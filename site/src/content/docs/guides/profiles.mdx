@@ -10,7 +10,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 | Profile | Behavior |
 |---|---|
 | `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. The default, and recommended, including when migrating from the official emulator. |
-| `emulator` | Targets the behavior of a pinned version of the official emulator (`firebase-tools` 15.28.2). Use it only to check alignment with the official emulator, for example as an extra test target. |
+| `emulator` | Targets the behavior of a pinned version of the official emulator (`firebase-tools` 15.28.2). Use it only to check alignment with the official emulator, for example as an extra test target; it is not needed for a migration. |
 
 The `emulator` profile accepts behavior that production refuses, so a test can pass there and fail against production. Use `strict` for your tests.
 
@@ -75,14 +75,14 @@ allowUnsignedCustomTokens = true
 | Development default | Setting | With `productionExact` |
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | Refused |
-| Firestore, Storage and Realtime Database Security Rules accept `@firebase/rules-unit-testing`'s unsigned mock ID token | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
+| Firestore, Storage and Realtime Database Security Rules accept `@firebase/rules-unit-testing`'s unsigned mock ID token (`authenticatedContext()`, the client SDK's `mockUserToken`) | `auth.allowUnsignedIdTokens` | The mock-token fallback is disabled, as production refuses an unsigned token; fireemu-issued tokens that pass normal verification are still accepted |
 | A Realtime Database instance without a rules file is open to every request, as the official emulator serves it | `database.defaultAccess` (`"open"`) | `"locked"`: only the emulator's `owner` credential reads and writes, as production admits only administrators to a new database in locked mode |
-| Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates |
-| The Eventarc listener admits any credential or none | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
+| Identity-provider sign-in accepts fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers; under `strict` an `oidc.*` or `saml.*` provider must still be configured and enabled (`auth.providers` or the Admin API), as production requires | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
+| The Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](https://github.com/t-k/fireemu/blob/main/docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A tenant ID can be any readable name, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | `"generated"`: production's generated form, such as `acme-x7k2q` |
 | Multi-tenancy is on: the Admin API creates tenants and `auth.tenants` loads without an `updateConfig` call | `auth.multiTenant.allowTenants` (`true`) | Unset until enabled, as in a new production project: tenant routes are refused and `auth.tenants` needs `allowTenants: true` |
 | Multi-factor authentication is on, SMS and TOTP, without a console toggle, an `updateConfig` call or an `auth.mfa` block | `auth.mfa` (`state: "ENABLED"`) | Off until enabled, as in a new production project: enrollment is refused with `OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` or `TOTP based MFA not enabled.` |
-| An end user's Firestore `Listen` stream stays open however long it is held | `firestore.listenStreamLifetime` (`"unlimited"`) | `"oneHour"`: ended with `INTERNAL` an hour after it opened |
+| An end user's Firestore `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | `"oneHour"`: ended with `INTERNAL` an hour after it opened |
 | App Check works without registering an app: any well-formed debug token (a UUIDv4) exchanges for any app, so an `enforceAppCheck` callable can be called with no `appCheck` block; a missing or malformed token is still refused | `appCheck.debugTokens` (`"any"`) | `"registered"`: only apps from `appCheck.apps` with a registered debug-token digest exchange, and App Check is not served without an `appCheck` block. An `appCheck` block restores it too |
 | Dead-letter forwarding needs neither a project number nor IAM grants | `pubsub.deadLetterAuthorization` (`"implicit"`) | `"iam"`: a message is forwarded only after the Pub/Sub service agent is granted `roles/pubsub.subscriber` on the subscription and `roles/pubsub.publisher` on the dead-letter topic. Naming `pubsub.projectNumbers` selects it too |
 

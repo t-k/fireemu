@@ -18,6 +18,8 @@ npx fireemu up --functions ./functions
 
 ## Supported triggers
 
+See the [Functions support inventory](https://github.com/t-k/fireemu/blob/main/docs/functions-export-inventory.md) for support by trigger type and export.
+
 | Trigger | v1 (`firebase-functions/v1`) | v2 (`firebase-functions/v2/*`) |
 |---|---|---|
 | HTTP and callable | `https.onRequest`, `https.onCall` | `onRequest`, `onCall`, `onCallGenkit` |

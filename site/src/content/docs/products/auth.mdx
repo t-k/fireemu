@@ -30,6 +30,10 @@ The `auth` section of `fireemu.toml` declares the project configuration your app
 | Blocking functions | `auth.blockingFunctions` |
 | OIDC and SAML providers | `auth.providers.oidc`, `auth.providers.saml` |
 | Sign-up quota and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
+| Unsigned emulator custom tokens (accepted by default; refused with `productionExact`) | `auth.allowUnsignedCustomTokens` |
+| The unsigned mock ID token fallback in Firestore, Storage and Realtime Database Security Rules (on by default; off with `productionExact`) | `auth.allowUnsignedIdTokens` |
+| Fixture identity-provider assertions, or signed assertions verified as production does | `auth.idpAssertions` |
+| Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 
 This example enables email/password and phone sign-in, disables anonymous sign-in, requires passwords of at least 12 characters with uppercase, lowercase and numeric characters, and prevents users from deleting their own accounts:
 
@@ -123,6 +127,24 @@ disabledUserDeletion = true
 </TabItem>
 </Tabs>
 
+For an existing `fireemu.toml`, add the settings you need to its `auth` section, and adjust the values to match your application's requirements. See the [configuration schema](../../reference/configuration/) for the format and accepted values of each setting.
+
+### Authorized domains
+
+Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to set the initial project-wide list in either profile. The list replaces the defaults, so include `localhost` if your tests use it. An empty list authorizes no host under `strict`; an absent or `null` setting keeps the existing defaults (`localhost` and the project's `firebaseapp.com` and `web.app` domains). Validation uses the Admin API's rules for the selected profile, including its conversion of numeric and boolean entries to strings and omission of `null` entries; use strings when writing the list. Fireemu intentionally keeps `localhost` in its defaults for development. The [recorded production sandbox baseline](https://github.com/t-k/fireemu/blob/main/conformance/auth-action-production.json) does not include it; new production projects may also omit it. This default is a Fireemu-only convenience, and declaring the list replaces it. Tenant-scoped strict action links currently check the tenant's default domains rather than this project declaration; support for the parent project's live list is pending.
+
+An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
+
+### Project- and tenant-specific settings
+
+Use `auth.passwordPolicyOverrides` to specify different password policies for individual projects or tenants. Use `auth.configOverrides` to customize account creation and deletion permissions and email enumeration protection. These settings are separate from creating the project or tenant: naming a tenant in `auth.configOverrides` or `auth.passwordPolicyOverrides` does not create it (declare it in `auth.tenants` to have it created).
+
+### OIDC and SAML providers
+
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `auth.providers.oidc = [{ name = "oidc.fixture", enabled = true, clientId = "local-client", issuer = "https://issuer.test", responseType = { idToken = true } }]` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget); the `emulator` profile accepts them whether or not the provider is declared, and the `strict` profile refuses an `oidc.*` or `saml.*` provider that is not declared (or is disabled), as production does. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
+
+Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The `emulator` profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `schemaVersion = 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
+
 ## Multi-factor authentication
 
 The official emulator has no TOTP. Fireemu supports TOTP and SMS second factors.
@@ -172,7 +194,11 @@ adjacentIntervals = 1
 </TabItem>
 </Tabs>
 
-The configuration applies at startup and to every project created afterward, and is validated as the Admin API validates an update; a value production would refuse stops the daemon at startup. A session reset returns the project to it. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`. A tenant follows its own `mfaConfig`.
+- The configuration applies when the daemon starts, in both profiles, and to every project created afterward (not the default project's current value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon at startup.
+- Nothing else changes. An Admin API update replaces the current configuration, and disabling MFA refuses TOTP as production does. A tenant follows its own `mfaConfig`, not this setting. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`.
+- `POST /v1/sessions/{session}/reset` returns the project to the declared configuration, or to the default (SMS and TOTP enabled) when none is declared. Under `productionExact` without `auth.mfa`, a reset leaves a configuration set through the Admin API alone, as it does the rest of the project configuration. `DELETE /emulator/v1/projects/{project}/accounts` clears accounts only.
+- An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
+- The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` is enough by default; under `productionExact`, or with an `auth.mfa` that leaves TOTP off, it prints a startup warning naming `auth.mfa`.
 
 A TOTP code accepted to complete enrollment must not be immediately reused for sign-in. In a test with virtual time, complete enrollment, advance the world clock by the secret's actual period, and generate the sign-in code for that new instant. Use matching algorithm and digit settings. See the [TOTP test recipe](https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md#totp-enrollment-consumes-a-code).
 
@@ -231,19 +257,46 @@ enabledProviders = ["PHONE_SMS"]
 </TabItem>
 </Tabs>
 
-By default a tenant ID can be any readable name, such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"`, it must have the form production generates: the display name, a hyphen and five characters of `a-z0-9`, such as `acme-x7k2q`.
+By default a tenant ID can be any readable name that starts with a letter and holds letters, digits and hyphens (up to 63 characters), such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"`, it must have the form production generates: the display name, a hyphen and five characters of `a-z0-9`, such as `acme-x7k2q`.
 
-Under the `emulator` profile, a request that names an unknown tenant creates it, as in the official emulator. `strict` refuses such a request, as production does.
+- A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
+- A declared tenant has what an Admin create with that document gives: an omitted `allowPasswordSignup`, `enableEmailLinkSignin` or `enableAnonymousUser` is off and multi-factor is off. A tenant the `emulator` profile creates on the way for a request that names an unknown id gets the official emulator's defaults instead (all three on, `PHONE_SMS` multi-factor), so declare what your test needs.
+- Under the `strict` profile tenants are created only in a project that allows them, as in production. A new project allows them by default; with `productionExact`, or with `allowTenants: false` declared, `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
+- The default project and every session project (`POST /v1/sessions`) start with the declared switch and tenants. `POST /v1/sessions/{session}/reset` (the default session's included) creates them again, empty, and returns the switch to the declared value; without these keys a reset leaves an Admin-set switch alone. A namespace the `emulator` profile creates for an unknown project id (as the official emulator does) starts with the declared switch and tenants too: it is created by the requests that already created one (a user, a provider or a project setting written there) and by a request that writes a tenant there (creating one, or naming one that does not exist yet), not by a read alone. A session created for that project id (`POST /v1/sessions`) replaces the namespace, tenants included, and starts with the declared ones.
+- With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created. If you keep re-importing your own export (`--import dir --export-on-exit dir`), an edit to a declared tenant is therefore ignored once its exported copy exists: the daemon prints a warning naming the tenant when the imported tenant's document differs from the declared one (every setting the file can declare is compared). The switch is the other way round: a declared `allowTenants` wins over the import. After a reset the declared version of a tenant comes back, not the imported one.
+
+Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. `strict` refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
+
+See the [compatibility documentation](https://github.com/t-k/fireemu/blob/main/docs/compatibility-contract.md) for the supported Admin API scope.
 
 ## Tokens
 
 | Development default | Setting | With `productionExact` |
 |---|---|---|
 | Unsigned custom tokens from the Admin SDK in emulator mode are accepted | `auth.allowUnsignedCustomTokens` | Refused; configure `auth.customTokenSigners` with your service accounts' public keys |
-| `@firebase/rules-unit-testing`'s unsigned mock ID token is accepted by Firestore, Storage and Realtime Database Security Rules | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
+| `@firebase/rules-unit-testing`'s unsigned mock ID token is accepted by Firestore, Storage and Realtime Database Security Rules | `auth.allowUnsignedIdTokens` | The mock-token fallback is disabled, as production refuses an unsigned token; fireemu-issued tokens that pass normal verification are still accepted |
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, and SAML responses with the provider's certificates |
 
 Fixture assertions skip only the signature check. Under `strict`, sign-in through an `oidc.*` or `saml.*` provider is still refused when the provider has no configuration (declare it in `auth.providers`, or create it through the Admin API) or is disabled, with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.`. Built-in providers such as `google.com` sign in without a console configuration; see [Other development conveniences](../../guides/profiles/#other-development-conveniences).
+
+### Custom tokens
+
+Unsigned custom tokens minted by the Firebase Admin SDK in emulator mode are accepted by default, including with the recommended `strict` profile and with `auth.customTokenSigners` configured. To require signed custom tokens, set `auth.allowUnsignedCustomTokens` to `false` and configure `auth.customTokenSigners` with the service accounts' public JWK sets. The setting applies only to custom-token sign-in; strict claim checks and signed-token verification still apply. In the `emulator` profile, setting it to `false` also disables JSON fake custom tokens.
+
+### Unsigned mock ID tokens
+
+The unsigned mock ID token of `@firebase/rules-unit-testing` is accepted by default when Firestore, Storage and Realtime Database Security Rules are evaluated, including with the `strict` profile. This is the token `authenticatedContext()` and the client SDKs' `mockUserToken` option send (`createMockUserToken` in `@firebase/util`).
+
+- Normal verification runs first. Only after it fails can the mock-token fallback accept a token.
+- Under `strict` that fallback accepts only the exact SDK shape: a JWT whose header is exactly `{"alg":"none","type":"JWT"}` and whose signature is empty. `request.auth` is built from the token's claims, as the official emulator builds it, when the token names a subject (`sub`) and its audience (`aud`) is the project the request goes to. Its `exp` is not checked, because the SDK sets `iat: 0` and `exp: 3600` by default.
+- Every other token is verified as before, expiry included. That covers the unsigned ID tokens fireemu itself issues (their header carries `typ`, not `type`), and a token that claims a signature that does not verify is still refused.
+- The `emulator` profile accepts any unsigned token, as the official emulator does, and its Storage also accepts another project's token.
+- Set `auth.allowUnsignedIdTokens` to `false` (in either profile) or set `productionExact` to disable this fallback. Neither setting refuses fireemu-issued unsigned ID tokens that pass normal verification. A session with `auth.idTokenSigning = "session-rsa"` accepts no unsigned token.
+- The setting does not affect callable Functions, Identity Toolkit or App Check.
+
+Changing only an issued token's header to the SDK shape can still pass normal verification of its payload; it is not a refusal test. For a refusal test, use `createMockUserToken` with its default `iat: 0` / `exp: 3600`, or construct that exact header and empty signature with those times, a subject and the routed project as audience, and run with a clock after expiry (including Firestore's 30-second allowance).
+
+### Tokens inside functions
 
 The Admin SDK's `verifyIdToken` and `verifySessionCookie` inside a function you run here skip signature verification, because the SDK accepts only unsigned tokens whenever `FIREBASE_AUTH_EMULATOR_HOST` is set (as against the official emulator). A handler that authenticates callers that way therefore accepts a hand-made unsigned token with the right claims, which production refuses, and `auth.idTokenSigning = "session-rsa"` cannot fix it because the SDK then refuses the signed tokens too. Do not rely on a local `verifyIdToken` call to prove that forged tokens are refused; test that path against a deployed function.
 

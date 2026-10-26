@@ -13,6 +13,7 @@ This reference lists common fireemu commands and options. Run `npx fireemu --hel
 | [`emulators:export`](#emulatorsexport) | Export the state of a running suite to a directory |
 | [`doctor`](#doctor) | Check the installation: binary, UI, Functions runner, Node.js |
 | [`capabilities`](#capabilities) | Print the capability manifest of the resolved profile as JSON |
+| [`config show`](#config-show) | Print every configuration key with its effective value and source |
 
 ## init
 
@@ -269,3 +270,14 @@ options:
   -h, --help
         Print this help and exit.
 ```
+
+`capabilities` resolves the configured profile and overrides without starting a daemon. A missing virtual-clock start is reported on standard error while standard output remains capability JSON; startup still requires that clock value.
+
+## config show
+
+`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`. Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description.
+
+- Sources distinguish explicit values, defaults, `productionExact`, derived values, and unset keys.
+- When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).
+- A key the configuration accepts but the daemon does not read (for example `bind`, `limits.catalog`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `auth.enabled` and `trace.*`) has the source `accepted, no effect`: its value is shown as written, or `(unset)`, never as if it were in effect, and a configuration that sets one prints a `note:` line at start-up.
+- `firebaseJson` shows the Firebase configuration file actually selected, including one chosen with `--firebase-json`.

@@ -40,31 +40,41 @@ firebaseJson = "firebase.json"
 
 `npx fireemu init --firebase-json firebase.json` writes this for you.
 
+## Generate a reference file
+
+`fireemu init --reference` also writes `fireemu.reference.toml`, a commented reference generated from the schema. With an existing `fireemu.json`, it writes `fireemu.reference.jsonc` instead, so reference keys match the configuration format. Fireemu never loads this file. The normal `fireemu.toml` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, keys governed by `productionExact`, and keys accepted for forward compatibility that currently have no effect (marked as such in their comment) stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.toml` or `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
+
+Generated schema annotations refer to the schema hosted in the GitHub repository. Older configurations containing `https://fireemu.dev/spec/config/fireemu.schema.json` still load, but replace that annotation with `https://raw.githubusercontent.com/t-k/fireemu/main/spec/config/fireemu.schema.json` for editor validation. Fireemu validates against its bundled schema and does not fetch the annotation URL.
+
 ## Which files are loaded
 
 `up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
 
 1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for. `--config` parses a `.toml` path as TOML (case-insensitive, including `.TOML`) and every other extension as JSON. A TOML configuration must set `schemaVersion = 1`; it is never read as a `firebase.json`, which is JSON only. `--firebase-json` always reads JSON.
-2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used. Relative paths inside a canonical file (`rules.source`, `storage.rules`, `functions.source`, `firestore.indexFile` and the other file settings) are read from the working directory, whichever directory the file is in; only `firebaseJson` and the paths inside a `firebase.json` are read from the file's own directory.
-3. Otherwise, the nearest `firebase.json` is loaded: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. The `.firebaserc` beside it is read too.
+2. Otherwise, the single `fireemu.toml` or `fireemu.json` in the current directory is loaded as if it were passed with `--config`. If both files exist, startup is refused: remove one or select a file with `--config`. Its `firebaseJson` entry, resolved relative to the loaded file, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.toml` without a `firebaseJson` entry is not loaded, and the startup output says so. Neither `fireemu.toml` nor `fireemu.json` in a parent directory is used, because the paths it contains are relative to the current directory. Relative paths inside a canonical file (`rules.source`, `storage.rules`, `functions.source`, `firestore.indexFile` and the other file settings) are read from the working directory, whichever directory the file is in; only `firebaseJson` and the paths inside a `firebase.json` are read from the file's own directory.
+3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
 4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
 
 `--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
+
+If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.toml`.
 
 ## File ownership checks
 
 A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you, root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
 
-- A `fireemu.toml`, `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped with a warning. Group write is allowed.
-- The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`.
-- A current directory that any user can write is not searched at all.
-- A discovered file larger than 16 MiB is refused.
+- A `fireemu.toml`, `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped with a warning. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
+- A `.firebaserc` names only project and target aliases, never code or rules, so its owner is not checked. It is skipped only when it, or its directory, can be written by any user.
+- The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`. It also stops, without a warning, at a parent it cannot inspect, such as one you may not enter.
+- The owner of the current directory is not checked, because you chose to run there. A current directory that any user can write is not searched at all.
+- A symbolic link is judged by the file it points to. The directory that holds the target is not checked.
+- Each candidate is opened once. Its owner and mode are checked on the open file before anything is read, and its text is then read from the same file. A discovered file larger than 16 MiB is refused with an error.
 
-To load a skipped file anyway, name it with `--config` or `--firebase-json`. To silence the warning, pass `--no-config-discovery`. On Windows, ownership is not checked.
+A skipped file or directory is named in a warning, and the run continues as if nothing had been found. To load a skipped file anyway, name it with `--config` or `--firebase-json`. To silence the warning, pass `--no-config-discovery`. Errors in a discovered file say that the search found the file. On Windows, ownership is not checked.
 
 Two common setups run into this rule:
 
-- **A root container with a bind-mounted checkout**, such as a GitHub Actions `container:` job, or `docker run -v "$PWD":/app` as root. The files are owned by a host user the container's root does not trust. Use the explicit flags, or `chown` the checkout. Rootless Podman maps your user to the container's root, so it is not affected.
+- **A root container with a bind-mounted checkout**, such as a GitHub Actions `container:` job, or `docker run -v "$PWD":/app` as root. The files are owned by a host user the container's root does not trust. Use the explicit flags, or `chown` the checkout. The `.firebaserc` still names the project. Rootless Podman maps your user to the container's root, so it is not affected.
 - **`sudo`.** Files owned by the user in `SUDO_UID` are trusted.
 
 ## Validate your configuration

@@ -3,7 +3,7 @@ title: Emulator UI
 description: Inspect and manage data, Functions, Security Rules decisions and the clock in the browser.
 ---
 
-`fireemu up` serves the Emulator UI at `http://127.0.0.1:4000`.
+`fireemu up` serves the Emulator UI at `http://127.0.0.1:4000/ui/`.
 
 ```sh
 # Another port

@@ -1986,6 +1986,13 @@
      "s/e2"
     ]
    ],
+   "listens": [
+    "s/e2",
+    "s/e3",
+    "s/e4",
+    "s/e5",
+    "s/e6"
+   ],
    "order": [
     "d:s/e3",
     "d:s/e4",
@@ -2011,6 +2018,12 @@
      "s/b"
     ]
    ],
+   "listens": [
+    "s/10",
+    "s/9",
+    "s/a",
+    "s/b"
+   ],
    "order": [
     "d:s/9",
     "d:s/10",
@@ -2035,6 +2048,13 @@
      "oc",
      "s/b"
     ]
+   ],
+   "listens": [
+    "s/10",
+    "s/9",
+    "s/100",
+    "s/b",
+    "s/-1"
    ],
    "order": [
     "d:s/-1",
@@ -2062,6 +2082,14 @@
      "oc",
      "s/f"
     ]
+   ],
+   "listens": [
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f"
    ],
    "order": [
     "d:s/e",
@@ -2095,6 +2123,13 @@
      "v"
     ]
    ],
+   "listens": [
+    "s/e2",
+    "s/e3",
+    "s/e4",
+    "s/e5",
+    "s/e6"
+   ],
    "order": [
     "d:s/e6",
     "d:s/e5",
@@ -2120,6 +2155,12 @@
      "oc",
      "s/1"
     ]
+   ],
+   "listens": [
+    "s/1",
+    "s/2",
+    "s/3",
+    "s/x"
    ],
    "order": [
     "d:s/2",
@@ -2149,6 +2190,15 @@
      "oc",
      "c/a/b"
     ]
+   ],
+   "listens": [
+    "c/a/b",
+    "c/a/c",
+    "c/a/e",
+    "c/d",
+    "c/f",
+    "c/g",
+    "c/h"
    ],
    "order": [
     "d:c/f",
@@ -2181,12 +2231,643 @@
      "c/a/p1"
     ]
    ],
+   "listens": [
+    "c/a/p1",
+    "c/a/p2",
+    "c/a/p3",
+    "c/a/p4",
+    "c/a/p5",
+    "c/z"
+   ],
    "order": [
     "d:c/a/p2",
     "d:c/a/p3",
     "d:c/a/p4",
     "d:c/a/p5",
     "d:c/z"
+   ]
+  },
+  {
+   "name": "M3: a only child x cancelled, four others",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": 1
+      },
+      "b": 1,
+      "c": 1,
+      "d": 1,
+      "e": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/x"
+    ]
+   ],
+   "listens": [
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e"
+   ],
+   "order": [
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e"
+   ]
+  },
+  {
+   "name": "M3: e2 only child x cancelled, four others",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "e2": {
+       "x": 1
+      },
+      "e3": 1,
+      "e4": 1,
+      "e5": 1,
+      "e6": 1
+     }
+    ],
+    [
+     "oc",
+     "s/e2/x"
+    ]
+   ],
+   "listens": [
+    "s/e2",
+    "s/e3",
+    "s/e4",
+    "s/e5",
+    "s/e6"
+   ],
+   "order": [
+    "d:s/e3",
+    "d:s/e4",
+    "d:s/e5",
+    "d:s/e6"
+   ]
+  },
+  {
+   "name": "M3: e2 keeps y, five children",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "e2": {
+       "x": 1,
+       "y": 2
+      },
+      "e3": 1,
+      "e4": 1,
+      "e5": 1,
+      "e6": 1
+     }
+    ],
+    [
+     "oc",
+     "s/e2/x"
+    ]
+   ],
+   "listens": [
+    "s/e2",
+    "s/e3",
+    "s/e4",
+    "s/e5",
+    "s/e6"
+   ],
+   "order": [
+    "d:s/e6",
+    "d:s/e5",
+    "d:s/e4",
+    "d:s/e3",
+    "m:s/e2{y}"
+   ]
+  },
+  {
+   "name": "M3: two levels vanish",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "b": {
+        "x": 1
+       }
+      },
+      "c": 1,
+      "d": 1,
+      "e": 1,
+      "f": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/b/x"
+    ]
+   ],
+   "listens": [
+    "s/a",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f"
+   ],
+   "order": [
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f"
+   ]
+  },
+  {
+   "name": "M3: inner level vanishes, outer keeps c",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "b": {
+        "x": 1
+       },
+       "c": 1
+      },
+      "d": 1,
+      "e": 1,
+      "f": 1,
+      "g": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/b/x"
+    ]
+   ],
+   "listens": [
+    "s/a",
+    "s/d",
+    "s/e",
+    "s/f",
+    "s/g"
+   ],
+   "order": [
+    "d:s/e",
+    "d:s/f",
+    "m:s/a{c}",
+    "d:s/g",
+    "d:s/d"
+   ]
+  },
+  {
+   "name": "M3: numeric a/10 only child, order of the others",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "9": 1,
+      "10": {
+       "x": 1
+      },
+      "100": 1,
+      "b": 1,
+      "-1": 1
+     }
+    ],
+    [
+     "oc",
+     "s/10/x"
+    ]
+   ],
+   "listens": [
+    "s/10",
+    "s/9",
+    "s/100",
+    "s/b",
+    "s/-1"
+   ],
+   "order": [
+    "d:s/-1",
+    "d:s/9",
+    "d:s/100",
+    "d:s/b"
+   ]
+  },
+  {
+   "name": "M3: priority cancel inside e2 keeps e2, five children",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "e2": {
+       ".priority": 1,
+       "x": 1
+      },
+      "e3": 1,
+      "e4": 1,
+      "e5": 1,
+      "e6": 1
+     }
+    ],
+    [
+     "oc",
+     "s/e2/.priority"
+    ]
+   ],
+   "listens": [
+    "s/e2",
+    "s/e3",
+    "s/e4",
+    "s/e5",
+    "s/e6"
+   ],
+   "order": [
+    "d:s/e6",
+    "d:s/e5",
+    "d:s/e4",
+    "d:s/e3",
+    "m:s/e2{x}"
+   ]
+  },
+  {
+   "name": "S4: six children, missing grandchild path",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": "v",
+      "b": "v",
+      "c": "v",
+      "d": "v",
+      "e": "v",
+      "f": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/zz/x"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f"
+   ]
+  },
+  {
+   "name": "S4: six children, missing child",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": "v",
+      "b": "v",
+      "c": "v",
+      "d": "v",
+      "e": "v",
+      "f": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/zz"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d",
+    "s/e",
+    "s/f"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d",
+    "d:s/e",
+    "d:s/f"
+   ]
+  },
+  {
+   "name": "S4: two numeric children, missing child",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "9": "v",
+      "10": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/zz"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/10",
+    "s/9"
+   ],
+   "order": [
+    "d:s",
+    "d:s/10",
+    "d:s/9"
+   ]
+  },
+  {
+   "name": "S4: existing child, missing grandchild",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": 1,
+       "y": 2
+      },
+      "b": 1,
+      "c": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/z"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c"
+   ],
+   "order": [
+    "m:s{a,b,c}",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c"
+   ]
+  },
+  {
+   "name": "S4: below a leaf grandchild",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": 1,
+       "y": 2
+      },
+      "b": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/x/q"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a/x",
+    "s/a/y",
+    "s/b"
+   ],
+   "order": [
+    "m:s{a/x,a/y,b}",
+    "d:s/a/x",
+    "d:s/a/y",
+    "d:s/b"
+   ]
+  },
+  {
+   "name": "S4: missing deep below a split child",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": {
+       "x": {
+        "p": 1,
+        "q": 2
+       },
+       "y": 1
+      },
+      "b": 1
+     }
+    ],
+    [
+     "oc",
+     "s/a/x/z"
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a/x",
+    "s/a/y",
+    "s/b"
+   ],
+   "order": [
+    "m:s{a/x,a/y,b}",
+    "d:s/a/x",
+    "d:s/a/y",
+    "d:s/b"
+   ]
+  },
+  {
+   "name": "S4: a missing cancel then a write below",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": "v",
+      "b": "v",
+      "c": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/zz"
+    ],
+    [
+     "o",
+     "s/d",
+     2
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/a",
+    "s/b",
+    "s/c",
+    "s/d"
+   ],
+   "order": [
+    "d:s",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d"
+   ]
+  },
+  {
+   "name": "S4: registered null, cancel below it, another write",
+   "ops": [
+    [
+     "o",
+     "s",
+     null
+    ],
+    [
+     "oc",
+     "s/a"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S4: a leaf with a priority, cancel of .value",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      ".value": 1,
+      ".priority": 2
+     }
+    ],
+    [
+     "oc",
+     "s/.value"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S4: priority value, cancel of a missing priority",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "b": 1,
+      "c": 1
+     }
+    ],
+    [
+     "oc",
+     "s/.priority"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/b",
+    "s/c",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/b",
+    "d:s/c",
+    "d:t"
+   ]
+  },
+  {
+   "name": "S4: priority value, cancel of the priority splits",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      ".priority": 1,
+      "b": 1,
+      "c": 1
+     }
+    ],
+    [
+     "oc",
+     "s/.priority"
+    ],
+    [
+     "o",
+     "t",
+     1
+    ]
+   ],
+   "listens": [
+    "s",
+    "s/b",
+    "s/c",
+    "t"
+   ],
+   "order": [
+    "m:s{b,c}",
+    "d:s/b",
+    "d:s/c",
+    "d:t"
    ]
   }
  ],

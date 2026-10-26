@@ -623,15 +623,14 @@ fn a_split_by_a_cancel_fires_the_remaining_children_in_the_recorded_order() {
                 )
             })
             .collect();
-        // The recorded listens are the children of the registered value, below /k.
-        let mut listens: Vec<String> = strings(&case["order"])
-            .iter()
-            .map(|f| f.trim_start_matches("d:").to_owned())
-            .collect();
-        listens.sort();
+        // The listens the recording used, below /k.
+        let listens = strings(&case["listens"]);
         let want: Vec<String> = strings(&case["order"])
             .iter()
-            .map(|f| format!("d:k/{}", f.trim_start_matches("d:")))
+            .map(|f| {
+                let (kind, rest) = f.split_once(':').unwrap();
+                format!("{kind}:k/{rest}")
+            })
             .collect();
         assert_eq!(
             after_registrations(&format!("s{n}"), &listens, &ops),

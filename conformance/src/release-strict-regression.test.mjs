@@ -1006,6 +1006,14 @@ test("the FUNCTIONS-HTTP stand-in accepts only the listed successor of the recor
     judgeFunctionsHttp(recorded, { ...observed, fixturePackageLockSha256: "2".repeat(64) }),
     [],
   );
+  // Inherited property names are not recorded digests: a difference, never a throw.
+  for (const key of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+    assert.notDeepEqual(
+      judgeFunctionsHttp({ ...recorded, fixturePackageLockSha256: key }, observed),
+      [],
+      key,
+    );
+  }
   for (const items of Object.values(FUNCTIONS_HTTP_LOCK_SUCCESSORS)) {
     for (const item of items) {
       assert.match(item.sha256, /^[0-9a-f]{64}$/);

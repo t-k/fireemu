@@ -1101,7 +1101,9 @@ export function judgeFunctionsHttp(expected, observed) {
     observed.fixtureIndexSha256,
   );
   const lockSuccessors = (
-    FUNCTIONS_HTTP_LOCK_SUCCESSORS[expected.fixturePackageLockSha256] ?? []
+    Object.hasOwn(FUNCTIONS_HTTP_LOCK_SUCCESSORS, expected.fixturePackageLockSha256)
+      ? FUNCTIONS_HTTP_LOCK_SUCCESSORS[expected.fixturePackageLockSha256]
+      : []
   ).map((item) => item.sha256);
   expectEqual(
     differences,

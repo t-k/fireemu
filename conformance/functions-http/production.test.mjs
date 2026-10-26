@@ -1243,10 +1243,10 @@ const FH_PACKAGE =
 const FH_DIGEST = `sha256:${"ab".repeat(32)}`;
 const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
 
-async function observeWorld({ deployScript, deleteStatus }) {
+async function observeWorld({ deployScript, deleteStatus, recordOnce = false }) {
   const base = await uploadWorld();
   const { FAKE_BUCKET } = base;
-  const deployed = { present: false, versionExists: false, bindings: [] };
+  const deployed = { present: false, versionExists: false, bindings: [], recordReads: 0 };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
     base.budget.take(kind);
     const reply = (status, value = {}) => ({ status, value, bytes: 10 });
@@ -1254,21 +1254,23 @@ async function observeWorld({ deployScript, deleteStatus }) {
     if (url.startsWith("https://storage.googleapis.com/")) {
       result = await base.gcs.send(method, url);
     } else if (url === `https://cloudfunctions.googleapis.com/v2/${FH_FUNCTION}`) {
-      result = deployed.present
-        ? reply(200, {
-            name: FH_FUNCTION,
-            environment: "GEN_2",
-            buildConfig: {
-              runtime: "nodejs22",
-              entryPoint: "fireemuHttpProbe",
-              source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } },
-            },
-            serviceConfig: {
-              service: FH_SERVICE,
-              uri: "https://fireemuhttpprobe-abc-uc.a.run.app",
-            },
-          })
-        : reply(404);
+      deployed.recordReads += 1;
+      result =
+        deployed.present && (!recordOnce || deployed.recordReads === 2)
+          ? reply(200, {
+              name: FH_FUNCTION,
+              environment: "GEN_2",
+              buildConfig: {
+                runtime: "nodejs22",
+                entryPoint: "fireemuHttpProbe",
+                source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } },
+              },
+              serviceConfig: {
+                service: FH_SERVICE,
+                uri: "https://fireemuhttpprobe-abc-uc.a.run.app",
+              },
+            })
+          : reply(404);
     } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}`) {
       result = deployed.present
         ? reply(200, {
@@ -1387,8 +1389,10 @@ test("a whole program: deploy, observe, clean up, and the source upload is delet
 });
 
 test("a whole program whose CLI output shows no receipt still takes it from the function record", async () => {
+  // the record is readable once, right after the deploy: the cleanup cannot read it again
   const world = await observeWorld({
     deployScript: 'console.log("i  functions: deploying");\nprocess.exit(0);',
+    recordOnce: true,
   });
   try {
     assert.equal(world.error, undefined);

@@ -5,14 +5,28 @@
 // and calls `finish` during cleanup. A deploy is clean only when every upload it owned is deleted
 // and read back as absent and no new object in the bucket is left unexplained.
 //
-// Receipts. A deploy learns its upload from two places only: the firebase-tools debug output line of
-// the `generateUploadUrl` answer (it exists even when the deploy fails afterwards), and the function
-// record's `buildConfig.source.storageSource`. Time, size and count never make an object ours.
+// Receipts. A deploy learns its upload from one place only: the firebase-tools `--debug` output. The
+// answer of `generateUploadUrl` (`<<< [apiv2][body] POST .../functions:generateUploadUrl {...}`) names
+// the bucket and object and exists even when the deploy fails afterwards; the upload's own status
+// line (`<<< [apiv2][status] PUT https://storage.googleapis.com/<bucket>/<object> <code>`) says
+// whether the CLI's create was answered. The function record is not a receipt: a deployed record
+// names the copy Cloud Functions made in `gcf-v2-sources-<number>-<region>` (recorded: FE v4 lists),
+// not the upload. Time, size and count never make an object ours. An object that appears in the
+// bucket without a receipt is reported as unexplained and never deleted.
+//
+// The upload is a create whose answer the recorder reads from that PUT line. 2xx: confirmed. A
+// definite 4xx: refused (nothing was created). A missing line, a 5xx, a 408, 429 or 499: unknown, and
+// a 404 read of the object never settles it (the ownership rules of ownership.mjs); only an own read
+// that shows the object does, and then the object is deleted by generation.
 //
 // The responsibility journal is an ownership ledger (ownership.mjs): one placeholder create per
 // deploy, which stays open until the deploy is accounted for, and one create per receipt object. A
 // run that stops leaves those intents unanswered, and resuming the ledger turns them into unknown
-// answers, so the responsibility and the lock outlive the process.
+// answers, so the responsibility and the lock outlive the process. The `deploy:<key>` placeholder
+// names no resource, so no read can ever settle it; on a clean deploy it is answered with a
+// bookkeeping 404 (transport label `accounting`, not a production status), and on an unclean one it
+// stays unknown until the coordinator accepts it with an owner-ledger line and an A2 list that shows
+// no unexplained object and every receipt absent.
 //
 // The caller supplies `send(method, url)` (it adds credentials and counts the request in the run's
 // budget) and `requestsLeft()` (the number of upload requests the budget still allows). The helper
@@ -60,43 +74,40 @@ export function assertUploadBucket(bucket, { projectNumber, region }) {
 
 const validObject = (object) => typeof object === "string" && OBJECT_NAME.test(object);
 
-/** The upload a function record names, or null. Only bucket and object are read. */
-export function uploadReceiptFromFunctionRecord(record) {
-  const source = record?.buildConfig?.source?.storageSource;
-  if (typeof source?.bucket !== "string" || typeof source.object !== "string") return null;
-  return { bucket: source.bucket, object: source.object };
-}
-
 const GENERATE_LINE =
   /<<< \[apiv2\]\[body\] POST \S+\/functions:generateUploadUrl(?:\?\S*)? (\{.*\})\s*$/u;
+const PUT_STATUS_LINE =
+  /<<< \[apiv2\]\[status\] PUT https:\/\/storage\.googleapis\.com\/([^/\s?]+)\/([^\s?]+) (\d{3})\s*$/u;
 
-function receiptFromLine(line) {
+/** One CLI output line as an event: a receipt, an upload status, or null. */
+export function uploadEventFromLine(line) {
+  const put = PUT_STATUS_LINE.exec(line);
+  if (put) return { type: "put-status", bucket: put[1], object: put[2], status: Number(put[3]) };
   const match = GENERATE_LINE.exec(line);
   if (!match) return null;
-  let body;
+  let source;
   try {
-    body = JSON.parse(match[1]);
+    source = JSON.parse(match[1]).storageSource;
   } catch {
     return null;
   }
-  return uploadReceiptFromFunctionRecord({
-    buildConfig: { source: { storageSource: body.storageSource } },
-  });
+  if (typeof source?.bucket !== "string" || typeof source.object !== "string") return null;
+  return { type: "receipt", bucket: source.bucket, object: source.object };
 }
 
-export function uploadReceiptsFromCliOutput(text) {
+export function uploadEventsFromCliOutput(text) {
   return text
     .split(/\r?\n/u)
-    .map(receiptFromLine)
-    .filter((receipt) => receipt !== null);
+    .map(uploadEventFromLine)
+    .filter((event) => event !== null);
 }
 
-/** Reads receipts from a stream of CLI output as it arrives, one complete line at a time. */
-export function createReceiptScanner(onReceipt) {
+/** Reads upload events from a stream of CLI output as it arrives, one complete line at a time. */
+export function createReceiptScanner(onEvent) {
   let tail = "";
   const scan = (line) => {
-    const receipt = receiptFromLine(line);
-    if (receipt) onReceipt(receipt);
+    const event = uploadEventFromLine(line);
+    if (event) onEvent(event);
   };
   return {
     feed(chunk) {
@@ -175,6 +186,7 @@ export function openSourceUploads({
         reply.status !== 200 ||
         !reply.bodyReadable ||
         !Array.isArray(items) ||
+        items.length > UPLOAD_BOUNDS.pageSize ||
         items.some((item) => typeof item?.name !== "string")
       ) {
         return { names, complete: false };
@@ -202,8 +214,16 @@ export function openSourceUploads({
       throw new Error("upload bucket baseline list is incomplete or unreadable");
     }
     started.add(key);
-    const ticket = beginCreate(state, { name: placeholder, transport: "cli" });
+    const ticket = beginCreate(state, { name: placeholder, transport: "accounting" });
     return createDeploy({ placeholder, ticket, baseline: baseline.names });
+  }
+
+  /** "confirmed" (a 2xx), "refused" (a definite 4xx, nothing created) or "unknown". */
+  function putClass(statuses) {
+    if (statuses.some((status) => status >= 200 && status < 300)) return "confirmed";
+    const last = statuses.at(-1);
+    const definite = last >= 400 && last < 500 && ![408, 429, 499].includes(last);
+    return definite ? "refused" : "unknown";
   }
 
   function createDeploy({ placeholder, ticket, baseline }) {
@@ -211,7 +231,7 @@ export function openSourceUploads({
     const faults = new Set();
     let finished = false;
 
-    // A null candidate (a record without a storageSource) names nothing and is ignored.
+    // A null candidate names nothing and is ignored, as is anything after the deploy finished.
     function receipt(candidate) {
       if (finished || candidate === null) return;
       if (candidate?.bucket !== bucket) {
@@ -236,6 +256,7 @@ export function openSourceUploads({
       try {
         receipts.set(candidate.object, {
           name,
+          statuses: [],
           ticket: beginCreate(state, { name, transport: "rest" }),
         });
       } catch {
@@ -243,27 +264,18 @@ export function openSourceUploads({
       }
     }
 
-    async function settleReceipt(object, entry, cliExited, reasons) {
-      const { name } = entry;
-      const unknown = (reason) => {
-        recordAnswer(state, entry.ticket, { transportError: true });
-        reasons.push(`${reason}:${name}`);
-      };
-      const meta = await dispatch("GET", objectUrl(object, "?fields=bucket,name,generation"));
-      if (meta.status === 404 && meta.bodyReadable) {
-        if (cliExited) {
-          recordAnswer(state, entry.ticket, { status: 404, bodyReadable: true });
-        } else {
-          recordAnswer(state, entry.ticket, { transportError: true });
-          recordRead(state, {
-            name,
-            transport: "rest",
-            answer: { status: 404, bodyReadable: true },
-          });
-          reasons.push(`receipt-unconfirmed:${name}`);
-        }
-        return;
+    /** Feeds one event from the CLI output: a receipt, or the status of the upload's PUT. */
+    function observe(event) {
+      if (finished || event === null || typeof event !== "object") return;
+      if (event.type === "receipt") receipt(event);
+      else if (event.type === "put-status" && event.bucket === bucket) {
+        receipts.get(event.object)?.statuses.push(event.status);
       }
+    }
+
+    async function readObject(object) {
+      const meta = await dispatch("GET", objectUrl(object, "?fields=bucket,name,generation"));
+      if (meta.status === 404 && meta.bodyReadable) return { found: false };
       const generation = String(meta.value?.generation ?? "");
       if (
         meta.status !== 200 ||
@@ -272,18 +284,60 @@ export function openSourceUploads({
         meta.value?.name !== object ||
         !/^\d{1,20}$/u.test(generation)
       ) {
+        return { found: null };
+      }
+      return { found: true, generation };
+    }
+
+    async function settleReceipt(object, entry, reasons) {
+      const { name } = entry;
+      const klass = putClass(entry.statuses);
+      if (klass === "refused") {
+        // The CLI's own create was answered with a definite refusal: nothing was made.
+        recordAnswer(state, entry.ticket, { status: entry.statuses.at(-1), bodyReadable: true });
+        return;
+      }
+      const unknown = (reason) => {
+        recordAnswer(state, entry.ticket, { transportError: true });
+        reasons.push(`${reason}:${name}`);
+      };
+      const read = await readObject(object);
+      if (read.found === null) {
         unknown("object-unreadable");
         return;
       }
-      recordAnswer(state, entry.ticket, { status: 200, bodyReadable: true });
+      if (!read.found) {
+        if (klass === "confirmed") {
+          // A create that was answered 2xx and now reads 404: not settled in the run.
+          recordAnswer(state, entry.ticket, { status: 200, bodyReadable: true });
+          reasons.push(`confirmed-upload-absent:${name}`);
+        } else {
+          recordAnswer(state, entry.ticket, { transportError: true });
+          reasons.push(`receipt-unconfirmed:${name}`);
+        }
+        recordRead(state, { name, transport: "rest", answer: { status: 404, bodyReadable: true } });
+        return;
+      }
+      if (klass === "unknown") {
+        // The PUT's answer was never seen. An own read that shows the object settles the unknown
+        // create (it is ours by its receipt); the run still needs the A2 read-back before it closes.
+        recordAnswer(state, entry.ticket, { transportError: true });
+        recordRead(state, {
+          name,
+          transport: "rest",
+          answer: { status: 200, bodyReadable: true, bodyName: name },
+        });
+      } else {
+        recordAnswer(state, entry.ticket, { status: 200, bodyReadable: true });
+      }
       const deleteTicket = beginDelete(state, { name, transport: "rest" });
       const deleted = await dispatch(
         "DELETE",
-        objectUrl(object, `?ifGenerationMatch=${generation}`),
+        objectUrl(object, `?ifGenerationMatch=${read.generation}`),
       );
-      const klass = recordAnswer(state, deleteTicket, deleted);
-      if (klass.class !== "ok") {
-        reasons.push(`delete-${klass.class}:${name}`);
+      const result = recordAnswer(state, deleteTicket, deleted);
+      if (result.class !== "ok") {
+        reasons.push(`delete-${result.class}:${name}`);
         return;
       }
       const back = await dispatch("GET", objectUrl(object, "?fields=bucket,name,generation"));
@@ -301,13 +355,19 @@ export function openSourceUploads({
       });
     }
 
-    async function finish({ cliExited }) {
+    /**
+     * Accounts for the deploy once its CLI is over. `exitCode` is the CLI's exit code, or null when
+     * it did not end by itself.
+     */
+    async function finish({ cliExited, exitCode = null }) {
       if (finished) throw new Error(`deploy ${placeholder} already finished`);
       if (typeof cliExited !== "boolean") throw new Error("finish needs cliExited");
       finished = true;
       const reasons = [...faults];
-      // A CLI that was killed before any receipt was seen may have an upload in flight.
+      // A CLI that was killed before any receipt was seen may have an upload in flight; a deploy that
+      // ended well without one used an upload path this helper does not see (or printed no debug line).
       if (!cliExited && receipts.size === 0) reasons.push("killed-without-receipt");
+      if (cliExited && exitCode === 0 && receipts.size === 0) reasons.push("no-receipt");
       const need = UPLOAD_BOUNDS.maxPages + 3 * receipts.size;
       if (requestsLeft() < need) {
         reasons.push("upload-budget");
@@ -319,12 +379,14 @@ export function openSourceUploads({
         const after = await listBucket();
         if (!after.complete) reasons.push("list-incomplete");
         for (const [object, entry] of receipts) {
-          await settleReceipt(object, entry, cliExited, reasons);
+          await settleReceipt(object, entry, reasons);
         }
         for (const name of [...after.names].toSorted()) {
-          if (!baseline.has(name) && !receipts.has(name))
-            reasons.push(`unexplained-object:${name}`);
+          const entry = receipts.get(name);
+          const explained = entry !== undefined && putClass(entry.statuses) !== "refused";
+          if (!baseline.has(name) && !explained) reasons.push(`unexplained-object:${name}`);
         }
+        // Bookkeeping only: this name is no resource, so the answer is not a production status.
         recordAnswer(
           state,
           ticket,
@@ -340,7 +402,7 @@ export function openSourceUploads({
       return { clean: reasons.length === 0, reasons };
     }
 
-    return { receipt, finish };
+    return { receipt, observe, finish };
   }
 
   return {

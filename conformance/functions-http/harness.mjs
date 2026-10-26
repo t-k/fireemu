@@ -17,9 +17,10 @@ export const BOUNDS = Object.freeze({
   auth: 12,
   cliDeploy: 16,
   cliDelete: 16,
-  // Source upload bucket requests: the bound of one deploy for each of the 16 deployments, plus
-  // slack for an access token refresh that is counted under the same kind.
-  upload: 16 * REQUESTS_PER_DEPLOY + 4,
+  // Access token refreshes, counted apart from the request that happened to need one.
+  token: 12,
+  // Source upload bucket requests: the bound of one deploy for each of the 16 deployments.
+  upload: 16 * REQUESTS_PER_DEPLOY,
 });
 
 const ALLOWED_HEADERS = new Set([
@@ -137,6 +138,7 @@ export function createBudget() {
     auth: 0,
     cliDeploy: 0,
     cliDelete: 0,
+    token: 0,
     upload: 0,
   };
   const limits = {
@@ -146,6 +148,7 @@ export function createBudget() {
     auth: BOUNDS.auth,
     cliDeploy: BOUNDS.cliDeploy,
     cliDelete: BOUNDS.cliDelete,
+    token: BOUNDS.token,
     upload: BOUNDS.upload,
   };
   return {

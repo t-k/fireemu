@@ -68,6 +68,11 @@ function scenario(rng) {
       object: uuid(1000 + i),
       uploaded,
       fault: uploaded ? rng.pick(OBJECT_FAULTS) : "none",
+      // the status lines of the CLI's PUT: an uploaded object may show a 2xx or nothing; one that
+      // never arrived may show a refusal, a server error, a 2xx that no longer reads, or nothing
+      put: uploaded
+        ? rng.pick([[], [200], [503, 200]])
+        : rng.pick([[], [403], [503], [200], [503, 403], [403, 503]]),
     });
   }
   return {
@@ -81,6 +86,7 @@ function scenario(rng) {
     afterGrowth: rng.pick([0, 0, 0, 0, UPLOAD_BOUNDS.pageSize * UPLOAD_BOUNDS.maxPages]),
     afterListFault: rng.pick(["none", "none", "none", "none", "503"]),
     cliExited: rng.chance(0.8),
+    exitCode: rng.pick([0, 1]),
     limit: rng.pick([REQUESTS_PER_DEPLOY, REQUESTS_PER_DEPLOY, REQUESTS_PER_DEPLOY + 40, 2000]),
     shortAtFinish: rng.chance(0.1),
     crashBeforeFinish: rng.chance(0.1),
@@ -115,6 +121,18 @@ function inject(world, receipt) {
     case "delete404Gone":
       world.override(del, answer(404), { effect: () => world.remove(receipt.object) });
       break;
+    case "readback503": {
+      // the metadata read is the first GET of the object; the read-back is the second
+      const send = world.send;
+      let gets = 0;
+      world.send = async (method, url) => {
+        if (method === "GET" && url.includes(`/o/${receipt.object}`) && (gets += 1) === 2) {
+          return answer(503);
+        }
+        return send(method, url);
+      };
+      break;
+    }
     case "deleteStayed":
       world.override(del, { status: 204, bodyReadable: true, value: {}, bytes: 0 });
       break;
@@ -168,6 +186,9 @@ async function run(seed) {
     let tracked = 0;
     for (const receipt of s.receipts) {
       deploy.receipt({ bucket: FAKE_BUCKET, object: receipt.object });
+      for (const status of receipt.put) {
+        deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object: receipt.object, status });
+      }
       if (tracked < UPLOAD_BOUNDS.maxReceiptsPerDeploy) {
         modelled.add(receipt.object);
         tracked += 1;
@@ -213,7 +234,10 @@ async function run(seed) {
 
     if (s.shortAtFinish) left = used + 1;
     const before = world.requests.length;
-    const result = await deploy.finish({ cliExited: s.cliExited });
+    const result = await deploy.finish({
+      cliExited: s.cliExited,
+      exitCode: s.cliExited ? s.exitCode : null,
+    });
     const sent = world.requests.slice(before);
 
     // Safety: only DELETEs of tracked receipt objects, each conditional on a numeric generation.
@@ -237,15 +261,18 @@ async function run(seed) {
     assert.ok(used <= left || s.shortAtFinish, `${seed}: used ${used} of ${left}`);
 
     // Reference model.
-    const objectsOk = s.receipts
-      .slice(0, UPLOAD_BOUNDS.maxReceiptsPerDeploy)
-      .every((r) => (r.uploaded ? r.fault === "none" : s.cliExited));
+    const objectsOk = s.receipts.slice(0, UPLOAD_BOUNDS.maxReceiptsPerDeploy).every((r) => {
+      if (r.uploaded) return r.fault === "none";
+      // never arrived: only a definite refusal as the PUT's last answer settles it
+      const last = r.put.at(-1);
+      return !r.put.some((x) => x < 300) && last >= 400 && last < 500;
+    });
     const afterTooBig =
       baseline.size + s.foreign + s.afterGrowth + s.receipts.filter((r) => r.uploaded).length >
       UPLOAD_BOUNDS.pageSize * UPLOAD_BOUNDS.maxPages;
     const expectClean =
       !s.shortAtFinish &&
-      (s.cliExited || modelled.size > 0) &&
+      (modelled.size > 0 || (s.cliExited && s.exitCode !== 0)) &&
       objectsOk &&
       receiptFaults.length === 0 &&
       s.foreign === 0 &&

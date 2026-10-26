@@ -11,7 +11,6 @@ import {
   redactUploadSecrets,
   createReceiptScanner,
   openSourceUploads,
-  uploadReceiptFromFunctionRecord,
 } from "../src/shared/gen2-source-uploads.mjs";
 import {
   BOUNDS,
@@ -613,8 +612,28 @@ async function acquireToken(adc, budget, kind) {
   return { value: value.access_token, expiresAt: Date.now() + value.expires_in * 1000 - 120_000 };
 }
 
+/** Reads a response body, stopping at 1 MiB counted in bytes. */
+export async function readBoundedText(response) {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_RESPONSE_BYTES) {
+      await reader.cancel("control response exceeded 1 MiB");
+      throw new Error("control response exceeded 1 MiB");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function safeJsonResponse(body) {
-  if (body.length > MAX_RESPONSE_BYTES) throw new Error("control response exceeded 1 MiB");
+  if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES)
+    throw new Error("control response exceeded 1 MiB");
   return body ? JSON.parse(body) : {};
 }
 
@@ -635,7 +654,7 @@ export function createControl(adc, budget) {
     ) {
       throw new Error("unreviewed REST host");
     }
-    if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, kind);
+    if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, "token");
     if (method === "GET" && body !== undefined) throw new Error("GET request cannot have a body");
     budget.take(kind);
     const response = await fetch(url, {
@@ -649,10 +668,14 @@ export function createControl(adc, budget) {
       redirect: "manual",
       signal: AbortSignal.timeout(60_000),
     });
-    const text = await response.text();
+    const text = await readBoundedText(response);
     if (allowed !== "any" && !allowed.includes(response.status))
       throw new Error(`bounded ${kind} REST ${method} returned ${response.status}`);
-    return { status: response.status, value: safeJsonResponse(text), bytes: text.length };
+    return {
+      status: response.status,
+      value: safeJsonResponse(text),
+      bytes: Buffer.byteLength(text),
+    };
   };
 }
 
@@ -681,8 +704,11 @@ async function removeCliDebugLogs() {
   }
 }
 
+// FIREBASE_CLI_EXPERIMENTS can move a 2nd gen upload to a bucket the upload helper does not list
+// (`functionsrunapionly` uploads to firebase-functions-src-<number>), and DEBUG changes the CLI's
+// logging, so neither reaches the CLI from the launch shell.
 export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
-  return {
+  const environment = {
     ...base,
     GOOGLE_APPLICATION_CREDENTIALS: adcPath,
     GOOGLE_CLOUD_QUOTA_PROJECT: PROJECT,
@@ -691,11 +717,14 @@ export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
     FIREBASE_CLI_DISABLE_UPDATE_CHECK: "1",
     CI: "1",
   };
+  delete environment.FIREBASE_CLI_EXPERIMENTS;
+  delete environment.DEBUG;
+  return environment;
 }
 
 // `deployTrack` is set for a deploy: the CLI then runs with --debug so that the generateUploadUrl
 // answer (the source upload receipt) is seen even when the deploy fails afterwards. Receipts go to
-// `deployTrack.onReceipt` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
+// `deployTrack.onEvent` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
 // (not killed by this runner or a signal), and the debug lines never reach the stored diagnostic.
 export async function cli(
   args,
@@ -710,6 +739,8 @@ export async function cli(
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
   const debug = deployTrack !== undefined;
+  // A debug log left by an earlier run holds a signed upload URL and must not be mistaken for ours.
+  if (debug) await removeCliDebugLogs();
   const outputLimit = debug ? 16_000_000 : 1_000_000;
   const child = spawn(
     command[0],
@@ -739,7 +770,7 @@ export async function cli(
     }
   };
   const scanners = [child.stdout, child.stderr].map(() =>
-    createReceiptScanner((receipt) => deployTrack?.onReceipt(receipt)),
+    createReceiptScanner((event) => deployTrack?.onEvent(event)),
   );
   [child.stdout, child.stderr].forEach((stream, index) =>
     stream.on("data", (chunk) => {
@@ -767,10 +798,14 @@ export async function cli(
     if (debug) {
       for (const scanner of scanners) scanner.flush();
       deployTrack.exited = false;
+      deployTrack.exitCode = null;
       await removeCliDebugLogs();
     }
   }
-  if (debug) deployTrack.exited = !stopped && signal === null && typeof code === "number";
+  if (debug) {
+    deployTrack.exited = !stopped && signal === null && typeof code === "number";
+    deployTrack.exitCode = deployTrack.exited ? code : null;
+  }
   const visible = debug ? withoutDebugLines(output) : output;
   const summary = summarizeCliOutput(visible, code);
   if (code !== 0 || summary.autoEnabledApi) {
@@ -903,11 +938,7 @@ export function serviceAgentGrantChanges(before, after) {
 async function inspectAbsence(control, target, kind) {
   const f = await control("GET", functionUrl(target), undefined, kind, [200, 404]);
   const s = await control("GET", serviceUrl(target), undefined, kind, [200, 404]);
-  return {
-    functionAbsent: f.status === 404,
-    serviceAbsent: s.status === 404,
-    functionRecord: f.status === 200 ? f.value : null,
-  };
+  return { functionAbsent: f.status === 404, serviceAbsent: s.status === 404 };
 }
 
 async function inspectOwnedPackage(control, target, kind) {
@@ -1069,9 +1100,6 @@ export async function cleanupTarget(
   if (!state.started) return;
   try {
     const current = await inspectAbsence(control, target, "cleanup");
-    if (current.functionRecord) {
-      state.upload?.receipt(uploadReceiptFromFunctionRecord(current.functionRecord));
-    }
     if (!current.serviceAbsent) {
       try {
         await publicInvoker(control, target, false, "cleanup", log);
@@ -1095,7 +1123,10 @@ export async function cleanupTarget(
     // The function and service are gone, so no build still needs the source upload. It is cleaned
     // before the image, which can stop on an image version that cannot be distinguished.
     if (state.upload) {
-      const uploads = await state.upload.finish({ cliExited: state.deployTrack?.exited === true });
+      const uploads = await state.upload.finish({
+        cliExited: state.deployTrack?.exited === true,
+        exitCode: state.deployTrack?.exitCode ?? null,
+      });
       if (uploads.clean) {
         await log(
           "source-upload-deleted",
@@ -1177,7 +1208,7 @@ export async function deployTarget(
   run = cli,
 ) {
   const upload = await uploads.beginDeploy(`${programId}:${target}`);
-  const deployTrack = { onReceipt: (receipt) => upload.receipt(receipt) };
+  const deployTrack = { onEvent: (event) => upload.observe(event) };
   Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
   await run(
     ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
@@ -1230,7 +1261,6 @@ export async function observeProgram(
       await log("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
       const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
         .value;
-      states[target].upload.receipt(uploadReceiptFromFunctionRecord(functionRecord));
       states[target].url = validateFunctionRecord(functionRecord, target);
       const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
       if (

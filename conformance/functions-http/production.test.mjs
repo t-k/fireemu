@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -32,7 +33,13 @@ test("Firebase CLI sends the reviewed project as its quota project", () => {
   const environment = cliEnvironment("/private/owner-adc.json", "/private/isolated-config", {
     GOOGLE_CLOUD_QUOTA_PROJECT: "unrelated-project",
     FIREBASE_TOKEN: "unreviewed-token",
+    FIREBASE_CLI_EXPERIMENTS: "functionsrunapionly",
+    DEBUG: "*",
+    PATH: "/usr/bin",
   });
+  assert.equal("FIREBASE_CLI_EXPERIMENTS" in environment, false, "an experiment moves the upload");
+  assert.equal("DEBUG" in environment, false);
+  assert.equal(environment.PATH, "/usr/bin");
   assert.equal(environment.GOOGLE_CLOUD_QUOTA_PROJECT, "fireemu-oracle-query");
   assert.equal(environment.GOOGLE_APPLICATION_CREDENTIALS, "/private/owner-adc.json");
   assert.equal(environment.XDG_CONFIG_HOME, "/private/isolated-config");
@@ -757,6 +764,27 @@ test("fourth attempt accounts for the successful prior build within the extended
 const UPLOAD_NUMBER = "123456789012";
 const UPLOAD_OBJECT = "9be229fd-1507-4797-ab4b-69f2fda6e54a.zip";
 
+// A deployed Gen2 function record in the recorded shape (FE v4 lists.functions-v2, masked): its
+// source is the copy Cloud Functions made in the sources bucket, not the upload.
+function recordedGen2Record() {
+  const recorded = JSON.parse(
+    readFileSync(
+      new URL(
+        "../src/functions-events/record/recorded/v4-run/0029-lists.functions-v2.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const record = structuredClone(recorded.body.functions.find((f) => f.environment === "GEN_2"));
+  record.name = "projects/fireemu-oracle-query/locations/us-central1/functions/fireemuHttpProbe";
+  record.buildConfig.entryPoint = "fireemuHttpProbe";
+  record.serviceConfig.service =
+    "projects/fireemu-oracle-query/locations/us-central1/services/fireemuhttpprobe";
+  record.serviceConfig.uri = "https://fireemuhttpprobe-abc-uc.a.run.app";
+  return record;
+}
+
 async function uploadWorld(overrides = {}) {
   const { createFakeGcs, FAKE_BUCKET, SECRET_MARKER, answer } =
     await import("../src/shared/gen2-source-uploads.fake.mjs");
@@ -765,13 +793,10 @@ async function uploadWorld(overrides = {}) {
   const dir = await mkdtemp(join(tmpdir(), "functions-http-uploads-"));
   const gcs = createFakeGcs();
   const budget = createBudget();
-  const functions = { present: overrides.functionPresent ?? false, record: null };
-  if (functions.present) {
-    functions.record = {
-      name: "projects/fireemu-oracle-query/locations/us-central1/functions/fireemuHttpProbe",
-      buildConfig: { source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } } },
-    };
-  }
+  const functions = {
+    present: overrides.functionPresent ?? false,
+    record: recordedGen2Record(),
+  };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
     budget.take(kind);
     let reply;
@@ -794,7 +819,7 @@ async function uploadWorld(overrides = {}) {
     projectNumber: UPLOAD_NUMBER,
     region: "us-central1",
     send: production.storageSend(control),
-    requestsLeft: () => 244 - budget.snapshot().upload,
+    requestsLeft: () => 240 - budget.snapshot().upload,
   });
   const logs = [];
   const deps = {
@@ -878,10 +903,14 @@ test("cleanup of a deploy that failed after the upload deletes the owned object 
       started: true,
       cleaned: false,
       upload,
-      deployTrack: { exited: true, onReceipt: (r) => upload.receipt(r) },
+      deployTrack: { exited: true, exitCode: 1, onEvent: (event) => upload.observe(event) },
     };
     world.gcs.put(UPLOAD_OBJECT);
-    state.deployTrack.onReceipt({ bucket: world.FAKE_BUCKET, object: UPLOAD_OBJECT });
+    state.deployTrack.onEvent({
+      type: "receipt",
+      bucket: world.FAKE_BUCKET,
+      object: UPLOAD_OBJECT,
+    });
     await production.cleanupTarget(
       world.control,
       "http",
@@ -905,12 +934,18 @@ test("cleanup of a deploy that failed after the upload deletes the owned object 
   }
 });
 
-test("cleanup takes the receipt from a function record that is still there", async () => {
+test("a recorded Gen2 function record, which names the sources bucket, owns nothing and blocks nothing (M1)", async () => {
   const world = await uploadWorld({ functionPresent: true });
   try {
     const upload = await world.uploads.beginDeploy("program:http");
-    const state = { started: true, cleaned: false, upload, deployTrack: { exited: false } };
+    const state = {
+      started: true,
+      cleaned: false,
+      upload,
+      deployTrack: { exited: true, exitCode: 0 },
+    };
     world.gcs.put(UPLOAD_OBJECT);
+    upload.receipt({ bucket: world.FAKE_BUCKET, object: UPLOAD_OBJECT });
     await production.cleanupTarget(
       world.control,
       "http",
@@ -922,7 +957,11 @@ test("cleanup takes the receipt from a function record that is still there", asy
     );
     assert.equal(state.cleanupError, undefined);
     assert.equal(state.cleaned, true);
-    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT), "the receipt came from the function record");
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT), "the CLI receipt is what was deleted");
+    assert.ok(
+      world.gcs.requests.every((request) => !request.url.includes("gcf-v2-sources")),
+      "the sources bucket is never touched",
+    );
   } finally {
     await rm(world.dir, { recursive: true, force: true });
   }
@@ -932,7 +971,12 @@ test("a refused upload DELETE leaves the target uncleaned and the ledger open", 
   const world = await uploadWorld();
   try {
     const upload = await world.uploads.beginDeploy("program:http");
-    const state = { started: true, cleaned: false, upload, deployTrack: { exited: true } };
+    const state = {
+      started: true,
+      cleaned: false,
+      upload,
+      deployTrack: { exited: true, exitCode: 1 },
+    };
     world.gcs.put(UPLOAD_OBJECT);
     upload.receipt({ bucket: world.FAKE_BUCKET, object: UPLOAD_OBJECT });
     world.gcs.override({ method: "DELETE", url: UPLOAD_OBJECT }, world.answer(403));
@@ -1037,20 +1081,25 @@ async function runFakeCli(body, kind, track) {
   return { dir, runDir, error, summary, diagnostics: await diagnostics };
 }
 
-const FAKE_RECEIPT_SCRIPT = (tail) => `
+const FAKE_RECEIPT_SCRIPT = (tail, put) => `
 const body = JSON.stringify({
   uploadUrl: "https://storage.googleapis.com/gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com/${UPLOAD_OBJECT}?X-Goog-Signature=SECRET-MARKER-9f3a",
   storageSource: { bucket: "gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com", object: "${UPLOAD_OBJECT}" },
 });
 console.log("i  functions: deploying");
 console.log("[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions:generateUploadUrl " + body);
+${
+  put
+    ? `console.log("[2026-10-26T01:02:04.000Z] <<< [apiv2][status] PUT https://storage.googleapis.com/gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com/${UPLOAD_OBJECT} ${put}");`
+    : ""
+}
 console.log("ARGV " + JSON.stringify(process.argv.slice(2)));
 ${tail}
 `;
 
 test("a deploy CLI runs with --debug, hands over its receipt and ends by itself", async () => {
   const seen = [];
-  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const track = { onEvent: (event) => seen.push(event) };
   const run = await runFakeCli(FAKE_RECEIPT_SCRIPT("process.exit(0);"), "cliDeploy", track);
   try {
     assert.equal(run.error, undefined);
@@ -1065,7 +1114,7 @@ test("a deploy CLI runs with --debug, hands over its receipt and ends by itself"
 
 test("a failing deploy CLI still hands over its receipt, and its diagnostic keeps no debug line", async () => {
   const seen = [];
-  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const track = { onEvent: (event) => seen.push(event) };
   const run = await runFakeCli(
     FAKE_RECEIPT_SCRIPT(
       'const { writeFileSync } = await import("node:fs"); writeFileSync("firebase-debug.log", "signed"); console.error("Error: Failed to create function"); process.exit(1);',
@@ -1095,7 +1144,7 @@ test("a failing deploy CLI still hands over its receipt, and its diagnostic keep
 
 test("a deploy CLI killed by a signal is not an exit by itself, and its receipt is kept", async () => {
   const seen = [];
-  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const track = { onEvent: (event) => seen.push(event) };
   const run = await runFakeCli(
     FAKE_RECEIPT_SCRIPT('process.kill(process.pid, "SIGKILL"); await new Promise(() => {});'),
     "cliDeploy",
@@ -1112,7 +1161,7 @@ test("a deploy CLI killed by a signal is not an exit by itself, and its receipt 
 
 test("only a deploy gets --debug; a delete CLI is run as before", async () => {
   const withTrack = await runFakeCli(FAKE_RECEIPT_SCRIPT("process.exit(0);"), "cliDeploy", {
-    onReceipt() {},
+    onEvent() {},
   });
   const without = await runFakeCli(
     'console.log("ARGV " + JSON.stringify(process.argv.slice(2)));\nprocess.exit(3);',
@@ -1175,6 +1224,7 @@ test("a deploy that failed after the upload is cleaned from the CLI receipt and 
   const { world, state, deployError } = await deployThenCleanUp({
     script: FAKE_RECEIPT_SCRIPT(
       'console.error("Error: Failed to create function"); process.exit(1);',
+      200,
     ),
     putObject: true,
   });
@@ -1243,10 +1293,9 @@ const FH_PACKAGE =
 const FH_DIGEST = `sha256:${"ab".repeat(32)}`;
 const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
 
-async function observeWorld({ deployScript, deleteStatus, recordOnce = false }) {
+async function observeWorld({ deployScript, deleteStatus }) {
   const base = await uploadWorld();
-  const { FAKE_BUCKET } = base;
-  const deployed = { present: false, versionExists: false, bindings: [], recordReads: 0 };
+  const deployed = { present: false, versionExists: false, bindings: [] };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
     base.budget.take(kind);
     const reply = (status, value = {}) => ({ status, value, bytes: 10 });
@@ -1254,23 +1303,7 @@ async function observeWorld({ deployScript, deleteStatus, recordOnce = false }) 
     if (url.startsWith("https://storage.googleapis.com/")) {
       result = await base.gcs.send(method, url);
     } else if (url === `https://cloudfunctions.googleapis.com/v2/${FH_FUNCTION}`) {
-      deployed.recordReads += 1;
-      result =
-        deployed.present && (!recordOnce || deployed.recordReads === 2)
-          ? reply(200, {
-              name: FH_FUNCTION,
-              environment: "GEN_2",
-              buildConfig: {
-                runtime: "nodejs22",
-                entryPoint: "fireemuHttpProbe",
-                source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } },
-              },
-              serviceConfig: {
-                service: FH_SERVICE,
-                uri: "https://fireemuhttpprobe-abc-uc.a.run.app",
-              },
-            })
-          : reply(404);
+      result = deployed.present ? reply(200, recordedGen2Record()) : reply(404);
     } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}`) {
       result = deployed.present
         ? reply(200, {
@@ -1363,7 +1396,7 @@ async function observeWorld({ deployScript, deleteStatus, recordOnce = false }) 
 }
 
 test("a whole program: deploy, observe, clean up, and the source upload is deleted by generation", async () => {
-  const world = await observeWorld({ deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);") });
+  const world = await observeWorld({ deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200) });
   try {
     assert.equal(world.error, undefined);
     assert.ok(world.recordings[0][world.program.id]);
@@ -1376,7 +1409,7 @@ test("a whole program: deploy, observe, clean up, and the source upload is delet
       world.logs.includes("function-deployed") && world.logs.includes("source-upload-deleted"),
     );
     const used = world.budget.snapshot();
-    assert.ok(used.upload >= 5 && used.upload <= 244, `upload requests ${used.upload}`);
+    assert.ok(used.upload >= 5 && used.upload <= 240, `upload requests ${used.upload}`);
     assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
     assert.deepEqual(world.argv[0], [
       "deploy",
@@ -1388,16 +1421,15 @@ test("a whole program: deploy, observe, clean up, and the source upload is delet
   }
 });
 
-test("a whole program whose CLI output shows no receipt still takes it from the function record", async () => {
-  // the record is readable once, right after the deploy: the cleanup cannot read it again
+test("a whole program whose CLI printed no receipt and exited 0 stops with the upload unexplained (S1)", async () => {
   const world = await observeWorld({
     deployScript: 'console.log("i  functions: deploying");\nprocess.exit(0);',
-    recordOnce: true,
   });
   try {
-    assert.equal(world.error, undefined);
-    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
-    assert.equal(world.uploads.report().closureReady, true);
+    assert.equal(world.error.residual, true);
+    assert.ok(world.gcs.objects.has(UPLOAD_OBJECT), "an object without a receipt is never deleted");
+    assert.equal(world.gcs.count("DELETE"), 0);
+    assert.equal(world.uploads.report().closureReady, false);
   } finally {
     await rm(world.dir, { recursive: true, force: true });
   }
@@ -1407,6 +1439,7 @@ test("a whole program whose deploy failed after the upload still deletes the upl
   const world = await observeWorld({
     deployScript: FAKE_RECEIPT_SCRIPT(
       'console.error("Error: Failed to create function"); process.exit(1);',
+      200,
     ),
   });
   try {
@@ -1421,7 +1454,7 @@ test("a whole program whose deploy failed after the upload still deletes the upl
 
 test("a whole program whose upload cannot be deleted leaves the responsibility open", async () => {
   const world = await observeWorld({
-    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);"),
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
     deleteStatus: 403,
   });
   try {
@@ -1477,7 +1510,8 @@ test("the REST control reaches Cloud Storage, passes any status when asked and r
     );
     assert.equal(reply.status, 412);
     assert.equal(reply.bytes, '{"error":{"code":412}}'.length);
-    assert.equal(budget.snapshot().upload, 2, "the token refresh and the request");
+    assert.equal(budget.snapshot().upload, 1, "the request");
+    assert.equal(budget.snapshot().token, 1, "the token refresh is counted apart");
     await assert.rejects(
       () =>
         control(
@@ -1498,7 +1532,7 @@ test("the REST control reaches Cloud Storage, passes any status when asked and r
 });
 
 test("a deploy CLI that is stopped by the runner and exits on its own is still not an exit by itself", async () => {
-  const track = { onReceipt() {} };
+  const track = { onEvent() {} };
   const run = await runFakeCli(
     `process.on("SIGTERM", () => process.exit(7));
 for (let i = 0; i < 17_000; i += 1) process.stdout.write("x ".repeat(500) + "\\n");
@@ -1516,7 +1550,7 @@ setInterval(() => {}, 1000);`,
 
 test("a receipt on the last line, with no newline, is still read when the CLI ends", async () => {
   const seen = [];
-  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const track = { onEvent: (event) => seen.push(event) };
   const run = await runFakeCli(
     `const body = JSON.stringify({ storageSource: { bucket: "b", object: "${UPLOAD_OBJECT}" } });
 process.stdout.write("<<< [apiv2][body] POST https://x/v2/p/functions:generateUploadUrl " + body);`,
@@ -1533,9 +1567,116 @@ process.stdout.write("<<< [apiv2][body] POST https://x/v2/p/functions:generateUp
 
 test("the upload bound is the reviewed number and a budget can be exhausted", async () => {
   const { BOUNDS, createBudget } = await import("./harness.mjs");
-  assert.equal(BOUNDS.upload, 16 * 15 + 4);
+  assert.equal(BOUNDS.upload, 16 * 15);
+  assert.equal(BOUNDS.token, 12);
   const budget = createBudget();
   for (let n = 0; n < BOUNDS.upload; n += 1) budget.take("upload");
-  assert.throws(() => budget.take("upload"), /upload ceiling 244 reached/);
-  assert.equal(budget.snapshot().upload, 244);
+  assert.throws(() => budget.take("upload"), /upload ceiling 240 reached/);
+  assert.equal(budget.snapshot().upload, 240);
+});
+
+test("a response body is bounded in bytes while it is read, not after (S3)", async () => {
+  const wide = "é".repeat(600_000); // 1.2 million bytes, 600 thousand characters
+  const stream = (chunks) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+          controller.close();
+        },
+      }),
+    );
+  await assert.rejects(() => production.readBoundedText(stream([wide])), /exceeded 1 MiB/);
+  const limit = 1024 * 1024;
+  assert.equal((await production.readBoundedText(stream(["a".repeat(limit)]))).length, limit);
+  await assert.rejects(
+    () => production.readBoundedText(stream(["a".repeat(limit), "a"])),
+    /exceeded 1 MiB/,
+  );
+  assert.equal(await production.readBoundedText(new Response(null)), "");
+});
+
+test("a stale CLI debug log is removed before a deploy and the pattern is git-ignored (S2)", async () => {
+  const stale = new URL("firebase-debug.3.log", import.meta.url);
+  await writeFile(stale, "signed upload URL from an earlier run");
+  const run = await runFakeCli(FAKE_RECEIPT_SCRIPT("process.exit(0);"), "cliDeploy", {
+    onEvent() {},
+  });
+  try {
+    await assert.rejects(() => stat(stale), { code: "ENOENT" });
+    const { execFileSync } = await import("node:child_process");
+    for (const name of ["firebase-debug.log", "firebase-debug.3.log"]) {
+      assert.doesNotThrow(() =>
+        execFileSync("git", ["check-ignore", "-q", `conformance/functions-http/${name}`], {
+          cwd: new URL("../..", import.meta.url),
+        }),
+      );
+    }
+  } finally {
+    await rm(stale, { force: true });
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("one receipt inside several MB of interleaved debug output is read once and stored nowhere (N9)", async () => {
+  const seen = [];
+  const track = { onEvent: (event) => seen.push(event) };
+  const run = await runFakeCli(
+    `const body = JSON.stringify({
+  uploadUrl: "https://storage.googleapis.com/b/o?X-Goog-Signature=SECRET-MARKER-9f3a",
+  storageSource: { bucket: "gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com", object: "${UPLOAD_OBJECT}" },
+});
+const receipt = "[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/p/functions:generateUploadUrl " + body + "\\n";
+const noise = (n) => ("[2026-10-26T01:02:03.456Z] >>> debug " + "y".repeat(90) + "\\n").repeat(n);
+let state = 1;
+const next = () => (state = (state * 1103515245 + 12345) % 2147483648);
+for (let i = 0; i < 20; i += 1) {
+  process.stdout.write(noise(2000));
+  process.stderr.write(noise(1000));
+  if (i === 10) {
+    const cut = 1 + (next() % (receipt.length - 2));
+    process.stdout.write(receipt.slice(0, cut));
+    process.stderr.write(noise(50));
+    await new Promise((r) => setTimeout(r, 20));
+    process.stdout.write(receipt.slice(cut));
+  }
+}
+console.error("Error: Failed to create function");
+process.exitCode = 1;`,
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.ok(run.error);
+    assert.equal(seen.filter((event) => event.type === "receipt").length, 1);
+    const stored = await readFile(join(run.runDir, run.diagnostics[0]), "utf8");
+    assert.doesNotMatch(stored, /SECRET-MARKER|>>> debug|generateUploadUrl/);
+    assert.match(stored, /Failed to create function/);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("a token refresh never costs the last upload request its place (S4)", async () => {
+  const { BOUNDS, createBudget } = await import("./harness.mjs");
+  const adc = { refresh_token: "r", client_id: "c", client_secret: "s" };
+  const handler = (url) =>
+    url.startsWith("https://oauth2.googleapis.com/")
+      ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
+      : new Response("{}", { status: 200 });
+  await withStubbedFetch(handler, async () => {
+    const budget = createBudget();
+    for (let n = 0; n < BOUNDS.upload - 1; n += 1) budget.take("upload");
+    const control = production.createControl(adc, budget);
+    const reply = await control(
+      "GET",
+      "https://storage.googleapis.com/storage/v1/b/b/o/x",
+      undefined,
+      "upload",
+      "any",
+    );
+    assert.equal(reply.status, 200);
+    assert.equal(budget.snapshot().upload, BOUNDS.upload);
+    assert.equal(budget.snapshot().token, 1);
+  });
 });

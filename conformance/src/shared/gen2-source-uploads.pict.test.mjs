@@ -1,6 +1,6 @@
 // A table-driven test of the Gen2 source upload helper over the pairwise combinations of the
 // factors that decide a deploy's outcome (PICT model gen2-upload-cleanup.pict, pairwise, with the
-// mandatory combinations of gen2-upload-cleanup.seed.tsv): object arrived or not, CLI ended by
+// mandatory combinations of gen2-upload-cleanup.seed.tsv): object arrived or not, the PUT's own status line, CLI ended by
 // itself or was killed, metadata answer, DELETE answer, read-back answer, a new foreign object or a
 // bucket grown past the page bound, a failing after-list, a short budget.
 
@@ -24,56 +24,63 @@ const OTHER = "11111111-2222-4333-8444-555555555555.zip";
 const FOREIGN = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.zip";
 
 const TABLE = `
-object	cli	meta	delete	readback	extra	list	budget
-present	exited	ok	ok204	absent404	none	ok	ok
-absent	exited	ok	ok204	absent404	none	ok	ok
-absent	killed	ok	ok204	absent404	none	ok	ok
-present	killed	ok	ok204	absent404	none	ok	ok
-present	exited	ok	conflict412	absent404	none	ok	ok
-present	exited	ok	gone404	absent404	none	ok	ok
-present	exited	ok	ok204	present200	none	ok	ok
-present	exited	ok	ok204	absent404	foreign	ok	ok
-present	exited	ok	ok204	absent404	none	ok	short
-present	killed	ok	gone404	absent404	foreign	unavailable	ok
-present	killed	ok	forbidden403	absent404	none	ok	short
-present	exited	ok	throws	absent404	foreign	unavailable	ok
-present	killed	ok	unavailable503	absent404	grown	unavailable	ok
-present	exited	ok	stayed204	absent404	grown	ok	ok
-present	exited	forbidden	ok204	absent404	foreign	unavailable	ok
-present	exited	ok	unavailable503	absent404	none	ok	short
-present	killed	ok	conflict412	absent404	grown	unavailable	ok
-present	killed	forbidden	ok204	absent404	grown	ok	ok
-present	killed	unavailable	ok204	absent404	foreign	unavailable	ok
-present	exited	throws	ok204	absent404	foreign	unavailable	ok
-present	exited	ok	unavailable503	absent404	foreign	unavailable	ok
-present	killed	throws	ok204	absent404	none	ok	short
-present	killed	ok	stayed204	absent404	none	ok	short
-present	killed	forbidden	ok204	absent404	none	ok	short
-present	exited	ok	conflict412	absent404	foreign	unavailable	ok
-present	killed	ok	throws	absent404	none	ok	short
-present	killed	wrongname	ok204	absent404	none	ok	short
-present	exited	ok	throws	absent404	grown	unavailable	ok
-present	exited	wrongname	ok204	absent404	foreign	unavailable	ok
-present	killed	ok	ok204	unavailable503	none	ok	short
-present	exited	ok	ok204	unavailable503	grown	unavailable	ok
-present	exited	ok	stayed204	absent404	foreign	unavailable	ok
-present	killed	throws	ok204	absent404	grown	unavailable	ok
-present	exited	ok	forbidden403	absent404	grown	unavailable	ok
-present	exited	wrongname	ok204	absent404	grown	unavailable	ok
-present	exited	ok	ok204	unavailable503	foreign	ok	ok
-present	killed	ok	conflict412	absent404	none	ok	short
-present	exited	ok	forbidden403	absent404	foreign	unavailable	ok
-present	killed	ok	ok204	present200	foreign	unavailable	ok
-absent	exited	ok	ok204	absent404	grown	unavailable	ok
-present	exited	unavailable	ok204	absent404	none	ok	short
-present	exited	ok	ok204	present200	none	ok	short
-present	exited	ok	ok204	present200	grown	unavailable	ok
-present	killed	ok	ok204	unavailable503	none	unavailable	ok
-present	killed	unavailable	ok204	absent404	grown	unavailable	ok
-absent	killed	ok	ok204	absent404	none	ok	short
-present	killed	ok	gone404	absent404	none	ok	short
-present	killed	ok	gone404	absent404	grown	ok	ok
-absent	killed	ok	ok204	absent404	foreign	unavailable	ok
+object	put	cli	meta	delete	readback	extra	list	budget
+present	ok	exited	ok	ok204	absent404	none	ok	ok
+present	none	exited	ok	ok204	absent404	none	ok	ok
+absent	refused	exited	ok	ok204	absent404	none	ok	ok
+absent	none	exited	ok	ok204	absent404	none	ok	ok
+absent	ok	exited	ok	ok204	absent404	none	ok	ok
+absent	unavailable	killed	ok	ok204	absent404	none	ok	ok
+absent	refused	killed	ok	ok204	absent404	none	ok	ok
+present	ok	killed	ok	ok204	absent404	none	ok	ok
+present	ok	exited	ok	conflict412	absent404	none	ok	ok
+present	ok	exited	ok	gone404	absent404	none	ok	ok
+present	ok	exited	ok	ok204	present200	none	ok	ok
+present	ok	exited	ok	ok204	absent404	foreign	ok	ok
+present	ok	exited	ok	ok204	absent404	none	ok	short
+present	none	killed	ok	gone404	absent404	foreign	unavailable	ok
+present	none	killed	ok	forbidden403	absent404	none	ok	short
+present	ok	exited	ok	throws	absent404	foreign	unavailable	ok
+present	ok	exited	ok	unavailable503	absent404	grown	unavailable	ok
+present	none	killed	ok	stayed204	absent404	grown	ok	ok
+present	none	exited	forbidden	ok204	absent404	foreign	unavailable	ok
+present	none	killed	ok	unavailable503	absent404	none	ok	short
+present	none	killed	ok	conflict412	absent404	grown	unavailable	ok
+present	none	exited	wrongname	ok204	absent404	none	ok	short
+present	ok	exited	unavailable	ok204	absent404	none	ok	short
+present	ok	exited	ok	stayed204	absent404	none	ok	short
+present	ok	exited	ok	ok204	unavailable503	grown	unavailable	ok
+present	ok	exited	throws	ok204	absent404	none	ok	short
+present	none	killed	throws	ok204	absent404	foreign	unavailable	ok
+present	ok	exited	ok	gone404	absent404	grown	unavailable	ok
+present	none	killed	unavailable	ok204	absent404	grown	unavailable	ok
+present	none	exited	ok	unavailable503	absent404	foreign	unavailable	ok
+present	ok	exited	throws	ok204	absent404	grown	unavailable	ok
+present	none	killed	ok	throws	absent404	none	ok	short
+present	ok	exited	ok	forbidden403	absent404	grown	unavailable	ok
+present	ok	killed	forbidden	ok204	absent404	none	ok	short
+absent	refused	exited	ok	ok204	absent404	grown	unavailable	ok
+present	none	killed	ok	ok204	unavailable503	none	ok	short
+present	ok	killed	wrongname	ok204	absent404	grown	unavailable	ok
+present	none	exited	ok	stayed204	absent404	foreign	unavailable	ok
+present	ok	exited	ok	forbidden403	absent404	foreign	unavailable	ok
+absent	unavailable	exited	ok	ok204	absent404	foreign	unavailable	ok
+present	none	killed	wrongname	ok204	absent404	foreign	unavailable	ok
+present	ok	killed	ok	ok204	unavailable503	foreign	ok	ok
+present	ok	exited	forbidden	ok204	absent404	grown	unavailable	ok
+absent	refused	killed	ok	ok204	absent404	foreign	unavailable	ok
+present	none	exited	ok	conflict412	absent404	none	ok	short
+present	none	killed	ok	ok204	present200	grown	unavailable	ok
+present	none	killed	ok	conflict412	absent404	foreign	ok	ok
+absent	refused	killed	ok	ok204	absent404	none	ok	short
+present	none	killed	ok	throws	absent404	grown	unavailable	ok
+present	none	exited	ok	ok204	present200	foreign	ok	ok
+present	ok	killed	ok	ok204	present200	none	ok	short
+present	none	exited	unavailable	ok204	absent404	foreign	ok	ok
+absent	unavailable	killed	ok	ok204	absent404	grown	ok	ok
+absent	unavailable	killed	ok	ok204	absent404	none	ok	short
+present	none	exited	ok	gone404	absent404	none	ok	short
+present	ok	exited	forbidden	ok204	absent404	none	unavailable	ok
 `;
 
 const [HEADER, ...ROWS] = TABLE.trim()
@@ -110,6 +117,10 @@ async function runRow(row) {
     const deploy = await uploads.beginDeploy("p:http");
     if (f.object === "present") world.put(OBJECT);
     deploy.receipt({ bucket: FAKE_BUCKET, object: OBJECT });
+    const putStatuses = { none: [], ok: [200], refused: [403], unavailable: [503] }[f.put];
+    for (const status of putStatuses) {
+      deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object: OBJECT, status });
+    }
     if (f.extra === "foreign") world.put(FOREIGN);
     if (f.extra === "grown") {
       for (let i = 0; i < UPLOAD_BOUNDS.pageSize * UPLOAD_BOUNDS.maxPages; i += 1) {
@@ -147,7 +158,10 @@ async function runRow(row) {
     if (f.list === "unavailable") world.override({ method: "GET", url: "/o?" }, answer(503));
     if (f.budget === "short") left = used + 1;
     const before = world.requests.length;
-    const result = await deploy.finish({ cliExited: f.cli === "exited" });
+    const result = await deploy.finish({
+      cliExited: f.cli === "exited",
+      exitCode: f.cli === "exited" ? 1 : null,
+    });
     const sent = world.requests.slice(before);
 
     const expectClean =
@@ -158,7 +172,7 @@ async function runRow(row) {
         f.meta === "ok" &&
         f.delete === "ok204" &&
         f.readback === "absent404") ||
-        (f.object === "absent" && f.cli === "exited"));
+        (f.object === "absent" && f.put === "refused"));
     assert.equal(result.clean, expectClean, `${row.join(" ")} -> ${result.reasons}`);
     const deletes = sent.filter((request) => request.method === "DELETE");
     assert.ok(deletes.length <= 1, "a DELETE is never re-sent");

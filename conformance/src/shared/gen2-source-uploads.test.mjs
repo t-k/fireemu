@@ -23,8 +23,7 @@ import {
   openSourceUploads,
   redactUploadSecrets,
   uploadBucketName,
-  uploadReceiptFromFunctionRecord,
-  uploadReceiptsFromCliOutput,
+  uploadEventsFromCliOutput,
 } from "./gen2-source-uploads.mjs";
 
 const OBJECT = "9be229fd-1507-4797-ab4b-69f2fda6e54a.zip";
@@ -55,6 +54,8 @@ function open(world, extra = {}) {
 }
 
 const receiptOf = (object = OBJECT, bucket = FAKE_BUCKET) => ({ bucket, object });
+const putStatus = (deploy, object, status) =>
+  deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object, status });
 
 describe("the reviewed bounds", () => {
   it("are the numbers a packet binds before it sends", () => {
@@ -128,49 +129,6 @@ describe("the upload bucket (T1)", () => {
 });
 
 describe("receipts", () => {
-  it("reads storageSource from a function record, and nothing else", () => {
-    const record = {
-      buildConfig: {
-        source: {
-          storageSource: {
-            bucket: FAKE_BUCKET,
-            object: OBJECT,
-            sourceUploadUrl: `https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT}?sig=${SECRET_MARKER}`,
-          },
-        },
-      },
-    };
-    assert.deepEqual(uploadReceiptFromFunctionRecord(record), receiptOf());
-    assert.equal(uploadReceiptFromFunctionRecord({ buildConfig: {} }), null);
-    assert.equal(uploadReceiptFromFunctionRecord(null), null);
-    assert.equal(
-      uploadReceiptFromFunctionRecord({
-        buildConfig: { source: { repoSource: { repoName: "x" } } },
-      }),
-      null,
-    );
-  });
-
-  it("reads every recorded Gen2 function record the way the record says", () => {
-    const recorded = JSON.parse(
-      readFileSync(
-        new URL(
-          "../functions-events/record/recorded/v4-run/0029-lists.functions-v2.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    );
-    assert.ok(recorded.body.functions.length > 0);
-    for (const record of recorded.body.functions) {
-      const source = record.buildConfig.source.storageSource;
-      assert.deepEqual(uploadReceiptFromFunctionRecord(record), {
-        bucket: source.bucket,
-        object: source.object,
-      });
-    }
-  });
-
   it("reads the generateUploadUrl answer from debug output and ignores other lines", () => {
     const body = JSON.stringify({
       uploadUrl: `https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT}?X-Goog-Signature=${SECRET_MARKER}`,
@@ -188,7 +146,31 @@ describe("receipts", () => {
       `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions ${body}`,
       `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrlX ${body}`,
     ].join("\n");
-    assert.deepEqual(uploadReceiptsFromCliOutput(output), [receiptOf()]);
+    assert.deepEqual(uploadEventsFromCliOutput(output), [{ type: "receipt", ...receiptOf() }]);
+  });
+
+  it("reads the status line of the upload's PUT, and only that", () => {
+    const put = (url, status) =>
+      `[2026-10-26T01:02:05.000Z] <<< [apiv2][status] PUT ${url} ${status}`;
+    const base = `https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT}`;
+    const output = [
+      put(base, 200),
+      put(base, 403),
+      `<<< [apiv2][status] PUT ${base} 503`,
+      put(`${base}?X-Goog-Signature=${SECRET_MARKER}`, 200),
+      put(`https://example.com/${FAKE_BUCKET}/${OBJECT}`, 200),
+      put(`https://storage.googleapis.com/${FAKE_BUCKET}`, 200),
+      `[2026-10-26T01:02:05.000Z] <<< [apiv2][status] GET ${base} 200`,
+      `[2026-10-26T01:02:05.000Z] <<< [apiv2][status] PUT ${base} 2000`,
+      `[2026-10-26T01:02:05.000Z] <<< [apiv2][status] PUT ${base} ok`,
+    ].join("\n");
+    const status = (code) => ({
+      type: "put-status",
+      bucket: FAKE_BUCKET,
+      object: OBJECT,
+      status: code,
+    });
+    assert.deepEqual(uploadEventsFromCliOutput(output), [status(200), status(403), status(503)]);
   });
 
   it("scans a stream chunk by chunk, across arbitrary chunk boundaries", () => {
@@ -196,18 +178,18 @@ describe("receipts", () => {
     const line = `[2026-10-26T01:02:03.999Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl ${body}\n`;
     for (let cut = 1; cut < line.length; cut += 17) {
       const seen = [];
-      const scanner = createReceiptScanner((receipt) => seen.push(receipt));
+      const scanner = createReceiptScanner((event) => seen.push(event));
       scanner.feed(line.slice(0, cut));
       scanner.feed(line.slice(cut));
       scanner.flush();
-      assert.deepEqual(seen, [receiptOf()], `cut at ${cut}`);
+      assert.deepEqual(seen, [{ type: "receipt", ...receiptOf() }], `cut at ${cut}`);
     }
     const seen = [];
-    const scanner = createReceiptScanner((receipt) => seen.push(receipt));
+    const scanner = createReceiptScanner((event) => seen.push(event));
     scanner.feed(line.trimEnd());
     assert.deepEqual(seen, [], "a line without its newline waits");
     scanner.flush();
-    assert.deepEqual(seen, [receiptOf()]);
+    assert.deepEqual(seen, [{ type: "receipt", ...receiptOf() }]);
   });
 
   it("redacts signed upload URLs and signature parameters (T7)", () => {
@@ -287,7 +269,7 @@ describe("a clean deploy (T3)", () => {
     const intent = rows.find((row) => row.phase === "intent");
     assert.deepEqual(
       [intent.action, intent.name, intent.transport],
-      ["create", "deploy:program-1:http", "cli"],
+      ["create", "deploy:program-1:http", "accounting"],
     );
   });
 
@@ -640,27 +622,106 @@ describe("delete and read-back answers (T4)", () => {
     }
   });
 
-  it("a receipt whose object never arrived is absent only when the CLI exited by itself", async () => {
-    for (const [cliExited, clean] of [
-      [true, true],
-      [false, false],
-    ]) {
+  it("settles a receipt whose object never arrived only by the PUT's own answer (M2)", async () => {
+    const cases = [
+      // [PUT status lines, CLI exited, clean, reason]
+      [[], true, false, "receipt-unconfirmed"],
+      [[], false, false, "receipt-unconfirmed"],
+      [[503], true, false, "receipt-unconfirmed"],
+      [[408], true, false, "receipt-unconfirmed"],
+      [[429], true, false, "receipt-unconfirmed"],
+      [[499], true, false, "receipt-unconfirmed"],
+      [[301], true, false, "receipt-unconfirmed"],
+      [[403], true, true, undefined],
+      [[400], true, true, undefined],
+      [[503, 403], true, true, undefined],
+      [[403, 503], true, false, "receipt-unconfirmed"],
+      [[200], true, false, "confirmed-upload-absent"],
+      [[503, 200], true, false, "confirmed-upload-absent"],
+      [[200], false, false, "confirmed-upload-absent"],
+    ];
+    for (const [index, [statuses, cliExited, clean, reason]] of cases.entries()) {
       const world = createFakeGcs();
-      const { uploads } = open(world, { ledgerPath: join(dir, `${cliExited}.jsonl`) });
+      const { uploads } = open(world, { ledgerPath: join(dir, `put-${index}.jsonl`) });
       const deploy = await uploads.beginDeploy("program-1:http");
       deploy.receipt(receiptOf());
-      const result = await deploy.finish({ cliExited });
-      assert.equal(result.clean, clean, `cliExited=${cliExited}`);
-      assert.equal(
-        result.reasons.some((reason) => reason.startsWith("receipt-unconfirmed:")),
-        !cliExited,
-      );
-      assert.equal(
-        world.count("DELETE"),
-        0,
-        "no generation-conditional DELETE for an object never made",
-      );
+      for (const status of statuses) putStatus(deploy, OBJECT, status);
+      const result = await deploy.finish({ cliExited, exitCode: cliExited ? 1 : null });
+      const label = `${JSON.stringify(statuses)} exited=${cliExited}: ${result.reasons}`;
+      assert.equal(result.clean, clean, label);
+      if (reason)
+        assert.ok(
+          result.reasons.some((r) => r.startsWith(`${reason}:`)),
+          label,
+        );
+      assert.equal(uploads.report().closureReady, clean, label);
+      assert.equal(world.count("DELETE"), 0, "no DELETE for an object that is not there");
     }
+  });
+
+  it("deletes an object whose PUT status was never seen once an own read shows it", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    world.put(OBJECT);
+    deploy.receipt(receiptOf());
+    const result = await deploy.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(result.clean, true);
+    assert.ok(!world.objects.has(OBJECT));
+    const report = uploads.report();
+    assert.equal(report.closureReady, true);
+    assert.equal(
+      report.a2Required,
+      true,
+      "an unknown create was settled: the A2 read-back precedes the close row",
+    );
+  });
+
+  it("does not look for an object the PUT's own answer refused, but flags it if it is there", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    world.put(OBJECT);
+    deploy.receipt(receiptOf());
+    putStatus(deploy, OBJECT, 403);
+    const result = await deploy.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(result.clean, false);
+    assert.ok(result.reasons.includes(`unexplained-object:${OBJECT}`));
+    assert.equal(world.count("DELETE"), 0);
+    assert.ok(world.objects.has(OBJECT));
+  });
+
+  it("a deploy that ended well with no receipt used a path this helper does not see (S1)", async () => {
+    for (const [cliExited, exitCode, reason] of [
+      [true, 0, "no-receipt"],
+      [false, null, "killed-without-receipt"],
+    ]) {
+      const world = createFakeGcs();
+      const { uploads } = open(world, { ledgerPath: join(dir, `none-${exitCode}.jsonl`) });
+      const deploy = await uploads.beginDeploy("program-1:http");
+      const result = await deploy.finish({ cliExited, exitCode });
+      assert.equal(result.clean, false);
+      assert.ok(result.reasons.includes(reason), result.reasons.join(","));
+    }
+    for (const exitCode of [1, 2, 255, null]) {
+      const world = createFakeGcs();
+      const { uploads } = open(world, { ledgerPath: join(dir, `fail-${exitCode}.jsonl`) });
+      const deploy = await uploads.beginDeploy("program-1:http");
+      const result = await deploy.finish({ cliExited: true, exitCode });
+      assert.equal(result.clean, true, `exit ${exitCode} before any upload leaves nothing`);
+    }
+  });
+
+  it("a PUT line for an object with no receipt, or in another bucket, owns nothing", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object: OTHER, status: 200 });
+    deploy.observe({ type: "put-status", bucket: "elsewhere", object: OBJECT, status: 200 });
+    deploy.observe(null);
+    deploy.observe({ type: "other" });
+    const result = await deploy.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(result.clean, true);
   });
 });
 
@@ -761,6 +822,23 @@ describe("pagination, counts and budget (T5)", () => {
       const { uploads } = open(world, { ledgerPath: join(dir, `page-${index}.jsonl`) });
       await assert.rejects(() => uploads.beginDeploy("program-1:http"), /baseline/, String(index));
     }
+  });
+
+  it("a page with more items than the reviewed page size is incomplete (S3)", async () => {
+    const items = Array.from({ length: UPLOAD_BOUNDS.pageSize + 1 }, (_, i) => ({
+      name: `o-${i}`,
+    }));
+    const world = createFakeGcs();
+    world.override({ method: "GET", url: "/o?" }, answer(200, { items }));
+    const { uploads } = open(world);
+    await assert.rejects(() => uploads.beginDeploy("program-1:http"), /baseline/);
+    const exact = createFakeGcs();
+    exact.override(
+      { method: "GET", url: "/o?" },
+      answer(200, { items: items.slice(0, UPLOAD_BOUNDS.pageSize) }),
+    );
+    const second = open(exact, { ledgerPath: join(dir, "exact.jsonl") });
+    assert.ok(await second.uploads.beginDeploy("program-1:http"));
   });
 
   it("a missing bucket is empty only on the first page, and only when the 404 can be read", async () => {
@@ -971,7 +1049,7 @@ describe("credentials never reach the journal or the report (T7)", () => {
       uploadUrl: `https://storage.googleapis.com/${FAKE_BUCKET}/${OBJECT}?X-Goog-Signature=${SECRET_MARKER}`,
       storageSource: { bucket: FAKE_BUCKET, object: OBJECT, token: SECRET_MARKER },
     });
-    const scanner = createReceiptScanner((receipt) => deploy.receipt(receipt));
+    const scanner = createReceiptScanner((event) => deploy.observe(event));
     scanner.feed(
       `[2026-10-26T01:02:03.999Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/${FAKE_REGION}/functions:generateUploadUrl ${body}\n`,
     );

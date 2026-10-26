@@ -1568,3 +1568,41 @@ test("the signUp answer is bounded in bytes while it is read (R2-S1)", async () 
     await rm(runDir, { recursive: true, force: true });
   }
 });
+
+test("the recorder refuses any Firebase CLI but the pinned 15.28.2", async () => {
+  const real = (file) => readFile(new URL(file, import.meta.url));
+  for (const version of ["15.28.1", "15.28.3", "15.29.0", "16.0.0"]) {
+    await assert.rejects(
+      () =>
+        production.requiredSourceDigests(async (name) =>
+          name.endsWith("firebase-tools/package.json")
+            ? Buffer.from(JSON.stringify({ version }))
+            : real(name),
+        ),
+      /pinned Firebase CLI 15\.28\.2 is required/,
+      version,
+    );
+  }
+});
+
+test("the recorder accepts the fixtures that are committed and refuses a changed lock file (C1)", async () => {
+  const corpus = await production.requiredSourceDigests();
+  assert.equal(corpus.programs.length, 15);
+  const real = (file) => readFile(new URL(file, import.meta.url));
+  for (const file of [
+    "corpus.json",
+    "fixtures/index.js",
+    "firebase.json",
+    "fixtures/package.json",
+    "fixtures/package-lock.json",
+  ]) {
+    await assert.rejects(
+      () =>
+        production.requiredSourceDigests(async (name) =>
+          name === file ? Buffer.concat([await real(name), Buffer.from(" ")]) : real(name),
+        ),
+      new RegExp(`reviewed source changed: ${file.replace(".", "\\.")}`),
+      file,
+    );
+  }
+});

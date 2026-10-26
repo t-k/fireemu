@@ -79,6 +79,9 @@
       "callable Authorization integrity: only a Firebase ID token verified against the target project AuthRegistry on the virtual clock and resolved as a user is reinserted. Bearer owner, service credentials, non-Bearer values and duplicate or folded fields are never callable user identities",
       "every caller-supplied copy of a field the daemon owns is stripped before the trusted one is inserted: the App Check field, Authorization, the per-runner secret, and the x-callable-context-auth / x-original-auth channels firebase-functions honours under the debug switch to override v1 callable auth context",
       "ordinary onRequest functions receive the raw App Check field list unclassified, duplicates included: application code owns custom-backend verification there (section 7.3)",
+      "firebase-admin getAppCheck().verifyToken() inside a function (13.x and 14.x, resolved from the codebase) is answered by the daemon: version-bounded runner instrumentation keeps the SDK's own decode and claim checks and replaces only its signature step with a question over the runner's private stdio pipe, which the daemon decides with the callable boundary's verifier against the runner's project, its current session epoch and its app registry, under the shared session admission barrier and on the virtual clock, with nothing cached; each reason becomes the SDK's own error through its own error mapper (a replaced epoch reads as an unknown key id, the closest production analogue)",
+      "verifyToken(token, { consume: true }) is refused locally with a fixed error after the token verified, and never builds a request to Google: the instrumentation replaces verifyReplayProtection in the same step as the signature check",
+      "a startup self-test runs the SDK's real verifyToken on a probe token and requires the instrumented step to be consulted exactly once; outside the supported majors, on a failed structural probe or a failed self-test nothing stays patched and the stock SDK rejects fireemu tokens, with a startup note",
       "the emulator profile enables FIREBASE_DEBUG_MODE and enableCors even without callable trust; skipTokenVerification is enabled only while the callable trusted protocol is active, and strict enables no CORS debug feature; the runner proves at startup that the installed firebase-functions reads those switches as expected and reports the auth-override header names it honours, which must all be ones the proxy strips",
       "the runner HTTP server refuses every request when it has no per-runner secret rather than serving them unguarded, and compares the secret it does have in constant time",
       "with App Check active, a configured functions.manifest is reconciled against discovery: it may not call a real callable an onRequest function, which would route the request around the trust boundary entirely",
@@ -88,13 +91,15 @@
     "notes": [
       "supported firebase-functions majors are 6 and 7; outside that range, or when the internal callable modules move, the instrumentation reports itself unsupported and starting Functions with App Check enabled fails rather than guessing",
       "onCallGenkit is covered because it goes through the same onCallHandler hook",
+      "supported firebase-admin majors for the verifyToken instrumentation are 13 and 14 (14.3.0 and 14.5.0 are identical on this path); a second copy of firebase-admin that the codebase does not resolve stays stock and therefore rejects fireemu tokens, and a custom verifier built on a JWKS library (jose) still has no epoch or app-registry awareness",
+      "divergence from production on the Admin SDK verifyToken path: a token whose app is not registered or is disabled is rejected in every profile (production accepts it until it expires); a token whose iat is in the future verifies, as in production",
       "the callable baseline is always unenforced at the daemon: it classifies and records every token so that valid app context reaches callables that do not enforce, and enforcement is the callable option",
       "conformance: appcheck/unenforced-header-matrix, appcheck/enforced-header-matrix (conformance/README.md); this records agreement with the official Local Emulator Suite, never with production"
     ],
     "precision": "boundary-conformance",
     "status": "implemented",
     "unimplemented": [
-      "limited-use consumption and alreadyConsumed (APPCHECK-REPLAY-1)"
+      "limited-use consumption and alreadyConsumed (APPCHECK-REPLAY-1), including verifyToken({ consume: true }) in the Admin SDK, which is refused"
     ]
   },
   "APPCHECK-JWKS-1": {

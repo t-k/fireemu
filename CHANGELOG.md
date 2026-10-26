@@ -16,7 +16,12 @@ The Firebase Realtime Database (RTDB) is now `COMPAT_VERIFIED` within its frozen
 ### Added
 
 - Add explicit local Enterprise text-index backfill, failure and repair controls with build generations and real positional posting data. Session snapshots and reset preserve scope boundaries.
-- Execute a finite local lexical `search` stage through REST and gRPC, with Unicode normalization, phrases, exclusions, indexed-field restrictions, approximate BM25 scores and current-snapshot update/delete reflection. Supported `searchConfig.textSpec` definitions load from configured index files. `productionExact` refuses unobserved search semantics; no production text-search equivalence is claimed.
+- Execute the Firestore Enterprise `search` stage through REST and gRPC, with Unicode normalization, phrases, exclusions, indexed-field restrictions, an occurrence and adjacency relevance model for `score()` and current-snapshot update/delete reflection. Supported `searchConfig.textSpec` definitions load from configured index files. Membership and result order match production for Latin-script text, as verified by the FS-TEXT-SEARCH closure; numeric `score()` values are approximate, recorded CJK/kana segmentation and `İpek` cases differ (listed in `docs/text-search.md`), and `productionExact` still refuses search.
+
+### Fixed
+
+- Firestore Enterprise full-text search has its own production closure record (FS-TEXT-SEARCH) and a comparison that replays every recorded production search response; the known differences are listed in `docs/text-search.md`.
+- Text search queries keep the combining mark that case folding splits off a Latin letter such as `İ`, as recorded in production: the query `İstanbul` matches no document, while `istanbul` matches a document holding `İstanbul`. Every recorded production search response, including those with zero or one result, is now replayed offline for membership.
 
 ## [0.29.0] - 2026-10-23
 

@@ -1,6 +1,6 @@
 # Local Enterprise text search
 
-Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. This guide describes the current emulator behavior; it does not claim exact production parity.
+Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response and match production for Latin-script text; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
 
 ## Configure a text index
 
@@ -93,12 +93,30 @@ The numeric `score()` values are an approximation (`0.6 × occurrences^(1/3)` pe
 
 ## Fidelity and limitations
 
-The emulator's ordinary strict profile works by default. Setting `productionExact: true` refuses every text search with `FS_TEXT_UNOBSERVED` until the search behavior has been compared with actual production observations. The lexical matching behavior is approximate and does not claim production parity. Score ordering reproduces every recorded production order (see Result order and `score()`), but numeric scores are not production values.
+The emulator's ordinary strict profile works by default. Setting `productionExact: true` still refuses every text search with `FS_TEXT_UNOBSERVED`. Membership matches every recorded production response apart from the cases listed under Production comparison, and score ordering reproduces every recorded production order (see Result order and `score()`), but numeric scores are not production values and analysis beyond the recorded cases is a language-neutral approximation.
 
 The current implementation does not support stemming, synonyms, typo tolerance, morphology, or language autodetection. It also does not support geospatial stages, general boolean-expression trees, search-stage select, nested score aliases, non-score sort, transactions, `readTime`, proxy mode, or full Admin index management.
 
-For the managed service's text-search concepts and query syntax, see [Cloud Firestore Enterprise text search](https://firebase.google.com/docs/firestore/enterprise/text-search). That documentation describes the product; this emulator's lexical behavior remains approximate and should not be treated as proof of parity.
+For the managed service's text-search concepts and query syntax, see [Cloud Firestore Enterprise text search](https://firebase.google.com/docs/firestore/enterprise/text-search). That documentation describes the product; beyond the recorded cases listed under Production comparison, this emulator's lexical behavior is a language-neutral approximation and should not be treated as proof of parity.
 
+
+## Production comparison
+
+Every recorded production search response is replayed through the local engine (the FS-TEXT-SEARCH closure, [`spec/compatibility/closure/FS-TEXT-SEARCH.json`](../spec/compatibility/closure/FS-TEXT-SEARCH.json)): 531 responses, 223 distinct queries on their recorded corpora, and both rounds of the Boundary03 cells. Result order matches production on all 64 score-sorted cases and exactly on 96 of the 104 unsorted cases. The other 8 have a known membership difference: in 3 of them the documents both sides return keep production order, and the other 5 have at most one document in common, so their order is not compared. The 22 membership differences that remain (20 CJK/kana plus 2 `İpek`) are known differences, and Japanese/CJK segmentation and dotted capital I handling are future work; they are listed by name in `crates/fireemu-core-firestore/tests/support/text_known_differences.rs`:
+
+- Unspaced Han and Katakana text. Production segments it with a dictionary: `京` does not match `京都` or `東京`, `都` and `東京都` do not match `京都東京駅東京都京都東京駅`, `吉` does not match `吉野家`, and `ネムラ・ﾈﾑﾗ` matches only `ネムラネムラ`. Local analysis makes each Han ideograph a token and keeps a Katakana run whole (20 recorded cases).
+- `İpek`. Production matched it against both `İpek` and `ipek`, while `İstanbul`, `İzmir`, `İnci` and `İzunex` matched nothing; the local query analysis follows the second group (2 recorded cases).
+
+Other known differences and limits of the comparison:
+
+- Numeric `score()` values are approximate (see Result order and `score()`); only the order is compared.
+- Orders the recordings do not separate are unverified: term-specific weights (one document repeating term A, another term B), the point where extra occurrences outweigh one adjacency, three-token queries, mixed clauses such as `"a b" c` or `a -x b`, creation time against document name as the tie-break, scores of documents that match only through CJK concatenation, and adjacency across punctuation, stop words or field restrictions. Local answers follow the documented model.
+- Production answered 409 `ALREADY_EXISTS` for a short time when a deleted text index was created again; local creates it at once.
+- Production can report an index operation as PROCESSING while the index already reads READY; local finishes both together.
+- `query_enhancement`: most recorded searches omit it, and production's default is not established; every recorded search with and without `disabled` answered alike, and an omitted value is treated as `disabled`. Other values are outside the comparison.
+- `language_code` is accepted and ignored; production answered `en`, `ja` and `tr` alike on every recorded case.
+- The Native Admin lifecycle and the search-root OR refusal were recorded over REST only; their gRPC answers are checked against the local REST answers, not against production. The option refusals were recorded over both REST and gRPC.
+- `productionExact: true` still refuses every text search.
 
 ## Verify SDK interoperability locally
 

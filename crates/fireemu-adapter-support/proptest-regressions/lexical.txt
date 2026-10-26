@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 0ea08de5ba0f86dba1e74dd5d2c22b6aacc28ab0a9fff21fe3f6cfb83834e41c # shrinks to input = "a:A"
+cc 08cdbbea304cdbb59801ccc825fa833312baa9ec95f403e1d6679ce82d7f310e # shrinks to input = "Ñ"

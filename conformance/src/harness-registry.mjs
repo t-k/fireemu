@@ -273,6 +273,12 @@ function tenantBlockingDigests() {
 }
 
 export const WAIVED_FIXTURES = [
+  {
+    fixture: "fs-ent-text-production.json",
+    reason:
+      "the lexical program keeps the digest of the text lane's request layer (fs-ent-text/harness.mjs and session.mjs, sha256 of both joined by a newline and an empty index text), but the search-root OR refusal program was added from a separate single observation without a harness digest, so the fixture cannot be enrolled as one lane. The text closure replays its rows through pipeline_shape.rs and fs-ent-text-refusal-evidence.test.mjs, not through the lane runner; the listed inputs are guarded against a rewrite",
+    inputs: SRC(["fs-ent-text/harness.mjs", "fs-ent-text/session.mjs"]),
+  },
   ...[
     "auth-federation-followup-production.json",
     "auth-federation-production.json",

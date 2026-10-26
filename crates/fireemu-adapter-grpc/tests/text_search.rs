@@ -721,3 +721,42 @@ fn strict_text_option_refusals_follow_the_recorded_shape_not_its_literals() {
     );
     assert_eq!(unrecorded.status, 501, "{}", unrecorded.body);
 }
+
+/// An empty search answers production's recorded body: one response holding only
+/// `executionTime`, with no `results` (`fs-ent-text/v1/lexical` steps `empty`, `negative-only`
+/// and `punctuation` in conformance/fs-ent-text-production.json).
+#[test]
+fn empty_searches_answer_the_recorded_execution_time_only_body() {
+    let recorded: Value = serde_json::from_str(include_str!(
+        "../../../conformance/fs-ent-text-production.json"
+    ))
+    .unwrap();
+    let steps = &recorded["programs"]["fs-ent-text/v1/lexical"]["steps"];
+    let state = fixture();
+    let _catalog = install(&state, false);
+    put(&state, "a", "waffles", "marker");
+    let path = format!("{DB}/documents:executePipeline");
+    for (step, query) in [
+        ("empty", ""),
+        ("negative-only", "-waffles"),
+        ("punctuation", "!!!"),
+        ("empty", "absentword"),
+    ] {
+        let expected = &steps[step];
+        assert_eq!(expected["status"], 200, "{step}");
+        let response = request(&state, "POST", &path, search_query(query));
+        assert_eq!(response.status, 200, "{query:?}: {}", response.body);
+        let mut body = response.body.clone();
+        let frames = body.as_array_mut().unwrap();
+        for frame in frames.iter_mut() {
+            assert!(
+                frame["executionTime"]
+                    .as_str()
+                    .is_some_and(|t| t.ends_with('Z')),
+                "{query:?}: {frame}"
+            );
+            frame["executionTime"] = json!("<t1>");
+        }
+        assert_eq!(body, expected["body"], "{query:?}");
+    }
+}

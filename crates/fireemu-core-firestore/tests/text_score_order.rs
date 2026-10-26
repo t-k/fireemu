@@ -165,11 +165,12 @@ fn recorded_production_score_orders_replay_exactly() {
 fn recorded_production_default_orders_replay_exactly() {
     let (checked, membership_gaps, failures) = mismatches(false);
     assert_eq!(checked, 104, "unsorted recorded cases");
-    // 14 unsorted cases differ in membership only (colon, CJK and supplementary-plane
-    // tokenization); the bound fails if a new membership difference appears.
-    assert!(
-        membership_gaps <= 14,
-        "membership gaps grew to {membership_gaps}"
+    // Eight unsorted cases differ in membership only: the documented CJK segmentation and
+    // `İpek` cases of `text_membership_replay.rs`. Their common members still follow the
+    // production order.
+    assert_eq!(
+        membership_gaps, 8,
+        "unsorted cases with a membership difference"
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

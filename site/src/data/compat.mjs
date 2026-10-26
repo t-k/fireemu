@@ -50,6 +50,11 @@ export const AREAS = {
 		title: 'Databases and administration',
 		covers: 'Named databases, index and field configuration, TTL, long-running operations, export, import and bulk delete.',
 	},
+	'FS-TEXT-SEARCH': {
+		product: 'Cloud Firestore',
+		title: 'Enterprise full-text search',
+		covers: 'Search stage membership and result order by score and by creation time, recorded search refusals and response frames, and the text index lifecycle, failed builds and repair state.',
+	},
 	'AUTH-ACCOUNT': {
 		product: 'Authentication',
 		title: 'Accounts',

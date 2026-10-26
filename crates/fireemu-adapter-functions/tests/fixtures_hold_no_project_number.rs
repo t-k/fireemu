@@ -269,6 +269,34 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// What the scan makes of one file: the forms in which a number that is not the mask was found, and how many
+/// times each form named the mask.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Verdict {
+    refused: Vec<&'static str>,
+    varint_masks: usize,
+    ascii_masks: usize,
+}
+
+fn judge(text: &[u8]) -> Verdict {
+    let mut verdict = Verdict::default();
+    for number in project_numbers_in(text) {
+        if number == MASK {
+            verdict.varint_masks += 1;
+        } else {
+            verdict.refused.push("varint");
+        }
+    }
+    for number in ascii_numbers_in(text) {
+        if number == MASK.to_string() {
+            verdict.ascii_masks += 1;
+        } else {
+            verdict.refused.push("ASCII digits");
+        }
+    }
+    verdict
+}
+
 #[test]
 fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_value() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -281,42 +309,65 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         "the scan found the repository: {} files",
         all.len()
     );
-    let mut with_mask = 0;
+    let mut with_varint_mask = 0;
     let mut with_ascii_mask = 0;
-    let mut refused = Vec::new();
     for path in &all {
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
-        for number in project_numbers_in(&bytes) {
-            if number == MASK {
-                with_mask += 1;
-            } else {
-                refused.push(format!("{} (varint)", path.display()));
-            }
-        }
-        for number in ascii_numbers_in(&bytes) {
-            if number == MASK.to_string() {
-                with_mask += 1;
-                with_ascii_mask += 1;
-            } else {
-                refused.push(format!("{} (ASCII digits)", path.display()));
-            }
-        }
+        let verdict = judge(&bytes);
+        assert!(
+            verdict.refused.is_empty(),
+            "{} holds an encoded number that is not the mask, as {:?} (the number is not printed)",
+            path.display(),
+            verdict.refused
+        );
+        with_varint_mask += verdict.varint_masks;
+        with_ascii_mask += verdict.ascii_masks;
     }
-    assert!(
-        refused.is_empty(),
-        "an encoded number that is not the mask is in (the number is not printed): {refused:?}"
-    );
     // The scan sees what it is meant to see: the Eventarc fixtures hold page tokens that name the mask.
     assert!(
-        with_mask >= 1,
-        "files with a token naming the mask: {with_mask}"
+        with_varint_mask >= 1,
+        "files with a token naming the mask: {with_varint_mask}"
     );
     // So does the ASCII scan: recorded response bodies stored as base64 name the mask in the clear.
     assert!(
         with_ascii_mask >= 1,
         "files with base64 naming the mask in ASCII digits: {with_ascii_mask}"
+    );
+}
+
+#[test]
+fn the_verdict_refuses_each_form_and_counts_the_mask_apart() {
+    let ascii = |number: &str| ascii_token(0, number, true, false);
+    // Neither form: nothing to refuse, nothing counted.
+    assert_eq!(judge(b"{\"a\": 1}"), Verdict::default());
+    // A number that is not the mask is refused in the form in which it is hidden, and only in that form.
+    let other = judge(token_of(111_111_111_111).as_bytes());
+    assert_eq!((other.refused, other.varint_masks), (["varint"].into(), 0));
+    let other = judge(ascii("111111111111").as_bytes());
+    assert_eq!(
+        (other.refused, other.ascii_masks),
+        (["ASCII digits"].into(), 0)
+    );
+    // The mask is counted in the form in which it is hidden, and only in that form, and is never refused.
+    let masked = judge(token_of(MASK).as_bytes());
+    assert_eq!(
+        masked,
+        Verdict {
+            refused: vec![],
+            varint_masks: 1,
+            ascii_masks: 0
+        }
+    );
+    let masked = judge(ascii("123456789012").as_bytes());
+    assert_eq!(
+        masked,
+        Verdict {
+            refused: vec![],
+            varint_masks: 0,
+            ascii_masks: 1
+        }
     );
 }
 
@@ -515,6 +566,8 @@ fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
         "\"requestId\": \"8586123456789de3\"",
         "validity 261015000000Z end",
         "CANARY0123456789abcd",
+        "x592603257417/b",
+        "a/592603257417z",
     ] {
         let token = encode(text.as_bytes(), true, false);
         assert!(ascii_numbers_in(token.as_bytes()).is_empty(), "{text}");

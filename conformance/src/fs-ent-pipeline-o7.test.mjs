@@ -37,6 +37,7 @@ import {
 } from "./fs-ent-pipeline/o6-corpus.mjs";
 import {
   ACCUMULATORS,
+  AROUND_COMBOS,
   EMPTY_COLLECTIONS,
   O7_AREAS,
   O7_PREFIX,
@@ -274,8 +275,118 @@ test("the O-7 packet counts are pinned", () => {
       commits: plan.commits,
       seedDocs: plan.seedDocs,
     },
-    { programs: 11, steps: 214, rest: 212, grpc: 2, commits: 0, seedDocs: 140 },
+    { programs: 11, steps: 223, rest: 221, grpc: 2, commits: 0, seedDocs: 140 },
   );
+});
+
+test("each aggregate-around step decodes back to its PICT row", () => {
+  assert.equal(AROUND_COMBOS.length, 16);
+  assert.equal(new Set(AROUND_COMBOS.map((row) => row.join("/"))).size, 16);
+  const levels = [
+    ["none", "where", "limit"],
+    ["none", "one", "two"],
+    ["none", "where", "sort", "limit", "select"],
+  ];
+  // The required rows, and every pair of values of two factors.
+  for (const seed of [
+    ["none", "none", "none"],
+    ["none", "one", "sort"],
+    ["where", "two", "select"],
+    ["limit", "one", "limit"],
+  ]) {
+    assert.ok(
+      AROUND_COMBOS.some((row) => row.join() === seed.join()),
+      seed.join(),
+    );
+  }
+  for (let a = 0; a < 3; a += 1) {
+    for (let b = a + 1; b < 3; b += 1) {
+      for (const x of levels[a]) {
+        for (const y of levels[b]) {
+          assert.ok(
+            AROUND_COMBOS.some((row) => row[a] === x && row[b] === y),
+            `${x} with ${y}`,
+          );
+        }
+      }
+    }
+  }
+  const basic = O7_AREAS.aggregate.find((p) => p.id === `${O7_PREFIX}aggregate-basic`);
+  for (const [pre, groups, post] of AROUND_COMBOS) {
+    const found = basic.steps.find((s) => s.id === `around-${pre}-${groups}-${post}`);
+    assert.ok(found, `${pre}-${groups}-${post}`);
+    const list = stagesOf(found);
+    assert.equal(list[0].args[0].referenceValue, "/ab");
+    const at = list.findIndex((s) => s.name === "aggregate");
+    const before = list.slice(1, at);
+    const after = list.slice(at + 1);
+    if (pre === "none") assert.deepEqual(before, []);
+    if (pre === "where") {
+      assert.deepEqual(
+        before.map((s) => s.name),
+        ["where"],
+      );
+      assert.deepEqual(before[0].args[0].functionValue.args, [
+        { fieldReferenceValue: "n" },
+        { integerValue: "2" },
+      ]);
+    }
+    if (pre === "limit") {
+      assert.deepEqual(
+        before.map((s) => s.name),
+        ["limit"],
+      );
+      assert.equal(before[0].args[0].integerValue, "3");
+    }
+    const [accumulators, keys] = list[at].args.map((arg) => arg.mapValue.fields);
+    assert.deepEqual(Object.keys(accumulators), ["c", "s"]);
+    assert.deepEqual(accumulators.c, { functionValue: { name: "count", args: [] } });
+    assert.deepEqual(accumulators.s.functionValue.args, [{ fieldReferenceValue: "n" }]);
+    assert.deepEqual(
+      Object.entries(keys),
+      {
+        none: [],
+        one: [["g", { fieldReferenceValue: "g" }]],
+        two: [
+          ["g", { fieldReferenceValue: "g" }],
+          ["d", { fieldReferenceValue: "d" }],
+        ],
+      }[groups],
+    );
+    if (post === "none") assert.deepEqual(after, []);
+    if (post === "where") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["where"],
+      );
+      assert.deepEqual(after[0].args[0].functionValue.args, [
+        { fieldReferenceValue: "c" },
+        { integerValue: "1" },
+      ]);
+    }
+    if (post === "sort") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["sort"],
+      );
+      assert.deepEqual(after[0].args[0].mapValue.fields.direction, { stringValue: "descending" });
+      assert.deepEqual(after[0].args[0].mapValue.fields.expression, { fieldReferenceValue: "c" });
+    }
+    if (post === "limit") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["limit"],
+      );
+      assert.equal(after[0].args[0].integerValue, "2");
+    }
+    if (post === "select") {
+      assert.deepEqual(
+        after.map((s) => s.name),
+        ["select"],
+      );
+      assert.deepEqual(after[0].args[0].mapValue.fields, { c: { fieldReferenceValue: "c" } });
+    }
+  }
 });
 
 // --- builders and generators ---
@@ -484,7 +595,7 @@ const FROZEN = [
   ],
   [
     "fs-ent-pipeline/o7/aggregate-basic",
-    "1b3cc72ea4cd6613f5c6b81fb2b5578043da1efd294ff496f1a3a45779774439",
+    "61bce044d30443775810303bdaaae237d5f5d846ee3ef0ca358f16316b41b6c6",
   ],
   [
     "fs-ent-pipeline/o7/aggregate-numbers",

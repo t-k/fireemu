@@ -122,6 +122,47 @@ const empty = {
   ],
 };
 
+/**
+ * The pairwise rows (a PICT model of three factors, Pre 3 x Groups 3 x Post 5, with four rows
+ * given as seeds): the stage before the aggregate, the grouping, and the stage after it.
+ */
+export const AROUND_COMBOS = [
+  ["none", "none", "none"],
+  ["none", "one", "sort"],
+  ["where", "two", "select"],
+  ["limit", "one", "limit"],
+  ["where", "none", "where"],
+  ["limit", "two", "none"],
+  ["none", "two", "where"],
+  ["limit", "none", "select"],
+  ["where", "two", "sort"],
+  ["none", "one", "select"],
+  ["where", "one", "limit"],
+  ["none", "none", "limit"],
+  ["limit", "none", "sort"],
+  ["where", "one", "none"],
+  ["where", "two", "limit"],
+  ["limit", "one", "where"],
+];
+const aroundStep = ([pre, groups, post]) => {
+  const before = { none: [], where: [where(gt(n, int(2)))], limit: [limit(3)] }[pre];
+  const keys = { none: {}, one: { g }, two: { g, d: fld("d") } }[groups];
+  const after = {
+    none: [],
+    where: [where(gt(fld("c"), int(1)))],
+    sort: [sort(desc(fld("c")))],
+    limit: [limit(2)],
+    select: [select({ c: fld("c") })],
+  }[post];
+  return read(
+    `around-${pre}-${groups}-${post}`,
+    "ab",
+    ...before,
+    aggregate({ c: countAll(), s: sum("n") }, keys),
+    ...after,
+  );
+};
+
 const basic = {
   id: "basic",
   seed: [
@@ -143,25 +184,9 @@ const basic = {
     read("doubles-all", "ab", aggregate(accumulatorMap("d"))),
     read("doubles-grouped", "ab", aggregate(accumulatorMap("d"), { g })),
     read("two-sums", "ab", aggregate({ s1: sum("n"), s2: sum("d") })),
-    read("where-then-aggregate", "ab", where(gt(n, int(2))), aggregate({ n: countAll() })),
-    read(
-      "aggregate-then-where",
-      "ab",
-      aggregate({ c: countAll() }, { g }),
-      where(gt(fld("c"), int(1))),
-    ),
-    read("aggregate-then-sort", "ab", aggregate({ c: countAll() }, { g }), sort(asc(g))),
-    read("aggregate-then-sort-desc", "ab", aggregate({ c: countAll() }, { g }), sort(desc(g))),
-    read("aggregate-then-limit", "ab", aggregate({ c: countAll() }, { g }), limit(2)),
-    read("aggregate-then-offset", "ab", aggregate({ c: countAll() }, { g }), offset(1)),
-    read(
-      "aggregate-then-select",
-      "ab",
-      aggregate({ c: countAll() }, { g }),
-      select({ c: fld("c") }),
-    ),
-    read("limit-then-aggregate", "ab", limit(3), aggregate({ n: countAll() })),
+    ...AROUND_COMBOS.map(aroundStep),
     read("sort-then-aggregate", "ab", sort(desc(n)), aggregate({ n: countAll() })),
+    read("aggregate-then-offset", "ab", aggregate({ c: countAll() }, { g }), offset(1)),
     read(
       "aggregate-then-aggregate",
       "ab",

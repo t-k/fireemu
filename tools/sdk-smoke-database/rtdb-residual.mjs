@@ -86,7 +86,7 @@ export function urls(o) {
  * 97 bytes). Anything else, another status or another text, is not read as the reenable still propagating.
  */
 export function isDisabledByOwner(status, text) {
-  if (status !== 423 || typeof text !== 'string') return false;
+  if (status !== 423) return false;
   let doc;
   try { doc = JSON.parse(text); } catch { return false; }
   return !!doc && typeof doc === 'object' && Object.keys(doc).length === 1 && doc.error === `The Firebase database '${INSTANCE}' has been disabled by a database owner.`;

@@ -2665,7 +2665,7 @@
         },
         "fixture": "conformance/fixtures/firestore/rules-decisions.json#anonymous-read-of-a-closed-document",
         "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
-        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/principals/grpc#none-get-a-own (gRPC get, recorded 2026-09-25); same text on get-missing-grpc in fs-rules/document-access/reads-and-writes"
       }
     },
     "firestore/rules-decisions#anonymous-write-to-an-owner-document": {
@@ -2684,7 +2684,7 @@
         },
         "fixture": "conformance/fixtures/firestore/rules-decisions.json#anonymous-write-to-an-owner-document",
         "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
-        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied-grpc (gRPC commit, recorded 2026-09-25)"
       }
     },
     "firestore/rules-decisions#owner-cannot-write-another-document": {
@@ -2703,7 +2703,7 @@
         },
         "fixture": "conformance/fixtures/firestore/rules-decisions.json#owner-cannot-write-another-document",
         "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
-        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied-grpc (gRPC commit, recorded 2026-09-25)"
       }
     },
     "firestore/rules-decisions#after-sign-out-the-document-is-protected-again": {
@@ -2722,7 +2722,7 @@
         },
         "fixture": "conformance/fixtures/firestore/rules-decisions.json#after-sign-out-the-document-is-protected-again",
         "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
-        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/principals/grpc#none-get-a-own (gRPC get, recorded 2026-09-25); same text on get-missing-grpc in fs-rules/document-access/reads-and-writes"
       }
     },
     "firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied": {
@@ -2741,7 +2741,7 @@
         },
         "fixture": "conformance/fixtures/firestore/lite-rest-transport.json#write-into-a-rules-closed-collection-is-denied",
         "approvalRecord": "spec/compatibility/closure/FS-RULES.json scopeDecisions R6 (owner t-k, 2026-09-24); commit 6705284dd",
-        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (recorded 2026-09-25)"
+        "productionObservation": "conformance/fs-rules-production.json#fs-rules/atomic/commit-and-batch-write#commit-one-denied (REST commit, recorded 2026-09-25)"
       }
     },
     "firestore/rest-error-shapes#get-a-missing-document": {

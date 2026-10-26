@@ -218,12 +218,16 @@ export function openSourceUploads({
     return createDeploy({ placeholder, ticket, baseline: baseline.names });
   }
 
-  /** "confirmed" (a 2xx), "refused" (a definite 4xx, nothing created) or "unknown". */
+  /**
+   * "confirmed": some status is a 2xx. "refused": there is at least one status and every one is a
+   * definite 4xx (not 408, 429 or 499), so nothing was made. Anything else is "unknown": no line, a
+   * 3xx or 5xx, 408/429/499, or a retried PUT that met a 5xx or a retryable code before a refusal
+   * (503 then 400 may mean the first attempt landed).
+   */
   function putClass(statuses) {
     if (statuses.some((status) => status >= 200 && status < 300)) return "confirmed";
-    const last = statuses.at(-1);
-    const definite = last >= 400 && last < 500 && ![408, 429, 499].includes(last);
-    return definite ? "refused" : "unknown";
+    const definite = (status) => status >= 400 && status < 500 && ![408, 429, 499].includes(status);
+    return statuses.length > 0 && statuses.every(definite) ? "refused" : "unknown";
   }
 
   function createDeploy({ placeholder, ticket, baseline }) {

@@ -631,9 +631,8 @@ export async function readBoundedText(response) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// `body` was read through readBoundedText, which already enforces the 1 MiB bound in bytes.
 function safeJsonResponse(body) {
-  if (Buffer.byteLength(body) > MAX_RESPONSE_BYTES)
-    throw new Error("control response exceeded 1 MiB");
   return body ? JSON.parse(body) : {};
 }
 
@@ -1017,7 +1016,7 @@ async function publicInvoker(control, target, enabled, kind, log = logChange) {
   );
 }
 
-async function createUser(key, budget, runDir, programId) {
+export async function createUser(key, budget, runDir, programId) {
   const email = `fireemu-fh-${randomBytes(8).toString("hex")}@example.com`;
   await appendFile(
     join(runDir, "owned-users.jsonl"),
@@ -1037,7 +1036,7 @@ async function createUser(key, budget, runDir, programId) {
     signal: AbortSignal.timeout(30_000),
   });
   if (response.status !== 200) throw new Error(`Auth signUp returned ${response.status}`);
-  const user = safeJsonResponse(await response.text());
+  const user = safeJsonResponse(await readBoundedText(response));
   await appendFile(
     join(runDir, "owned-users.jsonl"),
     `${JSON.stringify({ ts: now(), programId, email, localId: user.localId ?? null, state: "signup-accepted" })}\n`,

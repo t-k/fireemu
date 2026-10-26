@@ -263,9 +263,9 @@ async function run(seed) {
     // Reference model.
     const objectsOk = s.receipts.slice(0, UPLOAD_BOUNDS.maxReceiptsPerDeploy).every((r) => {
       if (r.uploaded) return r.fault === "none";
-      // never arrived: only a definite refusal as the PUT's last answer settles it
-      const last = r.put.at(-1);
-      return !r.put.some((x) => x < 300) && last >= 400 && last < 500;
+      // never arrived: it settles only when there is a PUT status and every one is a definite 4xx
+      const definite = (x) => x >= 400 && x < 500 && ![408, 429, 499].includes(x);
+      return r.put.length > 0 && r.put.every(definite);
     });
     const afterTooBig =
       baseline.size + s.foreign + s.afterGrowth + s.receipts.filter((r) => r.uploaded).length >

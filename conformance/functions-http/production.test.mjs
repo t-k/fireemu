@@ -1770,3 +1770,27 @@ process.exitCode = 1;`,
     await rm(run.dir, { recursive: true, force: true });
   }
 });
+
+test("the signUp answer is bounded in bytes while it is read (R2-S1)", async () => {
+  const { createBudget } = await import("./harness.mjs");
+  const runDir = await mkdtemp(join(tmpdir(), "functions-http-signup-"));
+  const wide = JSON.stringify({
+    localId: "u",
+    idToken: "t",
+    email: "x@example.com",
+    pad: "é".repeat(600_000),
+  });
+  try {
+    await withStubbedFetch(
+      () => new Response(wide, { status: 200 }),
+      async () => {
+        await assert.rejects(
+          () => production.createUser("k".repeat(20), createBudget(), runDir, "program-x"),
+          /exceeded 1 MiB/,
+        );
+      },
+    );
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
+});

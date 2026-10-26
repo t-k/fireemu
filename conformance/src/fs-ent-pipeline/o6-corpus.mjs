@@ -24,47 +24,34 @@ import {
   ts,
   vec,
 } from "../fs-query-index/values.mjs";
-import { collection, fld, fn, grpcStep, list, pipeline, select, stage, step } from "./builders.mjs";
+import {
+  asc,
+  del,
+  desc,
+  eq,
+  fld,
+  fn,
+  gt,
+  limit,
+  list,
+  lt,
+  numbered,
+  offset,
+  ordering,
+  read,
+  readGrpc,
+  seedBatch,
+  select,
+  sort,
+  stage,
+  where,
+} from "./builders.mjs";
+
+export { ordering };
 
 export const O6_PREFIX = "fs-ent-pipeline/o6/";
 
 const COMMIT_BATCH = 500;
-
-// --- builders ---
-
-/** A sort key: the SDK sends an ordering as a map of a direction and an expression. */
-export const ordering = (expression, direction) => ({
-  mapValue: { fields: { direction: str(direction), expression } },
-});
-const asc = (expression) => ordering(expression, "ascending");
-const desc = (expression) => ordering(expression, "descending");
-const sort = (...orderings) => stage("sort", ...orderings);
-const where = (condition) => stage("where", condition);
-const limit = (n) => stage("limit", int(n));
-const offset = (n) => stage("offset", int(n));
-const gt = (a, b) => fn("greater_than", a, b);
-const lt = (a, b) => fn("less_than", a, b);
-const eq = (a, b) => fn("equal", a, b);
-
-/** A REST step reading one collection through the given stages. */
-const read = (id, from, ...stages) => step(id, pipeline(collection(from), ...stages));
-const readGrpc = (id, from, ...stages) => grpcStep(id, pipeline(collection(from), ...stages));
-
-/** A commit step writing several documents (one request). */
-function seedBatch(id, entries) {
-  return {
-    id,
-    rpc: "commit",
-    body: {
-      writes: entries.map(([path, fields]) => ({ update: { name: `{docs}/${path}`, fields } })),
-    },
-  };
-}
-const del = (id, path) => ({ id, rpc: "commit", body: { writes: [{ delete: `{docs}/${path}` }] } });
-
-/** `[["<prefix>01", {v}], ...]` for a list of values of the field `v`. */
-const numbered = (prefix, values) =>
-  values.map((v, i) => [`${prefix}${String(i + 1).padStart(2, "0")}`, { v }]);
 
 /**
  * A program that reads each collection sorted by `v`, ascending and then descending. Specs

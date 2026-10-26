@@ -2,6 +2,8 @@
 // proto3 JSON `Value`s for expressions and stages, and the steps that carry them. A leaf module,
 // so both corpora can import it without a cycle.
 
+import { int, str } from "../fs-query-index/values.mjs";
+
 /** A function call. */
 export const fn = (name, ...args) => ({ functionValue: { name, args } });
 /** A field reference. */
@@ -32,3 +34,42 @@ export function seedCommit(id, path, fields) {
   }
   return { id, rpc: "commit", body: { writes: [{ update: { name: `{docs}/${path}`, fields } }] } };
 }
+
+/** A sort key: the SDK sends an ordering as a map of a direction and an expression. */
+export const ordering = (expression, direction) => ({
+  mapValue: { fields: { direction: str(direction), expression } },
+});
+export const asc = (expression) => ordering(expression, "ascending");
+export const desc = (expression) => ordering(expression, "descending");
+export const sort = (...orderings) => stage("sort", ...orderings);
+export const where = (condition) => stage("where", condition);
+export const limit = (n) => stage("limit", int(n));
+export const offset = (n) => stage("offset", int(n));
+export const gt = (a, b) => fn("greater_than", a, b);
+export const lt = (a, b) => fn("less_than", a, b);
+export const eq = (a, b) => fn("equal", a, b);
+
+/** A REST step reading one collection through the given stages. */
+export const read = (id, from, ...stages) => step(id, pipeline(collection(from), ...stages));
+export const readGrpc = (id, from, ...stages) =>
+  grpcStep(id, pipeline(collection(from), ...stages));
+
+/** A commit step writing several documents (one request). */
+export function seedBatch(id, entries) {
+  return {
+    id,
+    rpc: "commit",
+    body: {
+      writes: entries.map(([path, fields]) => ({ update: { name: `{docs}/${path}`, fields } })),
+    },
+  };
+}
+export const del = (id, path) => ({
+  id,
+  rpc: "commit",
+  body: { writes: [{ delete: `{docs}/${path}` }] },
+});
+
+/** `[["<prefix>01", {v}], ...]` for a list of values of the field `v`. */
+export const numbered = (prefix, values) =>
+  values.map((v, i) => [`${prefix}${String(i + 1).padStart(2, "0")}`, { v }]);

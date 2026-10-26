@@ -81,16 +81,29 @@ export function urls(o) {
   };
 }
 
+/**
+ * The data host's answer to a request right after the reenable: 423 with exactly this error (recorded in production-4,
+ * 97 bytes). Anything else, another status or another text, is not read as the reenable still propagating.
+ */
+export function isDisabledByOwner(status, text) {
+  if (status !== 423 || typeof text !== 'string') return false;
+  let doc;
+  try { doc = JSON.parse(text); } catch { return false; }
+  return !!doc && typeof doc === 'object' && Object.keys(doc).length === 1 && doc.error === `The Firebase database '${INSTANCE}' has been disabled by a database owner.`;
+}
+
 // The run's view of what it owns. state.* is 'baseline' or 'ours' ('unknown' after an unknown answer);
 // unresolved holds unknown creates and deletes: sticky, never re-sent. (Same flow as the CV11 recorder.)
 async function read(run, step, method, url, accept, body) {
   const options = { raw: method === 'GET' && url.includes('.settings/rules') };
   let r = await run.call(step, method, url, body, options);
   // Bounded backoff 2, 4, 8, 16, 30, 30, 30 s (120 s in all), counted against the caps; GETs only.
+  // 423 (production-4, 2026-10-27): the data host still sees the instance as disabled for a moment after the reenable
+  // although the Rules endpoint already answers; only that exact body counts, see isDisabledByOwner.
   // 403: the management API list right after the enable (CV11 production-1, propagation). 401 is retried too; it is
   // harmless, but the 401 of this recorder's production-1 and production-2 was a credential cause (an ADC token
   // without userinfo.email, which adc-preflight.mjs now refuses before any request), not propagation.
-  for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401); k++) {
+  for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401 || isDisabledByOwner(r.status, r.text)); k++) {
     const wait = Math.min(2000 * 2 ** (k - 1), 30000, PROPAGATION_MS - run.propagationWaited);
     if (wait <= 0) break;
     run.propagationWaited += wait;

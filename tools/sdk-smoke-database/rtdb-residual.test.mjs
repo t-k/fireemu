@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { ADC_ARGS, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { ADC_ARGS, isDisabledByOwner, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -563,4 +563,53 @@ test('preflight: main() runs it right after the token and before any admin reque
   const at = (x) => own.indexOf(x);
   assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') && at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') < at('await runScenario(o)'));
   assert.ok(own.includes('if (stopped) return stopped;'));
+});
+
+// production-4 (2026-10-27): preflight ok and rules-before 200, then prefix-before answered 423 with this body right
+// after the reenable (CV11 lean-02 got 200 at the same position). The data host still saw the disabled state.
+const DISABLED_423 = "{\n  \"error\" : \"The Firebase database 'fireemu-q-rtdb2' has been disabled by a database owner.\"\n}\n";
+const PREFIX_GET = /^\/parity1\/rr1\.json$/;
+test('isDisabledByOwner: only the recorded 423 body of this instance', () => {
+  assert.equal(DISABLED_423.length, 97, 'the recorded body is 97 bytes');
+  assert.equal(isDisabledByOwner(423, DISABLED_423), true);
+  assert.equal(isDisabledByOwner(423, JSON.stringify(JSON.parse(DISABLED_423))), true, 'compact JSON of the same document');
+  for (const [status, body] of [[400, DISABLED_423], [403, DISABLED_423], [500, DISABLED_423], [423, DISABLED_423.replace('fireemu-q-rtdb2', 'other-db')], [423, DISABLED_423.replace('disabled by a database owner', 'disabled by a billing issue')], [423, JSON.stringify({ error: JSON.parse(DISABLED_423).error, extra: 1 })], [423, JSON.stringify({ message: JSON.parse(DISABLED_423).error })], [423, '{"error":5}'], [423, 'not json'], [423, ''], [423, 'null'], [423, '[]'], [423, undefined]]) {
+    assert.equal(isDisabledByOwner(status, body), false, `${status} ${body}`);
+  }
+});
+
+test('production-4 replay: a 423 disabled-by-owner on the first prefix GET is retried inside the setup window and the run completes', async () => {
+  const w = fakeWorld(), c = clocked(), rows = [];
+  w.forbid = { path: PREFIX_GET, remaining: 3, status: 423, body: DISABLED_423 };
+  const r = await prod(w, { sleep: c.sleep, log: (x) => rows.push(x) });
+  assert.equal(r.status, 'closed'); assert.ok(r.observationComplete); assert.ok(w.baseline());
+  const steps = rows.map((x) => x.step);
+  assert.deepEqual(steps.slice(9, 16), ['rules-before', 'prefix-before', 'prefix-before-retry-1', 'prefix-before-retry-2', 'prefix-before-retry-3', 'rules-install-put', 'rules-install-read']);
+  assert.deepEqual(rows.filter((x) => x.status === 423).map((x) => x.body), [DISABLED_423, DISABLED_423, DISABLED_423, DISABLED_423].slice(0, 3));
+  assert.deepEqual(c.slept.slice(1, 4), [2000, 4000, 8000]);
+});
+
+test('production-4 replay: a 423 that outlasts 120 s stops before any Rules or data write and retires the instance and the API', async () => {
+  const w = fakeWorld(), c = clocked();
+  w.forbid = { path: PREFIX_GET, remaining: Infinity, status: 423, body: DISABLED_423 };
+  const r = await prod(w, { sleep: c.sleep });
+  assert.equal(c.slept.slice(1).reduce((a, b) => a + b, 0), 120000);
+  assert.equal(r.status, 'closed'); assert.ok(!r.observationComplete); assert.ok(w.baseline());
+  assert.ok(!w.sent.some((x) => x.startsWith('PUT')), 'no Rules or data write');
+});
+
+test('a 423 is retried only when it is that body, on a read-only GET, during setup', async () => {
+  const other = DISABLED_423.replace('disabled by a database owner', 'disabled by a billing issue');
+  const w1 = fakeWorld(), rows1 = [];
+  w1.forbid = { path: PREFIX_GET, remaining: 1, status: 423, body: other };
+  await prod(w1, { sleep: clocked().sleep, log: (x) => rows1.push(x.step) });
+  assert.ok(!rows1.some((x) => x.includes('-retry-')), 'another 423 is not retried');
+  const w2 = fakeWorld(), rows2 = [];
+  const base2 = w2.fetch;
+  w2.fetch = async (url, init) => (init.method === 'PUT' && url.includes('rules') && !w2.seen ? (w2.seen = true, w2.sent.push('PUT /.settings/rules.json'), json(423, DISABLED_423)) : base2(url, init));
+  const r2 = await prod(w2, { sleep: clocked().sleep, log: (x) => rows2.push(x.step) });
+  assert.ok(!rows2.some((x) => x.startsWith('rules-install-put-retry')), 'a refused PUT is not re-sent'); assert.ok(!r2.observationComplete);
+  const w3 = fakeWorld(), rows3 = [];
+  const r3 = await prod(w3, { sleep: clocked().sleep, log: (x) => rows3.push(x.step), browser: async (c, h) => { w3.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 423, body: DISABLED_423 }; return fakeBrowser(w3)(c, h); } });
+  assert.ok(!rows3.some((x) => x.includes('-retry-')), 'no retry after setup'); assert.ok(r3.errors.length > 0);
 });

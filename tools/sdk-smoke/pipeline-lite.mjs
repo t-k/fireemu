@@ -70,6 +70,10 @@ assert.deepEqual(
 // checks after this step run under both profiles; once production records offset forms, strict follows.
 const offsetPipeline = () => rows(source().select("name").offset(1).limit(1));
 if (profile === "strict") {
+  // NOTE: when strict starts accepting recorded offsets (work/pipeline-stages: "strict now accepts every
+  // positive offset"), this refusal stops being the answer for offset(1): flip this branch to the row
+  // below, as the emulator profile expects, and keep one offset form that is still refused (0 or a value
+  // above i32::MAX), whichever the landed rule leaves unrecorded.
   await assert.rejects(offsetPipeline(), (error) => {
     assert.equal(error.code, "unimplemented");
     assert.match(error.message, /this offset argument is not observed locally/);

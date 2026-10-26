@@ -195,15 +195,14 @@ const SECONDS_WINDOW: std::ops::Range<u64> = 1_600_000_000..2_100_000_000;
 const MILLIS_WINDOW: std::ops::Range<u64> = 1_600_000_000_000..2_100_000_000_000;
 
 fn is_instant(digits: &[u8]) -> bool {
-    let Some(value) = std::str::from_utf8(digits)
-        .ok()
-        .and_then(|text| text.parse::<u64>().ok())
-    else {
-        return false;
+    let value = || {
+        digits
+            .iter()
+            .fold(0u64, |acc, digit| acc * 10 + u64::from(digit - b'0'))
     };
     match digits.len() {
-        10 => SECONDS_WINDOW.contains(&value),
-        13 => MILLIS_WINDOW.contains(&value),
+        10 => SECONDS_WINDOW.contains(&value()),
+        13 => MILLIS_WINDOW.contains(&value()),
         _ => false,
     }
 }
@@ -546,6 +545,56 @@ fn the_scan_lists_each_number_once_in_order() {
         ascii_numbers_in(text.as_bytes()),
         ["111111111111", "222222222222"]
     );
+}
+
+/// A protobuf message: field 1 is `number` as a varint, field 2 is `filler` bytes of `x`.
+fn message_of(number: u64, filler: usize) -> Vec<u8> {
+    let mut bytes = vec![0x08];
+    let mut value = number;
+    loop {
+        let byte = u8::try_from(value & 0x7f).expect("seven bits");
+        value >>= 7;
+        if value == 0 {
+            bytes.push(byte);
+            break;
+        }
+        bytes.push(byte | 0x80);
+    }
+    bytes.push(0x12);
+    let mut length = filler;
+    loop {
+        let byte = u8::try_from(length & 0x7f).expect("seven bits");
+        length >>= 7;
+        if length == 0 {
+            bytes.push(byte);
+            break;
+        }
+        bytes.push(byte | 0x80);
+    }
+    bytes.extend(std::iter::repeat_n(b'x', filler));
+    bytes
+}
+
+#[test]
+fn the_varint_scan_covers_the_shortest_run_and_a_long_run_behind_a_glued_word() {
+    // The shortest run that is tried is 24 characters: 18 bytes, a 6-byte varint plus nine bytes of filler.
+    let bytes = message_of(111_111_111_111, 9);
+    assert_eq!(bytes.len(), 18);
+    let token = encode(&bytes, true, false);
+    assert_eq!(token.len(), MIN_RUN);
+    assert_eq!(project_numbers_in(token.as_bytes()), [111_111_111_111]);
+    // A run longer than EVERY_OFFSET_UP_TO is decoded from its first four characters only, which covers a
+    // word of up to three characters glued to the front.
+    let bytes = message_of(111_111_111_111, 480);
+    for glue in ["", "a", "ab", "abc"] {
+        let text = format!("{glue}{}", encode(&bytes, true, false));
+        assert!(text.len() > EVERY_OFFSET_UP_TO, "{}", text.len());
+        assert_eq!(
+            project_numbers_in(text.as_bytes()),
+            [111_111_111_111],
+            "glue {glue:?}"
+        );
+    }
 }
 
 #[test]

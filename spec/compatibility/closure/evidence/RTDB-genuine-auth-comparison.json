@@ -34,7 +34,7 @@
   },
   {
    "path": "tools/sdk-smoke-database/cv11-fixture.mjs",
-   "sha256": "40ee5fa036355ddaa65d553a6094f1ab7b84f60ad3060664911e2cd7f2b7ac49"
+   "sha256": "a9a71823071bb865171b69eddeb71e7c87e8312586fc0917dc639a516fda7b9a"
   }
  ],
  "command": "node tools/sdk-smoke-database/cv11-genuine-auth.mjs local --fireemu <binary> --out <dir>; node tools/sdk-smoke-database/cv11-fixture.mjs compare <dir>/journal.json",
@@ -64,7 +64,7 @@
    "gone"
   ]
  },
- "judging": "Profiles in order; steps in recorded order; events within one step compared sorted (the write-after-delete admin acknowledgement and the listener value race); millisecond timings and transport request counts are not compared.",
+ "judging": "cv11-fixture.mjs compareRecorded: profiles and events in recorded order, except the events of step write-after-delete (the admin acknowledgement and the listener value, which production delivered in both orders), compared sorted; millisecond timings and transport request counts are not compared.",
  "summary": {
   "match": true,
   "differences": [],
@@ -90,6 +90,8 @@
     "localEvents": 23
    }
   ],
-  "unorderedWithinStep": true
+  "unorderedSteps": [
+   "write-after-delete"
+  ]
  }
 }

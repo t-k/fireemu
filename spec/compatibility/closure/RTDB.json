@@ -16,21 +16,26 @@
   "decision": "PENDING",
   "submittedSourceCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
   "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
-  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main 5a15d1631 except the two committed replay tests (no product, Cargo or toolchain change on the branch), and rebuilding at the tool commit gave the same SHA-256."
+  "priorReview": {
+   "reportPath": "docs.local/reviews/2026-10-26-rtdb-closure-review.md",
+   "reportSha256": "9d4b3891ecaa86426c1803e98ac4ef59bb1dfd5891d1c531a09886e5f9d513ed",
+   "outcome": "CHANGES REQUESTED (Must 3, Should 5); M1-M3, S3-S5 addressed, S1/S2 filed as issues"
+  },
+  "note": "The coordinator runs the independent clean-context closure review and fills this entry. The submitted binary was built from the tool commit; its Rust sources equal origin/main 5a15d1631 except the two committed replay tests (no product, Cargo or toolchain change on the branch), and rebuilding in the same worktree path gave the same SHA-256; a build in another path differs only in LC_UUID and the code signature (see buildPath in the build receipt)."
  },
  "scopeDecisions": [
   {
    "id": "R1",
-   "decision": "RTDB covers the REST .json transport (CRUD, queries, ETag and conditional writes, export format, error texts, number forms, priorities), Security Rules evaluation and loading, SSE event streams, the Firebase JS web SDK over WebSocket and long polling (listen, onDisconnect, transactions, genuine email/password Auth), and the emulator-only management surfaces (Rules coverage inspection, import/export/reset/namespaces, the Emulator UI database view).",
-   "rationale": "These are the surfaces fireemu serves for RTDB (contract.json surface database) and the ones the RTDB coverage ledger rows CV01-CV07, CV09, CV11-CV13 and CV15 define.",
+   "decision": "Production parity of RTDB is claimed only for the recorded cases enumerated in the conditions: REST PUT/GET/PATCH of numbers, objects, arrays and priorities, format=export, orderBy with startAt/limitToFirst/limitToLast and their refusals, ETag and if-match, and the recorded validation errors; Security Rules loading (48 recorded M14 refusals) and owner/UID .read/.write evaluation with auth_variable_override and genuine email/password users; anonymous SSE put/patch/cancel; the web SDK over WebSocket and long polling for value listeners, onDisconnect set, remove, one compare-and-set transaction schedule and the genuine-Auth sign-in/sign-out/refresh/delete flow. The emulator-only Rules coverage view, import/export/reset/namespaces and the UI database view are compared with the official emulator or verified locally.",
+   "rationale": "These are the shapes recorded on the sandbox; anything else served for RTDB follows the official emulator and is listed as unverified in R2.",
    "status": "FROZEN",
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-26",
-   "decisionRef": "docs.local/runs/rtdb-closure/coordinator-rulings.md (2026-10-26 ruling Q1)"
+   "decisionRef": "docs.local/runs/rtdb-closure/coordinator-rulings.md (2026-10-26 ruling Q1); docs.local/reviews/2026-10-26-rtdb-closure-review.md M2"
   },
   {
    "id": "R2",
-   "decision": "UNVERIFIED and outside this closure (not observed in production): reconnect/resume and child-event and query-window ordering across goOffline/goOnline (CV08); onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
+   "decision": "UNVERIFIED and outside this closure (not observed in production): reconnect/resume, child-event and query ordering across goOffline/goOnline, and query-scoped listener cancellation (CV08); REST POST/push ids, DELETE, server values (.sv timestamp and increment), shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout and writeSizeLimit; Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims and .indexOn enforcement texts beyond the recorded query; SDK child events, SDK queries, update/push and multi-location updates and SDK server values; onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
    "rationale": "None of these was observed in production: the CV08/CV10 local gap actors never produced a result and no RTDB trigger was ever deployed (CV14). fireemu's behaviour there follows the official emulator and is provisional. Each needs its own production observation before it can join the closure.",
    "followUp": [
     "docs.local/issues/open/rtdb-reconnect-ordering-production-observation.md (CV08)",
@@ -389,7 +394,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
     "comparisonTool": "tools/sdk-smoke-database/cv11-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "comparisonSha256": "a77dd7061bc2fbb08d832d532a0d01a2e5cb75e656dbb97b8c62580e7254f9a6",
+    "comparisonSha256": "19a923d50833ac508334b5d16d17b21903b08f0e45bf26048fda1a675a542818",
     "rows": {
      "MATCH": 92
     },
@@ -552,6 +557,7 @@
   "integrationCommit": "8cda683b8e38d585586293cb649c2974d4f73ffa",
   "releaseBinarySha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "buildReceiptPath": "docs.local/runs/rtdb-closure/build/build-receipt.json",
+  "buildPath": ".worktree/rtdb-closure",
   "comparisons": [
    {
     "path": "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
@@ -578,7 +584,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "sha256": "a77dd7061bc2fbb08d832d532a0d01a2e5cb75e656dbb97b8c62580e7254f9a6",
+    "sha256": "19a923d50833ac508334b5d16d17b21903b08f0e45bf26048fda1a675a542818",
     "rows": 92,
     "summary": {
      "match": true,
@@ -602,7 +608,7 @@
    "statement": "A long-polling client that goes offline without closing has its onDisconnect writes run when the server drops the idle connection: production after 100.8 s and 104.0 s in the two recorded flows, fireemu after about 105 s (100 s idle timeout plus the client's poll timing). The event sequence is identical; the comparison judges the delay within 5 s of production's range."
   },
   "cv11WriteAfterDeleteRace": {
-   "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step unordered. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
+   "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step (and only that step) unordered; every other step, including the multi-event steps signin-a, signout, resignin-a and refresh-after-delete, is judged in recorded order. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
   },
   "sseFraming": {
    "statement": "Production sends event streams with Connection: close and closes the socket after the cancel event; fireemu uses chunked transfer encoding, ends the chunked body after cancel and keeps the connection. The event bytes are identical. Tracked in docs.local/issues/open/rtdb-sse-connection-close-framing.md."
@@ -620,7 +626,10 @@
   }
  },
  "outOfScope": [
-  "UNVERIFIED RTDB-CV-08 reconnect/resume and event ordering (not observed in production)",
+  "UNVERIFIED RTDB-CV-08 reconnect/resume, child-event and query ordering, query-scoped cancellation (not observed in production)",
+  "UNVERIFIED REST POST/push ids, DELETE, server values, shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout, writeSizeLimit",
+  "UNVERIFIED Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims, .indexOn enforcement texts beyond the recorded query",
+  "UNVERIFIED SDK child events, SDK queries, update/push and multi-location updates, SDK server values",
   "UNVERIFIED RTDB-CV-10 onDisconnect register/cancel/re-register and Rules changes before firing (not observed in production)",
   "UNVERIFIED RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
   "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",

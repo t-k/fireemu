@@ -260,9 +260,9 @@
               "package": "firebase-tools",
               "version": "15.28.2"
             },
-            "approvalRecord": "README.md#authentication"
+            "approvalRecord": "docs/compatibility/authentication.md (AUTH-USERS: transient credentials are bounded)"
           },
-          "note": "Read from the pinned source rather than measured with a clock: the official emulator has no virtual clock to advance past a lifetime. fireemu bounds the retained state so abandoned flows cannot grow a session without limit (INV-AUTH-004); every in-window credential keeps its one-time consumption semantics, and refresh tokens are not part of the policy. Documented in README.md, \"Authentication\"."
+          "note": "Read from the pinned source rather than measured with a clock: the official emulator has no virtual clock to advance past a lifetime. fireemu bounds the retained state so abandoned flows cannot grow a session without limit (INV-AUTH-004); every in-window credential keeps its one-time consumption semantics, and refresh tokens are not part of the policy. Documented in docs/compatibility/authentication.md (AUTH-USERS)."
         },
         {
           "key": "firestore.semantics",

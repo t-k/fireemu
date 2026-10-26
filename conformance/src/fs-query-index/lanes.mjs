@@ -63,9 +63,10 @@ export const LANES = {
   },
 };
 
-// The pipeline lane against the emulator profile, for a local dry run only: the lane's id,
-// corpus, fixture and database, with the emulator profile's fireemu config. A recording or a
-// comparison always uses `fs-ent-pipeline`.
+// The pipeline lane against the emulator profile, for local runs only: the lane's id, corpus,
+// fixture and database, with the emulator profile's fireemu config. A recording always uses
+// `fs-ent-pipeline`. Both lanes share the id, so both write `.runs/fs-ent-pipeline/`: copy
+// `comparison.json` out after each profile's run.
 LANES["fs-ent-pipeline-emulator"] = {
   ...LANES["fs-ent-pipeline"],
   localConfig: "fs-ent-pipeline.emulator.fireemu.json",

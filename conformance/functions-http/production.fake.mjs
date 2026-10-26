@@ -138,7 +138,7 @@ export const FH_DIGEST = `sha256:${"ab".repeat(32)}`;
 export const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
 
 /** The fake REST world, the harmless deploy child and the upload helper, without running a program. */
-export async function deployWorld({ deployScript, deleteStatus, caps }) {
+export async function deployWorld({ deployScript, deleteStatus, caps, buildsImage = true }) {
   const base = await uploadWorld({ caps });
   const deployed = { present: false, versionExists: false, bindings: [] };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
@@ -255,7 +255,7 @@ export async function deployWorld({ deployScript, deleteStatus, caps }) {
       return { exitCode: 0 };
     }
     base.gcs.put(UPLOAD_OBJECT);
-    deployed.versionExists = true;
+    deployed.versionExists = buildsImage;
     deployed.present = /process\.exit\(0\)/.test(deployScript);
     return production.cli(args, adc, budget, kind, runDir, track, [process.execPath, scriptPath]);
   };

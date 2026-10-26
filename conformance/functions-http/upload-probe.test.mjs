@@ -127,8 +127,20 @@ test("the packet's request caps can lower a budget and never raise it", () => {
   );
 });
 
-async function probe({ script, deleteStatus, loggingState, versionDeleteStatus, usedUploads = 0 }) {
-  const world = await deployWorld({ deployScript: script, deleteStatus, caps: PROBE_LIMITS });
+async function probe({
+  script,
+  deleteStatus,
+  loggingState,
+  versionDeleteStatus,
+  usedUploads = 0,
+  buildsImage,
+}) {
+  const world = await deployWorld({
+    deployScript: script,
+    deleteStatus,
+    caps: PROBE_LIMITS,
+    buildsImage,
+  });
   if (loggingState) world.deployed.loggingState = loggingState;
   if (versionDeleteStatus) world.deployed.versionDeleteStatus = versionDeleteStatus;
   for (let n = 0; n < usedUploads; n += 1) world.budget.take("upload");
@@ -376,6 +388,7 @@ test("a clean upload with an image that cannot be removed is still a run that ne
 test("a failed deploy is a residual run even when everything was cleaned", async () => {
   const { world, result } = await probe({
     script: FAKE_RECEIPT_SCRIPT('console.error("Error: Failed"); process.exit(1);', 200),
+    buildsImage: false, // the build never ran, so only the failed deploy itself makes the run residual
   });
   try {
     assert.equal(result.uploadsClosureReady, true);

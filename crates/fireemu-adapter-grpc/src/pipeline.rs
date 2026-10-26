@@ -485,6 +485,9 @@ pub struct CompiledExecution {
     pub input: pb::RunQueryRequest,
     /// The stages the executor runs over the input rows.
     pub stages: Vec<Stage>,
+    /// Whether the select kept `__name__` as itself, so that each result carries the document
+    /// name next to the selected fields (see [`selected_result`]).
+    pub select_keeps_name: bool,
     /// A local lexical search before the existing streaming suffix.
     pub search: Option<crate::text_search::SearchPlan>,
 }
@@ -544,6 +547,7 @@ pub fn compile_pipeline_in_order(
     // Whether the pipeline was refused only for a stage fireemu does not run, after every part
     // of it passed a check production made (strict answers the deferred empty map only then).
     let mut validated_unrun = false;
+    let mut select_keeps_name = false;
     let compiled = (|| -> Result<(), Status> {
         for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
             let rank = stage_rank(&stage.name);
@@ -588,7 +592,10 @@ pub fn compile_pipeline_in_order(
                     }
                     let aliases = select_wire_order(order, position);
                     match decode_select(stage, unrecorded, aliases) {
-                        Ok(select) => stages.push(Stage::Select(select)),
+                        Ok((select, keeps_name)) => {
+                            select_keeps_name = keeps_name;
+                            stages.push(Stage::Select(select));
+                        }
                         // A reserved alias and a `map(...)` key type are answered after a
                         // later stage's argument type, as an empty map is (the official
                         // emulator 1.22.0: `select {__x__: i}` then `limit("x")` gives the
@@ -677,6 +684,7 @@ pub fn compile_pipeline_in_order(
     Ok(CompiledExecution {
         input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
         stages,
+        select_keeps_name,
         search,
     })
 }
@@ -1589,12 +1597,14 @@ fn decode_condition(
 /// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
 /// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
 /// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
-/// repeated path and an alias inside another are refused.
+/// repeated path and an alias inside another are refused. `__name__` selected as itself is no
+/// alias but the request to keep the document name in the result (strict: alone only): the flag
+/// is the second part of the answer.
 fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
     wire_order: Option<&[String]>,
-) -> Result<Vec<(FieldPath, Expr)>, Status> {
+) -> Result<(Vec<(FieldPath, Expr)>, bool), Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
     else {
@@ -1608,17 +1618,9 @@ fn decode_select(
             map.fields.len()
         )));
     }
-    // The official emulator keeps `__name__` selected as itself (the result carries the name
-    // and no field); production has not answered it, and fireemu refuses it as an alias in the
-    // emulator profile (a known difference), so strict refuses it as unobserved.
-    if unrecorded == Unrecorded::Refuse
-        && map.fields.iter().any(|(alias, value)| {
-            parse_alias(alias).is_ok_and(|path| path.segments() == ["__name__"])
-                && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f)) if f == "__name__")
-        })
-    {
+    if unrecorded == Unrecorded::Refuse && !name_select_recorded(&map.fields) {
         return Err(Status::unimplemented(
-            "selecting __name__ as itself is not observed locally",
+            "selecting __name__ as itself, other than alone, is not observed locally",
         ));
     }
     // Every alias is checked before any value, as the official emulator does, in the request's
@@ -1664,7 +1666,16 @@ fn decode_select(
     }
     let mut aliases = Vec::with_capacity(entries.len());
     for ((alias, _), expr) in entries.iter().zip(exprs) {
-        aliases.push((*alias, decode_alias(alias)?, expr));
+        // `__name__` set from `__name__` takes part in the overlap checks like any alias, but
+        // sets no field.
+        let identity = matches!(&expr, Expr::Field(path) if path.is_document_name())
+            && parse_alias(alias).is_ok_and(|path| path.segments() == ["__name__"]);
+        let path = if identity {
+            parse_alias(alias)?
+        } else {
+            decode_alias(alias)?
+        };
+        aliases.push((*alias, path, expr, identity));
     }
     if aliases.is_empty() {
         // FS-ENT-ORACLE O-4 `o4/stages#select-empty-map`.
@@ -1679,8 +1690,8 @@ fn decode_select(
     // An alias inside another names the alias set later, which is the child in path order
     // (FS-ENT-ORACLE O-1 `px0/aliases#overlap`, `{m, m.r}`) and, in the request's order, the
     // later of the two (the official emulator 1.22.0: `{a.b, a}` names `a`).
-    for (at, (alias, path, _)) in aliases.iter().enumerate() {
-        for (earlier_alias, earlier, _) in &aliases[..at] {
+    for (at, (alias, path, _, _)) in aliases.iter().enumerate() {
+        for (earlier_alias, earlier, _, _) in &aliases[..at] {
             if earlier == path {
                 return Err(Status::invalid_argument(format!(
                     "select aliases {earlier_alias:?} and {alias:?} set the same field"
@@ -1691,10 +1702,50 @@ fn decode_select(
             }
         }
     }
-    Ok(aliases
-        .into_iter()
-        .map(|(_, path, expr)| (path, expr))
-        .collect())
+    let keeps_name = aliases.iter().any(|(_, _, _, identity)| *identity);
+    Ok((
+        aliases
+            .into_iter()
+            .filter(|(_, _, _, identity)| !identity)
+            .map(|(_, path, expr, _)| (path, expr))
+            .collect(),
+        keeps_name,
+    ))
+}
+
+/// A select's result for a source document: the selected fields, and the document name when
+/// the select kept `__name__` as itself.
+#[must_use]
+pub fn selected_result(
+    fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,
+    source_name: &str,
+    keeps_name: bool,
+) -> pb::Document {
+    let mut result = result_document(fields);
+    if keeps_name {
+        source_name.clone_into(&mut result.name);
+    }
+    result
+}
+
+/// Whether a strict select may name the document: it holds no `__name__` selected as itself,
+/// or only that, alone and unquoted. Production answered the alone form with the name only
+/// (FS-ENT-ORACLE O5 `appendix#proposed-select-name-field`); beside other aliases or quoted it is
+/// unobserved. (The emulator profile answers every form as the official emulator does.)
+fn name_select_recorded(fields: &std::collections::HashMap<String, pb::Value>) -> bool {
+    let names_document =
+        |text: &str| parse_alias(text).is_ok_and(|path| path.segments() == ["__name__"]);
+    let selects_itself = fields.iter().any(|(alias, value)| {
+        names_document(alias)
+            && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f))
+                if names_document(f))
+    });
+    !selects_itself
+        || matches!(
+            fields.iter().collect::<Vec<_>>()[..],
+            [(alias, pb::Value { value_type: Some(pb::value::ValueType::FieldReferenceValue(field)) })]
+                if alias == "__name__" && field == "__name__"
+        )
 }
 
 /// The wire order of the aliases of the `select` stage at `position`, where the body kept it.
@@ -2221,6 +2272,74 @@ pub fn result_document(
             .collect(),
         ..Default::default()
     }
+}
+
+/// The size at which a pipeline answer is cut into another response. Production answered up to
+/// four documents in one response (FS-ENT-ORACLE O-1, `results/metadata` and `results/order`);
+/// where it starts a second one is unobserved, so a response grows to this target and a single
+/// document larger than it is never split.
+pub(crate) const RESULT_BATCH_BYTES: usize = 1_048_576;
+
+/// What a response's `execution_time` and framing add to the size of its documents.
+const RESPONSE_OVERHEAD_BYTES: usize = 16;
+
+/// Packs result documents into responses in arrival order: one response holds every result
+/// until the target size is reached, so a small answer is a single response.
+#[derive(Debug, Default)]
+pub(crate) struct ResultBatcher {
+    results: Vec<pb::Document>,
+    bytes: usize,
+}
+
+impl ResultBatcher {
+    /// Adds `document`. When it would push the held results past the target, those results are
+    /// returned as a finished batch and `document` starts the next one.
+    pub(crate) fn push(&mut self, document: pb::Document) -> Option<Vec<pb::Document>> {
+        // One tag plus at most ten bytes for the length-delimited document prefix.
+        let document_bytes = prost::Message::encoded_len(&document).saturating_add(11);
+        let full = !self.results.is_empty()
+            && RESPONSE_OVERHEAD_BYTES
+                .saturating_add(self.bytes)
+                .saturating_add(document_bytes)
+                > RESULT_BATCH_BYTES;
+        let finished = full.then(|| self.take());
+        self.bytes = self.bytes.saturating_add(document_bytes);
+        self.results.push(document);
+        finished
+    }
+
+    /// Whether no result is held.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+
+    /// The held results, leaving the batcher empty.
+    pub(crate) fn take(&mut self) -> Vec<pb::Document> {
+        self.bytes = 0;
+        std::mem::take(&mut self.results)
+    }
+}
+
+/// The responses for a whole answer: every result in order, cut by [`ResultBatcher`]; a pipeline
+/// with no result answers one response holding only the execution time.
+pub(crate) fn pack_results(
+    documents: Vec<pb::Document>,
+    execution_time: Option<prost_types::Timestamp>,
+) -> Vec<pb::ExecutePipelineResponse> {
+    let response = |results| pb::ExecutePipelineResponse {
+        results,
+        execution_time,
+        ..Default::default()
+    };
+    let mut batcher = ResultBatcher::default();
+    let mut responses = Vec::new();
+    for document in documents {
+        responses.extend(batcher.push(document).map(response));
+    }
+    if !batcher.is_empty() || responses.is_empty() {
+        responses.push(response(batcher.take()));
+    }
+    responses
 }
 
 /// A `RunQuery` result document as an executor row.
@@ -3301,6 +3420,193 @@ mod tests {
                         pb::structured_query::filter::FilterType::UnaryFilter(pb::structured_query::UnaryFilter { op: actual, operand_type: Some(pb::structured_query::unary_filter::OperandType::Field(field)) })
                     )}), ..
                 })) if actual == op as i32 && field.field_path == "score"));
+        }
+    }
+    mod framing {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn document(index: usize, padding: usize) -> pb::Document {
+            pb::Document {
+                name: format!("projects/p/databases/(default)/documents/c/{index}"),
+                fields: [(
+                    "pad".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::StringValue("x".repeat(padding))),
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            }
+        }
+
+        fn weight(document: &pb::Document) -> usize {
+            prost::Message::encoded_len(document) + 11
+        }
+
+        proptest! {
+            /// The responses carry every result once, in order, and a pipeline with no result
+            /// is one response without results.
+            #[test]
+            fn packing_keeps_every_result_in_order(
+                paddings in proptest::collection::vec(0usize..600_000, 0..12),
+            ) {
+                let documents: Vec<_> = paddings.iter().enumerate().map(|(i, p)| document(i, *p)).collect();
+                let responses = pack_results(documents.clone(), None);
+                let flat: Vec<_> = responses.iter().flat_map(|r| r.results.clone()).collect();
+                prop_assert_eq!(flat, documents.clone());
+                prop_assert!(!responses.is_empty());
+                if documents.is_empty() {
+                    prop_assert_eq!(responses.len(), 1);
+                } else {
+                    prop_assert!(responses.iter().all(|r| !r.results.is_empty()));
+                }
+            }
+
+            /// A response stays within the target unless it holds a single oversized document,
+            /// and the packing is greedy: the next response's first document would not have fit.
+            #[test]
+            fn packing_cuts_only_where_the_next_result_does_not_fit(
+                paddings in proptest::collection::vec(0usize..600_000, 1..12),
+            ) {
+                let documents: Vec<_> = paddings.iter().enumerate().map(|(i, p)| document(i, *p)).collect();
+                let responses = pack_results(documents, None);
+                for response in &responses {
+                    let total: usize = response.results.iter().map(weight).sum();
+                    prop_assert!(
+                        response.results.len() == 1
+                            || total + RESPONSE_OVERHEAD_BYTES <= RESULT_BATCH_BYTES
+                    );
+                }
+                for pair in responses.windows(2) {
+                    let held: usize = pair[0].results.iter().map(weight).sum();
+                    prop_assert!(
+                        held + weight(&pair[1].results[0]) + RESPONSE_OVERHEAD_BYTES
+                            > RESULT_BATCH_BYTES
+                    );
+                }
+            }
+
+            /// An answer that fits the target is one response, as production sent 2 to 4
+            /// documents (FS-ENT-ORACLE O-1).
+            #[test]
+            fn a_small_answer_is_one_response(count in 0usize..200, padding in 0usize..2_000) {
+                let documents: Vec<_> = (0..count).map(|i| document(i, padding)).collect();
+                prop_assert_eq!(pack_results(documents, None).len(), 1);
+            }
+        }
+
+        /// A batch that reaches the target exactly is still one response; one byte more is cut.
+        #[test]
+        fn a_batch_may_fill_the_target_exactly() {
+            let first = document(0, 500_000);
+            let want = RESULT_BATCH_BYTES - RESPONSE_OVERHEAD_BYTES - weight(&first);
+            let fitting = (want.saturating_sub(400)..want)
+                .map(|padding| document(1, padding))
+                .find(|candidate| weight(candidate) == want)
+                .expect("a padding that fills the target exactly");
+            let over = (want.saturating_sub(400)..=want)
+                .map(|padding| document(1, padding))
+                .find(|candidate| weight(candidate) == want + 1)
+                .expect("a padding one byte over the target");
+            assert_eq!(pack_results(vec![first.clone(), fitting], None).len(), 1);
+            assert_eq!(pack_results(vec![first, over], None).len(), 2);
+        }
+
+        #[test]
+        fn the_execution_time_is_on_every_response() {
+            let time = prost_types::Timestamp {
+                seconds: 5,
+                nanos: 7,
+            };
+            let documents = (0..3).map(|i| document(i, 400_000)).collect();
+            let responses = pack_results(documents, Some(time));
+            assert_eq!(responses.len(), 2);
+            assert!(responses.iter().all(|r| r.execution_time == Some(time)));
+        }
+    }
+    mod select_name {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn field(name: &str) -> pb::Value {
+            pb::Value {
+                value_type: Some(pb::value::ValueType::FieldReferenceValue(name.to_owned())),
+            }
+        }
+
+        fn select(entries: &[(&str, &str)]) -> pb::pipeline::Stage {
+            pb::pipeline::Stage {
+                name: "select".to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+                        fields: entries
+                            .iter()
+                            .map(|(alias, source)| ((*alias).to_owned(), field(source)))
+                            .collect(),
+                    })),
+                }],
+                ..Default::default()
+            }
+        }
+
+        proptest! {
+            /// Under the emulator profile `__name__` selected as itself sets no field and asks
+            /// for the name; every other alias is a field, in any combination and order.
+            #[test]
+            fn the_identity_alias_asks_for_the_name_and_sets_no_field(
+                pool in proptest::sample::subsequence(vec!["a", "b", "c.d", "e"], 0..=4),
+                identity in any::<bool>(),
+                shuffle in any::<u64>(),
+            ) {
+                let mut entries: Vec<(&str, &str)> = pool.iter().map(|alias| (*alias, "n")).collect();
+                if identity {
+                    entries.push(("__name__", "__name__"));
+                }
+                prop_assume!(!entries.is_empty());
+                let rotation = usize::try_from(shuffle % u64::try_from(entries.len()).unwrap()).unwrap();
+                entries.rotate_left(rotation);
+                let (aliases, keeps_name) =
+                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None).unwrap();
+                prop_assert_eq!(keeps_name, identity);
+                let mut set: Vec<String> = aliases.iter().map(|(path, _)| path.canonical()).collect();
+                set.sort();
+                let mut want: Vec<String> = pool.iter().map(|alias| (*alias).to_owned()).collect();
+                want.sort();
+                prop_assert_eq!(set, want);
+            }
+
+            /// `__name__` set from any other value is refused, and strict refuses even the
+            /// identity as unobserved.
+            #[test]
+            fn only_the_identity_may_set_the_name(source in "[a-z]{1,4}") {
+                let refused = decode_select(
+                    &select(&[("__name__", &source)]),
+                    Unrecorded::OfficialEmulator,
+                    None,
+                ).unwrap_err();
+                prop_assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+                prop_assert!(refused.message().contains("can not be overwritten"));
+            }
+        }
+
+        #[test]
+        fn strict_answers_the_identity_alone_as_production_did_and_refuses_the_rest() {
+            let (aliases, keeps_name) = decode_select(
+                &select(&[("__name__", "__name__")]),
+                Unrecorded::Refuse,
+                None,
+            )
+            .unwrap();
+            assert!(aliases.is_empty() && keeps_name);
+            for entries in [
+                vec![("__name__", "__name__"), ("a", "n")],
+                vec![("`__name__`", "__name__")],
+            ] {
+                let refused =
+                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap_err();
+                assert_eq!(refused.code(), tonic::Code::Unimplemented, "{entries:?}");
+            }
         }
     }
 }

@@ -603,7 +603,9 @@ async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_p
             }
         }
     }).await.unwrap();
-    assert!(documents > 0 && documents < 32);
+    // The first page's results are held for the response they share with the next page's
+    // (production packs a small answer into one response), so none is sent yet.
+    assert_eq!(documents, 0);
     assert_eq!(
         backend.latest_query_execution_stats().unwrap().1.page_count,
         2

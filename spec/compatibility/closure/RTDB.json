@@ -68,6 +68,16 @@
    "decidedBy": "owner",
    "decidedOn": "2026-10-19",
    "decisionRef": "docs.local/instructions/2026-10-19-rtdb-design-memo.md; docs.local/instructions/rtdb-coordinator-rulings.md"
+  },
+  {
+   "id": "R4",
+   "decision": "R2 is amended for two of its items. Reconnect/resume, child-event and query-window order and query-scoped cancellation (CV08), and onDisconnect cancel, re-register, update/remove, server values and a Rules change between registration and firing (CV10), are observed in production (production-5, 2026-10-27, 8 profiles) and compared with fireemu: RTDB/sdk-reconnect-and-query-order and RTDB/sdk-ondisconnect-variants-and-rules, for the recorded shapes only. Still UNVERIFIED: SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge and onDisconnect update, SDK server values beyond the onDisconnect update, and everything else R2 lists (CV14 included).",
+   "rationale": "The CV08 and CV10 gap actors never produced a result; the lean residual recorder did (production-5), after four spent envelopes that stopped at the first requests (ADC scopes, a propagation 423) without observing anything.",
+   "amends": "R2",
+   "status": "PROPOSED",
+   "decidedBy": "coordinator (to confirm at the closure review)",
+   "decidedOn": "2026-10-27",
+   "decisionRef": "docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
   }
  ],
  "conditions": [
@@ -564,6 +574,100 @@
     ],
     "limitations": "One anonymous scenario; signed-in UI, stale UI and identity switching are not claimed."
    }
+  },
+  {
+   "conditionId": "RTDB/sdk-reconnect-and-query-order",
+   "coverageLedgerRows": [
+    "RTDB-CV-08"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "web SDK, 4 profiles (round 1 and 2 x WebSocket and long polling): an observer with value and child listeners on a limitToFirst(2) and a limitToLast(2) window by orderByChild, a gated path and a control path",
+    "initial child_added events with previous-child names and the window value order",
+    "a write that moves a child out of one window and into another: child_removed, child_added and value in the recorded order",
+    "only the limitToLast window is unsubscribed: the other window and the path listener keep receiving; a later fresh listen starts from the current data",
+    "goOffline: three queued writes (set, remove, set) raise their optimistic events at once and their acks only after goOnline",
+    "server changes made while offline, then goOnline: the listeners' catch-up events, the three acks, and the queued value winning over a server write to the same path",
+    "a listener whose read rule turns false while offline is cancelled alone with PERMISSION_DENIED on reconnect; the control listener continues; nothing arrives on the cancelled listener afterwards"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "production-5",
+      "envelope": "RTDB-RESIDUAL-20261026-05",
+      "recordedOn": "2026-10-27",
+      "project": "fireemu-oracle-query",
+      "profiles": 8
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rtdb-residual.json",
+    "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
+    "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
+    "comparisonSha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
+    "toolCommit": "900e9d1d343f79a1fcad4d00762e986fa54c221b",
+    "rustSourcesEqualTo": "work/rtdb-ondisconnect-order 3cdcb534fc3f19db43d737970aa1c5bfde5d8282 (origin/main ac1726cd0 plus the multi-path order fix; PROVISIONAL: rebind to the merged main and its release build)",
+    "knownDifferences": [],
+    "rows": {
+     "MATCH": 4
+    },
+    "tests": [
+     "tools/sdk-smoke-database/rtdb-residual-fixture.test.mjs",
+     "tools/sdk-smoke-database/rtdb-residual-judge.test.mjs",
+     "tools/sdk-smoke-database/rtdb-residual-page.test.mjs"
+    ],
+    "scope": "cv08 profiles r1-ws, r1-lp, r2-ws, r2-lp of the comparison"
+   }
+  },
+  {
+   "conditionId": "RTDB/sdk-ondisconnect-variants-and-rules",
+   "coverageLedgerRows": [
+    "RTDB-CV-10"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "onDisconnect set and then cancel never fires",
+    "set, cancel, set again fires the last value; set then set again without cancel fires once with the second value",
+    "remove; update with a null and a kept field; update with increment and serverTimestamp",
+    "cancel at a parent cancels the registrations below it",
+    "a Rules change that denies a path between registration and firing: the write is not made; registering under denying Rules is refused with PERMISSION_DENIED",
+    "the writes of one connection fire in the order of production (e6, e5, marker, e4, e3, e2 for the six recorded keys), which is the Scala map order of the official emulator: registration order up to four entries, key hash order from five",
+    "WebSocket: the writes fire at once (0.2 s); long polling: after the idle close (99.3 s and 103.2 s in production, about 104 s in fireemu)"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "production-5",
+      "envelope": "RTDB-RESIDUAL-20261026-05",
+      "recordedOn": "2026-10-27",
+      "project": "fireemu-oracle-query",
+      "profiles": 8
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rtdb-residual.json",
+    "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
+    "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
+    "comparisonSha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
+    "toolCommit": "900e9d1d343f79a1fcad4d00762e986fa54c221b",
+    "rustSourcesEqualTo": "work/rtdb-ondisconnect-order 3cdcb534fc3f19db43d737970aa1c5bfde5d8282 (origin/main ac1726cd0 plus the multi-path order fix; PROVISIONAL: rebind to the merged main and its release build)",
+    "knownDifferences": [
+     "/knownDifferences/longPollingIdleClose"
+    ],
+    "rows": {
+     "MATCH": 4
+    },
+    "tests": [
+     "tools/sdk-smoke-database/rtdb-residual-fixture.test.mjs",
+     "tools/sdk-smoke-database/rtdb-residual-judge.test.mjs",
+     "tools/sdk-smoke-database/rtdb-residual-page.test.mjs",
+     "crates/fireemu-adapter-database/tests/multi_path_order.rs",
+     "crates/fireemu-adapter-database/src/scala_map.rs#tests"
+    ],
+    "scope": "cv10 profiles r1-ws, r1-lp, r2-ws, r2-lp of the comparison"
+   }
   }
  ],
  "integratedRegression": {
@@ -603,6 +707,21 @@
      "match": true,
      "differences": 0
     }
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
+    "sha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
+    "rows": 8,
+    "summary": {
+     "match": true,
+     "rows": {
+      "MATCH": 8,
+      "DIFFERENCE": 0,
+      "NEEDS_REVIEW": 0
+     },
+     "timingWithinTolerance": true
+    },
+    "binding": "PROVISIONAL: bound to the local evidence build of work/rtdb-ondisconnect-order, not to the final release binary"
    }
   ],
   "productionRequests": 0,
@@ -639,11 +758,9 @@
   }
  },
  "outOfScope": [
-  "UNVERIFIED RTDB-CV-08 reconnect/resume, child-event and query ordering, query-scoped cancellation (not observed in production)",
   "UNVERIFIED REST POST/push ids, DELETE, server values, shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout, writeSizeLimit",
   "UNVERIFIED Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims, .indexOn enforcement texts beyond the recorded query",
-  "UNVERIFIED SDK child events, SDK queries, update/push and multi-location updates, SDK server values",
-  "UNVERIFIED RTDB-CV-10 onDisconnect register/cancel/re-register and Rules changes before firing (not observed in production)",
+  "UNVERIFIED SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge and onDisconnect update, SDK server values beyond the onDisconnect update",
   "UNVERIFIED RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
   "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",
   "latency, throughput, quotas, billing, instance management",

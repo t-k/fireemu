@@ -591,32 +591,59 @@ test("a send that throws fails that question and leaves nothing pending", async 
   }
 });
 
-test("a daemon that cannot answer the self-test leaves the SDK failing closed and says so", async () => {
-  const sourceDir = await codebase(anyCopy);
-  const channel = createAdminChannel((frame) =>
-    queueMicrotask(() => channel.deliver({ type: "appCheck:verdict", requestId: frame.requestId, ok: false, reason: "unavailable" })),
-  );
-  const handle = await instrumentAdminAppCheck(sourceDir, channel, { enabled: true });
-  try {
-    assert.equal(handle.supported, true);
-    assert.equal(handle.report.instrumentation, "daemon-unavailable");
-    const admin = sdk(anyCopy);
-    const { app, appCheck } = appCheckOf(admin);
-    const error = await appCheck.verifyToken(token()).then(() => assert.fail("accepted"), (e) => e);
-    assert.equal(error.message, "Error fetching Json Web Keys: the daemon cannot verify App Check tokens");
-    await admin.deleteApp(app);
-  } finally {
-    handle.restore();
+class NoNetworkAgent extends https.Agent {
+  createConnection() {
+    throw new Error("test: network access is refused");
   }
-});
+}
 
-test("a daemon that never answers the self-test is reported after the self-test deadline", async () => {
+for (const [name, answer, reported] of [
+  ["unavailable", { ok: false, reason: "unavailable" }, "daemon-unavailable"],
+  ["a refusal that is not the probe's", { ok: false, reason: "invalid-signature" }, "daemon-unavailable"],
+  ["an acceptance", { ok: true }, /self-test did not reach the instrumented signature step/],
+]) {
+  test(`a daemon that answers the self-test with ${name} leaves nothing patched and says so`, async () => {
+    const admin = sdk(anyCopy);
+    const before = [admin.Verifier.prototype.verifySignature, admin.Client.prototype.verifyReplayProtection];
+    const sourceDir = await codebase(anyCopy);
+    const sent = [];
+    const channel = createAdminChannel((frame) => {
+      sent.push(frame);
+      queueMicrotask(() => channel.deliver({ type: "appCheck:verdict", requestId: frame.requestId, ...answer }));
+    });
+    const handle = await instrumentAdminAppCheck(sourceDir, channel, { enabled: true });
+    try {
+      assert.equal(handle.supported, false);
+      assert.match(handle.report.instrumentation, typeof reported === "string" ? new RegExp(`^${reported}$`) : reported);
+      assert.equal(handle.report.firebaseAdminVersion, JSON.parse(readFileSync(join(anyCopy, "package.json"), "utf8")).version);
+      assert.equal(admin.Verifier.prototype.verifySignature, before[0], "verifySignature is the SDK's again");
+      assert.equal(admin.Client.prototype.verifyReplayProtection, before[1], "verifyReplayProtection is the SDK's again");
+      // The stock SDK is back: a later daemon answer is never consulted, and a fireemu token is
+      // rejected by the SDK's own key fetch (the agent refuses to open any connection here).
+      const asked = sent.length;
+      const { app, appCheck } = appCheckOf(admin, { httpAgent: new NoNetworkAgent() });
+      const error = await appCheck.verifyToken(token(), { consume: true }).then(() => assert.fail("accepted"), (e) => e);
+      assert.match(error.message, /^Error fetching Json Web Keys: /);
+      assert.equal(sent.length, asked, "no question was sent to the daemon");
+      assert.equal(channel.pending(), 0);
+      await admin.deleteApp(app);
+    } finally {
+      handle.restore();
+    }
+  });
+}
+
+test("a daemon that never answers the self-test is reported after the self-test deadline and nothing stays patched", async () => {
+  const admin = sdk(anyCopy);
+  const before = admin.Verifier.prototype.verifySignature;
   const sourceDir = await codebase(anyCopy);
   const channel = createAdminChannel(() => {}, { timeoutMs: 120 });
   const started = Date.now();
   const handle = await instrumentAdminAppCheck(sourceDir, channel, { enabled: true, timeoutMs: 120 });
   try {
     assert.equal(handle.report.instrumentation, "daemon-unavailable");
+    assert.equal(handle.supported, false);
+    assert.equal(admin.Verifier.prototype.verifySignature, before);
     assert.ok(Date.now() - started < 4000);
   } finally {
     handle.restore();

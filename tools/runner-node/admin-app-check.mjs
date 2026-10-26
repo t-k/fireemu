@@ -417,11 +417,12 @@ export async function instrumentAdminAppCheck(sourceDir, channel, options = {}) 
     outcome.error?.code === outcome.expected.code &&
     outcome.error?.message === outcome.expected.message;
   if (!answeredByDaemon) {
-    // Still installed and still failing closed (every question ends in the SDK's key-fetch
-    // failure), but the daemon is not answering: say so.
+    // The step was reached but the daemon did not answer the probe the way it answers: nothing
+    // stays patched. The stock SDK then rejects fireemu tokens, and a daemon that recovers later
+    // cannot start accepting tokens through a half-trusted channel.
     channel.dispose();
-    handle.instrumentation = "daemon-unavailable";
-    handle.report = { instrumentation: "daemon-unavailable", firebaseAdminVersion: version };
+    restore();
+    return unsupported("daemon-unavailable", version);
   }
   return handle;
 }

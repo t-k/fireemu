@@ -33,6 +33,11 @@ fn every_recorded_refusal_has_a_shape() {
     let mut o5 = 0;
     let mut o6 = 0;
     let mut o7 = 0;
+    let mut o8a = 0;
+    let mut o8b = 0;
+    let mut o8c = 0;
+    let mut o8d = 0;
+    let mut raw = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
     for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
@@ -46,9 +51,11 @@ fn every_recorded_refusal_has_a_shape() {
             let answer = &production["programs"][id]["steps"][step_id];
             if answer["status"] == 500 {
                 excluded_500 += 1;
-                assert_eq!(
-                    row,
-                    "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
+                assert!(
+                    row == "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
+                        || row.starts_with("fs-ent-pipeline/o8a/dupquote-main#")
+                        || row == "fs-ent-pipeline/o8c/collections-main#array-reverse-none",
+                    "{row}"
                 );
                 assert_eq!(answer["body"][0]["error"]["status"], "INTERNAL", "{row}");
                 let message = answer["body"][0]["error"]["message"].as_str().unwrap();
@@ -63,12 +70,26 @@ fn every_recorded_refusal_has_a_shape() {
             if answer["status"] != 400 {
                 continue;
             }
+            // A body sent as written (O-8A malformed bodies) has no shape: it is not a request
+            // the gate matches, only a row the replay compares.
+            if step.get("rawBody").is_some() {
+                raw += 1;
+                continue;
+            }
             if id.starts_with("fs-ent-pipeline/o5/") {
                 o5 += 1;
             } else if id.starts_with("fs-ent-pipeline/o6/") {
                 o6 += 1;
             } else if id.starts_with("fs-ent-pipeline/o7/") {
                 o7 += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8a/") {
+                o8a += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8b/") {
+                o8b += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8c/") {
+                o8c += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8d/") {
+                o8d += 1;
             } else {
                 original += 1;
             }
@@ -94,11 +115,14 @@ fn every_recorded_refusal_has_a_shape() {
             );
         }
     }
-    assert_eq!((original, o5, o6, o7), (98, 291, 21, 54));
-    let refused = original + o5 + o6 + o7;
-    assert_eq!(refused, 464);
-    assert_eq!(eligible, 464);
-    assert_eq!(excluded_500, 1);
+    assert_eq!(
+        (original, o5, o6, o7, o8a, o8b, o8c, o8d, raw),
+        (98, 291, 21, 54, 3, 80, 84, 18, 18)
+    );
+    let refused = original + o5 + o6 + o7 + o8a + o8b + o8c + o8d;
+    assert_eq!(refused, 649);
+    assert_eq!(eligible, 649);
+    assert_eq!(excluded_500, 7);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.
     assert!(texts <= refused && texts > 80, "{texts}");

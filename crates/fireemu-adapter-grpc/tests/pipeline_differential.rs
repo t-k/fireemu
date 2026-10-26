@@ -57,7 +57,11 @@ fn recorded_refusals() -> BTreeMap<String, Vec<String>> {
         let id = program["id"].as_str().unwrap();
         for (n, step) in program["steps"].as_array().unwrap().iter().enumerate() {
             let answer = &production["programs"][id]["steps"][step["id"].as_str().unwrap()];
-            if step["rpc"] != "executePipeline" || answer["status"] != 400 {
+            // A body sent as written (O-8A) has no shape to match.
+            if step["rpc"] != "executePipeline"
+                || answer["status"] != 400
+                || step.get("rawBody").is_some()
+            {
                 continue;
             }
             let element = answer["body"].as_array().map_or(&answer["body"], |a| &a[0]);

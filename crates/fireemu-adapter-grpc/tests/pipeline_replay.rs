@@ -21,13 +21,14 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-/// Programs recorded in O-6 and O-7 (2026-10-26: sort, relaxed stage order, logical and recorded
+/// Programs recorded in O-6, O-7, O-8A, O-8B, O-8C and O-8D (2026-10-26: sort, relaxed stage order, logical and recorded
 /// functions in a `where`, result order without a sort; aggregate, distinct, `add_fields`,
 /// `remove_fields`, `collection_group`, documents) that fireemu does not answer like
 /// production yet. They are replayed and compared like the rest, but a difference in them is
 /// not an unexpected one; each program must still differ in at least one row, so remove a
 /// program from this list when the work that makes it match lands. The comparison summary is in
-/// the lane's `o6-comparison.md`; none of these rows is a compatibility claim.
+/// the lane's `o6-comparison.md`; none of these rows is a compatibility claim. (`nesting-main`
+/// is not listed: every nesting probe this surface can take matches production.)
 const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o6/sort-kinds-cross",
     "fs-ent-pipeline/o6/sort-kinds-within",
@@ -56,6 +57,15 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o7/fields-main",
     "fs-ent-pipeline/o7/inputs-collection-group",
     "fs-ent-pipeline/o7/inputs-documents",
+    "fs-ent-pipeline/o8a/names-main",
+    "fs-ent-pipeline/o8a/dupquote-main",
+    "fs-ent-pipeline/o8a/precedence-main",
+    "fs-ent-pipeline/o8a/base64-main",
+    "fs-ent-pipeline/o8b/strings-main",
+    "fs-ent-pipeline/o8b/math-main",
+    "fs-ent-pipeline/o8c/timestamps-main",
+    "fs-ent-pipeline/o8c/collections-main",
+    "fs-ent-pipeline/o8d/stages-main",
 ];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
@@ -569,6 +579,19 @@ fn normalize(value: &Value) -> Value {
     }
 }
 
+/// The documents of a runQuery answer, normalized and sorted (the read time is not compared).
+fn query_documents(body: &Value) -> Vec<String> {
+    let mut documents: Vec<String> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|element| element.get("document"))
+        .map(|document| normalize(document).to_string())
+        .collect();
+    documents.sort();
+    documents
+}
+
 /// The comparable answer of an executePipeline step: the status, and the result documents as
 /// a sorted list or the error body.
 fn answer(status: u16, body: &Value) -> Value {
@@ -786,6 +809,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     for strict in [true, false] {
         let s = state(strict);
         let mut differing = Vec::new();
+        let mut not_replayable = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
@@ -807,6 +831,19 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 let (status, body) = if rpc == "get" {
                     let parent = step["parent"].as_str().unwrap();
                     call(&s, "GET", &format!("{DOCS}/{parent}"), &Value::Null)
+                } else if let Some(raw) = step["rawBody"].as_str() {
+                    // A body sent as written (O-8A): the in-process surface takes a parsed
+                    // body, so a text that is not JSON cannot be replayed here.
+                    let text = raw.replace("{docs}", DOCS);
+                    let Ok((value, key_order)) =
+                        fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(
+                            text.as_bytes(),
+                        )
+                    else {
+                        not_replayable.push(row);
+                        continue;
+                    };
+                    call_ordered(&s, "POST", &format!("{DOCS}:{rpc}"), &value, &key_order)
                 } else {
                     call_ordered(
                         &s,
@@ -824,6 +861,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     // A document read: the status and the normalized document.
                     json!({"status": status, "body": normalize(&body)})
                         == json!({"status": expected["status"], "body": normalize(&expected["body"])})
+                } else if rpc == "runQuery" {
+                    json!({"status": status, "documents": query_documents(&body)})
+                        == json!({"status": expected["status"], "documents": query_documents(&expected["body"])})
                 } else {
                     answer(status, &body)
                         == answer(
@@ -891,6 +931,23 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         assert!(compared > 200, "{compared}");
+        // The O-8A bodies that are not JSON, or nest deeper than the parser takes, are the only rows
+        // this surface cannot take.
+        assert_eq!(
+            not_replayable,
+            [
+                "fs-ent-pipeline/o8a/precedence-main#empty-body",
+                "fs-ent-pipeline/o8a/precedence-main#not-json",
+                "fs-ent-pipeline/o8a/precedence-main#truncated",
+                // Nesting probes deeper than the 100 levels the request parser takes.
+                "fs-ent-pipeline/o8a/nesting-main#chain-32",
+                "fs-ent-pipeline/o8a/nesting-main#chain-33",
+                "fs-ent-pipeline/o8a/nesting-main#chain-47",
+                "fs-ent-pipeline/o8a/nesting-main#chain-48",
+                "fs-ent-pipeline/o8a/nesting-main#chain-100",
+            ],
+            "strict={strict}"
+        );
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
         let pending = |row: &str| {
             let program = row.split('#').next().unwrap_or(row);

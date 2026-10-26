@@ -66,11 +66,10 @@ const INPUTS = new Set(["collection", "collection_group", "documents"]);
 
 test("O-7 programs follow the O-6 programs in PROGRAMS, under their own prefix, unique and valid", () => {
   assert.ok(O7_PROGRAMS.length > 0);
-  assert.deepEqual(PROGRAMS.slice(-O7_PROGRAMS.length), O7_PROGRAMS);
-  assert.deepEqual(
-    PROGRAMS.slice(-O7_PROGRAMS.length - O6_PROGRAMS.length, -O7_PROGRAMS.length),
-    O6_PROGRAMS,
-  );
+  // The O-7 programs follow the O-6 programs, in order (the O-8A programs follow them: o8a test).
+  const at = PROGRAMS.findIndex((p) => p.id === O7_PROGRAMS[0].id);
+  assert.deepEqual(PROGRAMS.slice(at, at + O7_PROGRAMS.length), O7_PROGRAMS);
+  assert.deepEqual(PROGRAMS.slice(at - O6_PROGRAMS.length, at), O6_PROGRAMS);
   assert.equal(new Set(O7_PROGRAMS.map((p) => p.id)).size, O7_PROGRAMS.length);
   for (const program of O7_PROGRAMS) assert.ok(program.id.startsWith(O7_PREFIX), program.id);
   assert.notEqual(O7_PREFIX, O6_PREFIX);

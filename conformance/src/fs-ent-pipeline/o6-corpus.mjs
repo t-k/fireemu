@@ -630,9 +630,9 @@ const isGrpc = (s) => (s.transport ?? "rest") === "grpc";
 /** The documents a program has left after its steps, from its seed and its commit steps. */
 function survivors(program) {
   const names = new Set((program.seed ?? []).map(([name]) => name));
-  for (const { rpc, body } of program.steps) {
+  for (const { rpc, body, rawBody } of program.steps) {
     if (rpc !== "commit") continue;
-    for (const write of body.writes) {
+    for (const write of (body ?? JSON.parse(rawBody)).writes) {
       if (write.update) names.add(write.update.name.replace(/^\{docs\}\//, ""));
       else names.delete(write.delete.replace(/^\{docs\}\//, ""));
     }

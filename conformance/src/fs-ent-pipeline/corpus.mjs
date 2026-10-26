@@ -36,6 +36,10 @@ import {
 } from "./builders.mjs";
 import { O6_PROGRAMS } from "./o6-corpus.mjs";
 import { O7_PROGRAMS } from "./o7-corpus.mjs";
+import { O8A_PROGRAMS } from "./o8a-corpus.mjs";
+import { O8B_PROGRAMS } from "./o8b-corpus.mjs";
+import { O8C_PROGRAMS } from "./o8c-corpus.mjs";
+import { O8D_PROGRAMS } from "./o8d-corpus.mjs";
 
 export { fld, fn, seedCommit };
 
@@ -1854,4 +1858,12 @@ export const PROGRAMS = [
   // O-7 (aggregate, distinct, add_fields, remove_fields, the collection_group and documents
   // inputs): see o7-corpus.mjs.
   ...O7_PROGRAMS,
+  // O-8A (large-answer framing, select name forms, error precedence, nesting, base64): see
+  // o8a-corpus.mjs.
+  ...O8A_PROGRAMS,
+  // O-8B, O-8C, O-8D (function families and the stages union, unnest and sample): see
+  // o8b-corpus.mjs, o8c-corpus.mjs and o8d-corpus.mjs.
+  ...O8B_PROGRAMS,
+  ...O8C_PROGRAMS,
+  ...O8D_PROGRAMS,
 ];

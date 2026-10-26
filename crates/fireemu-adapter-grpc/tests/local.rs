@@ -13643,7 +13643,7 @@ async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
 /// A literal of more than 20 map or array levels, over gRPC (`PX1d` r7 review S1, S2): the
 /// emulator profile answers 20 levels and refuses 21 with the official emulator's text,
 /// whatever keys the literal holds (a `__type__` key takes another decoding path); strict
-/// answers 21 with UNIMPLEMENTED (no production row).
+/// answers 21 levels with the recorded text (O-8A) and a typed literal with UNIMPLEMENTED.
 #[tokio::test]
 async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
     use pb::value::ValueType as V;
@@ -13692,9 +13692,13 @@ async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
                 ]
             };
             let err = pipeline_error(&mut client, stages(21)).await;
-            if policy == IndexValidationPolicy::Production {
+            if policy == IndexValidationPolicy::Production && typed {
+                // A `__type__` key makes another shape, which production was not asked about.
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
             } else {
+                // The shape of a 21-level array or map literal is a recorded refusal (O-8A
+                // `nesting-main#array-21`, `#map-21`), so strict answers it with the recorded
+                // text; the emulator profile answers it, typed or not, as the official emulator.
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
                 assert_eq!(err.message(), "Values can be at most 20 levels deep.");
                 if !typed {

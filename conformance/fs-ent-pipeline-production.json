@@ -31386,6 +31386,1869 @@
         }
       }
     },
+    "fs-ent-pipeline/o8a/base64-main": {
+      "corpusDigest": "652d0c5fcd058daab0ca2c1a1174d9a6cef79b0f517087061510b8c7de91242a",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T12:53:05.209Z",
+      "gitSha": "b209ed329741465464406ac7422c1e735c399519",
+      "steps": {
+        "write-control": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-control": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "b": {
+                "bytesValue": "QUJD"
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bw/control",
+            "updateTime": "<t1>"
+          }
+        },
+        "write-lf": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\nQUJD\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\nQUJD\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-lf": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/lf\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-cr": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\rQUJD\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\rQUJD\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-cr": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/cr\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-crlf": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\r\nQUJD\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\r\nQUJD\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-crlf": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/crlf\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-mime-76": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-mime-76": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-mime-76-lf": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-mime-76-lf": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76-lf\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-mixed-plus-underscore": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"+_AA\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"+_AA\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-mixed-plus-underscore": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-plus-underscore\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-mixed-minus-slash": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"-/AA\"",
+                      "field": "writes[0].update.fields[0].value.bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"-/AA\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "get-mixed-minus-slash": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-minus-slash\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        },
+        "write-urlsafe": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-urlsafe": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "b": {
+                "bytesValue": "+/AA"
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bw/urlsafe",
+            "updateTime": "<t1>"
+          }
+        },
+        "write-unpadded": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-unpadded": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "b": {
+                "bytesValue": "QQ=="
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bw/unpadded",
+            "updateTime": "<t1>"
+          }
+        },
+        "write-proto-name": {
+          "status": 200,
+          "body": {
+            "commitTime": "<t1>",
+            "writeResults": [
+              {
+                "updateTime": "<t1>"
+              }
+            ]
+          }
+        },
+        "get-proto-name": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "b": {
+                "bytesValue": "QUJD"
+              }
+            },
+            "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bw/proto-name",
+            "updateTime": "<t1>"
+          }
+        },
+        "cursor-control": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "b": {
+                    "bytesValue": "Ag=="
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bq/q2",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "b": {
+                    "bytesValue": "Aw=="
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/entpipe1/documents/bq/q3",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "cursor-lf": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"Ag==\n\"",
+                        "field": "structured_query.start_at.values[0].bytes_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"Ag==\n\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "cursor-crlf": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"A\r\ng==\"",
+                        "field": "structured_query.start_at.values[0].bytes_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"A\r\ng==\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o8a/dupquote-main": {
+      "corpusDigest": "3423894a9ca150a8158bc2c07c77314512de9a30dcf44a2428cd46ffd481a4e2",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T12:53:05.209Z",
+      "gitSha": "b209ed329741465464406ac7422c1e735c399519",
+      "steps": {
+        "same-1": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "same-2": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "same-3": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "different-values": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "swapped-order": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "dotted": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "mapValue": {
+                        "fields": {
+                          "b": {
+                            "integerValue": "1"
+                          }
+                        }
+                      }
+                    },
+                    "a.b": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "quoted-alone": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "plain-pair": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    },
+                    "b": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o8a/names-main": {
+      "corpusDigest": "65adfa507cca9f72434a80174faf98e97b893992ef47a37d5c4d9a9d8a3df41f",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T12:53:05.209Z",
+      "gitSha": "b209ed329741465464406ac7422c1e735c399519",
+      "steps": {
+        "alone-rest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "alone-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "beside-alias-rest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "beside-alias-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "a": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "quoted-alias": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "quoted-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "second-alias-rest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "nm": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "second-alias-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "nm": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "then-limit-rest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "then-limit-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "then-where": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ns/d1"
+                }
+              ]
+            }
+          ]
+        },
+        "from-field": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Stage 'select': field name '__name__' is reserved and can not be overwritten.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o8a/nesting-main": {
+      "corpusDigest": "295c6c5a0c0843819854c6aa49192c848ee1b5b22813101f9ceec78f4561b5f2",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T12:53:05.209Z",
+      "gitSha": "b209ed329741465464406ac7422c1e735c399519",
+      "steps": {
+        "chain-20": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "arrayValue": {
+                                          "values": [
+                                            {
+                                              "arrayValue": {
+                                                "values": [
+                                                  {
+                                                    "arrayValue": {
+                                                      "values": [
+                                                        {
+                                                          "arrayValue": {
+                                                            "values": [
+                                                              {
+                                                                "arrayValue": {
+                                                                  "values": [
+                                                                    {
+                                                                      "arrayValue": {
+                                                                        "values": [
+                                                                          {
+                                                                            "arrayValue": {
+                                                                              "values": [
+                                                                                {
+                                                                                  "arrayValue": {
+                                                                                    "values": [
+                                                                                      {
+                                                                                        "arrayValue": {
+                                                                                          "values": [
+                                                                                            {
+                                                                                              "arrayValue": {
+                                                                                                "values": [
+                                                                                                  {
+                                                                                                    "arrayValue": {
+                                                                                                      "values": [
+                                                                                                        {
+                                                                                                          "arrayValue": {
+                                                                                                            "values": [
+                                                                                                              {
+                                                                                                                "arrayValue": {
+                                                                                                                  "values": [
+                                                                                                                    {
+                                                                                                                      "arrayValue": {
+                                                                                                                        "values": [
+                                                                                                                          {
+                                                                                                                            "arrayValue": {
+                                                                                                                              "values": [
+                                                                                                                                {
+                                                                                                                                  "arrayValue": {
+                                                                                                                                    "values": [
+                                                                                                                                      {
+                                                                                                                                        "arrayValue": {
+                                                                                                                                          "values": [
+                                                                                                                                            {
+                                                                                                                                              "integerValue": "1"
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "chain-20-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "arrayValue": {
+                                          "values": [
+                                            {
+                                              "arrayValue": {
+                                                "values": [
+                                                  {
+                                                    "arrayValue": {
+                                                      "values": [
+                                                        {
+                                                          "arrayValue": {
+                                                            "values": [
+                                                              {
+                                                                "arrayValue": {
+                                                                  "values": [
+                                                                    {
+                                                                      "arrayValue": {
+                                                                        "values": [
+                                                                          {
+                                                                            "arrayValue": {
+                                                                              "values": [
+                                                                                {
+                                                                                  "arrayValue": {
+                                                                                    "values": [
+                                                                                      {
+                                                                                        "arrayValue": {
+                                                                                          "values": [
+                                                                                            {
+                                                                                              "arrayValue": {
+                                                                                                "values": [
+                                                                                                  {
+                                                                                                    "arrayValue": {
+                                                                                                      "values": [
+                                                                                                        {
+                                                                                                          "arrayValue": {
+                                                                                                            "values": [
+                                                                                                              {
+                                                                                                                "arrayValue": {
+                                                                                                                  "values": [
+                                                                                                                    {
+                                                                                                                      "arrayValue": {
+                                                                                                                        "values": [
+                                                                                                                          {
+                                                                                                                            "arrayValue": {
+                                                                                                                              "values": [
+                                                                                                                                {
+                                                                                                                                  "arrayValue": {
+                                                                                                                                    "values": [
+                                                                                                                                      {
+                                                                                                                                        "arrayValue": {
+                                                                                                                                          "values": [
+                                                                                                                                            {
+                                                                                                                                              "integerValue": "1"
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "chain-32": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "chain-32-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "arrayValue": {
+                                          "values": [
+                                            {
+                                              "arrayValue": {
+                                                "values": [
+                                                  {
+                                                    "arrayValue": {
+                                                      "values": [
+                                                        {
+                                                          "arrayValue": {
+                                                            "values": [
+                                                              {
+                                                                "arrayValue": {
+                                                                  "values": [
+                                                                    {
+                                                                      "arrayValue": {
+                                                                        "values": [
+                                                                          {
+                                                                            "arrayValue": {
+                                                                              "values": [
+                                                                                {
+                                                                                  "arrayValue": {
+                                                                                    "values": [
+                                                                                      {
+                                                                                        "arrayValue": {
+                                                                                          "values": [
+                                                                                            {
+                                                                                              "arrayValue": {
+                                                                                                "values": [
+                                                                                                  {
+                                                                                                    "arrayValue": {
+                                                                                                      "values": [
+                                                                                                        {
+                                                                                                          "arrayValue": {
+                                                                                                            "values": [
+                                                                                                              {
+                                                                                                                "arrayValue": {
+                                                                                                                  "values": [
+                                                                                                                    {
+                                                                                                                      "arrayValue": {
+                                                                                                                        "values": [
+                                                                                                                          {
+                                                                                                                            "arrayValue": {
+                                                                                                                              "values": [
+                                                                                                                                {
+                                                                                                                                  "arrayValue": {
+                                                                                                                                    "values": [
+                                                                                                                                      {
+                                                                                                                                        "arrayValue": {
+                                                                                                                                          "values": [
+                                                                                                                                            {
+                                                                                                                                              "arrayValue": {
+                                                                                                                                                "values": [
+                                                                                                                                                  {
+                                                                                                                                                    "arrayValue": {
+                                                                                                                                                      "values": [
+                                                                                                                                                        {
+                                                                                                                                                          "arrayValue": {
+                                                                                                                                                            "values": [
+                                                                                                                                                              {
+                                                                                                                                                                "arrayValue": {
+                                                                                                                                                                  "values": [
+                                                                                                                                                                    {
+                                                                                                                                                                      "arrayValue": {
+                                                                                                                                                                        "values": [
+                                                                                                                                                                          {
+                                                                                                                                                                            "arrayValue": {
+                                                                                                                                                                              "values": [
+                                                                                                                                                                                {
+                                                                                                                                                                                  "arrayValue": {
+                                                                                                                                                                                    "values": [
+                                                                                                                                                                                      {
+                                                                                                                                                                                        "arrayValue": {
+                                                                                                                                                                                          "values": [
+                                                                                                                                                                                            {
+                                                                                                                                                                                              "arrayValue": {
+                                                                                                                                                                                                "values": [
+                                                                                                                                                                                                  {
+                                                                                                                                                                                                    "arrayValue": {
+                                                                                                                                                                                                      "values": [
+                                                                                                                                                                                                        {
+                                                                                                                                                                                                          "arrayValue": {
+                                                                                                                                                                                                            "values": [
+                                                                                                                                                                                                              {
+                                                                                                                                                                                                                "arrayValue": {
+                                                                                                                                                                                                                  "values": [
+                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                      "integerValue": "1"
+                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                }
+                                                                                                                                                                                                              }
+                                                                                                                                                                                                            ]
+                                                                                                                                                                                                          }
+                                                                                                                                                                                                        }
+                                                                                                                                                                                                      ]
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  }
+                                                                                                                                                                                                ]
+                                                                                                                                                                                              }
+                                                                                                                                                                                            }
+                                                                                                                                                                                          ]
+                                                                                                                                                                                        }
+                                                                                                                                                                                      }
+                                                                                                                                                                                    ]
+                                                                                                                                                                                  }
+                                                                                                                                                                                }
+                                                                                                                                                                              ]
+                                                                                                                                                                            }
+                                                                                                                                                                          }
+                                                                                                                                                                        ]
+                                                                                                                                                                      }
+                                                                                                                                                                    }
+                                                                                                                                                                  ]
+                                                                                                                                                                }
+                                                                                                                                                              }
+                                                                                                                                                            ]
+                                                                                                                                                          }
+                                                                                                                                                        }
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                  }
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "chain-33": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "chain-33-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Expressions can be at most 32 levels deep.",
+          "messages": []
+        },
+        "chain-47": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "chain-47-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Request contains an invalid argument.",
+          "messages": []
+        },
+        "chain-48": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "chain-48-grpc": {
+          "transport": "grpc",
+          "code": 13,
+          "message": "Request message serialization failure: maximum nesting depth exceeded",
+          "messages": []
+        },
+        "chain-100": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "chain-100-grpc": {
+          "transport": "grpc",
+          "code": 13,
+          "message": "Request message serialization failure: maximum nesting depth exceeded",
+          "messages": []
+        },
+        "array-20": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "arrayValue": {
+                              "values": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "arrayValue": {
+                                          "values": [
+                                            {
+                                              "arrayValue": {
+                                                "values": [
+                                                  {
+                                                    "arrayValue": {
+                                                      "values": [
+                                                        {
+                                                          "arrayValue": {
+                                                            "values": [
+                                                              {
+                                                                "arrayValue": {
+                                                                  "values": [
+                                                                    {
+                                                                      "arrayValue": {
+                                                                        "values": [
+                                                                          {
+                                                                            "arrayValue": {
+                                                                              "values": [
+                                                                                {
+                                                                                  "arrayValue": {
+                                                                                    "values": [
+                                                                                      {
+                                                                                        "arrayValue": {
+                                                                                          "values": [
+                                                                                            {
+                                                                                              "arrayValue": {
+                                                                                                "values": [
+                                                                                                  {
+                                                                                                    "arrayValue": {
+                                                                                                      "values": [
+                                                                                                        {
+                                                                                                          "arrayValue": {
+                                                                                                            "values": [
+                                                                                                              {
+                                                                                                                "arrayValue": {
+                                                                                                                  "values": [
+                                                                                                                    {
+                                                                                                                      "arrayValue": {
+                                                                                                                        "values": [
+                                                                                                                          {
+                                                                                                                            "arrayValue": {
+                                                                                                                              "values": [
+                                                                                                                                {
+                                                                                                                                  "arrayValue": {
+                                                                                                                                    "values": [
+                                                                                                                                      {
+                                                                                                                                        "arrayValue": {
+                                                                                                                                          "values": [
+                                                                                                                                            {
+                                                                                                                                              "integerValue": "1"
+                                                                                                                                            }
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  }
+                                                                                                ]
+                                                                                              }
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      }
+                                                                                    ]
+                                                                                  }
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        ]
+                                                                      }
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-20": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "k": {
+                            "mapValue": {
+                              "fields": {
+                                "k": {
+                                  "mapValue": {
+                                    "fields": {
+                                      "k": {
+                                        "mapValue": {
+                                          "fields": {
+                                            "k": {
+                                              "mapValue": {
+                                                "fields": {
+                                                  "k": {
+                                                    "mapValue": {
+                                                      "fields": {
+                                                        "k": {
+                                                          "mapValue": {
+                                                            "fields": {
+                                                              "k": {
+                                                                "mapValue": {
+                                                                  "fields": {
+                                                                    "k": {
+                                                                      "mapValue": {
+                                                                        "fields": {
+                                                                          "k": {
+                                                                            "mapValue": {
+                                                                              "fields": {
+                                                                                "k": {
+                                                                                  "mapValue": {
+                                                                                    "fields": {
+                                                                                      "k": {
+                                                                                        "mapValue": {
+                                                                                          "fields": {
+                                                                                            "k": {
+                                                                                              "mapValue": {
+                                                                                                "fields": {
+                                                                                                  "k": {
+                                                                                                    "mapValue": {
+                                                                                                      "fields": {
+                                                                                                        "k": {
+                                                                                                          "mapValue": {
+                                                                                                            "fields": {
+                                                                                                              "k": {
+                                                                                                                "mapValue": {
+                                                                                                                  "fields": {
+                                                                                                                    "k": {
+                                                                                                                      "mapValue": {
+                                                                                                                        "fields": {
+                                                                                                                          "k": {
+                                                                                                                            "mapValue": {
+                                                                                                                              "fields": {
+                                                                                                                                "k": {
+                                                                                                                                  "mapValue": {
+                                                                                                                                    "fields": {
+                                                                                                                                      "k": {
+                                                                                                                                        "mapValue": {
+                                                                                                                                          "fields": {
+                                                                                                                                            "k": {
+                                                                                                                                              "integerValue": "1"
+                                                                                                                                            }
+                                                                                                                                          }
+                                                                                                                                        }
+                                                                                                                                      }
+                                                                                                                                    }
+                                                                                                                                  }
+                                                                                                                                }
+                                                                                                                              }
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    }
+                                                                                                                  }
+                                                                                                                }
+                                                                                                              }
+                                                                                                            }
+                                                                                                          }
+                                                                                                        }
+                                                                                                      }
+                                                                                                    }
+                                                                                                  }
+                                                                                                }
+                                                                                              }
+                                                                                            }
+                                                                                          }
+                                                                                        }
+                                                                                      }
+                                                                                    }
+                                                                                  }
+                                                                                }
+                                                                              }
+                                                                            }
+                                                                          }
+                                                                        }
+                                                                      }
+                                                                    }
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-21": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Values can be at most 20 levels deep.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-21": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Values can be at most 20 levels deep.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-21-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Values can be at most 20 levels deep.",
+          "messages": []
+        },
+        "map-21-grpc": {
+          "transport": "grpc",
+          "code": 3,
+          "message": "Values can be at most 20 levels deep.",
+          "messages": []
+        }
+      }
+    },
+    "fs-ent-pipeline/o8a/precedence-main": {
+      "corpusDigest": "6fbfd7386227c63366cb2bc599a6b0930e9d279a9e9bac90eb898e2ff3513b1c",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T12:53:05.209Z",
+      "gitSha": "b209ed329741465464406ac7422c1e735c399519",
+      "steps": {
+        "empty-body": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Pipeline cannot be empty.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "not-json": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Unexpected token.\nnot json\n^",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "truncated": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Closing quote expected in string.\n\n^",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "empty-object": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Pipeline cannot be empty.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "null-pipeline": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Pipeline cannot be empty.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "top-level-unknown": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid JSON payload received. Unknown name \"bogus\": Cannot find field."
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid JSON payload received. Unknown name \"bogus\": Cannot find field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "stage-unknown-member": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline.pipeline.stages[0]': Cannot find field.",
+                        "field": "structured_pipeline.pipeline.stages[0]"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid JSON payload received. Unknown name \"bogus\" at 'structured_pipeline.pipeline.stages[0]': Cannot find field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "bad-integer": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value' (TYPE_INT64), \"abc\"",
+                        "field": "structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value' (TYPE_INT64), \"abc\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "string-number": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.string_value' (TYPE_STRING), 5",
+                        "field": "structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.string_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.string_value' (TYPE_STRING), 5",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unknown-value-type": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid JSON payload received. Unknown name \"bogusValue\" at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value': Cannot find field.",
+                        "field": "structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid JSON payload received. Unknown name \"bogusValue\" at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value': Cannot find field.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "malformed-and-unknown-stage": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value' (TYPE_INT64), \"abc\"",
+                        "field": "structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.integer_value' (TYPE_INT64), \"abc\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "malformed-and-unknown-function": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.function_value.args[0].integer_value' (TYPE_INT64), \"abc\"",
+                        "field": "structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.function_value.args[0].integer_value"
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid value at 'structured_pipeline.pipeline.stages[1].args[0].map_value.fields[0].value.function_value.args[0].integer_value' (TYPE_INT64), \"abc\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unknown-stage": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unsupported stage: nope_stage",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "well-formed": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "createTime": "<t2>",
+                  "fields": {
+                    "i": {
+                      "integerValue": "1"
+                    }
+                  },
+                  "name": "projects/demo-fs-query-index/databases/entpipe1/documents/pr/d1",
+                  "updateTime": "<t2>"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

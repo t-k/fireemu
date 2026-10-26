@@ -51,7 +51,9 @@ export function writtenCollections(program) {
   const names = [
     ...(program.seed ?? []).map(([name]) => name),
     ...steps(program, "commit").flatMap((s) =>
-      s.body.writes.filter((w) => w.update).map((w) => relative(w.update.name)),
+      (s.body ?? JSON.parse(s.rawBody)).writes
+        .filter((w) => w.update)
+        .map((w) => relative(w.update.name)),
     ),
   ];
   return new Set(names.map(parentOf));
@@ -66,8 +68,19 @@ export function fakeFirestore(initial = []) {
     const path = String(url);
     calls.push(path);
     const base = `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/entpipe1/documents`;
+    if (init.method === "GET") {
+      // A document read by name.
+      assert.ok(path.startsWith(`${base}/`), path);
+      return new Response("{}");
+    }
     assert.ok(path.startsWith(`${base}:`), path);
-    const body = init.body ? JSON.parse(init.body) : {};
+    // A recorder may send a body that is not JSON on purpose.
+    let body = {};
+    try {
+      body = init.body ? JSON.parse(init.body) : {};
+    } catch {
+      /* not JSON */
+    }
     if (path.endsWith(":commit")) {
       for (const write of body.writes) {
         if (write.update) store.set(write.update.name, write.update.fields);
@@ -76,7 +89,7 @@ export function fakeFirestore(initial = []) {
       return new Response(JSON.stringify({ writeResults: body.writes.map(() => ({})) }));
     }
     if (path.endsWith(":runQuery")) {
-      const names = [...store.keys()].toSorted().slice(0, body.structuredQuery.limit);
+      const names = [...store.keys()].toSorted().slice(0, body.structuredQuery?.limit);
       return new Response(
         JSON.stringify(names.length ? names.map((name) => ({ document: { name } })) : [{}]),
       );

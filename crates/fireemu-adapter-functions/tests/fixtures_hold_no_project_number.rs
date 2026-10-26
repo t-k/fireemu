@@ -175,17 +175,22 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     runs
 }
 
-const LONG_WORDS_FROM: usize = 48;
+/// A run is also decoded without its last 1 to 3 characters (a token glued to what follows it, as the start
+/// offsets cover a token glued to what precedes it).
+const END_TRIM: usize = 3;
 
-/// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile) or a
+/// A run that is words, not a token: at least this share of its characters are lower case letters.
+const WORDS_LOWER_SHARE: (usize, usize) = (4, 5);
+
+/// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile), a
 /// lower case identifier or path (lower case letters, digits, `_`, `-` and `/` only: a random token of 24
-/// characters has no upper case letter and no `+` once in 250,000, and a hex digest is one of these). Random
-/// bytes parse as a message now and then, and across a corpus of hashes, identifiers and file names they do,
-/// so these runs are not decoded as protobuf.
-///
-/// A long run of letters and separators with no digit and no `+` is words too (`CamelCaseNames`, a slug with
-/// a repeated letter): a random token of 48 characters is one in 20,000. (At 32 characters a real 42 character
-/// token of the tests, which happens to hold no digit, was skipped.)
+/// characters has no upper case letter and no `+` once in 250,000, and a hex digest is one of these), or words
+/// (`CamelCaseNames`, `schemas/GoogleFirestoreAdminV1IndexConfigDelta`: four fifths of the characters are
+/// lower case letters, which a random token of 24 characters reaches about once in 100,000 and one of 48
+/// never). Random bytes parse as a message now and then, and across a corpus of hashes, identifiers, file
+/// names and words they do, so these runs are not decoded as protobuf. (A rule on letters and separators
+/// only was tried first: one in about 3,500 random tokens of 48 characters is that, and the repository
+/// still held names with a digit that it let through.)
 fn is_digest_or_identifier(run: &[u8]) -> bool {
     let digest = run.strip_prefix(b"sha").is_some_and(|rest| {
         let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
@@ -195,10 +200,8 @@ fn is_digest_or_identifier(run: &[u8]) -> bool {
         || run
             .iter()
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'/'))
-        || (run.len() >= LONG_WORDS_FROM
-            && run
-                .iter()
-                .all(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'-' | b'/')))
+        || run.iter().filter(|b| b.is_ascii_lowercase()).count() * WORDS_LOWER_SHARE.1
+            >= run.len() * WORDS_LOWER_SHARE.0
 }
 
 /// The 12-digit numbers that the base64 runs of `text` carry as protobuf varints.
@@ -213,12 +216,16 @@ fn project_numbers_in(text: &[u8]) -> Vec<u64> {
         } else {
             3
         };
-        for offset in 0..=offsets {
-            let bytes = decode(&run[offset..]);
-            let mut found = Vec::new();
-            let parsed = varints(&bytes, 0, &mut found);
-            if parses_as_a_message(parsed, bytes.len()) {
-                numbers.extend(found.into_iter().filter(|n| is_project_number(*n)));
+        // The token may also be followed by up to three characters that belong to the text around it.
+        for trim in 0..=END_TRIM {
+            let end = run.len() - trim;
+            for offset in 0..=offsets.min(end.saturating_sub(MIN_RUN)) {
+                let bytes = decode(&run[offset..end]);
+                let mut found = Vec::new();
+                let parsed = varints(&bytes, 0, &mut found);
+                if parses_as_a_message(parsed, bytes.len()) {
+                    numbers.extend(found.into_iter().filter(|n| is_project_number(*n)));
+                }
             }
         }
     }
@@ -1168,18 +1175,86 @@ fn the_number_in_the_committed_source_token_shape_is_found_when_it_is_not_the_ma
 }
 
 #[test]
-fn a_run_of_letters_is_words_from_48_characters_on() {
+fn a_token_followed_by_one_to_three_glued_base64_characters_is_still_found() {
+    // The run ends with characters that belong to the text around the token, not to it ("/", "-", "/x",
+    // "-ab"), at every length of the token modulo four.
+    let number = 407_182_936_504;
+    for filler in 9..17 {
+        let token = encode(&message_of(number, filler), true, false);
+        for glue in ["/", "-", "/x", "-ab", "x", "xyz", "+/-"] {
+            for prefix in ["", "a", "pageToken/"] {
+                let text = format!("{prefix}{token}{glue}");
+                assert_eq!(
+                    project_numbers_in(text.as_bytes()),
+                    [number],
+                    "filler {filler}, prefix {prefix:?}, glue {glue:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn page_like_tokens_are_never_skipped_as_digests_or_words() {
+    // 10,000 seeded tokens of the shape of a page token (a made-up number, a short string, a checksum),
+    // some with a long string field so that the run passes the 48 character mark of the words rule.
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for round in 0..10_000 {
+        let number = 100_000_000_000 + next() % 900_000_000_000;
+        if number == MASK {
+            continue;
+        }
+        let filler = usize::try_from(next() % 40).expect("small") + 9;
+        let mut bytes = message_of(number, filler);
+        // Make the string field text-like, so that long tokens are mostly letters.
+        for byte in bytes.iter_mut().skip(9) {
+            *byte = b'a' + u8::try_from(next() % 26).expect("small");
+        }
+        let token = encode(&bytes, next() % 2 == 0, false);
+        assert!(
+            !is_digest_or_identifier(token.as_bytes()),
+            "round {round}: {token}"
+        );
+        assert!(
+            project_numbers_in(token.as_bytes()).contains(&number),
+            "round {round}"
+        );
+    }
+}
+
+#[test]
+fn a_run_is_words_when_four_fifths_of_it_is_lower_case_letters() {
     for (run, words) in [
-        ("Ab".repeat(24), true),
-        ("Ab".repeat(23) + "A", false),
-        ("Ab".repeat(25), true),
-        ("A-".repeat(24), true),
-        ("A/".repeat(23) + "A", false),
-        ("Ab".repeat(23) + "A1", false),
-        ("Ab".repeat(23) + "A+", false),
-        // lower case runs of any length, with separators
-        ("a-".repeat(12), true),
-        ("a/".repeat(11), true),
+        // 24 characters: 20 lower case is words, 19 is not.
+        ("abcdefghijklmnopqrstABCD".to_string(), true),
+        ("abcdefghijklmnopqrsABCDE".to_string(), false),
+        // 25 characters: 20 lower case is exactly four fifths.
+        ("abcdefghijklmnopqrstABCDE".to_string(), true),
+        ("abcdefghijklmnopqrs1ABCDE".to_string(), false),
+        // Digits, `+` and separators count as not lower case.
+        ("abcdefghijklmnopqrst1234".to_string(), true),
+        ("abcdefghijklmnopqrst+/-_".to_string(), true),
+        ("abcdefghijklmnopqrs+/-_1".to_string(), false),
+        // The names the repository holds.
+        (
+            "schemas/GoogleFirestoreAdminV1IndexConfigDelta".to_string(),
+            true,
+        ),
+        (
+            "changed-ccccccccccccccccccccccccccccccccPrincipal".to_string(),
+            true,
+        ),
+        ("taskResetDispatchCorrectness".to_string(), true),
+        (
+            "ChQYASCAwMrzhKMCKghjaGFubmVscyEBAgMEBQYHCA".to_string(),
+            false,
+        ),
     ] {
         assert_eq!(is_digest_or_identifier(run.as_bytes()), words, "{run}");
     }
@@ -1215,7 +1290,6 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"zzz_aaa",
         b"changed-ccccccccccccccccccccccccccccccccPrincipal",
         b"schemas/GoogleFirestoreAdminIndexConfigDeltaAndMore",
-        b"Words/With/Upper_And_Lower-Case_Only_Here_Again_Long",
         b"auth-refusal-precedence",
         b"tools/compat-check/src",
         b"___",
@@ -1233,10 +1307,8 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"sha512r1w81DpR",
         b"xsha512-r1w81DpR",
         b"a_snake_Case_identifier_9",
-        b"a_snake_case+identifier_9",
         b"A_SNAKE",
-        b"WordsWithOneDigit1AndLongEnoughToCount",
-        b"WordsWithAPlusAndLongEnough+ToCountOk",
+        b"WordsWithOneDigit1AndLongEnoughToCount0123456789ABCDEF",
     ] {
         assert!(
             !is_digest_or_identifier(run),

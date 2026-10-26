@@ -297,6 +297,31 @@ fn judge(text: &[u8]) -> Verdict {
     verdict
 }
 
+/// What the scan makes of a set of files.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Corpus {
+    /// `path (form)` for each number that is not the mask (the number itself is never kept).
+    refused: Vec<String>,
+    varint_masks: usize,
+    ascii_masks: usize,
+}
+
+fn scan(paths: &[PathBuf]) -> Corpus {
+    let mut corpus = Corpus::default();
+    for path in paths {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let verdict = judge(&bytes);
+        corpus.varint_masks += verdict.varint_masks;
+        corpus.ascii_masks += verdict.ascii_masks;
+        for form in verdict.refused {
+            corpus.refused.push(format!("{} ({form})", path.display()));
+        }
+    }
+    corpus
+}
+
 #[test]
 fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_value() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -309,31 +334,59 @@ fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_
         "the scan found the repository: {} files",
         all.len()
     );
-    let mut with_varint_mask = 0;
-    let mut with_ascii_mask = 0;
-    for path in &all {
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        let verdict = judge(&bytes);
-        assert!(
-            verdict.refused.is_empty(),
-            "{} holds an encoded number that is not the mask, as {:?} (the number is not printed)",
-            path.display(),
-            verdict.refused
-        );
-        with_varint_mask += verdict.varint_masks;
-        with_ascii_mask += verdict.ascii_masks;
-    }
+    let corpus = scan(&all);
+    assert!(
+        corpus.refused.is_empty(),
+        "an encoded number that is not the mask is in (the number is not printed): {:?}",
+        corpus.refused
+    );
     // The scan sees what it is meant to see: the Eventarc fixtures hold page tokens that name the mask.
     assert!(
-        with_varint_mask >= 1,
-        "files with a token naming the mask: {with_varint_mask}"
+        corpus.varint_masks >= 1,
+        "files with a token naming the mask: {}",
+        corpus.varint_masks
     );
     // So does the ASCII scan: recorded response bodies stored as base64 name the mask in the clear.
     assert!(
-        with_ascii_mask >= 1,
-        "files with base64 naming the mask in ASCII digits: {with_ascii_mask}"
+        corpus.ascii_masks >= 1,
+        "files with base64 naming the mask in ASCII digits: {}",
+        corpus.ascii_masks
+    );
+}
+
+#[test]
+fn a_dirty_file_is_named_and_a_clean_or_masked_one_is_not() {
+    let dir = std::env::temp_dir().join(format!("fixtures-hold-no-number-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let write = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("scratch file");
+        path
+    };
+    let clean = write("clean.json", "{\"a\": 1}");
+    let masked = write("masked.json", &token_of(MASK));
+    let in_ascii = write("ascii.json", &ascii_token(0, "123456789012", true, false));
+    let dirty_varint = write("varint.json", &token_of(111_111_111_111));
+    let dirty_ascii = write("dirty.json", &ascii_token(1, "111111111111", false, true));
+    let corpus = scan(&[
+        clean,
+        dir.join("missing.json"),
+        masked,
+        in_ascii,
+        dirty_varint.clone(),
+        dirty_ascii.clone(),
+    ]);
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+    assert_eq!(
+        corpus,
+        Corpus {
+            refused: vec![
+                format!("{} (varint)", dirty_varint.display()),
+                format!("{} (ASCII digits)", dirty_ascii.display()),
+            ],
+            varint_masks: 1,
+            ascii_masks: 1,
+        }
     );
 }
 

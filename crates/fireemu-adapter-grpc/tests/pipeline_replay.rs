@@ -1230,7 +1230,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
             for rows in [strict_rows, emulator_rows] {
                 let mut listed = HashSet::new();
-                for step_id in rows.iter() {
+                for step_id in *rows {
                     if !listed.insert(*step_id) {
                         failures.push(format!(
                             "strict={strict}: pin listed twice: {program}#{step_id}"
@@ -1238,7 +1238,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     }
                 }
             }
-            for step_id in (if strict { *strict_rows } else { *emulator_rows }).iter() {
+            let pinned_here = if strict { *strict_rows } else { *emulator_rows };
+            for step_id in pinned_here {
                 if !seen.contains(&format!("{program}#{step_id}")) {
                     failures.push(format!(
                         "strict={strict}: pinned step is not replayed: {program}#{step_id}"

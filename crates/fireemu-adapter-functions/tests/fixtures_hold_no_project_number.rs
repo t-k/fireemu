@@ -803,6 +803,7 @@ fn the_scan_ignores_a_digit_run_inside_a_longer_identifier() {
         "id/ab407182936504",
         "407182936504zy/id",
         "x1a407182936504",
+        "ab407182936504/x",
     ] {
         let token = encode(text.as_bytes(), true, false);
         assert!(ascii_numbers_in(token.as_bytes()).is_empty(), "{text}");
@@ -908,6 +909,7 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"sha1-x",
         b"sha256-",
         b"a_snake_case_identifier_9",
+        b"zzz_aaa",
         b"___",
         b"0123456789",
     ] {

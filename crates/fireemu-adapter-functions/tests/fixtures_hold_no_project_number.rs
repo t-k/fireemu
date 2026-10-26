@@ -5,8 +5,9 @@
 //! A number that is not the mask `123456789012` that the fixtures use is refused in these two forms:
 //! - As a protobuf varint. A page token, a cursor or any other opaque value that a service hands out can carry
 //!   a project number this way. A run counts when it parses as a protobuf message (it is tried from every
-//!   offset), and the varint has 12 or 13 digits. 10 and 11 digit varints are everyday values (sizes, ids,
-//!   seconds) that random bytes and real tokens both hold, so they are not refused here. A run that is a
+//!   offset), and the varint has 12 or 13 digits, or 10 digits outside the seconds window of 2020 to 2036
+//!   (the real `sourceToken` holds a timestamp's seconds). 11 digit varints are not refused here: random bytes
+//!   that parse as a message produce them. A run that is a
 //!   subresource integrity digest (`sha512-...`) or a snake case identifier is not decoded as a message:
 //!   random bytes parse as one now and then. No instant is exempt as a varint, so a token that holds an epoch
 //!   in milliseconds as a varint would be refused.
@@ -14,7 +15,8 @@
 //!   of 10 to 13 digits in the decoded bytes (each run is decoded from its first four characters, so that
 //!   every byte alignment and a word glued to the token are covered). It is not refused when it starts with a
 //!   zero, when it is inside an identifier (a letter beside it that has a letter or a digit behind it: a hex
-//!   id that starts with digits), when it is an X.509 `UTCTime` (`YYMMDDHHMMSSZ`), or when it is an instant in
+//!   id that starts with digits), when it is an X.509 `UTCTime` (`YYMMDDHHMMSSZ`) (neither applies to digits
+//!   that are a whole protobuf string field: the byte before them is their count), or when it is an instant in
 //!   the context in which the corpus holds one: epoch seconds of 2020 to 2036 as the value of a JWT time claim
 //!   (`"iat":`, `"exp":`, `"nbf":`, `"auth_time":`), and epoch milliseconds of the same years as the time
 //!   segment of an operation name (`operation-<ms>-`). Those windows are a known blind spot for a new 10 or 13
@@ -137,10 +139,12 @@ fn parses_as_a_message(parsed: usize, total: usize) -> bool {
 /// otherwise: a token can follow a word with no delimiter, as in `pageToken/<token>`).
 const EVERY_OFFSET_UP_TO: usize = 512;
 
-/// 12 and 13 digits. 10 and 11 digit varints are everyday values (sizes, ids, seconds): the real
-/// `sourceToken` of the corpus holds one, so they are left to the ASCII scan and the pre-push scan.
+/// 12 and 13 digits, and 10 digits outside the seconds window (the real `sourceToken` of the corpus holds the
+/// seconds of a timestamp, and no corpus file holds another 10 digit varint). 11 digit varints are left to the
+/// ASCII scan and the pre-push scan: random bytes that parse as a message produce them.
 fn is_project_number(number: u64) -> bool {
     (100_000_000_000..10_000_000_000_000).contains(&number)
+        || ((1_000_000_000..10_000_000_000).contains(&number) && !SECONDS_WINDOW.contains(&number))
 }
 
 /// The maximal runs of base64 or base64url characters in `text` that are at least `min_len` long.
@@ -265,6 +269,15 @@ fn inside_identifier(bytes: &[u8], at: usize, end: usize) -> bool {
     left || right
 }
 
+/// The byte before a run of digits is their count when they are a whole protobuf string field (`0a 0c <12
+/// digits>`). Then the digits are exactly that many, even if the tag of the next field is a digit (fields 6
+/// and 7) and the byte after it is one too: up to two digits may follow the field. The neighbours of a whole
+/// field are a tag and a length, not text, so it is never inside an identifier.
+fn field_length(bytes: &[u8], at: usize, run: usize) -> Option<usize> {
+    let count = usize::from(*bytes.get(at.checked_sub(1)?)?);
+    (ASCII_DIGITS.contains(&count) && (count..=count + 2).contains(&run)).then_some(count)
+}
+
 /// The numbers that the base64 runs of `text` carry as ASCII decimal digits (a GCF v2 `sourceToken` held the
 /// events project number this way): a whole run of 10 to 13 digits that does not start with a zero, that is
 /// not inside an identifier, an `UTCTime` or an instant in the context of a time claim or an operation name.
@@ -281,20 +294,23 @@ fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
                     at += 1;
                     continue;
                 }
-                let end = bytes[at..]
+                let run_end = bytes[at..]
                     .iter()
                     .position(|byte| !byte.is_ascii_digit())
                     .map_or(bytes.len(), |length| at + length);
+                let field = field_length(&bytes, at, run_end - at);
+                let end = field.map_or(run_end, |count| at + count);
                 let digits = &bytes[at..end];
                 if ASCII_DIGITS.contains(&digits.len())
                     && digits[0] != b'0'
-                    && !inside_identifier(&bytes, at, end)
-                    && !is_utc_time(digits, &bytes[end..])
+                    && (field.is_some()
+                        || (!inside_identifier(&bytes, at, end)
+                            && !is_utc_time(digits, &bytes[end..])))
                     && !is_instant(&bytes[..at], digits, &bytes[end..])
                 {
                     numbers.push(String::from_utf8_lossy(digits).into_owned());
                 }
-                at = end;
+                at = run_end;
             }
         }
     }
@@ -943,6 +959,98 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         [111_111_111_111]
     );
     assert_eq!(project_numbers_in(token.as_bytes()), [111_111_111_111]);
+}
+
+#[test]
+fn a_whole_string_field_is_found_whatever_byte_follows_its_tag() {
+    // `0a 0c <12 digits>`, the tag of a next field and any byte after it: the digits are a whole string field
+    // (the byte before them is their length), so a letter beside them is a tag, never part of an identifier.
+    let number = "407182936504";
+    let mut cases = 0;
+    for field in 6u8..=15 {
+        for wire in [0u8, 1, 2, 5] {
+            let tag = field << 3 | wire;
+            if !(tag.is_ascii_alphanumeric()) {
+                continue;
+            }
+            for second in 0u8..=255 {
+                let mut bytes = vec![0x0a, 0x0c];
+                bytes.extend_from_slice(number.as_bytes());
+                bytes.extend_from_slice(&[tag, second]);
+                bytes.extend_from_slice(b"projects/p/locations/l/functions/f");
+                for (url_safe, padded) in [(false, false), (true, true)] {
+                    for glue in ["", "x", "pageToken/", "abc"] {
+                        let text = format!("{glue}{}", encode(&bytes, url_safe, padded));
+                        assert!(
+                            !ascii_numbers_in(text.as_bytes()).is_empty(),
+                            "field {field}, wire {wire}, next byte {second}, glue {glue:?}"
+                        );
+                    }
+                }
+                cases += 1;
+            }
+        }
+    }
+    assert!(cases > 5000, "{cases}");
+    // The realistic case: a field-8 string of length 80 (`B`, `P`) after the number.
+    let mut bytes = vec![0x0a, 0x0c];
+    bytes.extend_from_slice(number.as_bytes());
+    bytes.extend_from_slice(&[0x42, 80]);
+    bytes.extend(std::iter::repeat_n(b'a', 80));
+    assert_eq!(
+        ascii_numbers_in(encode(&bytes, true, false).as_bytes()),
+        [number]
+    );
+}
+
+#[test]
+fn the_length_byte_decides_whether_a_letter_beside_the_digits_is_a_tag() {
+    // Digits that are not a whole string field stay inside an identifier when a letter with a letter or a
+    // digit behind it is beside them; the same digits with their length in front are a field.
+    assert!(numbers_in_text("q-ab407182936504/b").is_empty());
+    assert!(numbers_in_text("q-407182936504ab/b").is_empty());
+    assert_eq!(numbers_in_text("q-\u{c}407182936504ab/b"), ["407182936504"]);
+    assert_eq!(numbers_in_text("q-\u{c}ab407182936504/b").len(), 0);
+    // A length that is not the digit count does not make a field; one more digit (the tag of field 6 or 7 is
+    // a digit) still does.
+    assert!(numbers_in_text("q-\u{9}407182936504ab/b").is_empty());
+    assert!(numbers_in_text("q-\u{e}407182936504ab/b").is_empty());
+    assert!(numbers_in_text("q-\u{9}4071829365041ab/b").is_empty());
+    assert_eq!(
+        numbers_in_text("q-\u{c}4071829365041ab/b"),
+        ["407182936504"]
+    );
+    assert_eq!(
+        numbers_in_text("q-\u{c}40718293650412ab/b"),
+        ["407182936504"]
+    );
+    assert!(numbers_in_text("q-\u{c}407182936504123ab/b").is_empty());
+    // A UTCTime is not a field either: with its length in front it is a number.
+    assert!(numbers_in_text("\u{17}\r261015000000Z\u{18}").is_empty());
+    assert_eq!(numbers_in_text("\u{c}261015000000Z\u{18}").len(), 1);
+}
+
+#[test]
+fn a_ten_digit_varint_outside_the_seconds_window_is_a_number_and_an_eleven_digit_one_is_not() {
+    for number in [1_000_000_000, 1_599_999_999, 2_100_000_000, 9_999_999_999] {
+        assert_eq!(
+            project_numbers_in(token_of(number).as_bytes()),
+            [number],
+            "{number}"
+        );
+    }
+    for number in [
+        1_600_000_000,
+        1_791_200_000,
+        2_099_999_999,
+        999_999_999,
+        10_000_000_000,
+    ] {
+        assert!(
+            project_numbers_in(token_of(number).as_bytes()).is_empty(),
+            "{number}"
+        );
+    }
 }
 
 #[test]

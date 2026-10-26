@@ -391,7 +391,7 @@ export async function requiredSourceDigests(readSource = (file) => readFile(join
       throw new Error(`reviewed source changed: ${file}`);
   }
   const cliPackage = JSON.parse(
-    await readFile(join(CONFORMANCE, "node_modules/firebase-tools/package.json"), "utf8"),
+    (await readSource("../node_modules/firebase-tools/package.json")).toString("utf8"),
   );
   if (cliPackage.version !== "15.28.2") throw new Error("pinned Firebase CLI 15.28.2 is required");
   const corpus = JSON.parse((await readSource("corpus.json")).toString("utf8"));

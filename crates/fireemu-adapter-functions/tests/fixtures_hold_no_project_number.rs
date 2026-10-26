@@ -186,8 +186,8 @@ const WORDS_LOWER_SHARE: (usize, usize) = (4, 5);
 /// lower case identifier or path (lower case letters, digits, `_`, `-` and `/` only: a random token of 24
 /// characters has no upper case letter and no `+` once in 250,000, and a hex digest is one of these), or words
 /// (`CamelCaseNames`, `schemas/GoogleFirestoreAdminV1IndexConfigDelta`: four fifths of the characters are
-/// lower case letters, which a random token of 24 characters reaches about once in 100,000 and one of 48
-/// never). Random bytes parse as a message now and then, and across a corpus of hashes, identifiers, file
+/// lower case letters, which a random token of 24 characters reaches about once in 32,000 (measured on two
+/// million) and one of 48 never). Random bytes parse as a message now and then, and across a corpus of hashes, identifiers, file
 /// names and words they do, so these runs are not decoded as protobuf. (A rule on letters and separators
 /// only was tried first: one in about 3,500 random tokens of 48 characters is that, and the repository
 /// still held names with a digit that it let through.)
@@ -211,16 +211,41 @@ fn project_numbers_in(text: &[u8]) -> Vec<u64> {
         if is_digest_or_identifier(run) {
             continue;
         }
-        let offsets = if run.len() <= EVERY_OFFSET_UP_TO {
-            run.len() - MIN_RUN
+        // A token may start anywhere in a run of up to 512 characters, and in the first four characters of
+        // a longer one; it may also start just after a `/` or a `-` (a path segment) in either.
+        let separators: Vec<usize> = run
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| matches!(byte, b'/' | b'-'))
+            .map(|(index, _)| index)
+            .collect();
+        // Each candidate is `(position, cut)`: `cut` is true for a position next to a separator.
+        let plain_starts = if run.len() <= EVERY_OFFSET_UP_TO {
+            0..=run.len() - MIN_RUN
         } else {
-            3
+            0..=3
         };
-        // The token may also be followed by up to three characters that belong to the text around it.
-        for trim in 0..=END_TRIM {
-            let end = run.len() - trim;
-            for offset in 0..=offsets.min(end.saturating_sub(MIN_RUN)) {
-                let bytes = decode(&run[offset..end]);
+        let mut starts: Vec<(usize, bool)> = plain_starts.map(|index| (index, false)).collect();
+        starts.extend(separators.iter().map(|index| (index + 1, true)));
+        // It may end up to three characters before the end of the run (text glued behind it), or just
+        // before a `/` or a `-`.
+        let mut ends: Vec<(usize, bool)> = (0..=END_TRIM)
+            .map(|trim| (run.len() - trim, false))
+            .collect();
+        ends.extend(separators.iter().map(|index| (*index, true)));
+        for &(end, cut_end) in &ends {
+            for &(start, cut_start) in &starts {
+                // A piece between separators is a run of its own and has to be as long as one; a piece that
+                // only loses glued characters may be a few shorter.
+                let long_enough = if cut_start || cut_end {
+                    start < end && end - start >= MIN_RUN
+                } else {
+                    start <= end.saturating_sub(MIN_RUN)
+                };
+                if !long_enough {
+                    continue;
+                }
+                let bytes = decode(&run[start..end]);
                 let mut found = Vec::new();
                 let parsed = varints(&bytes, 0, &mut found);
                 if parses_as_a_message(parsed, bytes.len()) {
@@ -1252,13 +1277,58 @@ fn a_run_of_lower_case_letters_digits_and_separators_is_an_identifier_whatever_i
 }
 
 #[test]
+fn a_token_between_path_separators_is_found_whatever_surrounds_it() {
+    // A token that is a middle path segment, with a long suffix (and, on a run over 512 characters, a long
+    // prefix): the run is cut at every `/` and `-`.
+    let number = 407_182_936_504;
+    let token = encode(&message_of(number, 12), true, false);
+    let front = "AbCd/".repeat(110);
+    let lower = "abcdefghijklmnopqrstuvwxyzabcdefghijkl";
+    for text in [
+        format!("{token}/next/page/{lower}"),
+        format!("{token}-more-words-here-and-there-and-more"),
+        format!("v1/{token}/next/page/{lower}"),
+        format!("AbCd-{token}-{lower}"),
+        format!("{front}{token}"),
+        format!("{front}{token}/{lower}"),
+        format!("{front}x-y/{token}-{lower}"),
+    ] {
+        assert!(!is_digest_or_identifier(text.as_bytes()), "{text}");
+        assert_eq!(
+            project_numbers_in(text.as_bytes()),
+            [number],
+            "{}",
+            &text[text.len().saturating_sub(80)..]
+        );
+    }
+}
+
+#[test]
+fn a_token_shorter_than_the_minimum_run_is_a_known_gap_left_to_the_pre_push_scan() {
+    // Measured on the repository when this was written: a minimum of 12, 16 or 20 characters refused 30 or
+    // more files at each (names, generated code and specs parse as messages by chance), so it stays at 24.
+    let number = 407_182_936_504;
+    let long_enough = encode(&message_of(number, 9), true, false);
+    assert_eq!(long_enough.len(), MIN_RUN);
+    assert_eq!(project_numbers_in(long_enough.as_bytes()), [number]);
+    for filler in 0..9 {
+        let short = encode(&message_of(number, filler), true, false);
+        assert!(short.len() < MIN_RUN, "{}", short.len());
+        assert!(
+            project_numbers_in(short.as_bytes()).is_empty(),
+            "filler {filler}"
+        );
+    }
+}
+
+#[test]
 fn four_glued_characters_are_beyond_the_tolerance_at_some_token_lengths() {
     // Three glued characters are covered at every length (see above); four complete an extra byte at some
     // lengths, and then the run no longer parses.
     let number = 407_182_936_504;
     let found = (9..17)
         .filter(|filler| {
-            let text = format!("{}/abc", encode(&message_of(number, *filler), true, false));
+            let text = format!("{}_abc", encode(&message_of(number, *filler), true, false));
             project_numbers_in(text.as_bytes()) == [number]
         })
         .count();

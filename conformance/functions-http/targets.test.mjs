@@ -247,6 +247,9 @@ function worldFor(
     if (url.includes("/functions?")) {
       return { status: 200, value: { functions: siblings } };
     }
+    if (url.includes("/repositories/gcf-artifacts/packages?")) {
+      return { status: 200, value: { packages: [] } };
+    }
     if (url.includes("/functions/")) {
       return present ? { status: 200, value: {} } : { status: 404, value: {} };
     }
@@ -720,4 +723,27 @@ test("the exact delete is counted in the cleanup budget, and a missing function 
   assert.equal(residual.cleaned, false);
   assert.match(residual.cleanupError, /Cloud Run service remains after delete/);
   assert.equal(calls.filter((c) => c.method === "DELETE").length, 0);
+});
+
+test("the image residue check follows the target's region and package names (after the merge with the probe follow-ups)", async () => {
+  const target = spec({ region: "europe-west1" });
+  const pkg = `projects/${P}/locations/europe-west1/repositories/gcf-artifacts/packages/fireemu--oracle--query__europe--west1__cv14_db_created_v2`;
+  const seen = [];
+  const control = async (_m, url) => {
+    seen.push(url);
+    if (url.endsWith("/europe-west1/repositories/gcf-artifacts/packages?pageSize=1000")) {
+      return {
+        status: 200,
+        value: { packages: [{ name: `${pkg}%2Fcache` }, { name: `${pkg}-other` }] },
+      };
+    }
+    return { status: 200, value: { versions: [{ name: `${pkg}%2Fcache/versions/sha256:x` }] } };
+  };
+  await assert.rejects(
+    () => production.assertNoImageResidue(control, target, "cleanup"),
+    /owned image version remains in fireemu--oracle--query__europe--west1__cv14_db_created_v2%2Fcache/,
+  );
+  assert.ok(seen[0].includes("/locations/europe-west1/repositories/gcf-artifacts/packages?"));
+  assert.ok(seen[1].includes(`${pkg}%2Fcache/versions`));
+  assert.equal(seen.length, 2, "the package with a longer id is not ours and is not read");
 });

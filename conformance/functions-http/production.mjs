@@ -1006,9 +1006,10 @@ async function listOwnedVersions(control, target, kind) {
  * version left in either is a residue to name, not to ignore. An empty package is no residue.
  */
 export async function assertNoImageResidue(control, target, kind) {
+  const spec = resolveTarget(target);
   const response = await control(
     "GET",
-    `${ARTIFACT_HOST}/v1/${REPOSITORY}/packages?pageSize=1000`,
+    `${ARTIFACT_HOST}/v1/${locationOf(spec)}/repositories/gcf-artifacts/packages?pageSize=1000`,
     undefined,
     kind,
   );

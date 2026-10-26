@@ -365,8 +365,9 @@ const wireErrors = {
 };
 
 /**
- * The pairwise rows (PICT, docs.local coverage ledger work+pipeline-o6): the stage before the
- * sort, the direction, the key and the stages after it.
+ * The pairwise rows (a PICT model of four factors, Pre 4 x Direction 2 x Key 3 x Post 4, with the
+ * four rows the packet must contain given as seeds): the stage before the sort, the direction,
+ * the key and the stages after it.
  */
 export const SORT_COMBOS = [
   ["none", "asc", "tied", "offset-limit"],

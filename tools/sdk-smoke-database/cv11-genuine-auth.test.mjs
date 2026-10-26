@@ -347,3 +347,15 @@ test('S2: an output refused for a secret leaves result.json not closed', () => {
 test('S3: the browser is launched without Playwright signal handlers (they would exit mid-cleanup)', () => {
   assert.deepEqual(LAUNCH, { headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
 });
+
+test('the ADC scope preflight runs after the token is minted and before the first sandbox request, and stops the run', () => {
+  const src = readFileSync(new URL('./cv11-genuine-auth.mjs', import.meta.url), 'utf8');
+  const at = (x) => { const i = src.indexOf(x); assert.ok(i > 0, x); return i; };
+  assert.ok(at("const token = execFileSync") < at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))'));
+  assert.ok(at('await runPreflight(out, token, fetch,') < at('if (stopped) return stopped;'));
+  assert.ok(at('if (stopped) return stopped;') < at('o = { mode, packet, headers:'));
+  assert.ok(at('if (stopped) return stopped;') < at('await runScenario(o)'));
+  assert.equal(src.split('await runScenario(o)').length - 1, 1);
+  assert.ok(src.includes("import { runPreflight } from './adc-preflight.mjs';"));
+  assert.deepEqual(SOURCES, ['cv11-genuine-auth.mjs', 'cv11-genuine-auth-page.js', 'adc-preflight.mjs']);
+});

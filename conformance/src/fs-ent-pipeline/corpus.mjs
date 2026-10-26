@@ -34,6 +34,7 @@ import {
   stage,
   step,
 } from "./builders.mjs";
+import { O6_PROGRAMS } from "./o6-corpus.mjs";
 
 export { fld, fn, seedCommit };
 
@@ -1847,4 +1848,6 @@ export const PROGRAMS = [
   o5FunctionNameProgram,
   o5AppendixProgram,
   o5SubcollectionProgram,
+  // O-6 (sort, stage order, functions in where, result order): see o6-corpus.mjs.
+  ...O6_PROGRAMS,
 ];

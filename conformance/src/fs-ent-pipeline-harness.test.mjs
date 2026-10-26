@@ -18,7 +18,7 @@ import {
   NUMBER_CONDITIONS,
   NUMBER_DOC,
   NUMBER_EXPRESSIONS,
-  PROGRAMS,
+  PROGRAMS as ALL_PROGRAMS,
   PROBE_DOC,
   SELECT_EXPRESSIONS,
   STATIC_REFUSALS,
@@ -40,6 +40,10 @@ import * as queryHarness from "./fs-query-index/harness.mjs";
 import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
+
+// The O-6 programs join the pinned counts below after their recording; fs-ent-pipeline-o6.test.mjs
+// covers them until then.
+const PROGRAMS = ALL_PROGRAMS.filter((program) => !program.id.startsWith("fs-ent-pipeline/o6/"));
 
 const production = (database = lane.database) =>
   createContext({

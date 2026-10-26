@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The README, and with it the npm package page, is now a short overview with a quick start, a scope summary and links. The configuration and usage details it carried are on the [documentation site](https://t-k.github.io/fireemu/), which gains the parts it lacked: `fireemu config show` and `init --reference`, the remaining discovery ownership rules, Auth authorized domains, provider declarations, tenant and MFA declaration details and the unsigned-token rules, schedule and manual-run semantics, Firestore history and Storage stored-byte limit details, macOS export ACL rules, and the container exposure rules.
+
 ## [0.30.0] - 2026-10-26
 
 Two more parents are `COMPAT_VERIFIED` against production, the Firebase Realtime Database (RTDB) and Firestore Enterprise full-text search (FS-TEXT-SEARCH), so every parent of the compatibility inventory is now `COMPAT_VERIFIED`. Each claim covers only its recorded cases.

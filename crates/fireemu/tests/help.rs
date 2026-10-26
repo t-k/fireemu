@@ -407,9 +407,15 @@ fn the_profile_documentation_recommends_strict_including_for_migrations() {
     );
     let readme = include_str!("../../../README.md");
     assert!(readme.contains("Recommended, including when migrating from the official emulator"));
-    assert!(readme.contains("### Migrating from the Firebase Local Emulator Suite"));
     assert!(readme.contains("it is not needed for a migration"));
-    // The settings the README names as single-behavior relaxations exist in the schema.
+    let profiles = include_str!("../../../site/src/content/docs/guides/profiles.mdx");
+    assert!(profiles.contains("recommended, including when migrating from the official emulator"));
+    assert!(profiles.contains("it is not needed for a migration"));
+    // The migration guide moved from the README to the documentation site.
+    let migration = include_str!("../../../site/src/content/docs/getting-started/migrate.md");
+    assert!(migration.contains("title: Migrate from the Local Emulator Suite"));
+    assert!(migration.contains("Keep `profile = \"strict\"`, the default."));
+    // The settings the migration guide names as single-behavior relaxations exist in the schema.
     for (section, key) in [
         ("firestore", "enforceLimits"),
         ("auth", "improvedEmailPrivacy"),
@@ -420,7 +426,7 @@ fn the_profile_documentation_recommends_strict_including_for_migrations() {
             "{section}.{key}"
         );
         assert!(
-            readme.contains(&format!("`{section}.{key}`")),
+            migration.contains(&format!("`{section}.{key}`")),
             "{section}.{key}"
         );
     }

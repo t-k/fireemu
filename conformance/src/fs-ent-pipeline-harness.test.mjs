@@ -43,11 +43,11 @@ import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 
-// The O-8C and O-8D programs join the pinned counts below after their recording
+// The O-8D programs join the pinned counts below after their recording
 // (fs-ent-pipeline-o8fn.test.mjs covers them until then). The two O-8A framing programs are not
 // in the fixture at all: their answers are kept as a summary (fs-ent-pipeline-framing.json).
 const PROGRAMS = ALL_PROGRAMS.filter(
-  (program) => !/^fs-ent-pipeline\/o8[c-d]\//.test(program.id) && !SUMMARY_ONLY.has(program.id),
+  (program) => !/^fs-ent-pipeline\/o8d\//.test(program.id) && !SUMMARY_ONLY.has(program.id),
 );
 
 const production = (database = lane.database) =>
@@ -151,7 +151,7 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 1448);
+  assert.equal(requests, 1731);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
   assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get", "runQuery"]);
   // The only writes are single-document commits into the program's own collection: the order
@@ -214,7 +214,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/(o[2-7]|o8[ab])\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/(o[2-7]|o8[abc])\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -566,7 +566,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 62);
+  assert.equal(recordedPrograms.length, 64);
   assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
   assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
@@ -920,7 +920,7 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
   }
   const earlier = Object.fromEntries(
     Object.entries(recorded)
-      .filter(([id]) => !/^fs-ent-pipeline\/(o[567]|o8[ab])\//.test(id))
+      .filter(([id]) => !/^fs-ent-pipeline\/(o[567]|o8[abc])\//.test(id))
       .sort(([a], [b]) => a.localeCompare(b)),
   );
   assert.equal(Object.keys(earlier).length, 20);

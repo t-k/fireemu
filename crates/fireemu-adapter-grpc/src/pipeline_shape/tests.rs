@@ -35,6 +35,7 @@ fn every_recorded_refusal_has_a_shape() {
     let mut o7 = 0;
     let mut o8a = 0;
     let mut o8b = 0;
+    let mut o8c = 0;
     let mut raw = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
@@ -51,7 +52,8 @@ fn every_recorded_refusal_has_a_shape() {
                 excluded_500 += 1;
                 assert!(
                     row == "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
-                        || row.starts_with("fs-ent-pipeline/o8a/dupquote-main#"),
+                        || row.starts_with("fs-ent-pipeline/o8a/dupquote-main#")
+                        || row == "fs-ent-pipeline/o8c/collections-main#array-reverse-none",
                     "{row}"
                 );
                 assert_eq!(answer["body"][0]["error"]["status"], "INTERNAL", "{row}");
@@ -83,6 +85,8 @@ fn every_recorded_refusal_has_a_shape() {
                 o8a += 1;
             } else if id.starts_with("fs-ent-pipeline/o8b/") {
                 o8b += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8c/") {
+                o8c += 1;
             } else {
                 original += 1;
             }
@@ -109,13 +113,13 @@ fn every_recorded_refusal_has_a_shape() {
         }
     }
     assert_eq!(
-        (original, o5, o6, o7, o8a, o8b, raw),
-        (98, 291, 21, 54, 3, 80, 18)
+        (original, o5, o6, o7, o8a, o8b, o8c, raw),
+        (98, 291, 21, 54, 3, 80, 84, 18)
     );
-    let refused = original + o5 + o6 + o7 + o8a + o8b;
-    assert_eq!(refused, 547);
-    assert_eq!(eligible, 547);
-    assert_eq!(excluded_500, 6);
+    let refused = original + o5 + o6 + o7 + o8a + o8b + o8c;
+    assert_eq!(refused, 631);
+    assert_eq!(eligible, 631);
+    assert_eq!(excluded_500, 7);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.
     assert!(texts <= refused && texts > 80, "{texts}");

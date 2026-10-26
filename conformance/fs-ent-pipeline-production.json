@@ -38212,6 +38212,5042 @@
         }
       }
     },
+    "fs-ent-pipeline/o8c/collections-main": {
+      "corpusDigest": "fb68cceefe08b2800d722637621f0762caf794844fc8c14cd22bb320c6f87cc5",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T15:41:42.455Z",
+      "gitSha": "1365382996415d1cc367e33a3676bd1a198dc550",
+      "steps": {
+        "map-get-key": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-get-missing-key": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "map-get-dotted-key": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "map-get-nested-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "c": {
+                            "integerValue": "2"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-get-empty-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "map-get-null-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-get-absent-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-get-null-key": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-get-int-key": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_get"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_get(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-get-array-map": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_get"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_get(...) requires `Map` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-get-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_get(map: map[string, any], key: string): any?' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-merge-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          },
+                          "z": {
+                            "integerValue": "9"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-later-wins": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "2"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-three": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "integerValue": "2"
+                          },
+                          "c": {
+                            "integerValue": "3"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-with-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-not-deep": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "d": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-merge-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_merge"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_merge(...) requires `Map` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-merge-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_merge(maps: map[string, any]*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-set-add": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          },
+                          "z": {
+                            "integerValue": "9"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-set-overwrite": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "9"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-set-two-pairs": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          },
+                          "y": {
+                            "integerValue": "8"
+                          },
+                          "z": {
+                            "integerValue": "9"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-set-odd-entries": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "'map_set' function must have an odd number of arguments",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-set-null-value": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          },
+                          "z": {
+                            "nullValue": null
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-set-int-key": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "map_set keys must be of type STRING, given type is LONG",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-set-null-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "map-set-absent-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "map-set-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_set(map: map[string, any], entries: any*): map[string, any]' takes [3..+∞) argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-remove-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-remove-missing": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {
+                        "fields": {
+                          "a": {
+                            "integerValue": "1"
+                          },
+                          "b": {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-remove-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "mapValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-remove-null-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-remove-absent-map": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-remove-int-key": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_remove"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_remove(...) requires `String` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-remove-map-only": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_remove(map: map[string, any], key: string*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-keys-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": "b"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-keys-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-keys-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-keys-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-keys-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_keys"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_keys(...) requires `Map` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-keys-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_keys(map: map[string, any]): array[string]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-values-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "mapValue": {
+                              "fields": {
+                                "c": {
+                                  "integerValue": "2"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-values-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-values-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-values-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-values-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_values"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_values(...) requires `Map` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-values-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_values(map: map[string, any]): array[any]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-entries-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "mapValue": {
+                              "fields": {
+                                "k": {
+                                  "stringValue": "a"
+                                },
+                                "v": {
+                                  "integerValue": "1"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "mapValue": {
+                              "fields": {
+                                "k": {
+                                  "stringValue": "b"
+                                },
+                                "v": {
+                                  "mapValue": {
+                                    "fields": {
+                                      "c": {
+                                        "integerValue": "2"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-entries-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-entries-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-entries-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "map-entries-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "map_entries"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function map_entries(...) requires `Map` but got `ARRAY`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "map-entries-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'map_entries(map: map[string, any]): array[map[string, any]]' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-concat-two": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "stringValue": "a"
+                          },
+                          {
+                            "stringValue": "b"
+                          },
+                          {
+                            "stringValue": "c"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-concat-three": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-concat-with-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-concat-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-concat-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-concat-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_concat"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_concat(...) requires `Array` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-concat-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_concat(arrays: array[any]*): array[any]' takes [2..+∞) argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-length-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-length-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-length-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-length-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-length-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_length"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_length(...) requires `Array` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-length-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_length(x: array[any]): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-reverse-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-reverse-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-reverse-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-reverse-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-reverse-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_reverse"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_reverse(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-reverse-none": {
+          "status": 500,
+          "body": [
+            {
+              "error": {
+                "code": 500,
+                "message": "An internal error occurred.",
+                "status": "INTERNAL"
+              }
+            }
+          ]
+        },
+        "array-slice-from": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-with-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "2"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-negative-offset": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-beyond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-slice-int-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_slice"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_slice(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-first-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "array-first-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "first"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function first(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-last-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-empty": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "array-last-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "last"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function last(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-get-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-last": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-out-of-range": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [{}]
+            }
+          ]
+        },
+        "array-get-null-index": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-null-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-get-double-index": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-get-int-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_get"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_get(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-get-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_get(array: array[any], index: int64): any?' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-index-of-first": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-last": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-none": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-null-search": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-direction-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'direction' for function 'array_index_of' must be a literal of type string from the following list: [first, last]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-index-of-null-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-absent-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-index-of-int-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "array_index_of"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function array_index_of(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-index-of-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_index_of(array: array[any], search: any, direction: (first|last)): int64' takes [3..3] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-first-n-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-n-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-n-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function `array_first_n(...)` requires non-negative count.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-first-n-more-than-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-n-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-first-n-double-n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-first-n-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_first_n(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-last-n-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-n-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-n-negative": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function `array_last_n(...)` requires non-negative count.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-last-n-more-than-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-n-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "array-last-n-double-n": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "array-last-n-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'array_last_n(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "join-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a,b,c"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-empty-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-null-element": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a,NULL"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-null-element-no-text": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "stringValue": "a"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-int-elements": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot join non-string types.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "join-null-delimiter": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-null-array": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "join-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'join' does not accept 1 argument(s). Valid options are:\n- join[T: string | bytes](array: array[T], delimiter: T): string with [2..2] argument(s).\n- join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "maximum-n-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "integerValue": "2"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maximum-n-more-than-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "3"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maximum-n-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maximum-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maximum-n-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "maximum-n-int-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "maximum_n"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function maximum_n(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "minimum-n-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minimum-n-more-than-length": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "1"
+                          },
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "3"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minimum-n-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "arrayValue": {}
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minimum-n-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minimum-n-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "minimum-n-int-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "minimum_n"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function minimum_n(...) requires `Array` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "fs-ent-pipeline/o8c/timestamps-main": {
+      "corpusDigest": "c6b28866b5d6edb7cc6f802f02709858bd323a20c39c83124197a6d16fd1d14e",
+      "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",
+      "recordedAt": "2026-10-26T15:41:42.455Z",
+      "gitSha": "1365382996415d1cc367e33a3676bd1a198dc550",
+      "steps": {
+        "current-timestamp-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "<t2>"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "current-timestamp-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'current_timestamp(): timestamp' takes [0..0] argument(s), but 1 was provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "current-timestamp-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'current_timestamp(): timestamp' takes [0..0] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-unit-microsecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56.789013Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-millisecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56.790012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:57.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-minute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:35:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-hour": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T13:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-day": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-03-01T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-28T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-unit-month": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-unit-week": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-unit-uppercase": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-unit-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-amount-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-amount-huge": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "timestamp_add(...) result is out of range",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-past-the-end": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "reason": "INVALID_TIMESTAMP_OUT_OF_RANGE"
+                  }
+                ],
+                "message": "timestamp_add(...) received a timestamp value that is out of range.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-null-timestamp": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-null-amount": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-add-int-timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_add"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_add(...) requires `Timestamp or BsonTimestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-add-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_add[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp' takes [3..3] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-subtract-day": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-28T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-subtract-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:55.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-subtract-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-03-01T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-subtract-before-the-start": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "reason": "INVALID_TIMESTAMP_OUT_OF_RANGE"
+                  }
+                ],
+                "message": "timestamp_sub(...) received a timestamp value that is out of range.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-subtract-unit-month": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_subtract' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-subtract-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-subtract-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-subtract-int-timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_sub"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_sub(...) requires `Timestamp or BsonTimestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-subtract-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_subtract[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp' takes [3..3] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-microsecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56.789012Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-millisecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56.789Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:56Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-minute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:34:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-hour": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T12:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-day": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-29T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-week": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-23T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-week-monday": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-24T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-isoweek": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-24T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-month": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-quarter": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-01-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-year": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-01-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-isoyear": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2019-12-30T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-zone-tokyo": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "2020-02-28T15:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-zone-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "timestamp_trunc(...) given an invalid timezone",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'granularity' for function 'timestamp_trunc' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-trunc-granularity-uppercase": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'granularity' for function 'timestamp_trunc' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-trunc-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-trunc-int-timestamp": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_trunc"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_trunc(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-trunc-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_trunc' does not accept 1 argument(s). Valid options are:\n- timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): timestamp with [2..2] argument(s).\n- timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): timestamp with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-diff-day": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "18321"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-hour": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "439716"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1582979696"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-microsecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1582979696789012"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-18321"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-truncation": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-same": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-widest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "315537897599999999"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-now": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1793029330"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-unit-month": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'unit' for function 'timestamp_diff' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-diff-null-end": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-null-start": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-diff-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_diff"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_diff(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-diff-two": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_diff[T1: timestamp | bson_timestamp, T2: timestamp | bson_timestamp](end: T1, start: T2, unit: (microsecond|millisecond|second|minute|hour|day)): int64' takes [3..3] argument(s), but 2 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-extract-part-year": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2020"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-month": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-day": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "29"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-dayofweek": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-dayofyear": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "60"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-hour": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "12"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-minute": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "34"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-second": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "56"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-microsecond": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "789012"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-week": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "8"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-isoweek": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "9"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-part-quarter": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-zone-tokyo": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "21"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-zone-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "timestamp_extract(...) given an invalid timezone",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-extract-part-invalid": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The argument 'part' for function 'timestamp_extract' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, dayofweek, day, dayofyear, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-extract-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-extract-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_extract"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_extract(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-extract-one": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_extract' does not accept 1 argument(s). Valid options are:\n- timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): int64 with [2..2] argument(s).\n- timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): int64 with [3..3] argument(s).",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:00.000001Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1969-12-31T23:59:59.999999Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-max": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "unix_micros_to_timestamp(...) argument out of range",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-min": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "unix_micros_to_timestamp(...) argument out of range",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-string": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "unix_micros_to_timestamp"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function unix_micros_to_timestamp(...) requires `Int64` but got `STRING`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-micros-to-timestamp-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_micros_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:00.001Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1969-12-31T23:59:59.999Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-past-the-end": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "unix_millis_to_timestamp(...) argument out of range",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-millis-to-timestamp-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_millis_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-one": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:01Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-zero": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1970-01-01T00:00:00Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-negative": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "timestampValue": "1969-12-31T23:59:59Z"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-past-the-end": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "unix_seconds_to_timestamp(...) argument out of range",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-double": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Cannot coerce Float64 (1.5) to Int64",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "unix-seconds-to-timestamp-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'unix_seconds_to_timestamp(input: int64): timestamp' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1582979696789012"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-before-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-latest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "253402300799999999"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_to_unix_micros"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_to_unix_micros(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-micros-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_micros[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1582979696789"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-before-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-latest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "253402300799999"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_to_unix_millis"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_to_unix_millis(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-millis-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_millis[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-ok": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1582979696"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-before-epoch": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-latest": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "253402300799"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-null": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-absent": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "nullValue": null
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-int": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "domain": "firestore.googleapis.com",
+                    "metadata": {
+                      "function_name": "timestamp_to_unix_seconds"
+                    },
+                    "reason": "FUNCTION_WRONG_TYPE"
+                  }
+                ],
+                "message": "The function timestamp_to_unix_seconds(...) requires `Timestamp` but got `LONG`.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "timestamp-to-unix-seconds-none": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The function 'timestamp_to_unix_seconds[T: timestamp | bson_timestamp](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        }
+      },
+      "second": {
+        "timestamp-diff-now": {
+          "status": 200,
+          "body": [
+            {
+              "executionTime": "<t1>",
+              "results": [
+                {
+                  "fields": {
+                    "v": {
+                      "integerValue": "1793029387"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "fs-ent-pipeline/px0/aliases": {
       "corpusDigest": "223719eb91e725a6b93f36575fe883575629ec7cdf85720d5db855b733d21335",
       "harnessDigest": "4b61aaa20f2c9cf89607d4741a61f40408d8f6af8d78166f2539f095b926ed77",

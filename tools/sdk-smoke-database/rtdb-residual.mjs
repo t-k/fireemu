@@ -34,7 +34,8 @@ export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation
 // A profile that never reaches the writer's disconnect can leave onDisconnect writes pending; the
 // server fires them when it drops the idle long-polling connection (production: about 105 s).
 export const FIRE_GRACE_MS = 150000;
-export const PROFILE_TIMEOUT_MS = { cv08: 150000, cv10: { ws: 150000, lp: 360000 } };
+// Longer than the worst case of the page's own waits (Rules probes up to 60 s each, marker wait 30 s / 240 s).
+export const PROFILE_TIMEOUT_MS = { cv08: 240000, cv10: { ws: 300000, lp: 540000 } };
 const PROPAGATION_MS = 120000;
 const INSTANCE = 'fireemu-q-rtdb2', LOCATION = 'us-central1', TIMEOUT_MS = 25000;
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -239,6 +240,14 @@ export function compareFiles(production, local) {
   return { ...verdict, match: verdict.verdict === 'match' && verdict.timing.within };
 }
 
+/** The SDK bundles the page loads are the ones the packet pins (the browser serves them from disk). */
+export function verifyBundles(packet) {
+  for (const [name, expected] of Object.entries(packet.bundleSha256 ?? {})) {
+    if (sha256(readFileSync(path.join(path.resolve(packet.modules), 'firebase', name))) !== expected) throw Error(`SDK bundle differs from the packet: ${name}`);
+  }
+  if (!['firebase-app.js', 'firebase-database.js'].every((n) => packet.bundleSha256?.[n])) throw Error('the packet must pin firebase-app.js and firebase-database.js');
+}
+
 export function verifyPacket(file, expected) {
   if (!file || !expected) throw Error('production needs --packet <file> and --packet-sha256 <hex>');
   const raw = readFileSync(file);
@@ -369,6 +378,7 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
+  if (packet) verifyBundles(packet);
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.

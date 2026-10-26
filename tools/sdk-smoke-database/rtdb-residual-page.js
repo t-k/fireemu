@@ -135,7 +135,7 @@ window.__rrRun = async (c) => {
     const PATHS = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9', 'marker'];
     // The probe path follows the same Rules flag as e7 and e8: it tells when a Rules change took effect.
     const probe = async (allowed) => {
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 60; i++) {
         let ok = true;
         try { await D.set(at(o, 'dprobe'), i); } catch { ok = false; }
         if (ok === allowed) return emit('rules', { code: allowed ? 'allowed' : 'denied' });

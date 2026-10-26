@@ -4,11 +4,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -272,7 +272,8 @@ test('browser plumbing: transport from what opened, per-profile timeouts, host r
   assert.equal(profileTimeout({ scenario: 'cv08', transport: 'lp' }), PROFILE_TIMEOUT_MS.cv08);
   assert.equal(profileTimeout({ scenario: 'cv10', transport: 'ws' }), PROFILE_TIMEOUT_MS.cv10.ws);
   assert.equal(profileTimeout({ scenario: 'cv10', transport: 'lp' }), PROFILE_TIMEOUT_MS.cv10.lp);
-  assert.ok(PROFILE_TIMEOUT_MS.cv10.lp > 240000 + 60000, 'the long-polling profile outlasts the marker wait of 240 s');
+  assert.ok(PROFILE_TIMEOUT_MS.cv10.lp > 240000 + 2 * 60000 + 60000, 'the long-polling profile outlasts the marker wait of 240 s and two Rules probes of 60 s');
+  assert.ok(PROFILE_TIMEOUT_MS.cv10.ws > 30000 + 2 * 60000 + 60000 && PROFILE_TIMEOUT_MS.cv08 > 150000);
   assert.equal(hostRules(), '--host-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE *.firebaseio.com');
   assert.deepEqual(LAUNCH, { headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
   assert.ok(FIRE_GRACE_MS > 105000, 'longer than the recorded long-polling idle close (about 105 s)');
@@ -450,4 +451,36 @@ test('a hook failure in the last profile leaves the run incomplete even though a
   const r = await prod(w, { browser: swallowing });
   assert.equal(r.profiles.length, 8); assert.ok(r.errors.some((e) => /rules-deny-cv10-r2-lp-2-put: refused/.test(e)), r.errors.join());
   assert.equal(r.observationComplete, false); assert.ok(w.baseline());
+});
+
+test('the SDK bundles must be the pinned ones, and both bundles the page loads must be pinned', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rr-mod-'));
+  const fb = path.join(dir, 'firebase');
+  mkdirSync(fb);
+  writeFileSync(path.join(fb, 'firebase-app.js'), 'app');
+  writeFileSync(path.join(fb, 'firebase-database.js'), 'db');
+  const sha = (x) => createHash('sha256').update(x).digest('hex');
+  const packet = { modules: dir, bundleSha256: { 'firebase-app.js': sha('app'), 'firebase-database.js': sha('db') } };
+  assert.doesNotThrow(() => verifyBundles(packet));
+  assert.throws(() => verifyBundles({ ...packet, bundleSha256: { ...packet.bundleSha256, 'firebase-database.js': sha('other') } }), /SDK bundle differs from the packet: firebase-database.js/);
+  assert.throws(() => verifyBundles({ ...packet, bundleSha256: { ...packet.bundleSha256, 'firebase-app.js': sha('other') } }), /firebase-app.js/);
+  assert.throws(() => verifyBundles({ ...packet, bundleSha256: { 'firebase-app.js': sha('app') } }), /must pin firebase-app.js and firebase-database.js/);
+  assert.throws(() => verifyBundles({ modules: dir }), /must pin firebase-app.js and firebase-database.js/);
+});
+
+test('the command line stops on a bundle that differs from the packet before creating the output or asking for a token', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rr-cli2-'));
+  const fb = path.join(dir, 'modules', 'firebase');
+  mkdirSync(fb, { recursive: true });
+  writeFileSync(path.join(fb, 'firebase-app.js'), 'app');
+  writeFileSync(path.join(fb, 'firebase-database.js'), 'db');
+  const sha = (x) => createHash('sha256').update(x).digest('hex');
+  const sources = Object.fromEntries(SOURCES.map((s) => [s, sha(readFileSync(new URL(`./${s}`, import.meta.url)))]));
+  const packet = JSON.stringify({ sources, modules: path.join(dir, 'modules'), gcloud: '/nonexistent/gcloud', bundleSha256: { 'firebase-app.js': sha('app'), 'firebase-database.js': sha('different') } });
+  const file = path.join(dir, 'packet.json');
+  writeFileSync(file, packet);
+  const out = path.join(dir, 'out');
+  const r = spawnSync(process.execPath, [new URL('./rtdb-residual.mjs', import.meta.url).pathname, 'production', '--packet', file, '--packet-sha256', sha(packet), '--out', out], { encoding: 'utf8' });
+  assert.equal(r.status, 2); assert.match(r.stderr, /SDK bundle differs from the packet: firebase-database.js/);
+  assert.throws(() => readFileSync(out), /ENOENT/, 'the output directory was not created');
 });

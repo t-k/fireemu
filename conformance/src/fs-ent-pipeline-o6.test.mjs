@@ -50,7 +50,11 @@ const areaSteps = (area) => O6_AREAS[area].flatMap((program) => steps(program));
 
 test("O-6 programs are the tail of PROGRAMS, under their own prefix, unique and valid", () => {
   assert.ok(O6_PROGRAMS.length > 0);
-  assert.deepEqual(PROGRAMS.slice(-O6_PROGRAMS.length), O6_PROGRAMS);
+  // The O-7 programs follow them (o7 test).
+  assert.deepEqual(
+    PROGRAMS.filter((p) => p.id.startsWith(O6_PREFIX)),
+    O6_PROGRAMS,
+  );
   assert.equal(new Set(O6_PROGRAMS.map((p) => p.id)).size, O6_PROGRAMS.length);
   for (const program of O6_PROGRAMS) assert.ok(program.id.startsWith(O6_PREFIX), program.id);
   validateCorpus(O6_PROGRAMS, LANE);

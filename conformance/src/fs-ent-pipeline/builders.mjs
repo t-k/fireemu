@@ -73,3 +73,26 @@ export const del = (id, path) => ({
 /** `[["<prefix>01", {v}], ...]` for a list of values of the field `v`. */
 export const numbered = (prefix, values) =>
   values.map((v, i) => [`${prefix}${String(i + 1).padStart(2, "0")}`, { v }]);
+
+// --- stages and inputs of packet v2 (aggregate, distinct, add_fields, remove_fields,
+// collection_group, documents), in the forms the SDK sends ---
+
+/** A map of aliases to expressions. */
+export const mapOf = (fields) => ({ mapValue: { fields } });
+/** The accumulators map, then the groups map (empty when there is no grouping). */
+export const aggregate = (accumulators, groups = {}) =>
+  stage("aggregate", mapOf(accumulators), mapOf(groups));
+export const distinct = (groups) => stage("distinct", mapOf(groups));
+export const addFields = (fields) => stage("add_fields", mapOf(fields));
+/** One field reference per argument. */
+export const removeFields = (...paths) => stage("remove_fields", ...paths.map(fld));
+/** An empty parent reference, then the collection id as a string. */
+export const collectionGroup = (id) => stage("collection_group", { referenceValue: "" }, str(id));
+/** One reference per document path, from the root. */
+export const documents = (...paths) =>
+  stage("documents", ...paths.map((path) => ({ referenceValue: `/${path}` })));
+
+/** A REST step that starts from the given input stage. */
+export const readFrom = (id, input, ...stages) => step(id, pipeline(input, ...stages));
+/** The same step over gRPC. */
+export const readFromGrpc = (id, input, ...stages) => grpcStep(id, pipeline(input, ...stages));

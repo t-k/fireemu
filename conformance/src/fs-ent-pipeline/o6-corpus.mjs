@@ -92,13 +92,13 @@ export function truthTableDocs(from, domain) {
 // --- the table ---
 
 /** Checks one area and returns its programs. */
-export function defineArea(area, groups) {
+export function defineArea(area, groups, prefix = O6_PREFIX) {
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(area)) throw new Error(`area ${area} is not a name`);
   const seen = new Set();
   return groups.map(({ id, seed = [], steps }) => {
     if (seen.has(id)) throw new Error(`duplicate group ${area}-${id}`);
     seen.add(id);
-    return { id: `${O6_PREFIX}${area}-${id}`, seed, steps };
+    return { id: `${prefix}${area}-${id}`, seed, steps };
   });
 }
 
@@ -120,7 +120,7 @@ const KIND_DOCS = [
   ["d14", { v: map({ a: int(1) }) }],
   ["d15", { w: int(1) }],
 ];
-const kindDocs = (from) =>
+export const kindDocs = (from) =>
   KIND_DOCS.map(([doc, fields]) => [
     `${from}/${doc}`,
     JSON.parse(JSON.stringify(fields).replaceAll("{c}", from)),

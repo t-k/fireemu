@@ -697,15 +697,30 @@ export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
 // answer (the source upload receipt) is seen even when the deploy fails afterwards. Receipts go to
 // `deployTrack.onReceipt` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
 // (not killed by this runner or a signal), and the debug lines never reach the stored diagnostic.
-async function cli(args, adcPath, budget, kind, runDir, deployTrack) {
+export async function cli(
+  args,
+  adcPath,
+  budget,
+  kind,
+  runDir,
+  deployTrack,
+  command = [process.execPath, CLI],
+) {
   const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
   const debug = deployTrack !== undefined;
   const outputLimit = debug ? 16_000_000 : 1_000_000;
   const child = spawn(
-    process.execPath,
-    [CLI, ...args, ...(debug ? ["--debug"] : []), "--project", PROJECT, "--non-interactive"],
+    command[0],
+    [
+      ...command.slice(1),
+      ...args,
+      ...(debug ? ["--debug"] : []),
+      "--project",
+      PROJECT,
+      "--non-interactive",
+    ],
     {
       cwd: HERE,
       detached: true,

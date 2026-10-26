@@ -1010,3 +1010,123 @@ test("the run never closes with an open source upload ledger, whatever else it r
     { outcome: "recorded", reason: undefined, residual: false },
   );
 });
+
+// ---- the deploy CLI child (a bounded harmless native child stands in for firebase-tools) ----
+
+async function runFakeCli(body, kind, track) {
+  const { createBudget } = await import("./harness.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "functions-http-fake-cli-"));
+  const script = join(dir, "fake-cli.mjs");
+  await writeFile(script, body);
+  const runDir = join(dir, "run");
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(runDir));
+  const budget = createBudget();
+  let error;
+  let summary;
+  try {
+    summary = await production.cli(["deploy"], "/adc", budget, kind, runDir, track, [
+      process.execPath,
+      script,
+    ]);
+  } catch (caught) {
+    error = caught;
+  }
+  const diagnostics = (await import("node:fs/promises"))
+    .readdir(runDir)
+    .then((names) => names.filter((name) => name.startsWith("cli-")));
+  return { dir, runDir, error, summary, diagnostics: await diagnostics };
+}
+
+const FAKE_RECEIPT_SCRIPT = (tail) => `
+const body = JSON.stringify({
+  uploadUrl: "https://storage.googleapis.com/gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com/${UPLOAD_OBJECT}?X-Goog-Signature=SECRET-MARKER-9f3a",
+  storageSource: { bucket: "gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com", object: "${UPLOAD_OBJECT}" },
+});
+console.log("i  functions: deploying");
+console.log("[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions:generateUploadUrl " + body);
+console.log("ARGV " + JSON.stringify(process.argv.slice(2)));
+${tail}
+`;
+
+test("a deploy CLI runs with --debug, hands over its receipt and ends by itself", async () => {
+  const seen = [];
+  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const run = await runFakeCli(FAKE_RECEIPT_SCRIPT("process.exit(0);"), "cliDeploy", track);
+  try {
+    assert.equal(run.error, undefined);
+    assert.equal(run.summary.exitCode, 0);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].object, UPLOAD_OBJECT);
+    assert.equal(track.exited, true);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("a failing deploy CLI still hands over its receipt, and its diagnostic keeps no debug line", async () => {
+  const seen = [];
+  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const run = await runFakeCli(
+    FAKE_RECEIPT_SCRIPT(
+      'const { writeFileSync } = await import("node:fs"); writeFileSync("firebase-debug.log", "signed"); console.error("Error: Failed to create function"); process.exit(1);',
+    ),
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.match(run.error.message, /cliDeploy failed/);
+    assert.equal(run.error.indeterminate, true);
+    assert.equal(seen.length, 1);
+    assert.equal(track.exited, true, "exit code 1 is the CLI ending by itself");
+    await assert.rejects(
+      () => stat(new URL("firebase-debug.log", import.meta.url)),
+      { code: "ENOENT" },
+      "the CLI debug log, which holds signed URLs, is removed",
+    );
+    assert.equal(run.diagnostics.length, 1);
+    const stored = await readFile(join(run.runDir, run.diagnostics[0]), "utf8");
+    assert.match(stored, /Failed to create function/);
+    assert.match(stored, /--debug/, "the argv echo is a normal line");
+    assert.doesNotMatch(stored, /SECRET-MARKER|generateUploadUrl|X-Goog-Signature/);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("a deploy CLI killed by a signal is not an exit by itself, and its receipt is kept", async () => {
+  const seen = [];
+  const track = { onReceipt: (receipt) => seen.push(receipt) };
+  const run = await runFakeCli(
+    FAKE_RECEIPT_SCRIPT('process.kill(process.pid, "SIGKILL"); await new Promise(() => {});'),
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.ok(run.error);
+    assert.equal(seen.length, 1);
+    assert.equal(track.exited, false);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("only a deploy gets --debug; a delete CLI is run as before", async () => {
+  const withTrack = await runFakeCli(FAKE_RECEIPT_SCRIPT("process.exit(0);"), "cliDeploy", {
+    onReceipt() {},
+  });
+  const without = await runFakeCli(
+    'console.log("ARGV " + JSON.stringify(process.argv.slice(2)));\nprocess.exit(3);',
+    "cliDelete",
+    undefined,
+  );
+  try {
+    assert.equal(withTrack.error, undefined);
+    assert.equal(without.error.indeterminate, false);
+    const stored = await readFile(join(without.runDir, without.diagnostics[0]), "utf8");
+    assert.doesNotMatch(stored, /--debug/);
+    assert.match(stored, /--project/);
+  } finally {
+    await rm(withTrack.dir, { recursive: true, force: true });
+    await rm(without.dir, { recursive: true, force: true });
+  }
+});

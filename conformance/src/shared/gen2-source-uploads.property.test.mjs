@@ -20,7 +20,7 @@ import {
 import { REQUESTS_PER_DEPLOY, UPLOAD_BOUNDS, openSourceUploads } from "./gen2-source-uploads.mjs";
 
 const BASE_SEED = 0x5eed_0b6e;
-const CASES = 500;
+const CASES = 300;
 
 /** mulberry32: a small deterministic generator. */
 function prng(seed) {

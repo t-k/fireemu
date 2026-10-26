@@ -12,8 +12,25 @@
   },
   "scopeAuthority": "docs.local/instructions/owner-decisions.md (2026-10-25 Claude coordinator resumes after Codex, ledger 1777: full-text search COMPAT_VERIFIED is a goal; 1778 score acceptance; 1785 CJK known difference)",
   "closureReview": {
-    "decision": "PENDING",
-    "note": "The coordinator fills this after an independent closure review. Prepared by the text-closure lane on work/text-closure."
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-26",
+    "decider": "project coordinator (delegated by the owner)",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1789, FS-TEXT-SEARCH closure review)",
+    "reviewedCommit": "39330346a16de0904c66a8b82a1685df2c5ec136",
+    "comparisonSha256": "fed9836dc32414c5bf4b52127998c0e9587a25024c3ab502d2858bfcd10e0622",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-26-fs-text-search-closure-review.md",
+        "reportSha256": "756d9813f7096a79dd57e868da492b380c6b4caaeaad008135d9a886f9ec3103",
+        "outcome": "Opus general-purpose: initial CHANGES REQUESTED (Must 1, CHANGELOG wording; Shoulds 1-7) at 333a332bbc9ac5afa9699a69226d2f36e4c9dfae"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-26-fs-text-search-closure-review.md",
+        "reportSha256": "ada8e7a7cc75b68cc2a940a2ffe3284410ac94e23dfb1e206c3249b7625062db",
+        "outcome": "Opus general-purpose: delta APPROVE (Must 0) at 39330346a16de0904c66a8b82a1685df2c5ec136"
+      }
+    ],
+    "followUps": "Non-blocking, tracked privately: the known-difference lookup matches on collection and query rather than the exact corpus state (docs.local/issues/open/text-known-difference-lookup-matches-collection-not-corpus.md); the Admin lifecycle and failed-build tests should replay sanitized production bodies (docs.local/issues/open/text-admin-lifecycle-tests-should-replay-sanitized-production-bodies.md); a binary-level release harness for the comparison; productionExact serving verified search."
   },
   "scopeDecisions": [
     {

@@ -296,6 +296,7 @@ function fakeService({
   deleteStatus = 200,
   describeAfterDelete = 404,
   protection = "DELETE_PROTECTION_DISABLED",
+  failDescribe = false,
 } = {}) {
   const state = { exists: true, deleted: false, deletes: 0, requests: [], deleteAnswered: false };
   const respond = (status, body) => ({ status, text: async () => JSON.stringify(body) });

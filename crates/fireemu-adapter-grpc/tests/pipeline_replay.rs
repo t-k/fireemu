@@ -21,8 +21,9 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-/// Programs recorded in O-6 (2026-10-26: sort, relaxed stage order, logical and recorded
-/// functions in a `where`, result order without a sort) that fireemu does not answer like
+/// Programs recorded in O-6 and O-7 (2026-10-26: sort, relaxed stage order, logical and recorded
+/// functions in a `where`, result order without a sort; aggregate, distinct, `add_fields`,
+/// `remove_fields`, `collection_group`, documents) that fireemu does not answer like
 /// production yet. They are replayed and compared like the rest, but a difference in them is
 /// not an unexpected one; each program must still differ in at least one row, so remove a
 /// program from this list when the work that makes it match lands. The comparison summary is in
@@ -44,6 +45,17 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o6/where-functions-equal-any",
     "fs-ent-pipeline/o6/order-writes",
     "fs-ent-pipeline/o6/order-batch",
+    "fs-ent-pipeline/o7/aggregate-empty",
+    "fs-ent-pipeline/o7/aggregate-basic",
+    "fs-ent-pipeline/o7/aggregate-numbers",
+    "fs-ent-pipeline/o7/aggregate-kinds",
+    "fs-ent-pipeline/o7/aggregate-group-keys",
+    "fs-ent-pipeline/o7/aggregate-aliases",
+    "fs-ent-pipeline/o7/aggregate-args",
+    "fs-ent-pipeline/o7/distinct-main",
+    "fs-ent-pipeline/o7/fields-main",
+    "fs-ent-pipeline/o7/inputs-collection-group",
+    "fs-ent-pipeline/o7/inputs-documents",
 ];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
@@ -528,7 +540,10 @@ fn normalize(value: &Value) -> Value {
             for (key, inner) in map {
                 let inner = match key.as_str() {
                     "doubleValue" | "latitude" | "longitude" => double(inner),
-                    "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
+                    // A field may be called `name` (an alias in an aggregate or distinct answer).
+                    "referenceValue" | "name" if inner.is_string() => {
+                        json!(relative(inner.as_str().unwrap()))
+                    }
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
                     "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),

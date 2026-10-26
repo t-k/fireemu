@@ -53,6 +53,10 @@ impl Children {
 
     fn remove(&mut self, key: &str) {
         self.items.retain(|(name, _)| name != key);
+        // A map emptied by cancels is a new map again (probed on the jar).
+        if self.items.is_empty() {
+            self.hashed = false;
+        }
     }
 
     fn clear(&mut self) {
@@ -98,7 +102,14 @@ impl Pending {
                 self.value = Some(value);
                 return false;
             }
-            for (key, child) in children_of(value) {
+            // The children that remain go in, in key order (integers first, by number); the one the
+            // cancel ends at is not put in and taken out again, so it never counts towards five.
+            let mut children = children_of(value);
+            children.sort_by(|a, b| fireemu_core_database::key::name_compare(&a.0, &b.0));
+            for (key, child) in children {
+                if keys.len() == 1 && key == keys[0] {
+                    continue;
+                }
                 self.remember(&[key], child);
             }
             return self.forget(keys);
@@ -450,6 +461,36 @@ mod tests {
                 crate::scala_map::tests::strings(&probe["order"]),
                 "{probe}"
             );
+        }
+    }
+
+    #[test]
+    fn a_split_by_a_cancel_inserts_only_the_children_that_remain_in_key_order() {
+        // Raw frames on the jar, with the order review's rows (M2): the cancelled child is not inserted, the
+        // others go in Firebase key order (integers first by number), and the map turns hashed only at five.
+        let cases = crate::scala_map::tests::cases();
+        let splits = cases["splits"].as_array().unwrap();
+        assert!(splits.len() >= 8);
+        for case in splits {
+            let mut pending = Pending::default();
+            for op in case["ops"].as_array().unwrap() {
+                let (action, path) = (op[0].as_str().unwrap(), op[1].as_str().unwrap());
+                if action == "o" {
+                    pending.remember(&keys(path), json(&op[2].to_string()));
+                } else {
+                    pending.forget(&keys(path));
+                }
+            }
+            let fired: Vec<String> = pending
+                .entries()
+                .into_iter()
+                .map(|(k, _)| k.join("/"))
+                .collect();
+            let want: Vec<String> = crate::scala_map::tests::strings(&case["order"])
+                .into_iter()
+                .map(|frame| frame.trim_start_matches("d:").to_owned())
+                .collect();
+            assert_eq!(fired, want, "{case}");
         }
     }
 }

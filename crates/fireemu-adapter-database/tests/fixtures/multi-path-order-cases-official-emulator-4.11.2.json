@@ -1,0 +1,2235 @@
+{
+ "provenance": "Recorded against firebase-database-emulator v4.11.2 (the jar firebase-tools 15.28.2 runs) with raw realtime frames by docs.local/runs/rtdb-ondisconnect-order/probes/record-order-cases.mjs, 2026-10-27; the nested bodies are the order review's 40 random cases (nested-cases-reviewer.json).",
+ "nested": [
+  {
+   "kind": "table",
+   "mode": "patch",
+   "keys": [
+    "a/x",
+    "a/y",
+    "b",
+    "c",
+    "d"
+   ],
+   "order": [
+    "a/y",
+    "a/x",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "merge",
+   "keys": [
+    "a/x",
+    "a/y",
+    "b",
+    "c",
+    "d"
+   ],
+   "order": [
+    "a/y",
+    "a/x",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "patch",
+   "keys": [
+    "d",
+    "c",
+    "b",
+    "a/y",
+    "a/x"
+   ],
+   "order": [
+    "a/y",
+    "a/x",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "merge",
+   "keys": [
+    "d",
+    "c",
+    "b",
+    "a/y",
+    "a/x"
+   ],
+   "order": [
+    "a/y",
+    "a/x",
+    "b",
+    "c",
+    "d"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "patch",
+   "keys": [
+    "zz",
+    "a/x",
+    "a/y",
+    "a/z",
+    "a/w",
+    "a/v"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "merge",
+   "keys": [
+    "zz",
+    "a/x",
+    "a/y",
+    "a/z",
+    "a/w",
+    "a/v"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "patch",
+   "keys": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "merge",
+   "keys": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "patch",
+   "keys": [
+    "zz",
+    "a/x",
+    "a/y",
+    "a/z",
+    "a/w",
+    "a/v"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "table",
+   "mode": "merge",
+   "keys": [
+    "zz",
+    "a/x",
+    "a/y",
+    "a/z",
+    "a/w",
+    "a/v"
+   ],
+   "order": [
+    "a/x",
+    "a/y",
+    "a/v",
+    "a/w",
+    "a/z",
+    "zz"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "l/x",
+    "l/y/",
+    "w",
+    "u",
+    "q"
+   ],
+   "order": [
+    "l/x",
+    "l/y",
+    "u",
+    "q",
+    "w"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "l/x",
+    "l/y/",
+    "w",
+    "u",
+    "q"
+   ],
+   "order": [
+    "l/x",
+    "l/y",
+    "u",
+    "q",
+    "w"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "u//x",
+    "u/y",
+    "b",
+    "f",
+    "d"
+   ],
+   "order": [
+    "u/x",
+    "u/y",
+    "f",
+    "b",
+    "d"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "u//x",
+    "u/y",
+    "b",
+    "f",
+    "d"
+   ],
+   "order": [
+    "u/x",
+    "u/y",
+    "f",
+    "b",
+    "d"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "m//x",
+    "m/y",
+    "r",
+    "d",
+    "s"
+   ],
+   "order": [
+    "s",
+    "m/x",
+    "m/y",
+    "r",
+    "d"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "m//x",
+    "m/y",
+    "r",
+    "d",
+    "s"
+   ],
+   "order": [
+    "s",
+    "m/x",
+    "m/y",
+    "r",
+    "d"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "/n/x",
+    "n/y",
+    "i",
+    "f",
+    "m"
+   ],
+   "order": [
+    "n/x",
+    "n/y",
+    "f",
+    "m",
+    "i"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "/n/x",
+    "n/y",
+    "i",
+    "f",
+    "m"
+   ],
+   "order": [
+    "n/x",
+    "n/y",
+    "f",
+    "m",
+    "i"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "e/x",
+    "/e/y",
+    "a",
+    "g",
+    "f"
+   ],
+   "order": [
+    "f",
+    "a",
+    "g",
+    "e/x",
+    "e/y"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "e/x",
+    "/e/y",
+    "a",
+    "g",
+    "f"
+   ],
+   "order": [
+    "f",
+    "a",
+    "g",
+    "e/x",
+    "e/y"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "patch",
+   "keys": [
+    "m/x",
+    "m/y/",
+    "a",
+    "r",
+    "n"
+   ],
+   "order": [
+    "n",
+    "a",
+    "m/y",
+    "m/x",
+    "r"
+   ]
+  },
+  {
+   "kind": "rawSpelling",
+   "mode": "merge",
+   "keys": [
+    "m/x",
+    "m/y/",
+    "a",
+    "r",
+    "n"
+   ],
+   "order": [
+    "n",
+    "a",
+    "m/y",
+    "m/x",
+    "r"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "yx",
+    "zyy/xyy/zx",
+    "xyy",
+    "z/z",
+    "z/xyy"
+   ],
+   "order": [
+    "zyy/xyy/zx",
+    "xyy",
+    "yx",
+    "z/xyy",
+    "z/z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "yx",
+    "zyy/xyy/zx",
+    "xyy",
+    "z/z",
+    "z/xyy"
+   ],
+   "order": [
+    "zyy/xyy/zx",
+    "xyy",
+    "yx",
+    "z/xyy",
+    "z/z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "y",
+    "yyy/yx",
+    "xyy/xyy",
+    "yyy/yyy",
+    "xyy/xx/zyy",
+    "zx",
+    "z",
+    "zyy/x"
+   ],
+   "order": [
+    "zx",
+    "y",
+    "xyy/xx/zyy",
+    "xyy/xyy",
+    "zyy/x",
+    "yyy/yyy",
+    "yyy/yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "y",
+    "yyy/yx",
+    "xyy/xyy",
+    "yyy/yyy",
+    "xyy/xx/zyy",
+    "zx",
+    "z",
+    "zyy/x"
+   ],
+   "order": [
+    "zx",
+    "y",
+    "xyy/xx/zyy",
+    "xyy/xyy",
+    "zyy/x",
+    "yyy/yyy",
+    "yyy/yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "dyy",
+    "c",
+    "dx/dyy/c",
+    "dx/a",
+    "dx/d/b",
+    "byy/ax"
+   ],
+   "order": [
+    "byy/ax",
+    "dx/dyy/c",
+    "dx/d/b",
+    "dx/a",
+    "dyy",
+    "c"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "dyy",
+    "c",
+    "dx/dyy/c",
+    "dx/a",
+    "dx/d/b",
+    "byy/ax"
+   ],
+   "order": [
+    "byy/ax",
+    "dx/dyy/c",
+    "dx/d/b",
+    "dx/a",
+    "dyy",
+    "c"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "z",
+    "zyy/yx",
+    "zx/y",
+    "xx/zx",
+    "y/zyy/zyy",
+    "x"
+   ],
+   "order": [
+    "x",
+    "xx/zx",
+    "zx/y",
+    "y/zyy/zyy",
+    "zyy/yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "z",
+    "zyy/yx",
+    "zx/y",
+    "xx/zx",
+    "y/zyy/zyy",
+    "x"
+   ],
+   "order": [
+    "x",
+    "xx/zx",
+    "zx/y",
+    "y/zyy/zyy",
+    "zyy/yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "b/dyy/b",
+    "a/a",
+    "ayy/cyy/c",
+    "c/cx",
+    "byy/a",
+    "ax/cyy/ayy",
+    "cyy",
+    "byy/ayy"
+   ],
+   "order": [
+    "ayy/cyy/c",
+    "a/a",
+    "b/dyy/b",
+    "byy/a",
+    "byy/ayy",
+    "ax/cyy/ayy",
+    "c/cx",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "b/dyy/b",
+    "a/a",
+    "ayy/cyy/c",
+    "c/cx",
+    "byy/a",
+    "ax/cyy/ayy",
+    "cyy",
+    "byy/ayy"
+   ],
+   "order": [
+    "ayy/cyy/c",
+    "a/a",
+    "b/dyy/b",
+    "byy/a",
+    "byy/ayy",
+    "ax/cyy/ayy",
+    "c/cx",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "yyy/xyy/zx",
+    "x",
+    "xyy",
+    "yx/yyy/xyy",
+    "zyy"
+   ],
+   "order": [
+    "x",
+    "xyy",
+    "yx/yyy/xyy",
+    "zyy",
+    "yyy/xyy/zx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "yyy/xyy/zx",
+    "x",
+    "xyy",
+    "yx/yyy/xyy",
+    "zyy"
+   ],
+   "order": [
+    "x",
+    "xyy",
+    "yx/yyy/xyy",
+    "zyy",
+    "yyy/xyy/zx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "hyy",
+    "dx/dyy",
+    "g/ayy",
+    "gyy/cyy",
+    "ax/cyy/a"
+   ],
+   "order": [
+    "gyy/cyy",
+    "g/ayy",
+    "hyy",
+    "ax/cyy/a",
+    "dx/dyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "hyy",
+    "dx/dyy",
+    "g/ayy",
+    "gyy/cyy",
+    "ax/cyy/a"
+   ],
+   "order": [
+    "gyy/cyy",
+    "g/ayy",
+    "hyy",
+    "ax/cyy/a",
+    "dx/dyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "bx/bx",
+    "a/dx/byy",
+    "b",
+    "ayy",
+    "dyy/byy"
+   ],
+   "order": [
+    "ayy",
+    "a/dx/byy",
+    "dyy/byy",
+    "bx/bx",
+    "b"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "bx/bx",
+    "a/dx/byy",
+    "b",
+    "ayy",
+    "dyy/byy"
+   ],
+   "order": [
+    "ayy",
+    "a/dx/byy",
+    "dyy/byy",
+    "bx/bx",
+    "b"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "bx",
+    "dyy",
+    "cyy",
+    "d",
+    "gx/g/fx",
+    "e"
+   ],
+   "order": [
+    "e",
+    "gx/g/fx",
+    "dyy",
+    "bx",
+    "cyy",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "bx",
+    "dyy",
+    "cyy",
+    "d",
+    "gx/g/fx",
+    "e"
+   ],
+   "order": [
+    "e",
+    "gx/g/fx",
+    "dyy",
+    "bx",
+    "cyy",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "bx/1yy",
+    "b/1x",
+    "ax/ayy",
+    "2yy/b/b",
+    "byy/byy",
+    "1"
+   ],
+   "order": [
+    "bx/1yy",
+    "1",
+    "b/1x",
+    "byy/byy",
+    "ax/ayy",
+    "2yy/b/b"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "bx/1yy",
+    "b/1x",
+    "ax/ayy",
+    "2yy/b/b",
+    "byy/byy",
+    "1"
+   ],
+   "order": [
+    "bx/1yy",
+    "1",
+    "b/1x",
+    "byy/byy",
+    "ax/ayy",
+    "2yy/b/b"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "cyy",
+    "a/bx",
+    "c",
+    "b/b",
+    "bx/dyy/bx"
+   ],
+   "order": [
+    "a/bx",
+    "bx/dyy/bx",
+    "b/b",
+    "c",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "cyy",
+    "a/bx",
+    "c",
+    "b/b",
+    "bx/dyy/bx"
+   ],
+   "order": [
+    "a/bx",
+    "bx/dyy/bx",
+    "b/b",
+    "c",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "f/ax/dx",
+    "cx",
+    "ex/c/byy",
+    "c",
+    "gyy",
+    "eyy/dyy/e"
+   ],
+   "order": [
+    "gyy",
+    "cx",
+    "f/ax/dx",
+    "ex/c/byy",
+    "c",
+    "eyy/dyy/e"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "f/ax/dx",
+    "cx",
+    "ex/c/byy",
+    "c",
+    "gyy",
+    "eyy/dyy/e"
+   ],
+   "order": [
+    "gyy",
+    "cx",
+    "f/ax/dx",
+    "ex/c/byy",
+    "c",
+    "eyy/dyy/e"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xx/yyy",
+    "yyy",
+    "y/yx/z",
+    "x/z/xx",
+    "zyy"
+   ],
+   "order": [
+    "x/z/xx",
+    "xx/yyy",
+    "y/yx/z",
+    "zyy",
+    "yyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "xx/yyy",
+    "yyy",
+    "y/yx/z",
+    "x/z/xx",
+    "zyy"
+   ],
+   "order": [
+    "x/z/xx",
+    "xx/yyy",
+    "y/yx/z",
+    "zyy",
+    "yyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "cx",
+    "d/dyy",
+    "byy/b",
+    "dx",
+    "b",
+    "ayy"
+   ],
+   "order": [
+    "ayy",
+    "cx",
+    "b",
+    "byy/b",
+    "dx",
+    "d/dyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "cx",
+    "d/dyy",
+    "byy/b",
+    "dx",
+    "b",
+    "ayy"
+   ],
+   "order": [
+    "ayy",
+    "cx",
+    "b",
+    "byy/b",
+    "dx",
+    "d/dyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "ayy/b",
+    "ax/2",
+    "2x/byy/1x",
+    "a/bx/1yy",
+    "bx/1",
+    "ayy/1x",
+    "2/1"
+   ],
+   "order": [
+    "ayy/b",
+    "ayy/1x",
+    "a/bx/1yy",
+    "bx/1",
+    "2/1",
+    "ax/2",
+    "2x/byy/1x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "ayy/b",
+    "ax/2",
+    "2x/byy/1x",
+    "a/bx/1yy",
+    "bx/1",
+    "ayy/1x",
+    "2/1"
+   ],
+   "order": [
+    "ayy/b",
+    "ayy/1x",
+    "a/bx/1yy",
+    "bx/1",
+    "2/1",
+    "ax/2",
+    "2x/byy/1x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "y",
+    "xyy",
+    "yx/y/yx",
+    "z/zx",
+    "yyy/x/yx",
+    "xx/y",
+    "z/z/xyy"
+   ],
+   "order": [
+    "xx/y",
+    "y",
+    "xyy",
+    "yx/y/yx",
+    "yyy/x/yx",
+    "z/z/xyy",
+    "z/zx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "y",
+    "xyy",
+    "yx/y/yx",
+    "z/zx",
+    "yyy/x/yx",
+    "xx/y",
+    "z/z/xyy"
+   ],
+   "order": [
+    "xx/y",
+    "y",
+    "xyy",
+    "yx/y/yx",
+    "yyy/x/yx",
+    "z/z/xyy",
+    "z/zx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xx/yyy/zx",
+    "z",
+    "yx",
+    "zx",
+    "xyy/x"
+   ],
+   "order": [
+    "xx/yyy/zx",
+    "zx",
+    "xyy/x",
+    "yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "xx/yyy/zx",
+    "z",
+    "yx",
+    "zx",
+    "xyy/x"
+   ],
+   "order": [
+    "xx/yyy/zx",
+    "zx",
+    "xyy/x",
+    "yx",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "y/yx",
+    "xyy/zyy",
+    "yyy/z",
+    "zx/yx",
+    "yyy/x"
+   ],
+   "order": [
+    "y/yx",
+    "zx/yx",
+    "xyy/zyy",
+    "yyy/z",
+    "yyy/x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "y/yx",
+    "xyy/zyy",
+    "yyy/z",
+    "zx/yx",
+    "yyy/x"
+   ],
+   "order": [
+    "y/yx",
+    "zx/yx",
+    "xyy/zyy",
+    "yyy/z",
+    "yyy/x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "ayy/2/a",
+    "2yy",
+    "1/1",
+    "a/ax/1x",
+    "byy",
+    "2x/byy"
+   ],
+   "order": [
+    "ayy/2/a",
+    "a/ax/1x",
+    "1/1",
+    "byy",
+    "2x/byy",
+    "2yy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "ayy/2/a",
+    "2yy",
+    "1/1",
+    "a/ax/1x",
+    "byy",
+    "2x/byy"
+   ],
+   "order": [
+    "ayy/2/a",
+    "a/ax/1x",
+    "1/1",
+    "byy",
+    "2x/byy",
+    "2yy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "ayy/dyy",
+    "bx/ayy",
+    "dx/d/ax",
+    "b/d",
+    "c/a/dyy"
+   ],
+   "order": [
+    "ayy/dyy",
+    "bx/ayy",
+    "b/d",
+    "c/a/dyy",
+    "dx/d/ax"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "ayy/dyy",
+    "bx/ayy",
+    "dx/d/ax",
+    "b/d",
+    "c/a/dyy"
+   ],
+   "order": [
+    "ayy/dyy",
+    "bx/ayy",
+    "b/d",
+    "c/a/dyy",
+    "dx/d/ax"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "fx",
+    "fyy/b",
+    "e",
+    "d/h",
+    "gx/fx/c",
+    "cx/ayy/a",
+    "byy/dx",
+    "g/ayy"
+   ],
+   "order": [
+    "e",
+    "fyy/b",
+    "gx/fx/c",
+    "cx/ayy/a",
+    "fx",
+    "g/ayy",
+    "byy/dx",
+    "d/h"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "fx",
+    "fyy/b",
+    "e",
+    "d/h",
+    "gx/fx/c",
+    "cx/ayy/a",
+    "byy/dx",
+    "g/ayy"
+   ],
+   "order": [
+    "e",
+    "fyy/b",
+    "gx/fx/c",
+    "cx/ayy/a",
+    "fx",
+    "g/ayy",
+    "byy/dx",
+    "d/h"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "c/a",
+    "cyy",
+    "byy/bx/cx",
+    "cx/d",
+    "ax",
+    "ayy/cx/cx",
+    "dyy"
+   ],
+   "order": [
+    "ayy/cx/cx",
+    "cx/d",
+    "dyy",
+    "byy/bx/cx",
+    "ax",
+    "c/a",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "c/a",
+    "cyy",
+    "byy/bx/cx",
+    "cx/d",
+    "ax",
+    "ayy/cx/cx",
+    "dyy"
+   ],
+   "order": [
+    "ayy/cx/cx",
+    "cx/d",
+    "dyy",
+    "byy/bx/cx",
+    "ax",
+    "c/a",
+    "cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "f/g/bx",
+    "ax",
+    "h/d",
+    "dyy/bx",
+    "ex/eyy",
+    "d"
+   ],
+   "order": [
+    "f/g/bx",
+    "dyy/bx",
+    "ex/eyy",
+    "ax",
+    "h/d",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "f/g/bx",
+    "ax",
+    "h/d",
+    "dyy/bx",
+    "ex/eyy",
+    "d"
+   ],
+   "order": [
+    "f/g/bx",
+    "dyy/bx",
+    "ex/eyy",
+    "ax",
+    "h/d",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xyy/y/x",
+    "zx/x/yx",
+    "x/x",
+    "yx",
+    "z/xyy",
+    "y/zyy",
+    "x/yyy/xx"
+   ],
+   "order": [
+    "x/yyy/xx",
+    "x/x",
+    "zx/x/yx",
+    "y/zyy",
+    "xyy/y/x",
+    "yx",
+    "z/xyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "xyy/y/x",
+    "zx/x/yx",
+    "x/x",
+    "yx",
+    "z/xyy",
+    "y/zyy",
+    "x/yyy/xx"
+   ],
+   "order": [
+    "x/yyy/xx",
+    "x/x",
+    "zx/x/yx",
+    "y/zyy",
+    "xyy/y/x",
+    "yx",
+    "z/xyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "d",
+    "cyy/cx",
+    "c/c",
+    "dyy",
+    "byy/ayy/bx"
+   ],
+   "order": [
+    "dyy",
+    "byy/ayy/bx",
+    "c/c",
+    "cyy/cx",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "d",
+    "cyy/cx",
+    "c/c",
+    "dyy",
+    "byy/ayy/bx"
+   ],
+   "order": [
+    "dyy",
+    "byy/ayy/bx",
+    "c/c",
+    "cyy/cx",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "d",
+    "a/dyy",
+    "b/a",
+    "b/ax/d",
+    "cyy/b/cx",
+    "bx/d/ax",
+    "ax"
+   ],
+   "order": [
+    "a/dyy",
+    "bx/d/ax",
+    "b/a",
+    "b/ax/d",
+    "ax",
+    "cyy/b/cx",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "d",
+    "a/dyy",
+    "b/a",
+    "b/ax/d",
+    "cyy/b/cx",
+    "bx/d/ax",
+    "ax"
+   ],
+   "order": [
+    "a/dyy",
+    "bx/d/ax",
+    "b/a",
+    "b/ax/d",
+    "ax",
+    "cyy/b/cx",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "f/c",
+    "dx/cyy",
+    "h/hyy",
+    "ayy",
+    "hx",
+    "fx/h/a",
+    "eyy/gx/dx",
+    "gyy"
+   ],
+   "order": [
+    "gyy",
+    "ayy",
+    "f/c",
+    "fx/h/a",
+    "hx",
+    "h/hyy",
+    "dx/cyy",
+    "eyy/gx/dx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "f/c",
+    "dx/cyy",
+    "h/hyy",
+    "ayy",
+    "hx",
+    "fx/h/a",
+    "eyy/gx/dx",
+    "gyy"
+   ],
+   "order": [
+    "gyy",
+    "ayy",
+    "f/c",
+    "fx/h/a",
+    "hx",
+    "h/hyy",
+    "dx/cyy",
+    "eyy/gx/dx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "d/cyy",
+    "b/ayy",
+    "c/cyy/cx",
+    "b/cyy/a",
+    "bx",
+    "cx"
+   ],
+   "order": [
+    "cx",
+    "bx",
+    "b/ayy",
+    "b/cyy/a",
+    "c/cyy/cx",
+    "d/cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "d/cyy",
+    "b/ayy",
+    "c/cyy/cx",
+    "b/cyy/a",
+    "bx",
+    "cx"
+   ],
+   "order": [
+    "cx",
+    "bx",
+    "b/ayy",
+    "b/cyy/a",
+    "c/cyy/cx",
+    "d/cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xx/x",
+    "y",
+    "zyy/z/yyy",
+    "zx",
+    "yyy/xyy/x",
+    "yx/yx/z",
+    "xx/zx/yyy"
+   ],
+   "order": [
+    "xx/zx/yyy",
+    "xx/x",
+    "zx",
+    "y",
+    "yx/yx/z",
+    "zyy/z/yyy",
+    "yyy/xyy/x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "xx/x",
+    "y",
+    "zyy/z/yyy",
+    "zx",
+    "yyy/xyy/x",
+    "yx/yx/z",
+    "xx/zx/yyy"
+   ],
+   "order": [
+    "xx/zx/yyy",
+    "xx/x",
+    "zx",
+    "y",
+    "yx/yx/z",
+    "zyy/z/yyy",
+    "yyy/xyy/x"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "b",
+    "bx/a/byy",
+    "cx",
+    "dyy/d",
+    "cyy/bx/cyy",
+    "c/ayy",
+    "byy/a"
+   ],
+   "order": [
+    "cx",
+    "dyy/d",
+    "bx/a/byy",
+    "b",
+    "byy/a",
+    "c/ayy",
+    "cyy/bx/cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "merge",
+   "keys": [
+    "b",
+    "bx/a/byy",
+    "cx",
+    "dyy/d",
+    "cyy/bx/cyy",
+    "c/ayy",
+    "byy/a"
+   ],
+   "order": [
+    "cx",
+    "dyy/d",
+    "bx/a/byy",
+    "b",
+    "byy/a",
+    "c/ayy",
+    "cyy/bx/cyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "cx",
+    "a",
+    "ax/gyy/h",
+    "d/g/gyy",
+    "eyy/ax/gyy",
+    "eyy/d",
+    "b",
+    "e/eyy/ayy"
+   ],
+   "order": [
+    "e/eyy/ayy",
+    "cx",
+    "a",
+    "b",
+    "ax/gyy/h",
+    "eyy/ax/gyy",
+    "eyy/d",
+    "d/g/gyy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "d",
+    "hx/a/gyy",
+    "cx",
+    "a",
+    "e/gyy/byy"
+   ],
+   "order": [
+    "e/gyy/byy",
+    "cx",
+    "a",
+    "hx/a/gyy",
+    "d"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "bx",
+    "cx/dx",
+    "dx/ax",
+    "cx/ayy",
+    "ax/dyy",
+    "byy/ayy/c"
+   ],
+   "order": [
+    "cx/dx",
+    "cx/ayy",
+    "bx",
+    "byy/ayy/c",
+    "ax/dyy",
+    "dx/ax"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "gyy/bx",
+    "dx/ex",
+    "cx/dx/cyy",
+    "fx",
+    "f/hx/eyy",
+    "fyy/eyy/cx",
+    "dx/c/bx",
+    "ax/fyy/cx"
+   ],
+   "order": [
+    "fyy/eyy/cx",
+    "gyy/bx",
+    "cx/dx/cyy",
+    "f/hx/eyy",
+    "fx",
+    "ax/fyy/cx",
+    "dx/ex",
+    "dx/c/bx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "ex/e",
+    "c/f",
+    "b/b/g",
+    "bx/dx/h",
+    "fyy"
+   ],
+   "order": [
+    "fyy",
+    "bx/dx/h",
+    "ex/e",
+    "b/b/g",
+    "c/f"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "y/z/yyy",
+    "z",
+    "yx/yyy",
+    "zyy/y/zyy",
+    "xx"
+   ],
+   "order": [
+    "xx",
+    "y/z/yyy",
+    "yx/yyy",
+    "zyy/y/zyy",
+    "z"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "y/zx",
+    "xx",
+    "xyy",
+    "z/zx/xx",
+    "yx/x"
+   ],
+   "order": [
+    "xx",
+    "y/zx",
+    "xyy",
+    "yx/x",
+    "z/zx/xx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xx/zyy/z",
+    "xyy/yx",
+    "zyy/yx",
+    "yx/z/y",
+    "yyy",
+    "xx/y/x",
+    "z/yx/xx"
+   ],
+   "order": [
+    "xx/y/x",
+    "xx/zyy/z",
+    "xyy/yx",
+    "yx/z/y",
+    "zyy/yx",
+    "yyy",
+    "z/yx/xx"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "ex/byy/c",
+    "byy",
+    "e/hyy/dyy",
+    "ayy/a",
+    "f/dx"
+   ],
+   "order": [
+    "e/hyy/dyy",
+    "ayy/a",
+    "f/dx",
+    "ex/byy/c",
+    "byy"
+   ]
+  },
+  {
+   "kind": "random",
+   "mode": "patch",
+   "keys": [
+    "xx",
+    "z/xyy",
+    "xyy/zyy",
+    "yx",
+    "x",
+    "zx/yx",
+    "z/yx/yx"
+   ],
+   "order": [
+    "x",
+    "xx",
+    "zx/yx",
+    "xyy/zyy",
+    "yx",
+    "z/yx/yx",
+    "z/xyy"
+   ]
+  }
+ ],
+ "flatIntegers": [
+  {
+   "mode": "patch",
+   "keys": [
+    "10",
+    "9",
+    "100",
+    "b",
+    "-1",
+    "7"
+   ],
+   "order": [
+    "100",
+    "9",
+    "10",
+    "b",
+    "7",
+    "-1"
+   ]
+  },
+  {
+   "mode": "merge",
+   "keys": [
+    "10",
+    "9",
+    "100",
+    "b",
+    "-1",
+    "7"
+   ],
+   "order": [
+    "100",
+    "9",
+    "10",
+    "b",
+    "7",
+    "-1"
+   ]
+  },
+  {
+   "mode": "patch",
+   "keys": [
+    "3",
+    "1",
+    "2"
+   ],
+   "order": [
+    "3",
+    "1",
+    "2"
+   ]
+  },
+  {
+   "mode": "merge",
+   "keys": [
+    "3",
+    "1",
+    "2"
+   ],
+   "order": [
+    "3",
+    "1",
+    "2"
+   ]
+  },
+  {
+   "mode": "patch",
+   "keys": [
+    "10",
+    "9",
+    "a",
+    "b"
+   ],
+   "order": [
+    "10",
+    "9",
+    "a",
+    "b"
+   ]
+  },
+  {
+   "mode": "merge",
+   "keys": [
+    "10",
+    "9",
+    "a",
+    "b"
+   ],
+   "order": [
+    "10",
+    "9",
+    "a",
+    "b"
+   ]
+  },
+  {
+   "mode": "patch",
+   "keys": [
+    "5",
+    "4",
+    "3",
+    "2",
+    "1",
+    "0"
+   ],
+   "order": [
+    "4",
+    "5",
+    "1",
+    "0",
+    "2",
+    "3"
+   ]
+  },
+  {
+   "mode": "merge",
+   "keys": [
+    "5",
+    "4",
+    "3",
+    "2",
+    "1",
+    "0"
+   ],
+   "order": [
+    "4",
+    "5",
+    "1",
+    "0",
+    "2",
+    "3"
+   ]
+  }
+ ],
+ "splits": [
+  {
+   "name": "five children, e2 cancelled",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "e2": "v",
+      "e3": "v",
+      "e4": "v",
+      "e5": "v",
+      "e6": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/e2"
+    ]
+   ],
+   "order": [
+    "d:s/e3",
+    "d:s/e4",
+    "d:s/e5",
+    "d:s/e6"
+   ]
+  },
+  {
+   "name": "numeric children, one cancelled, four left",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "9": "v",
+      "10": "v",
+      "a": "v",
+      "b": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ]
+   ],
+   "order": [
+    "d:s/9",
+    "d:s/10",
+    "d:s/a"
+   ]
+  },
+  {
+   "name": "numeric, five given, four left",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "9": "v",
+      "10": "v",
+      "100": "v",
+      "b": "v",
+      "-1": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/b"
+    ]
+   ],
+   "order": [
+    "d:s/-1",
+    "d:s/9",
+    "d:s/10",
+    "d:s/100"
+   ]
+  },
+  {
+   "name": "six children, f cancelled, five left",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "a": "v",
+      "b": "v",
+      "c": "v",
+      "d": "v",
+      "e": "v",
+      "f": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/f"
+    ]
+   ],
+   "order": [
+    "d:s/e",
+    "d:s/a",
+    "d:s/b",
+    "d:s/c",
+    "d:s/d"
+   ]
+  },
+  {
+   "name": "five children, e2 cancelled and registered again",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "e2": "v",
+      "e3": "v",
+      "e4": "v",
+      "e5": "v",
+      "e6": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/e2"
+    ],
+    [
+     "o",
+     "s/e2",
+     "v"
+    ]
+   ],
+   "order": [
+    "d:s/e6",
+    "d:s/e5",
+    "d:s/e4",
+    "d:s/e3",
+    "d:s/e2"
+   ]
+  },
+  {
+   "name": "numeric four children, middle cancelled",
+   "ops": [
+    [
+     "o",
+     "s",
+     {
+      "1": "v",
+      "2": "v",
+      "3": "v",
+      "x": "v"
+     }
+    ],
+    [
+     "oc",
+     "s/1"
+    ]
+   ],
+   "order": [
+    "d:s/2",
+    "d:s/3",
+    "d:s/x"
+   ]
+  },
+  {
+   "name": "recursive: c31 holds a and d, cancel below a",
+   "ops": [
+    [
+     "o",
+     "c",
+     {
+      "a": {
+       "b": 1,
+       "c": 2,
+       "e": 3
+      },
+      "d": 3,
+      "f": 4,
+      "g": 5,
+      "h": 6
+     }
+    ],
+    [
+     "oc",
+     "c/a/b"
+    ]
+   ],
+   "order": [
+    "d:c/f",
+    "d:c/a/c",
+    "d:c/a/e",
+    "d:c/g",
+    "d:c/h",
+    "d:c/d"
+   ]
+  },
+  {
+   "name": "recursive: nested object of five, cancel below it",
+   "ops": [
+    [
+     "o",
+     "c",
+     {
+      "a": {
+       "p1": "v",
+       "p2": "v",
+       "p3": "v",
+       "p4": "v",
+       "p5": "v"
+      },
+      "z": 1
+     }
+    ],
+    [
+     "oc",
+     "c/a/p1"
+    ]
+   ],
+   "order": [
+    "d:c/a/p2",
+    "d:c/a/p3",
+    "d:c/a/p4",
+    "d:c/a/p5",
+    "d:c/z"
+   ]
+  }
+ ],
+ "covered": [
+  {
+   "mode": "merge",
+   "keys": [
+    "q10",
+    "q9",
+    "qb"
+   ],
+   "listens": [
+    "",
+    "q10",
+    "q9",
+    "qb"
+   ],
+   "order": [
+    "m:{q10,q9,qb}",
+    "d:q10",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "mode": "merge",
+   "keys": [
+    "10",
+    "9",
+    "b"
+   ],
+   "listens": [
+    "",
+    "10",
+    "9",
+    "b"
+   ],
+   "order": [
+    "m:{10,9,b}",
+    "d:10",
+    "d:9",
+    "d:b"
+   ]
+  }
+ ]
+}

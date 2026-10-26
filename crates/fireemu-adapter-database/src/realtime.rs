@@ -798,7 +798,11 @@ impl Session {
             relative
                 .into_iter()
                 .zip(effective)
-                .map(|((_, path), effective)| Patched { path, effective })
+                .map(|((key, path), effective)| Patched {
+                    path,
+                    key,
+                    effective,
+                })
                 .collect(),
         );
         let change = Change::Patch {

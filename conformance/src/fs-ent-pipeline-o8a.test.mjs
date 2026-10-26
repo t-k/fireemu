@@ -24,6 +24,7 @@ import {
   SUMMARY_ONLY,
   base64Variants,
   documentOfSize,
+  largeWrites,
   literalChain,
   functionChain,
 } from "./fs-ent-pipeline/o8a-corpus.mjs";
@@ -275,6 +276,31 @@ test("property: a document of a given size is that long and stays one document",
   );
 });
 
+test("property: large writes split any count into commits of at most the asked size, once each", () => {
+  forAll(
+    100,
+    (random) => ({ count: between(random, 1, 60), perCommit: between(random, 1, 12) }),
+    ({ count, perCommit }) => {
+      const commits = largeWrites("lw", count, 10, perCommit);
+      assert.equal(commits.length, Math.ceil(count / perCommit));
+      const names = commits.flatMap((c) => c.body.writes.map((w) => w.update.name));
+      assert.equal(names.length, count);
+      assert.equal(new Set(names).size, count);
+      for (const commit of commits) {
+        assert.ok(commit.body.writes.length >= 1 && commit.body.writes.length <= perCommit);
+        assert.equal(commit.rpc, "commit");
+      }
+      assert.deepEqual(
+        commits.map((c) => c.id),
+        commits.map((_, i) => `seed-lw-${i + 1}`),
+      );
+      // Documents are numbered from 01 across the commits, in order.
+      assert.equal(names[0], "{docs}/lw/d01");
+      assert.equal(names.at(-1), `{docs}/lw/d${String(count).padStart(2, "0")}`);
+    },
+  );
+});
+
 test("the base64 variants send the bytes as written and name the field as asked", () => {
   const variants = base64Variants();
   const byLabel = Object.fromEntries(variants.map((v) => [v.label, v]));
@@ -343,6 +369,15 @@ test("the framing programs cross every size the follow-up asks about", () => {
       .flatMap((s) => JSON.parse(s.rawBody ?? JSON.stringify(s.body)).writes)
       .filter((w) => relative(w.update.name).startsWith(`${collection}/`))
       .map((w) => w.update.fields.pad.stringValue.length);
+  const ids = (collection) =>
+    small.seed.filter(([n]) => n.startsWith(`${collection}/`)).map(([n]) => n.split("/")[1]);
+  assert.deepEqual(ids("f5"), ["d0001", "d0002", "d0003", "d0004", "d0005"]);
+  assert.equal(ids("f5000").at(-1), "d5000");
+  assert.equal(new Set(ids("f500")).size, 500);
+  const largeNames = steps(large, "commit")
+    .flatMap((s) => s.body.writes)
+    .map((w) => relative(w.update.name));
+  assert.equal(new Set(largeNames).size, 45);
   assert.deepEqual(docs("l12"), Array(12).fill(400_000));
   assert.deepEqual(docs("l3"), Array(3).fill(950_000));
   assert.deepEqual(docs("m30"), Array(30).fill(100_000));
@@ -383,6 +418,13 @@ test("a framing summary lists, per response unit, how many results it holds", ()
     [3, 2, 0],
   );
   assert.ok(rest.units.every((u) => Number.isInteger(u.jsonBytes) && u.jsonBytes > 0));
+  // A body that is one object, not an array, is one unit.
+  const single = summarizeStep({ status: 200, body: unit(2) });
+  assert.deepEqual(
+    single.units.map((u) => u.results),
+    [2],
+  );
+  assert.equal(single.results, 2);
   const grpc = summarizeStep({ transport: "grpc", code: 0, messages: [unit(4), unit(1)] });
   assert.equal(grpc.transport, "grpc");
   assert.equal(grpc.code, 0);

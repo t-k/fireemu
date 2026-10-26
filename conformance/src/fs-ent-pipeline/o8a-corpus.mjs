@@ -121,7 +121,7 @@ const framingSmall = {
 };
 
 /** Documents that are too big for one commit together are written in commits of a few. */
-const largeWrites = (name, count, length, perCommit) =>
+export const largeWrites = (name, count, length, perCommit) =>
   Array.from({ length: Math.ceil(count / perCommit) }, (_, part) =>
     seedBatch(
       `seed-${name}-${part + 1}`,

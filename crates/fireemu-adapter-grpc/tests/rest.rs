@@ -7094,6 +7094,7 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
 /// stages `UNIMPLEMENTED`, malformed pipelines `INVALID_ARGUMENT`, a run-time refusal under
 /// strict UNIMPLEMENTED; a refusal answers no partial results over REST.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_execute_pipeline_refusals_keep_their_codes() {
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
@@ -7109,6 +7110,25 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                 pipeline_body(
                     &json!([collection, {"name": "explode", "args": [{"stringValue": "x"}]}]),
                 ),
+                // The official emulator refuses a name that is no stage in production's words
+                // (`Unsupported stage: explode`); strict answers only the name production was
+                // given (O-8A `precedence-main#unknown-stage`).
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
+            ),
+            (
+                "the unknown stage name production was given",
+                pipeline_body(&json!([collection, {"name": "nope_stage", "args": []}])),
+                400,
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "a stage only the official emulator runs",
+                pipeline_body(&json!([collection, {"name": "let", "args": []}])),
                 501,
                 "UNIMPLEMENTED",
             ),
@@ -7137,10 +7157,19 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                     "INVALID_ARGUMENT"
                 },
             ),
-            // fireemu's own text, in no shape production refused.
+            // Production's words for a request that names no pipeline (O-8A `precedence-main`:
+            // `{}`, a null `structuredPipeline`), in both profiles.
+            ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
             (
-                "no pipeline",
-                json!({}),
+                "null pipeline",
+                json!({"structuredPipeline": null}),
+                400,
+                "INVALID_ARGUMENT",
+            ),
+            // The same words for a body that also names a transaction selector were never given.
+            (
+                "no pipeline with a transaction",
+                json!({"autoCommitTransaction": true}),
                 if strict { 501 } else { 400 },
                 if strict {
                     "UNIMPLEMENTED"

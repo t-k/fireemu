@@ -704,8 +704,12 @@ enum Segment<'a> {
     Field(&'a str),
     /// An element of a repeated field (`[3]`).
     Index(usize),
-    /// An entry of a map field (`[key]`).
-    Key(&'a str),
+    /// An entry of a map field, by its position in the object (`[0].value`): production's
+    /// transcoder names the entry's index and then its `value` (FS-ENT-ORACLE O-8A
+    /// `precedence-main`, firestore-production-matrix). Only the first entry is recorded; a
+    /// body with several is a shape strict does not answer, and the position here is the
+    /// object's key order, not the wire order.
+    Entry(usize),
 }
 
 /// Walks a body against its schema, collecting violations as production's transcoder does.
@@ -729,7 +733,7 @@ impl<'a> Checker<'a> {
                 Segment::Field(name) if out.0.is_empty() => out.write_str(name),
                 Segment::Field(name) => write!(out, ".{name}"),
                 Segment::Index(index) => write!(out, "[{index}]"),
-                Segment::Key(key) => write!(out, "[{key}]"),
+                Segment::Entry(index) => write!(out, "[{index}].value"),
             };
             if written.is_err() {
                 break;
@@ -833,13 +837,13 @@ impl<'a> Checker<'a> {
             Kind::ValueMap => {
                 if let Value::Object(entries) = value {
                     let mut checked = Map::new();
-                    for (key, entry) in entries {
+                    for (position, (key, entry)) in entries.iter().enumerate() {
                         if self.full() {
                             break;
                         }
                         let normalized = match entry {
                             Value::Object(object) => {
-                                self.path.push(Segment::Key(key));
+                                self.path.push(Segment::Entry(position));
                                 let normalized = Value::Object(self.message(&VALUE, object));
                                 self.path.pop();
                                 normalized
@@ -1234,10 +1238,10 @@ mod tests {
         bad["structuredQuery"]["where"]["fieldFilter"]["value"]["mapValue"]["fields"][&key]
             ["arrayValue"]["values"][150_000] = json!(1);
         let status = check_body("runQuery", &bad).unwrap_err();
-        // The path holds the 1 MiB key, so it is echoed only in part.
-        assert!(status
-            .message()
-            .ends_with("...' (type.googleapis.com/google.firestore.v1.Value), 1"));
+        // A map entry is named by its position, so the 1 MiB key is not in the path.
+        assert!(status.message().ends_with(
+            "fields[0].value.array_value.values[150000]' (type.googleapis.com/google.firestore.v1.Value), 1"
+        ));
         assert!(status.message().len() < 4 * MAX_ECHO);
     }
 }

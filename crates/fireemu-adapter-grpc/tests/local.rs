@@ -13460,8 +13460,9 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
 }
 
 /// `select` of `__name__` as itself answers the document name next to the other selected
-/// fields under the emulator profile, as the official emulator 1.22.0 does; production has not
-/// answered it alone (O5), so strict refuses the form beside other aliases as unobserved.
+/// fields under the emulator profile, as the official emulator 1.22.0 does; production answered
+/// it alone (O5), beside another alias and with either side quoted (O-8A), so strict refuses
+/// only the unrecorded combinations as unobserved.
 #[tokio::test]
 async fn execute_pipeline_select_of_the_name_as_itself_carries_the_document_name() {
     let (mut client, _, handle) = start_with_edition_and_policy(
@@ -13512,10 +13513,9 @@ async fn execute_pipeline_select_of_the_name_as_itself_carries_the_document_name
     let refused = strict
         .execute_pipeline(pipeline_request(vec![
             pipeline_stage("collection", collection_ref("selname")),
-            pipeline_select_map(vec![
-                ("__name__", pipeline_field("__name__")),
-                ("v", pipeline_field("n")),
-            ]),
+            // Both sides quoted: the one identity select production was never given
+            // (O-8A `names-main` recorded each side quoted alone, and the name beside a field).
+            pipeline_select_map(vec![("`__name__`", pipeline_field("`__name__`"))]),
         ]))
         .await;
     let code = match refused {

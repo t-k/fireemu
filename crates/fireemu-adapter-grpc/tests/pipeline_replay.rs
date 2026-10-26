@@ -28,9 +28,7 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// differ are named in the lists below, each with its reason. `nesting-main` is not listed:
 /// every nesting probe this surface can take matches production.)
 const PENDING_PROGRAMS: &[&str] = &[
-    "fs-ent-pipeline/o8a/names-main",
     "fs-ent-pipeline/o8a/dupquote-main",
-    "fs-ent-pipeline/o8a/precedence-main",
     "fs-ent-pipeline/o8a/base64-main",
 ];
 
@@ -315,6 +313,39 @@ const SCAN_ORDER_ROWS: &[(&str, &str)] = &[
     (
         "fs-ent-pipeline/o7/inputs-collection-group#limit",
         "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+];
+
+/// Rows that only the emulator profile answers differently: strict matches. The profile keeps the
+/// official emulator's text (status 400), as it never refuses more than the official emulator.
+const EMULATOR_ONLY_DIFFERENCES: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/o8a/precedence-main#top-level-unknown",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#stage-unknown-member",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#bad-integer",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#string-number",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#unknown-value-type",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#malformed-and-unknown-stage",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#malformed-and-unknown-function",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
     ),
 ];
 
@@ -932,6 +963,10 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     && STRICT_ONLY_DIFFERENCES
                         .iter()
                         .any(|(known, _)| row == *known))
+                || (!strict
+                    && EMULATOR_ONLY_DIFFERENCES
+                        .iter()
+                        .any(|(known, _)| row == *known))
         };
         let pending = |row: &str| {
             let program = row.split('#').next().unwrap_or(row);
@@ -1007,6 +1042,20 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 }
                 (true, None) => stale.push(json!({"row": known, "reason": reason})),
                 (false, None) => {}
+            }
+        }
+        for (known, reason) in EMULATOR_ONLY_DIFFERENCES {
+            let differs = differing.iter().find(|(row, _, _)| row == known);
+            match (strict, differs) {
+                (false, Some((_, got, _)))
+                    if got["status"] == 400
+                        && got["body"][0]["error"]["message"]
+                            == "Payload isn't valid for request." => {}
+                (_, Some((_, got, _))) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                (false, None) => stale.push(json!({"row": known, "reason": reason})),
+                (true, None) => {}
             }
         }
         for (known, _) in TIE_ORDER_ROWS {

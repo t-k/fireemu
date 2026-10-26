@@ -25,6 +25,7 @@ const EMPTY_ALIAS: &str = "Invalid empty property path string.";
 const DB: &str = "projects/demo-app/databases/(default)";
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn every_recorded_refusal_has_a_shape() {
     let (requests, order) = json_syntax::parse_with_key_order(REQUESTS.as_bytes()).unwrap();
     let production: Value = serde_json::from_str(PRODUCTION).unwrap();
@@ -66,10 +67,26 @@ fn every_recorded_refusal_has_a_shape() {
             if answer["status"] != 400 {
                 continue;
             }
-            // A body sent as written (O-8A malformed bodies) has no shape: it is not a request
-            // the gate matches, only a row the replay compares.
-            if step.get("rawBody").is_some() {
+            // A body sent as written (O-8A malformed bodies) has the shape of its parsed JSON, or
+            // its own text when it is no JSON: only that exact body was refused with that text.
+            if let Some(text) = step.get("rawBody").and_then(Value::as_str) {
                 raw += 1;
+                let element = answer["body"]
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .unwrap_or(&answer["body"]);
+                let message = element["error"]["message"].as_str().unwrap();
+                let shape = match json_syntax::parse_with_key_order(text.as_bytes()) {
+                    Ok((body, order)) => shape_of_json(&body, &order)
+                        .unwrap_or_else(|| panic!("recorded refusal has no shape: {row}")),
+                    Err(_) => raw_shape(text.as_bytes()),
+                };
+                assert!(
+                    table
+                        .get(&shape)
+                        .is_some_and(|texts| texts.contains(&normalized_text(message))),
+                    "recorded shape/text missing: {row}"
+                );
                 continue;
             }
             if id.starts_with("fs-ent-pipeline/o5/") {
@@ -112,7 +129,7 @@ fn every_recorded_refusal_has_a_shape() {
     assert_eq!(excluded_500, 6);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.
-    assert!(texts <= refused && texts > 80, "{texts}");
+    assert!(texts <= refused + raw && texts > 80, "{texts}");
     assert!(table.values().flatten().any(|t| t == EMPTY_ALIAS));
 }
 

@@ -2002,17 +2002,29 @@ const NAME_D: &str = "projects/demo-app/databases/(default)/documents/c/d";
 
 /// `select` of `__name__` as itself: the official emulator 1.22.0 answers the document name in
 /// the result (probed 2026-10-26, alone, quoted either way, beside other aliases, before a
-/// limit) and refuses `__name__` set from any other value. Production answered the alone,
-/// unquoted form with the name only (FS-ENT-ORACLE O5, `appendix#proposed-select-name-field`),
-/// so strict answers that form and refuses the others as unobserved.
+/// limit) and refuses `__name__` set from any other value. Production answered the alone form
+/// with the name only (FS-ENT-ORACLE O5, `appendix#proposed-select-name-field`) and, in O-8A
+/// (`names-main`), the quoted alias, the quoted value, the name beside another alias, a second
+/// alias holding the name, a following `limit` and a following `where`; strict answers those
+/// and refuses the unrecorded combination (both sides quoted) as unobserved.
 #[test]
 fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile() {
-    let quoted = json!({ "mapValue": { "fields": {
+    let quoted_alias = json!({ "mapValue": { "fields": {
+        "`__name__`": field("__name__"),
+    } } });
+    let quoted_value = json!({ "mapValue": { "fields": {
+        "__name__": field("`__name__`"),
+    } } });
+    let both_quoted = json!({ "mapValue": { "fields": {
         "`__name__`": field("`__name__`"),
     } } });
     let beside = map(vec![("__name__", field("__name__")), ("a", field("i"))]);
-    // The strict status: 501 for the unobserved identity select, 200 for the neighbour that
-    // selects the name under another alias (production answered that one).
+    let second = map(vec![
+        ("__name__", field("__name__")),
+        ("nm", field("__name__")),
+    ]);
+    // The strict status: 200 for the recorded forms, 501 for the identity select with both
+    // sides quoted, which production was not given.
     let named = |cases: Vec<(&str, Vec<Value>, Value, u16)>| {
         let (strict, emulator) = (seeded(true), seeded(false));
         for (label, stages, expected, strict_status) in cases {
@@ -2022,6 +2034,9 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             assert!(body[0]["executionTime"].is_string(), "{label}");
             let (status, body) = run(&strict, &stages);
             assert_eq!(status, strict_status, "strict {label}: {body}");
+            if strict_status == 200 {
+                assert_eq!(body[0]["results"], expected, "strict {label}");
+            }
         }
     };
     named(vec![
@@ -2035,8 +2050,20 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             200,
         ),
         (
+            "quoted alias",
+            vec![stage("select", vec![quoted_alias])],
+            json!([{ "name": NAME_D }]),
+            200,
+        ),
+        (
+            "quoted value",
+            vec![stage("select", vec![quoted_value])],
+            json!([{ "name": NAME_D }]),
+            200,
+        ),
+        (
             "quoted alias and value",
-            vec![stage("select", vec![quoted])],
+            vec![stage("select", vec![both_quoted])],
             json!([{ "name": NAME_D }]),
             501,
         ),
@@ -2044,13 +2071,34 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             "beside another alias",
             vec![stage("select", vec![beside.clone()])],
             json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
-            501,
+            200,
+        ),
+        (
+            "a second alias for the name",
+            vec![stage("select", vec![second])],
+            json!([{ "name": NAME_D, "fields": { "nm": { "referenceValue": NAME_D } } }]),
+            200,
         ),
         (
             "before a limit",
             vec![stage("select", vec![beside]), stage("limit", vec![int(1)])],
             json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
-            501,
+            200,
+        ),
+        (
+            "before a where on the name",
+            vec![
+                stage("select", vec![map(vec![("__name__", field("__name__"))])]),
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![field("__name__"), json!({ "referenceValue": NAME_D })],
+                    )],
+                ),
+            ],
+            json!([{ "name": NAME_D }]),
+            200,
         ),
         (
             "another alias holding the name keeps the document out of the name",

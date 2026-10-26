@@ -23,6 +23,9 @@ use crate::decode::Parent;
 /// Option keys a `StructuredPipeline` may carry.
 const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 
+/// Stages the official emulator 1.22.0 knows (probed 2026-10-27) and the registry does not.
+const OFFICIAL_ONLY_STAGES: &[&str] = &["let", "insert", "upsert", "literals"];
+
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
 /// the `fireemu-code` metadata like the gateway's rejections. The stage registry's refusals
 /// (a stage's argument count, argument shape, options, input position) are fireemu's own
@@ -80,8 +83,11 @@ pub fn validate_pipeline(
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &req.pipeline_type
     else {
+        // Production's words for a request that names no pipeline (FS-ENT-ORACLE O-8A
+        // `precedence-main`: an empty body, `{}`, a null `structuredPipeline`). The official
+        // emulator 1.22.0 answers such a request with an `UNKNOWN` fault, so any refusal holds.
         return Err(with_code(
-            Status::invalid_argument("ExecutePipeline requires a structured_pipeline"),
+            Status::invalid_argument("Pipeline cannot be empty."),
             "FS_PIPE_DECODE",
         ));
     };
@@ -162,9 +168,20 @@ pub fn validate_pipeline(
     }
     canonicalize(&specs).map_err(|e| {
         let (status, code) = match &e {
-            PipelineError::UnknownStage(_) => (
+            // A stage the official emulator 1.22.0 runs and fireemu does not stays unsupported.
+            PipelineError::UnknownStage(name) if OFFICIAL_ONLY_STAGES.contains(&name.as_str()) => (
                 Status::unimplemented(e.to_string()),
                 "FS_PIPE_UNSUPPORTED_STAGE",
+            ),
+            // Any other name is no stage of the official emulator, which refuses it in
+            // production's words (FS-ENT-ORACLE O-8A `precedence-main#unknown-stage`; strict
+            // answers the name production was given and `UNIMPLEMENTED` for any other).
+            PipelineError::UnknownStage(name) => (
+                Status::invalid_argument(format!(
+                    "Unsupported stage: {}",
+                    crate::rest::transcode::echo(name)
+                )),
+                "FS_PIPE_INVALID",
             ),
             PipelineError::WriteStage(_) => {
                 (Status::unimplemented(e.to_string()), "FS_PIPE_WRITE_0")
@@ -1943,24 +1960,48 @@ fn decode_select(
     ))
 }
 
-/// Whether a strict select may name the document: it holds no `__name__` selected as itself,
-/// or only that, alone and unquoted. Production answered the alone form with the name only
-/// (FS-ENT-ORACLE O5 `appendix#proposed-select-name-field`); beside other aliases or quoted it is
-/// unobserved. (The emulator profile answers every form as the official emulator does.)
+/// Whether strict has a production answer for this `select` over `__name__`: the name selected
+/// as itself is recorded alone (FS-ENT-ORACLE O5 `appendix#proposed-select-name-field`), with
+/// either side quoted (O-8A `names-main`: a quoted alias, a quoted value) and, unquoted, beside
+/// other aliases of plain field references (O-8A: a field under another alias, the name under a
+/// second alias). Both sides quoted, or a quoted side beside other aliases, was never sent.
+/// (The emulator profile answers every form as the official emulator does.)
 fn name_select_recorded(fields: &std::collections::HashMap<String, pb::Value>) -> bool {
+    fn reference(value: &pb::Value) -> Option<&str> {
+        match &value.value_type {
+            Some(pb::value::ValueType::FieldReferenceValue(field)) => Some(field.as_str()),
+            _ => None,
+        }
+    }
     let names_document =
         |text: &str| parse_alias(text).is_ok_and(|path| path.segments() == ["__name__"]);
-    let selects_itself = fields.iter().any(|(alias, value)| {
-        names_document(alias)
-            && matches!(&value.value_type, Some(pb::value::ValueType::FieldReferenceValue(f))
-                if names_document(f))
-    });
-    !selects_itself
-        || matches!(
-            fields.iter().collect::<Vec<_>>()[..],
-            [(alias, pb::Value { value_type: Some(pb::value::ValueType::FieldReferenceValue(field)) })]
-                if alias == "__name__" && field == "__name__"
-        )
+    let plain = |text: &str| {
+        let mut chars = text.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let itself: Vec<_> = fields
+        .iter()
+        .filter(|(alias, value)| {
+            names_document(alias) && reference(value).is_some_and(names_document)
+        })
+        .collect();
+    let [(alias, value)] = itself[..] else {
+        // None selects the name as itself; several spell the same alias twice.
+        return itself.is_empty();
+    };
+    let field = reference(value).unwrap_or_default();
+    if fields.len() == 1 {
+        return plain(alias) || plain(field);
+    }
+    plain(alias)
+        && plain(field)
+        && fields
+            .iter()
+            .filter(|(other, _)| *other != alias)
+            .all(|(other, value)| plain(other) && reference(value).is_some_and(plain))
 }
 
 /// The wire order of the aliases of the `select` stage at `position`, where the body kept it.
@@ -4146,6 +4187,66 @@ mod tests {
             assert!(responses.iter().all(|r| r.execution_time == Some(time)));
         }
     }
+    mod unknown_stage {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn with_stage(name: &str) -> pb::ExecutePipelineRequest {
+            let stage = |name: &str, args: Vec<pb::Value>| pb::pipeline::Stage {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            };
+            pb::ExecutePipelineRequest {
+                database: "projects/p/databases/(default)".to_owned(),
+                pipeline_type: Some(
+                    pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        pb::StructuredPipeline {
+                            pipeline: Some(pb::Pipeline {
+                                stages: vec![
+                                    stage(
+                                        "collection",
+                                        vec![pb::Value {
+                                            value_type: Some(pb::value::ValueType::ReferenceValue(
+                                                "/items".to_owned(),
+                                            )),
+                                        }],
+                                    ),
+                                    stage(name, Vec::new()),
+                                ],
+                            }),
+                            options: std::collections::HashMap::new(),
+                        },
+                    ),
+                ),
+                ..Default::default()
+            }
+        }
+
+        proptest! {
+            /// A name that is no stage is refused in production's words by both profiles (the
+            /// strict gate then answers only the recorded name); a stage the official emulator
+            /// runs and the registry lacks stays `UNIMPLEMENTED`.
+            #[test]
+            fn a_name_that_is_no_stage_is_refused_in_production_words(name in "[A-Z][A-Z0-9_]{0,12}") {
+                for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                    let refused = validate_pipeline(&with_stage(&name), unrecorded).unwrap_err();
+                    prop_assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+                    prop_assert_eq!(refused.message(), format!("Unsupported stage: {name}"));
+                }
+            }
+        }
+
+        #[test]
+        fn a_stage_only_the_official_emulator_runs_stays_unsupported() {
+            for name in OFFICIAL_ONLY_STAGES {
+                for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                    let refused = validate_pipeline(&with_stage(name), unrecorded).unwrap_err();
+                    assert_eq!(refused.code(), tonic::Code::Unimplemented, "{name}");
+                }
+            }
+        }
+    }
     mod select_name {
         use super::*;
         use proptest::prelude::*;
@@ -4211,18 +4312,31 @@ mod tests {
             }
         }
 
+        /// Production answered the identity alone, with either side quoted and beside plain
+        /// aliases (FS-ENT-ORACLE O5, O-8A `names-main`); strict refuses the unrecorded
+        /// combinations as unobserved.
         #[test]
-        fn strict_answers_the_identity_alone_as_production_did_and_refuses_the_rest() {
-            let (aliases, keeps_name) = decode_select(
-                &select(&[("__name__", "__name__")]),
-                Unrecorded::Refuse,
-                None,
-            )
-            .unwrap();
-            assert!(aliases.is_empty() && keeps_name);
+        fn strict_answers_the_recorded_identity_selects_and_refuses_the_rest() {
             for entries in [
-                vec![("__name__", "__name__"), ("a", "n")],
+                vec![("__name__", "__name__")],
                 vec![("`__name__`", "__name__")],
+                vec![("__name__", "`__name__`")],
+                vec![("__name__", "__name__"), ("a", "n")],
+                vec![("__name__", "__name__"), ("nm", "__name__")],
+            ] {
+                let (_, keeps_name) =
+                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap();
+                assert!(keeps_name, "{entries:?}");
+            }
+            for entries in [
+                vec![("`__name__`", "`__name__`")],
+                vec![("`__name__`", "__name__"), ("a", "n")],
+                vec![("__name__", "`__name__`"), ("a", "n")],
+                vec![("__name__", "__name__"), ("`a`", "n")],
+                vec![("__name__", "__name__"), ("a", "`n`")],
+                vec![("__name__", "__name__"), ("a", "n.m")],
+                vec![("__name__", "__name__"), ("a.b", "n")],
+                vec![("__name__", "__name__"), ("__name__.x", "n")],
             ] {
                 let refused =
                     decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap_err();

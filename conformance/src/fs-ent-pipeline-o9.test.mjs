@@ -44,11 +44,10 @@ const numberOf = (fieldsOfDoc) => Number(fieldsOfDoc.n.integerValue);
 
 test("O-9 programs follow the O-8D programs in PROGRAMS, under their own prefix, unique and valid", () => {
   assert.equal(O9_PROGRAMS.length, 6);
-  assert.deepEqual(PROGRAMS.slice(-O9_PROGRAMS.length), O9_PROGRAMS);
-  assert.deepEqual(
-    PROGRAMS.slice(-O9_PROGRAMS.length - O8D_PROGRAMS.length, -O9_PROGRAMS.length),
-    O8D_PROGRAMS,
-  );
+  // The O-9b program follows them (fs-ent-pipeline-o9b.test.mjs).
+  const at = PROGRAMS.findIndex((p) => p.id === O9_PROGRAMS[0].id);
+  assert.deepEqual(PROGRAMS.slice(at, at + O9_PROGRAMS.length), O9_PROGRAMS);
+  assert.deepEqual(PROGRAMS.slice(at - O8D_PROGRAMS.length, at), O8D_PROGRAMS);
   assert.equal(new Set(O9_PROGRAMS.map((p) => p.id)).size, O9_PROGRAMS.length);
   for (const program of O9_PROGRAMS) assert.ok(program.id.startsWith(O9_PREFIX), program.id);
   assert.deepEqual(

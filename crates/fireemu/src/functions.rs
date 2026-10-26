@@ -4242,7 +4242,10 @@ fn check_manifest_agrees_on_callables(
                 return Err(format!(
                     "the configured functions manifest declares {:?} as a non-HTTP function, but \
                      the codebase declares it callable; App Check for callables cannot trust a \
-                     manifest that disagrees with the code",
+                     manifest that disagrees with the code. List it as an http function with \
+                     callable: true and the App Check options the code declares, remove it from \
+                     the manifest, or export it with onTaskDispatched if it is meant to be a task \
+                     queue",
                     f.name
                 ));
             }
@@ -13974,6 +13977,9 @@ module.exports = { tick, observer };
                 .expect_err(&format!("{label} may not carry a callable"));
             assert!(e.contains("guarded"), "{label}: {e}");
             assert!(e.contains("callable"), "{label}: {e}");
+            assert!(e.contains("callable: true"), "{label}: {e}");
+            assert!(e.contains("remove it from the manifest"), "{label}: {e}");
+            assert!(e.contains("onTaskDispatched"), "{label}: {e}");
         }
         // A real task queue, and a queue name the code does not export, still load.
         let honest = parse_manifest(&json!({

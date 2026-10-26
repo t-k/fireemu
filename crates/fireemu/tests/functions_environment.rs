@@ -1810,7 +1810,7 @@ exports.guarded = onCall(() => ({ ok: true }));
             (
                 "a task queue",
                 r#"{"type": "tasks"}"#,
-                Some("declares \"guarded\" as a non-HTTP function"),
+                Some("declares \"guarded\" as a non-HTTP function, but the codebase declares it callable"),
             ),
             // The Blocking Auth reconciliation refuses this one first, with its own message.
             (

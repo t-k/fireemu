@@ -1304,6 +1304,33 @@ fn a_token_between_path_separators_is_found_whatever_surrounds_it() {
 }
 
 #[test]
+fn a_piece_between_separators_is_a_run_of_its_own_and_has_to_be_as_long_as_one() {
+    let number = 407_182_936_504;
+    let lower = "abcdefghijklmnopqrstuvwxyzabcd";
+    let exact = encode(&message_of(number, 9), true, false);
+    let short = encode(&message_of(number, 8), true, false);
+    let token = encode(&message_of(number, 12), true, false);
+    assert_eq!((exact.len(), short.len()), (MIN_RUN, MIN_RUN - 1));
+    // Exactly the minimum, cut at `/` and at `-`: found. One character less: not found. Cut at `+` or `_`
+    // (which are not path separators): not found, the suffix is longer than the glue tolerance.
+    for (text, found) in [
+        (format!("{exact}/{lower}"), true),
+        (format!("{exact}-{lower}"), true),
+        (format!("{short}/{lower}"), false),
+        (format!("{short}-{lower}"), false),
+        (format!("{token}+{lower}"), false),
+        (format!("{token}_{lower}"), false),
+        // A short token reaches the minimum run with up to three glued characters, and is found then.
+        (format!("{short}_ab"), true),
+        (format!("{short}+ab"), true),
+    ] {
+        assert!(!is_digest_or_identifier(text.as_bytes()), "{text}");
+        let expected: Vec<u64> = found.then_some(number).into_iter().collect();
+        assert_eq!(project_numbers_in(text.as_bytes()), expected, "{text}");
+    }
+}
+
+#[test]
 fn a_token_shorter_than_the_minimum_run_is_a_known_gap_left_to_the_pre_push_scan() {
     // Measured on the repository when this was written: a minimum of 12, 16 or 20 characters refused 30 or
     // more files at each (names, generated code and specs parse as messages by chance), so it stays at 24.

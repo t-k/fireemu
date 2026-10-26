@@ -763,11 +763,17 @@ describe("pagination, counts and budget (T5)", () => {
     }
   });
 
-  it("a missing bucket is empty only on the first page", async () => {
+  it("a missing bucket is empty only on the first page, and only when the 404 can be read", async () => {
     const world = createFakeGcs({ bucketExists: false });
     const { uploads } = open(world);
-    const deploy = await uploads.beginDeploy("program-1:http");
-    assert.ok(deploy);
+    assert.ok(await uploads.beginDeploy("program-1:http"));
+    const unreadable = createFakeGcs();
+    unreadable.override(
+      { method: "GET", url: "/o?" },
+      { status: 404, bodyReadable: false, bytes: 2 },
+    );
+    const second = open(unreadable, { ledgerPath: join(dir, "unreadable-404.jsonl") });
+    await assert.rejects(() => second.uploads.beginDeploy("program-1:http"), /baseline/);
   });
 
   it("an answer that is not an object is a transport failure, not a crash", async () => {

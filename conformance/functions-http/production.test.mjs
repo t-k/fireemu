@@ -1320,8 +1320,10 @@ async function observeWorld({ deployScript, deleteStatus }) {
   await writeFile(scriptPath, deployScript);
   await import("node:fs/promises").then(({ mkdir }) => mkdir(join(base.dir, "run")));
   const calls = [];
+  const argv = [];
   const run = async (args, adc, budget, kind, runDir, track) => {
     calls.push(kind);
+    argv.push(args);
     if (kind === "cliDelete") {
       budget.take("cliDelete");
       deployed.present = false;
@@ -1355,7 +1357,7 @@ async function observeWorld({ deployScript, deleteStatus }) {
   } catch (caught) {
     error = caught;
   }
-  return { ...base, uploads, error, recordings, program, calls };
+  return { ...base, uploads, error, recordings, program, calls, argv };
 }
 
 test("a whole program: deploy, observe, clean up, and the source upload is deleted by generation", async () => {
@@ -1374,6 +1376,24 @@ test("a whole program: deploy, observe, clean up, and the source upload is delet
     const used = world.budget.snapshot();
     assert.ok(used.upload >= 5 && used.upload <= 244, `upload requests ${used.upload}`);
     assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
+    assert.deepEqual(world.argv[0], [
+      "deploy",
+      "--only",
+      "functions:functions-http-oracle:fireemuHttpProbe",
+    ]);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a whole program whose CLI output shows no receipt still takes it from the function record", async () => {
+  const world = await observeWorld({
+    deployScript: 'console.log("i  functions: deploying");\nprocess.exit(0);',
+  });
+  try {
+    assert.equal(world.error, undefined);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+    assert.equal(world.uploads.report().closureReady, true);
   } finally {
     await rm(world.dir, { recursive: true, force: true });
   }

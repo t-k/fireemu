@@ -439,3 +439,15 @@ test('the command line refuses a narrowed production run before the packet is ev
   const bad = run('bogus', '--out', path.join(dir, 'c'));
   assert.equal(bad.status, 2); assert.match(bad.stderr, /usage/);
 });
+
+test('a hook failure in the last profile leaves the run incomplete even though all eight profiles returned', async () => {
+  const w = fakeWorld([{ method: 'PUT', path: /rules/, kind: '4xx', skip: 8 }]);
+  const swallowing = async (cfg, hooks) => {
+    const journal = [];
+    try { if (cfg.scenario === 'cv10') { await hooks.rulesOpen(); await hooks.rulesDeny(); } } catch { journal.push({ scenario: cfg.scenario, step: 'runner', type: 'error', code: 'hook' }); }
+    return { journal, counts: {} };
+  };
+  const r = await prod(w, { browser: swallowing });
+  assert.equal(r.profiles.length, 8); assert.ok(r.errors.some((e) => /rules-deny-cv10-r2-lp-2-put: refused/.test(e)), r.errors.join());
+  assert.equal(r.observationComplete, false); assert.ok(w.baseline());
+});

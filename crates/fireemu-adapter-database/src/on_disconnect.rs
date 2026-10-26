@@ -6,7 +6,9 @@
 //! value, and cancelling below a registered value splits it into its children first (below a
 //! leaf it changes nothing). When the connection ends, every registered value becomes one
 //! entry of a single update at the root, so the update is applied whole or not at all. Values
-//! keep their server-value placeholders until then.
+//! keep their server-value placeholders until then. The entries come out in the order of the
+//! official emulator's maps (see [`crate::scala_map`]): a node's children in the order they
+//! were registered up to four of them, by key hash from the fifth on.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +20,57 @@ pub(crate) struct Pending {
     /// The value registered at this path, which covers everything below it.
     value: Option<Json>,
     /// The paths below, when no value covers them.
-    children: BTreeMap<String, Pending>,
+    children: Children,
+}
+
+/// The children of a node, in registration order, with what decides how they are listed.
+#[derive(Debug, Default)]
+struct Children {
+    items: Vec<(String, Pending)>,
+    /// Whether the map held five children at some time: it then stays a hash map.
+    hashed: bool,
+}
+
+impl Children {
+    fn get_mut(&mut self, key: &str) -> Option<&mut Pending> {
+        self.items
+            .iter_mut()
+            .find(|(name, _)| name == key)
+            .map(|(_, child)| child)
+    }
+
+    /// The child `key`, added after the others when it is new.
+    fn child(&mut self, key: &str) -> &mut Pending {
+        let at = if let Some(at) = self.items.iter().position(|(name, _)| name == key) {
+            at
+        } else {
+            self.items.push((key.to_owned(), Pending::default()));
+            self.hashed |= self.items.len() >= 5;
+            self.items.len() - 1
+        };
+        &mut self.items[at].1
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.items.retain(|(name, _)| name != key);
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
+        self.hashed = false;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// The children in the order the official emulator lists them.
+    fn in_order(&self) -> impl Iterator<Item = &(String, Pending)> {
+        let names: Vec<&str> = self.items.iter().map(|(name, _)| name.as_str()).collect();
+        crate::scala_map::scala_order(&names, self.hashed)
+            .into_iter()
+            .map(|at| &self.items[at])
+    }
 }
 
 impl Pending {
@@ -30,10 +82,7 @@ impl Pending {
         } else if let Some(value) = self.value.take() {
             self.value = Some(update_child(value, keys, data));
         } else {
-            self.children
-                .entry(keys[0].clone())
-                .or_default()
-                .remember(&keys[1..], data);
+            self.children.child(&keys[0]).remember(&keys[1..], data);
         }
     }
 
@@ -62,7 +111,7 @@ impl Pending {
         self.children.is_empty()
     }
 
-    /// Every registered value with its path, in key order.
+    /// Every registered value with its path, in the order the entries fire.
     pub(crate) fn entries(&self) -> Vec<(Vec<String>, Json)> {
         let mut entries = Vec::new();
         self.collect(&mut Vec::new(), &mut entries);
@@ -74,7 +123,7 @@ impl Pending {
             entries.push((prefix.clone(), value.clone()));
             return;
         }
-        for (key, child) in &self.children {
+        for (key, child) in self.children.in_order() {
             prefix.push(key.clone());
             child.collect(prefix, entries);
             prefix.pop();
@@ -328,5 +377,79 @@ mod tests {
         assert_eq!(entries(&pending), vec![("a".to_owned(), "null".to_owned())]);
         assert!(pending.forget(&keys("a/b")));
         assert!(pending.entries().is_empty());
+    }
+
+    /// Replays registrations (`o` register, `c` cancel) and returns the paths in fire order.
+    fn fired(ops: &[(String, String)]) -> Vec<String> {
+        let mut pending = Pending::default();
+        for (op, path) in ops {
+            if op == "o" {
+                pending.remember(&keys(path), json("1"));
+            } else {
+                pending.forget(&keys(path));
+            }
+        }
+        pending
+            .entries()
+            .into_iter()
+            .map(|(k, _)| k.join("/"))
+            .collect()
+    }
+
+    #[test]
+    fn the_fire_order_is_the_recorded_one_for_nested_registrations() {
+        let fixture = crate::scala_map::tests::fixture();
+        let cases = fixture["nested"].as_array().unwrap();
+        assert!(cases.len() >= 40);
+        for case in cases {
+            let ops: Vec<(String, String)> = crate::scala_map::tests::strings(&case["registered"])
+                .into_iter()
+                .map(|path| ("o".to_owned(), path))
+                .collect();
+            assert_eq!(
+                fired(&ops),
+                crate::scala_map::tests::strings(&case["order"]),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_five_registered_e2_to_marker_fire_e6_e5_marker_e4_e3_e2() {
+        let fixture = crate::scala_map::tests::fixture();
+        let case = &fixture["production5"];
+        let ops: Vec<(String, String)> = crate::scala_map::tests::strings(&case["registered"])
+            .into_iter()
+            .map(|path| ("o".to_owned(), path))
+            .collect();
+        assert_eq!(
+            fired(&ops),
+            crate::scala_map::tests::strings(&case["order"])
+        );
+    }
+
+    #[test]
+    fn registering_cancelling_and_registering_again_follow_the_recorded_probes() {
+        let fixture = crate::scala_map::tests::fixture();
+        let probes = fixture["probes"].as_array().unwrap();
+        assert!(probes.len() >= 6);
+        for probe in probes {
+            let ops: Vec<(String, String)> = probe["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|op| {
+                    (
+                        op[0].as_str().unwrap().to_owned(),
+                        op[1].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                fired(&ops),
+                crate::scala_map::tests::strings(&probe["order"]),
+                "{probe}"
+            );
+        }
     }
 }

@@ -188,9 +188,9 @@ const ASCII_DIGITS: std::ops::RangeInclusive<usize> = 10..=13;
 /// Ten digits take 14 base64 characters.
 const MIN_ASCII_RUN: usize = 14;
 /// Fixtures hold recent instants: epoch seconds (10 digits) and milliseconds (13 digits) from 2020 up to 2036
-/// are not project numbers (a JWT `iat`, the time in an operation name). Every sandbox number the hook lists
-/// is outside both windows; those that are not 12 digits long would otherwise be exempted, so the exact
-/// numbers stay with `scan-encoded-numbers`.
+/// are not project numbers (a JWT `iat`, the time in an operation name). Every sandbox number that is 10 or 13
+/// digits long is outside both windows (checked against the private list when the windows were chosen); the
+/// pre-push scan stays the exact check for any that a future window change would let through.
 const SECONDS_WINDOW: std::ops::Range<u64> = 1_600_000_000..2_100_000_000;
 const MILLIS_WINDOW: std::ops::Range<u64> = 1_600_000_000_000..2_100_000_000_000;
 
@@ -212,7 +212,8 @@ fn is_instant(digits: &[u8]) -> bool {
 /// events project number this way): a whole run of 10 to 13 digits, with no letter next to it (a hex
 /// id that starts with digits and an X.509 `UTCTime` such as `261015000000Z` are not numbers), that is not an
 /// instant, and does not start with a zero. The mask is returned as the mask. A run is decoded from each of
-/// its first four characters, so that every byte alignment and a word glued to the front of the token (`pageToken/<token>`) is covered.
+/// its first four characters, so that every byte alignment and a word glued to the front of the token
+/// (`pageToken/<token>`) is covered.
 fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
     let mut numbers = Vec::new();
     for run in base64_runs(text, MIN_ASCII_RUN) {

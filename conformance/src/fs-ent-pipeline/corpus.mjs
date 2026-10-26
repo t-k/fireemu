@@ -36,6 +36,7 @@ import {
 } from "./builders.mjs";
 import { O6_PROGRAMS } from "./o6-corpus.mjs";
 import { O7_PROGRAMS } from "./o7-corpus.mjs";
+import { O8A_PROGRAMS } from "./o8a-corpus.mjs";
 
 export { fld, fn, seedCommit };
 
@@ -1854,4 +1855,7 @@ export const PROGRAMS = [
   // O-7 (aggregate, distinct, add_fields, remove_fields, the collection_group and documents
   // inputs): see o7-corpus.mjs.
   ...O7_PROGRAMS,
+  // O-8A (large-answer framing, select name forms, error precedence, nesting, base64): see
+  // o8a-corpus.mjs.
+  ...O8A_PROGRAMS,
 ];

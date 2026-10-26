@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { ADC_ARGS, API_SCOPES, EMAIL_SCOPE, TOKENINFO_URL, adcPreflight, adcScopeVerdict } from './adc-preflight.mjs';
+import { ADC_ARGS, API_SCOPES, EMAIL_SCOPE, TOKENINFO_URL, adcPreflight, adcScopeVerdict, cli } from './adc-preflight.mjs';
 
 const G = 'https://www.googleapis.com/auth/';
 const EMAIL = 'owner@example.com';
@@ -106,4 +106,18 @@ test('command line: needs --gcloud, and refuses a token of an unexpected shape b
   writeFileSync(fake, '#!/bin/sh\necho short\n'); chmodSync(fake, 0o755);
   const short = run('--gcloud', fake);
   assert.equal(short.status, 2); assert.match(short.stderr, /unexpected shape/); assert.equal(short.stdout, '');
+});
+
+test('command line: exit 0 for an accepted token, 4 for a refused or unverified one, and only the verdict is printed', async () => {
+  const run = async (f) => { const out = [], err = []; const code = await cli(['--gcloud', '/x/gcloud'], { fetchImpl: f, mint: () => TOK, out: (x) => out.push(x), err: (x) => err.push(x) }); return { code, out, err }; };
+  const ok = await run(answer(200, doc([`${G}userinfo.email`, `${G}cloud-platform`])));
+  assert.deepEqual([ok.code, ok.out, ok.err], [0, ['{"ok":true,"missing":[]}'], []]);
+  const bad = await run(answer(200, { scope: `${G}androidpublisher ${G}cloud-platform` }));
+  assert.equal(bad.code, 4); assert.deepEqual(JSON.parse(bad.out[0]).missing, [`${G}userinfo.email`, 'email']);
+  assert.ok(!bad.out.join().includes(TOK));
+  const down = await run(async () => { throw new Error('network'); });
+  assert.equal(down.code, 4); assert.equal(JSON.parse(down.out[0]).reason, 'adc-scopes-unverified');
+  assert.equal(await cli([], { err: () => {} }), 2);
+  assert.equal(await cli(['--gcloud'], { err: () => {} }), 2);
+  assert.equal(await cli(['--gcloud', 'g'], { mint: () => 'short', err: () => {} }), 2);
 });

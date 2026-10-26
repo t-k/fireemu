@@ -44,10 +44,17 @@ export async function adcPreflight(fetchImpl, token) {
 /** The token from gcloud ADC; its scopes are those of the last `application-default login`. */
 export const mintToken = (gcloud) => execFileSync(gcloud, ADC_ARGS, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
 
+/** The command line; returns the exit code (0 ok, 4 stopped, 2 usage or an unusable token). Injectable for tests. */
+export async function cli(argv, { fetchImpl = fetch, mint = mintToken, out = console.log, err = console.error } = {}) {
+  const i = argv.indexOf('--gcloud');
+  if (i < 0 || !argv[i + 1]) { err('usage: adc-preflight.mjs --gcloud <path>'); return 2; }
+  const token = mint(argv[i + 1]);
+  if (!/^[\x21-\x7e]{20,4096}$/.test(token)) { err('ADC token has an unexpected shape'); return 2; }
+  const verdict = await adcPreflight(fetchImpl, token);
+  out(JSON.stringify(verdict));
+  return verdict.ok ? 0 : 4;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const i = process.argv.indexOf('--gcloud');
-  if (i < 0 || !process.argv[i + 1]) { console.error('usage: adc-preflight.mjs --gcloud <path>'); process.exit(2); }
-  const token = mintToken(process.argv[i + 1]);
-  if (!/^[\x21-\x7e]{20,4096}$/.test(token)) { console.error('ADC token has an unexpected shape'); process.exit(2); }
-  adcPreflight(fetch, token).then((v) => { console.log(JSON.stringify(v)); process.exitCode = v.ok ? 0 : 4; }, () => { console.error('adc-preflight failed'); process.exitCode = 2; });
+  cli(process.argv.slice(2)).then((code) => { process.exitCode = code; }, () => { console.error('adc-preflight failed'); process.exitCode = 2; });
 }

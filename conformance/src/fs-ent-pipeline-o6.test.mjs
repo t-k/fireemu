@@ -21,71 +21,32 @@ import {
   withinKindsProgram,
 } from "./fs-ent-pipeline/o6-corpus.mjs";
 import {
-  SANDBOX_PROJECT,
   buildGrpcRequest,
   buildRestRequest,
-  createContext,
   databaseName,
   guardGrpcRequest,
   guardRestRequest,
   validateCorpus,
 } from "./fs-ent-pipeline/harness.mjs";
 import { runCorpus } from "./fs-ent-pipeline/session.mjs";
+import {
+  between,
+  fakeFirestore,
+  forAll,
+  parentOf,
+  pick,
+  production,
+  relative,
+  stagesOf,
+  steps,
+  writtenCollections,
+} from "./fs-ent-pipeline/test-support.mjs";
 import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 import { ceilings, estimatedUsd, programDigest, selectPrograms } from "./fs-query-index/run.mjs";
 
 const LANE = "fs-ent-pipeline";
-const steps = (program, rpc = "executePipeline") => program.steps.filter((s) => s.rpc === rpc);
+const literalInt = (value) => Number(value.integerValue);
 const areaSteps = (area) => O6_AREAS[area].flatMap((program) => steps(program));
-
-/** A small seeded generator, so a failing property reproduces from its seed. */
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-const pick = (random, items) => items[Math.floor(random() * items.length)];
-const between = (random, low, high) => low + Math.floor(random() * (high - low + 1));
-
-/** Runs `check` on `runs` generated inputs; the seed is in the failure message. */
-function forAll(runs, generate, check) {
-  for (let seed = 1; seed <= runs; seed += 1) {
-    const input = generate(mulberry32(seed));
-    try {
-      check(input);
-    } catch (error) {
-      error.message = `seed ${seed}: ${error.message}`;
-      throw error;
-    }
-  }
-}
-
-const production = () =>
-  createContext({
-    run: "1",
-    startedMs: Date.parse("2026-10-26T00:00:00Z"),
-    database: "entpipe1",
-    target: { kind: "production", token: "t", quotaProject: SANDBOX_PROJECT },
-  });
-
-const parentOf = (path) => path.split("/").slice(0, -1).join("/");
-const relative = (name) => name.replace(/^\{docs\}\//, "");
-
-/** Every collection a program writes: seeds and commit updates. */
-function writtenCollections(program) {
-  const names = [
-    ...(program.seed ?? []).map(([name]) => name),
-    ...steps(program, "commit").flatMap((s) =>
-      s.body.writes.filter((w) => w.update).map((w) => relative(w.update.name)),
-    ),
-  ];
-  return new Set(names.map(parentOf));
-}
 
 test("O-6 programs are the tail of PROGRAMS, under their own prefix, unique and valid", () => {
   assert.ok(O6_PROGRAMS.length > 0);
@@ -460,41 +421,6 @@ test("property: the plan is additive and matches the runner's ceilings", () => {
   assert.ok(plan.expectedRequests <= plan.worstRequests);
 });
 
-/** An in-memory Firestore: commit, the kindless wipe query and an empty pipeline answer. */
-function fakeFirestore(initial = []) {
-  const store = new Map(initial.map((name) => [name, {}]));
-  const calls = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = async (url, init = {}) => {
-    const path = String(url);
-    calls.push(path);
-    const base = `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/entpipe1/documents`;
-    assert.ok(path.startsWith(`${base}:`), path);
-    const body = init.body ? JSON.parse(init.body) : {};
-    if (path.endsWith(":commit")) {
-      for (const write of body.writes) {
-        if (write.update) store.set(write.update.name, write.update.fields);
-        else store.delete(write.delete);
-      }
-      return new Response(JSON.stringify({ writeResults: body.writes.map(() => ({})) }));
-    }
-    if (path.endsWith(":runQuery")) {
-      const names = [...store.keys()].toSorted().slice(0, body.structuredQuery.limit);
-      return new Response(
-        JSON.stringify(names.length ? names.map((name) => ({ document: { name } })) : [{}]),
-      );
-    }
-    return new Response(JSON.stringify([{ executionTime: "2026-10-26T00:00:00Z" }]));
-  };
-  return {
-    store,
-    calls,
-    restore: () => {
-      globalThis.fetch = original;
-    },
-  };
-}
-
 test("seed/wipe plan: the planned requests equal a simulated run and the database ends empty", async () => {
   const restOnly = O6_PROGRAMS.map((program) => ({
     ...program,
@@ -583,9 +509,6 @@ test("the dry run has both profiles' configs, as lanes that differ only by the c
 });
 
 // --- the case table decoded back ---
-
-const stagesOf = (s) => s.body.structuredPipeline.pipeline.stages;
-const literalInt = (value) => Number(value.integerValue);
 
 test("each sort combination step decodes back to its PICT row", () => {
   const combos = O6_AREAS.sort.find((p) => p.id === `${O6_PREFIX}sort-combos`);

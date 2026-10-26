@@ -9,8 +9,8 @@
   "variant": "baseline",
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
-    "parity": 6,
-    "documented-divergence": 0,
+    "parity": 5,
+    "documented-divergence": 1,
     "debt": 0,
     "pending": 0
   },

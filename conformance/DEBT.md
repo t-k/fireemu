@@ -12,42 +12,12 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - **documented divergence** -- a difference that is intended and written down. These are listed
   for completeness; `check` does gate them, against the recorded fireemu value.
 
-## Debt (7)
-
-### `firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied`
-
-- oracle: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: \nfalse for 'create' @ L20, false for 'update' @ L20"}`
-- fireemu: `{"thrown":true,"code":"permission-denied","message":"Request failed with error: create on conf_rules_closed/lite denied by Security Rules: no allow statement evaluated to true"}`
+## Debt (1)
 
 ### `firestore/rest-error-shapes#runQuery-with-an-unknown-operator`
 
 - oracle: `{"body":{"error":{"code":400,"message":"Payload isn't valid for request.","status":"INVALID_ARGUMENT"}},"status":400}`
-- fireemu: `{"body":{"error":{"code":400,"message":"unknown field filter operator \"NOT_A_REAL_OPERATOR\"","status":"INVALID_ARGUMENT"}},"status":400}`
-
-### `firestore/rest-error-shapes#get-a-missing-document`
-
-- oracle: `{"body":{"error":{"code":404,"message":"Document (projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing) not found.","status":"NOT_FOUND"}},"status":404}`
-- fireemu: `{"body":{"error":{"code":404,"message":"Document not found: projects/demo-conformance/databases/(default)/documents/conf_values/definitely-missing","status":"NOT_FOUND"}},"status":404}`
-
-### `firestore/rules-decisions#anonymous-read-of-a-closed-document`
-
-- oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L20"}`
-- fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_closed/x denied by Security Rules: no allow statement evaluated to true"}`
-
-### `firestore/rules-decisions#anonymous-write-to-an-owner-document`
-
-- oracle: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"}`
-- fireemu: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/nobody denied by Security Rules: no allow statement evaluated to true"}`
-
-### `firestore/rules-decisions#owner-cannot-write-another-document`
-
-- oracle: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: \nfalse for 'create' @ L17, false for 'update' @ L17"}`
-- fireemu: `{"thrown":true,"code":"permission-denied","message":"7 PERMISSION_DENIED: create on conf_rules_owner/someone-else denied by Security Rules: no allow statement evaluated to true"}`
-
-### `firestore/rules-decisions#after-sign-out-the-document-is-protected-again`
-
-- oracle: `{"thrown":true,"code":"permission-denied","message":"\nfalse for 'get' @ L17"}`
-- fireemu: `{"thrown":true,"code":"permission-denied","message":"get on conf_rules_owner/<uid> denied by Security Rules: no allow statement evaluated to true"}`
+- fireemu: `{"body":[{"error":{"code":400,"message":"unknown field filter operator","status":"INVALID_ARGUMENT"}}],"status":400}`
 
 
 ## Pending: needs a real project (6)
@@ -83,7 +53,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (33)
+## Documented divergences (40)
 
 - `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
@@ -145,12 +115,26 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: conformance/ORACLE.md, "What the oracle cannot answer"
 - `auth/identity-toolkit-error-shapes#unknown-method` -- Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML.
   documented in: conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md
-- `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The query itself is served on both sides since index merging landed. The official emulator ends the REST runQuery stream with `done: true` on the last response; production omits `done` (probed against the oracle project on 2026-09-08) and fireemu follows production.
+- `firestore/lite-rest-transport#write-into-a-rules-closed-collection-is-denied` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.
+  documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
+- `firestore/rest-error-shapes#runQuery-needing-a-composite-index` -- The official emulator ends a REST runQuery stream with `done: true` on the last response; production omits the field and fireemu follows production.
   documented in: README.md, "Gap from the official Firebase Emulator Suite"
+- `firestore/rest-error-shapes#get-a-missing-document` -- Production answers a missing document with `Document "projects/.../documents/..." not found.` (recorded 2026-09-07); the official emulator says `Document (projects/.../documents/...) not found.`. fireemu follows production (567565bdd).
+  documented in: conformance/FIRESTORE-PRODUCTION-MATRIX.md; README.md, "Gap from the official Firebase Emulator Suite"
+- `firestore/rules-decisions#anonymous-read-of-a-closed-document` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.
+  documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
+- `firestore/rules-decisions#anonymous-write-to-an-owner-document` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.
+  documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
+- `firestore/rules-decisions#owner-cannot-write-another-document` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.
+  documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
+- `firestore/rules-decisions#after-sign-out-the-document-is-protected-again` -- Production answers every Security Rules denial with PERMISSION_DENIED "Missing or insufficient permissions." and fireemu does the same in both profiles (owner decision R6, 2026-09-24); the official emulator answers with the failed allow statements. The reason stays in fireemu's request traces.
+  documented in: spec/compatibility/closure/FS-RULES.json (scope decision R6); spec/compatibility/contract.json (fireemuOnly)
 - `functions/callable-auth-context#a-forged-bearer-token-is-not-an-identity` -- The official Functions emulator runs the runtime with token verification skipped, so any Bearer value produces a context with hasAuth true and a null uid. fireemu verifies the ID token against the target project's registry and reinserts only a resolved user, so a forged value produces no Auth context at all.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
 - `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
+- `storage/admin-upload-download-metadata#metadata-shape` -- The JSON API object resource carries timeFinalized in fireemu, as production writes it (recorded in stage 3 v9, 2026-09-30); the official emulator omits it.
+  documented in: README.md, "Storage"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)
 
 ## Standing proposal: precision of the App Check boundary rows
 

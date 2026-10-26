@@ -676,6 +676,48 @@ pub fn compile_pipeline(
     compile_pipeline_in_order(req, parent, unrecorded, None)
 }
 
+/// Strict answers the references of an input stage only in the forms production was given
+/// (FS-ENT-ORACLE O-7 `inputs-collection-group`, `inputs-documents`): a `collection_group`
+/// ancestor that is empty (the root) or the document of a collection (`/cg/a`), and `documents`
+/// paths of the same two segments. Any other reference (a collection, a deeper document, a full
+/// resource name) is unobserved.
+fn unrecorded_input_path(stage: &pb::pipeline::Stage) -> Option<Status> {
+    let document = |path: &str| {
+        path.strip_prefix('/').is_some_and(|rest| {
+            let segments: Vec<&str> = rest.split('/').collect();
+            segments.len() == 2 && segments.iter().all(|segment| !segment.is_empty())
+        })
+    };
+    let reference = |value: &pb::Value| match &value.value_type {
+        Some(pb::value::ValueType::ReferenceValue(path)) => Some(path.clone()),
+        _ => None,
+    };
+    let (input, unrecorded) = match stage.name.as_str() {
+        "collection_group" => (
+            "collection_group",
+            stage
+                .args
+                .first()
+                .and_then(reference)
+                .is_some_and(|path| !path.is_empty() && !document(&path)),
+        ),
+        "documents" => (
+            "documents",
+            stage
+                .args
+                .iter()
+                .filter_map(reference)
+                .any(|path| !document(&path)),
+        ),
+        _ => return None,
+    };
+    unrecorded.then(|| {
+        Status::unimplemented(format!(
+            "a {input} reference of this form is not observed locally"
+        ))
+    })
+}
+
 /// [`compile_pipeline`] with the wire order of the request's maps, where the transport kept it
 /// (a REST body): a `select` stage checks its aliases in that order, as the official emulator
 /// does, so an alias inside another names the later one.
@@ -694,6 +736,9 @@ pub fn compile_pipeline_in_order(
         documents,
     } = pipeline_input(req, parent)?;
     if unrecorded == Unrecorded::Refuse {
+        if let Some(error) = unrecorded_input_path(&pipeline.stages[0]) {
+            return Err(error);
+        }
         let own = format!(
             "projects/{}/databases/{}/documents",
             parent.project.as_str(),

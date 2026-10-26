@@ -1010,7 +1010,21 @@ impl Cursor {
                     let mut refused = None;
                     for (alias, expr) in aliases {
                         match expr.eval_in(&row, self.unrecorded) {
-                            Eval::Value(value) => values.push((alias, value)),
+                            Eval::Value(value) => values.push((alias, Some(value))),
+                            Eval::Absent if alias.segments().len() > 1 => {
+                                // As `select`: the official emulator keeps the parents of a
+                                // nested alias whose value is missing as empty maps (probed
+                                // 2026-10-27, a scalar parent replaced); production has not
+                                // answered one (O-7 `fields-main` recorded a top-level missing
+                                // source only).
+                                if self.unrecorded == Unrecorded::Refuse {
+                                    return Err(EvalError::Unobserved {
+                                        function: "add_fields",
+                                        reason: "a nested alias of a missing value",
+                                    });
+                                }
+                                values.push((alias, None));
+                            }
                             Eval::Absent => {}
                             Eval::Error(error) => {
                                 refused = first_refusal(
@@ -1026,7 +1040,10 @@ impl Cursor {
                         return Err(error);
                     }
                     for (alias, value) in values {
-                        set_path(&mut row.fields, alias, value);
+                        match value {
+                            Some(value) => set_path(&mut row.fields, alias, value),
+                            None => set_parents(&mut row.fields, alias),
+                        }
                     }
                 }
                 Stage::RemoveFields(paths) => {
@@ -1170,14 +1187,6 @@ impl Ord for GroupKey {
     }
 }
 
-/// The value a group shows for its key: the first one met, with `-0.0` shown as `0.0`.
-fn shown(value: Value) -> Value {
-    match value {
-        Value::Double(d) if d.to_bits() == (-0.0_f64).to_bits() => Value::Double(0.0),
-        other => other,
-    }
-}
-
 /// The key values of one row for the aliases, a missing value being null.
 fn key_values(
     row: &Row,
@@ -1210,7 +1219,7 @@ fn distinct_rows(
         let fields = aliases
             .iter()
             .map(|(name, _)| name.clone())
-            .zip(key.0.iter().cloned().map(shown))
+            .zip(key.0.iter().cloned())
             .collect();
         seen.insert(key);
         out.push(Row::derived(fields));
@@ -1370,7 +1379,7 @@ fn aggregate_rows(
         .map(|(key, running)| {
             let mut fields = BTreeMap::new();
             for ((name, _), value) in groups.iter().zip(key) {
-                fields.insert(name.clone(), shown(value));
+                fields.insert(name.clone(), value);
             }
             for ((name, accumulator), state) in accumulators.iter().zip(running) {
                 fields.insert(name.clone(), accumulator.finish(state));

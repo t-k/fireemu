@@ -6256,6 +6256,14 @@ fn pipeline_stage(name: &str, value: pb::Value) -> pb::pipeline::Stage {
     }
 }
 
+fn pipeline_stage_args(name: &str, args: Vec<pb::Value>) -> pb::pipeline::Stage {
+    pb::pipeline::Stage {
+        name: name.to_owned(),
+        args,
+        ..Default::default()
+    }
+}
+
 fn pipeline_request(stages: Vec<pb::pipeline::Stage>) -> pb::ExecutePipelineRequest {
     pb::ExecutePipelineRequest {
         database: DB.to_owned(),
@@ -13314,7 +13322,7 @@ async fn execute_pipeline_runs_the_recorded_stages_and_inputs() {
         // a collection group reads every collection of that id, at any depth
         let group = run(vec![stage(
             "collection_group",
-            vec![reference("/"), s("sub")],
+            vec![reference(""), s("sub")],
         )])
         .await;
         assert_eq!(names(&group), ["z"], "{policy:?}");
@@ -13455,6 +13463,57 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
         let response = stream.message().await.unwrap().unwrap();
         assert_eq!(response.results.len(), 1, "{policy:?}");
         assert!(response.execution_time.is_some(), "{policy:?}");
+        // The references of an input stage beyond the recorded forms (O-7: the root or a
+        // document of a collection as the ancestor, two-segment document paths): the emulator
+        // profile reads them, strict refuses them as unobserved.
+        let raw = |path: &str| pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue(path.to_owned())),
+        };
+        let group = |ancestor: &str| {
+            vec![pipeline_stage_args(
+                "collection_group",
+                vec![raw(ancestor), s("na")],
+            )]
+        };
+        let documents = |paths: &[&str]| {
+            vec![pipeline_stage_args(
+                "documents",
+                paths.iter().map(|path| raw(path)).collect(),
+            )]
+        };
+        let own = format!("{DOCS}/zz/q");
+        for (label, stages, recorded) in [
+            ("group, root", group(""), true),
+            ("group, document", group("/zz/q"), true),
+            ("group, collection", group("/zz"), false),
+            ("group, deeper document", group("/a/b/c/d"), false),
+            ("group, odd path", group("/a/b/c"), false),
+            ("group, full name", group(&own), false),
+            ("documents, two segments", documents(&["/na/a"]), true),
+            ("documents, deeper", documents(&["/na/a/s/b"]), false),
+            (
+                "documents, one deeper of two",
+                documents(&["/na/a", "/na/a/s/b"]),
+                false,
+            ),
+        ] {
+            let outcome = client.execute_pipeline(pipeline_request(stages)).await;
+            let refused = match outcome {
+                Err(status) => Some(status),
+                Ok(response) => response.into_inner().message().await.err(),
+            };
+            match (strict && !recorded, refused) {
+                (true, Some(status)) => {
+                    assert_eq!(
+                        status.code(),
+                        tonic::Code::Unimplemented,
+                        "{label}: {status}"
+                    );
+                }
+                (false, None) => {}
+                (expected, got) => panic!("{label}: strict-refusal {expected}, got {got:?}"),
+            }
+        }
         handle.abort();
     }
 }

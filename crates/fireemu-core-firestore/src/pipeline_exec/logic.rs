@@ -227,7 +227,13 @@ fn eval_and(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
+/// `or`: production answered two operands, and only `and` with three (O-6
+/// `where-functions-truth#and3`); more operands of `or` are unobserved under strict, as for `xor`
+/// and `nor`.
 fn eval_or(args: &[Eval], cx: Context) -> Eval {
+    if cx.unrecorded == Unrecorded::Refuse && args.len() > 2 {
+        return unobserved("or", "more than two operands");
+    }
     // Production failed an `or` with an operand of another type beside a `true` one (O-6
     // `where-functions-non-boolean#or`): no short circuit past a type error.
     match tri_state("or", args, None, cx) {
@@ -343,9 +349,14 @@ fn eval_is_type(args: &[Eval], cx: Context) -> Eval {
     if cx.unrecorded == Unrecorded::Refuse && !recorded {
         return unobserved("is_type", "this type name");
     }
-    // A missing value has no type: production answered null for `null` and dropped the row
-    // for the other names (O-1 `px1/select#is-type-x-null`, O-6 `where-functions-kinds`).
+    // A missing value has no type: production answered null for `null` (O-1
+    // `px1/select#is-type-x-null`) and dropped the row for the other names when the call is
+    // the whole condition of a `where` (O-6 `where-functions-kinds`, which shows no
+    // difference between null and false there). Strict answers nothing else.
     let Eval::Value(value) = &args[0] else {
+        if cx.unrecorded == Unrecorded::Refuse && !cx.condition && name != "null" {
+            return unobserved("is_type", "a missing value for this type name");
+        }
         return null();
     };
     boolean(match name.as_str() {

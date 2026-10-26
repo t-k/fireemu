@@ -513,9 +513,32 @@ fn aggregate_groups_merge_null_and_missing_and_equal_numbers() {
         [
             (int(1), int(2), int(3)),
             (Value::Null, int(2), int(7)),
-            (Value::Double(0.0), int(2), int(11)),
+            (Value::Double(-0.0), int(2), int(11)),
         ]
     );
+    // The key shows the first member met, as stored.
+    assert!(matches!(&rows[2].0, Value::Double(d) if d.is_sign_negative()));
+}
+
+/// A group of one member shows that member as stored (O-7 `aggregate-group-keys#by-g-h-n`:
+/// a lone `-0.0` is shown as `-0`), in `aggregate` and in `distinct`.
+#[test]
+fn a_lone_negative_zero_key_is_shown_as_stored() {
+    let rows = vec![doc("a", &[("g", Value::Double(-0.0)), ("n", int(1))])];
+    let grouped = run(
+        vec![Stage::Aggregate {
+            accumulators: vec![("c".to_owned(), count_all())],
+            groups: vec![("g".to_owned(), field("g"))],
+        }],
+        rows.clone(),
+    );
+    let distinct = run(
+        vec![Stage::Distinct(vec![("g".to_owned(), field("g"))])],
+        rows,
+    );
+    for out in [grouped, distinct] {
+        assert!(matches!(&out[0].fields["g"], Value::Double(d) if d.is_sign_negative()));
+    }
 }
 
 #[test]
@@ -916,7 +939,7 @@ fn group_keys_compare_by_value_not_by_representation() {
 }
 
 #[test]
-fn a_group_shows_its_key_with_negative_zero_as_zero_and_other_doubles_as_they_are() {
+fn a_group_shows_the_first_member_met_as_stored_negative_zero_included() {
     let rows = vec![
         doc("a", &[("g", Value::Double(1.5))]),
         doc("b", &[("g", Value::Double(-0.0))]),
@@ -934,8 +957,11 @@ fn a_group_shows_its_key_with_negative_zero_as_zero_and_other_doubles_as_they_ar
             ref other => panic!("{other:?}"),
         })
         .collect();
-    assert_eq!(shown, [1.5, 0.0, -2.5]);
-    assert!(shown[1].is_sign_positive());
+    // The key shows one of the group's own members (production chose by its scan order, which
+    // is not reproduced: O-7 `aggregate-group-keys#by-g`); a lone -0.0 stays -0.0
+    // (`#by-g-h-n`).
+    assert_eq!(shown, [1.5, -0.0, -2.5]);
+    assert!(shown[1].is_sign_negative());
 }
 
 #[test]
@@ -994,9 +1020,18 @@ fn strict_refuses_what_it_cannot_attribute_inside_a_blocking_stage() {
 }
 
 #[test]
-fn xor_and_nor_of_more_than_two_operands_are_unobserved_under_strict_only() {
+fn xor_nor_and_or_of_more_than_two_operands_are_unobserved_under_strict_only() {
     let t = || Eval::Value(Value::Boolean(true));
     let f = || Eval::Value(Value::Boolean(false));
+    // `and` of three operands was recorded (O-6 `where-functions-truth#and3`); `or` of three was
+    // not.
+    assert!(is_unobserved(&strict("or", &[f(), f(), t()])));
+    assert!(is_unobserved(&strict("or", &[f(), Eval::Absent, f()])));
+    assert_eq!(emulator("or", &[f(), f(), t()]), t());
+    assert_eq!(emulator("or", &[f(), f(), f()]), f());
+    assert_eq!(strict("or", &[f(), t()]), t());
+    assert_eq!(strict("or", &[f()]), f());
+    assert_eq!(strict("and", &[t(), t(), f()]), f());
     assert!(is_unobserved(&strict("xor", &[t(), t(), t()])));
     assert!(is_unobserved(&strict("nor", &[f(), f(), f()])));
     assert_eq!(emulator("xor", &[t(), t(), t()]), t());
@@ -1127,14 +1162,20 @@ fn strict_answers_only_the_type_names_production_recorded() {
     ] {
         assert!(is_unobserved(&ask(unrecorded)), "{unrecorded}");
     }
-    // A missing value is unknown whatever the name; a name that is no constant string is unobserved.
+    // A missing value is unknown for the name `null` only (the other names were recorded where
+    // the call is a whole `where` condition: see the test of the missing value); a name that is
+    // no constant string is unobserved.
     assert_eq!(
         strict(
             "is_type",
-            &[Eval::Absent, Eval::Value(Value::String("string".into()))]
+            &[Eval::Absent, Eval::Value(Value::String("null".into()))]
         ),
         Eval::Value(Value::Null)
     );
+    assert!(is_unobserved(&strict(
+        "is_type",
+        &[Eval::Absent, Eval::Value(Value::String("string".into()))]
+    )));
     assert!(is_unobserved(&strict(
         "is_type",
         &[Eval::Value(int(1)), Eval::Absent]
@@ -1219,4 +1260,122 @@ fn the_registry_checks_the_replace_with_mode() {
     assert!(canonicalize(&[users(), replace(None)]).is_ok());
     assert!(canonicalize(&[users(), replace(Some("full_replace"))]).is_ok());
     assert!(canonicalize(&[users(), replace(Some("sideways"))]).is_err());
+}
+
+/// `add_fields` of a nested alias whose value is missing: the official emulator keeps the parents
+/// as empty maps (probed 2026-10-27, a scalar parent included, as `select` does); production has
+/// not answered one (O-7 `fields-main` recorded a top-level missing source only), so strict
+/// refuses it as unobserved.
+#[test]
+fn add_fields_of_a_nested_alias_with_a_missing_value_is_unobserved_under_strict() {
+    let stage = |name: &str| vec![Stage::AddFields(vec![(alias(name), field("zz"))])];
+    let row = || vec![doc("a", &[("m", int(5)), ("v", int(1))])];
+    // The emulator profile follows the official emulator: parents become empty maps, a scalar
+    // parent is replaced, a top-level alias sets nothing.
+    let out = run(stage("nm.r"), row());
+    assert_eq!(out[0].fields["nm"], Value::Map(BTreeMap::new()));
+    assert!(!out[0].fields.contains_key("nm.r"));
+    let out = run(stage("m.r"), row());
+    assert_eq!(out[0].fields["m"], Value::Map(BTreeMap::new()));
+    let out = run(stage("a.b.c"), row());
+    assert_eq!(
+        out[0].fields["a"],
+        Value::Map(BTreeMap::from([(
+            "b".to_owned(),
+            Value::Map(BTreeMap::new())
+        )]))
+    );
+    assert_eq!(run(stage("nm"), row())[0].fields, row()[0].fields);
+    // Strict refuses the nested forms and still answers the top-level one.
+    for nested in ["nm.r", "m.r", "a.b.c"] {
+        let error = execute_rows_in(stage(nested), row(), Unrecorded::Refuse).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                EvalError::Unobserved {
+                    function: "add_fields",
+                    ..
+                }
+            ),
+            "{nested}: {error:?}"
+        );
+    }
+    let out = execute_rows_in(stage("nm"), row(), Unrecorded::Refuse).unwrap();
+    assert_eq!(out[0].fields, row()[0].fields);
+    // A present value is set at any depth under both profiles.
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let out = execute_rows_in(
+            vec![Stage::AddFields(vec![(alias("x.y"), field("v"))])],
+            row(),
+            unrecorded,
+        )
+        .unwrap();
+        assert_eq!(
+            out[0].fields["x"],
+            Value::Map(BTreeMap::from([("y".to_owned(), int(1))]))
+        );
+    }
+}
+
+/// `is_type` of a missing value: production answered `null` for the name `null` (O-1
+/// `px1/select#is-type-x-null`) and dropped the row for the others where the call is the whole
+/// condition of a `where` (O-6 `where-functions-kinds`), so strict answers nothing else.
+#[test]
+fn is_type_of_a_missing_value_is_unobserved_under_strict_beyond_the_recorded_forms() {
+    let call = |name: &str, unrecorded, condition| {
+        (function("is_type").unwrap().eval)(
+            &[Eval::Absent, Eval::Value(Value::String(name.into()))],
+            Context {
+                unrecorded,
+                condition,
+            },
+        )
+    };
+    for name in TYPE_NAMES.iter().copied() {
+        // The emulator profile and a `where` condition answer null (the row is dropped).
+        for (unrecorded, condition) in [
+            (Unrecorded::OfficialEmulator, false),
+            (Unrecorded::OfficialEmulator, true),
+            (Unrecorded::Refuse, true),
+        ] {
+            let recorded = matches!(
+                name,
+                "null" | "array" | "string" | "int64" | "float64" | "number"
+            );
+            if unrecorded == Unrecorded::Refuse && !recorded {
+                assert!(is_unobserved(&call(name, unrecorded, condition)), "{name}");
+            } else {
+                assert_eq!(
+                    call(name, unrecorded, condition),
+                    Eval::Value(Value::Null),
+                    "{name} {unrecorded:?} {condition}"
+                );
+            }
+        }
+        // Anywhere else strict answers only the name `null`.
+        let outside = call(name, Unrecorded::Refuse, false);
+        if name == "null" {
+            assert_eq!(outside, Eval::Value(Value::Null));
+        } else if matches!(name, "array" | "string" | "int64" | "float64" | "number") {
+            assert!(is_unobserved(&outside), "{name}");
+        }
+    }
+}
+
+/// The adapter's `where` decoder treats a function without a signature as a comparison of two
+/// operands only when it returns a boolean and takes exactly two arguments, and as a value of
+/// another kind otherwise. The table keeps those two conditions interchangeable: a function
+/// without a signature that takes exactly two arguments is a boolean comparison, and one that
+/// returns a boolean takes exactly two. So the first `||` of the adapter's test in
+/// `decode_condition` can be an `&&` without changing any answer (an equivalent mutant).
+#[test]
+fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_arguments() {
+    for function in FUNCTIONS.iter().filter(|f| f.signature.is_empty()) {
+        assert_eq!(
+            function.returns_boolean,
+            matches!(function.arity, Arity::Exact(2)),
+            "{}",
+            function.name
+        );
+    }
 }

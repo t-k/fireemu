@@ -1,14 +1,16 @@
 //! No committed fixture may hold the number of a sandbox project, in the clear or encoded.
 //!
-//! This test reads every file under `crates/` and `conformance/` (`node_modules`, `target` and `.git`
-//! excluded; files over 40 MB are skipped) and decodes every run of base64 or base64url characters in two ways.
+//! This test reads every file of the repository that git tracks, and the files under `crates/` and
+//! `conformance/` that are not tracked or ignored yet (a recording is scanned before it is committed), and
+//! decodes every run of base64 or base64url characters in two ways. A file larger than 128 MB is not skipped:
+//! the test fails and names it, so that a large production-derived fixture cannot go unread.
 //! A number that is not the mask `123456789012` that the fixtures use is refused in these two forms:
 //! - As a protobuf varint. A page token, a cursor or any other opaque value that a service hands out can carry
 //!   a project number this way. A run counts when it parses as a protobuf message (it is tried from every
 //!   offset), and the varint has 12 or 13 digits, or 10 digits outside the seconds window of 2020 to 2036
 //!   (the real `sourceToken` holds a timestamp's seconds). 11 digit varints are not refused here: random bytes
 //!   that parse as a message produce them. A run that is a
-//!   subresource integrity digest (`sha512-...`) or a snake case identifier is not decoded as a message:
+//!   subresource integrity digest (`sha512-...`) or a lower case identifier or path (`snake_case`, `kebab-case`, `dir/file`) is not decoded as a message:
 //!   random bytes parse as one now and then. No instant is exempt as a varint, so a token that holds an epoch
 //!   in milliseconds as a varint would be refused.
 //! - As ASCII decimal digits (a GCF v2 `sourceToken` carried the events project number this way): a whole run
@@ -37,7 +39,8 @@ use std::path::{Path, PathBuf};
 /// The number the fixtures use in place of a project number.
 const MASK: u64 = 123_456_789_012;
 const MIN_RUN: usize = 24;
-const MAX_FILE_BYTES: u64 = 40 * 1024 * 1024;
+/// A file larger than this is not scanned, and the test fails naming it.
+const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 
 fn value_of(byte: u8) -> Option<u8> {
     match byte {
@@ -128,11 +131,12 @@ fn varints(bytes: &[u8], depth: u32, out: &mut Vec<u64>) -> usize {
     at
 }
 
-/// A hit counts when the run parses as a message, give or take a short tail. A page token parses to its last
-/// byte (its checksum is a fixed64 field); a hash, a signature or any other random run fails that almost
-/// always, because every tag has to be valid.
+/// A hit counts when the run parses as a message to its last byte. A page token does (its checksum is a
+/// fixed64 field); a hash, a signature, a file name or any other run that is not a message fails that almost
+/// always, because every tag has to be valid. (A tolerance of a short tail was tried on the whole repository:
+/// prose and identifiers parse by chance often enough that documents, specs and tools were refused.)
 fn parses_as_a_message(parsed: usize, total: usize) -> bool {
-    total - parsed <= 2 && parsed * 10 >= total * 9
+    parsed == total
 }
 
 /// Runs longer than this are decoded from their first four offsets only (a run is tried from every offset
@@ -171,10 +175,16 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     runs
 }
 
+const LONG_WORDS_FROM: usize = 32;
+
 /// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile) or a
-/// snake case identifier (lower case letters, digits and underscores only: a random token of 24 characters has
-/// no upper case letter once in 250,000). Random bytes parse as a message now and then, and across a corpus of
-/// hashes and identifiers they do, so these runs are not decoded as protobuf.
+/// lower case identifier or path (lower case letters, digits, `_`, `-` and `/` only: a random token of 24
+/// characters has no upper case letter and no `+` once in 250,000, and a hex digest is one of these). Random
+/// bytes parse as a message now and then, and across a corpus of hashes, identifiers and file names they do,
+/// so these runs are not decoded as protobuf.
+///
+/// A long run of letters and separators with no digit and no `+` is words too (`CamelCaseNames`, a slug with
+/// a repeated letter): a random token of 32 characters is one in 500.
 fn is_digest_or_identifier(run: &[u8]) -> bool {
     let digest = run.strip_prefix(b"sha").is_some_and(|rest| {
         let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
@@ -183,7 +193,11 @@ fn is_digest_or_identifier(run: &[u8]) -> bool {
     digest
         || run
             .iter()
-            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'/'))
+        || (run.len() >= LONG_WORDS_FROM
+            && run
+                .iter()
+                .all(|b| b.is_ascii_alphabetic() || matches!(b, b'_' | b'-' | b'/')))
 }
 
 /// The 12-digit numbers that the base64 runs of `text` carry as protobuf varints.
@@ -319,26 +333,38 @@ fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
     numbers
 }
 
-fn files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// The files the scan reads, as git lists them from `root`: every tracked file, and the files under `crates/`
+/// and `conformance/` that are not tracked and not ignored yet (a recording is scanned before it is
+/// committed). Git's own ignore rules replace a list of excluded directories (`node_modules`, `target`,
+/// worktrees). A tracked file that was deleted from the work tree is listed; the scan skips what it cannot read.
+fn corpus_files(root: &Path) -> Vec<PathBuf> {
+    let list = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["ls-files", "-z"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git ls-files {args:?}");
+        output.stdout
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if matches!(name.as_ref(), "node_modules" | "target" | ".git") {
-            continue;
-        }
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        if kind.is_dir() {
-            files(&path, out);
-        } else if kind.is_file() && entry.metadata().is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
-            out.push(path);
-        }
-    }
+    let mut names = list(&["--cached"]);
+    names.extend(list(&[
+        "--others",
+        "--exclude-standard",
+        "--",
+        "crates",
+        "conformance",
+    ]));
+    let mut paths: Vec<PathBuf> = names
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| root.join(String::from_utf8_lossy(name).as_ref()))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// What the scan makes of one file: the forms in which a number that is not the mask was found, and how many
@@ -374,13 +400,46 @@ fn judge(text: &[u8]) -> Verdict {
 struct Corpus {
     /// `path (form)` for each number that is not the mask (the number itself is never kept).
     refused: Vec<String>,
+    /// Files larger than the limit, which were not scanned.
+    oversize: Vec<String>,
     varint_masks: usize,
     ascii_masks: usize,
 }
 
-fn scan(paths: &[PathBuf]) -> Corpus {
+/// Scans the files on a few threads (the repository holds 250 MB of fixtures, one of them 56 MB); the result
+/// lists the files in the order given.
+fn scan(paths: &[PathBuf], max_bytes: u64) -> Corpus {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(8);
+    let chunk = paths.len().div_ceil(threads).max(1);
+    let parts: Vec<Corpus> = std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || scan_in_order(part, max_bytes)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a scan thread"))
+            .collect()
+    });
+    let mut corpus = Corpus::default();
+    for part in parts {
+        corpus.refused.extend(part.refused);
+        corpus.oversize.extend(part.oversize);
+        corpus.varint_masks += part.varint_masks;
+        corpus.ascii_masks += part.ascii_masks;
+    }
+    corpus
+}
+
+fn scan_in_order(paths: &[PathBuf], max_bytes: u64) -> Corpus {
     let mut corpus = Corpus::default();
     for path in paths {
+        if std::fs::metadata(path).is_ok_and(|meta| meta.len() > max_bytes) {
+            corpus.oversize.push(path.display().to_string());
+            continue;
+        }
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
@@ -395,22 +454,39 @@ fn scan(paths: &[PathBuf]) -> Corpus {
 }
 
 #[test]
-fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_value() {
+fn no_tracked_file_holds_a_project_number_inside_an_encoded_value() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut all = Vec::new();
-    for top in ["crates", "conformance"] {
-        files(&root.join(top), &mut all);
-    }
+    let all = corpus_files(&root);
     assert!(
         all.len() > 100,
         "the scan found the repository: {} files",
         all.len()
     );
-    assert_corpus_clean(&scan(&all));
+    // Beyond crates/ and conformance/: a root file, a tool, a spec file, and the largest fixture.
+    for needle in [
+        "Cargo.toml",
+        "tools/",
+        "spec/",
+        "conformance/fs-data-write-production-matrix.json",
+        "crates/fireemu-adapter-functions/tests/fixtures_hold_no_project_number.rs",
+    ] {
+        assert!(
+            all.iter().any(|path| path
+                .strip_prefix(&root)
+                .is_ok_and(|rel| rel.to_string_lossy().contains(needle))),
+            "the scan lists {needle}"
+        );
+    }
+    assert_corpus_clean(&scan(&all, MAX_FILE_BYTES));
 }
 
 /// The assertions on what the scan made of the corpus: nothing refused, and both forms saw the mask.
 fn assert_corpus_clean(corpus: &Corpus) {
+    assert!(
+        corpus.oversize.is_empty(),
+        "a file is larger than the scan limit and was not scanned: {:?}",
+        corpus.oversize
+    );
     assert!(
         corpus.refused.is_empty(),
         "an encoded number that is not the mask is in (the number is not printed): {:?}",
@@ -434,6 +510,7 @@ fn assert_corpus_clean(corpus: &Corpus) {
 fn a_clean_corpus_that_saw_the_mask_in_both_forms_passes() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 1,
     });
@@ -444,6 +521,7 @@ fn a_clean_corpus_that_saw_the_mask_in_both_forms_passes() {
 fn a_corpus_with_a_refused_number_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec!["a.json (ASCII digits)".to_string()],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 1,
     });
@@ -454,6 +532,7 @@ fn a_corpus_with_a_refused_number_fails() {
 fn a_corpus_that_never_saw_the_mask_as_a_varint_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 0,
         ascii_masks: 1,
     });
@@ -464,6 +543,7 @@ fn a_corpus_that_never_saw_the_mask_as_a_varint_fails() {
 fn a_corpus_that_never_saw_the_mask_in_ascii_digits_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 0,
     });
@@ -483,14 +563,17 @@ fn a_dirty_file_is_named_and_a_clean_or_masked_one_is_not() {
     let in_ascii = write("ascii.json", &ascii_token(0, "123456789012", true, false));
     let dirty_varint = write("varint.json", &token_of(111_111_111_111));
     let dirty_ascii = write("dirty.json", &ascii_token(1, "111111111111", false, true));
-    let corpus = scan(&[
-        clean,
-        dir.join("missing.json"),
-        masked,
-        in_ascii,
-        dirty_varint.clone(),
-        dirty_ascii.clone(),
-    ]);
+    let corpus = scan(
+        &[
+            clean,
+            dir.join("missing.json"),
+            masked,
+            in_ascii,
+            dirty_varint.clone(),
+            dirty_ascii.clone(),
+        ],
+        MAX_FILE_BYTES,
+    );
     std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
     assert_eq!(
         corpus,
@@ -499,10 +582,171 @@ fn a_dirty_file_is_named_and_a_clean_or_masked_one_is_not() {
                 format!("{} (varint)", dirty_varint.display()),
                 format!("{} (ASCII digits)", dirty_ascii.display()),
             ],
+            oversize: vec![],
             varint_masks: 1,
             ascii_masks: 1,
         }
     );
+}
+
+#[test]
+fn the_threaded_scan_equals_the_scan_in_order() {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-order-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let mut paths = Vec::new();
+    for index in 0..37 {
+        let path = dir.join(format!("{index:02}.json"));
+        let text = match index % 4 {
+            0 => ascii_token(0, "111111111111", true, false),
+            1 => token_of(MASK),
+            2 => ascii_token(1, "123456789012", false, true),
+            _ => "{}".to_string(),
+        };
+        std::fs::write(&path, text).expect("scratch file");
+        paths.push(path);
+    }
+    let threaded = scan(&paths, MAX_FILE_BYTES);
+    let in_order = scan_in_order(&paths, MAX_FILE_BYTES);
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+    assert_eq!(threaded, in_order);
+    assert_eq!(
+        (
+            threaded.refused.len(),
+            threaded.varint_masks,
+            threaded.ascii_masks
+        ),
+        (10, 9, 9)
+    );
+}
+
+#[test]
+fn a_file_over_the_limit_is_named_not_skipped_and_one_at_the_limit_is_scanned() {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-cap-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let write = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("scratch file");
+        path
+    };
+    // A dirty file of exactly 64 bytes (the limit below), one of 65 bytes, and a clean small one.
+    let dirty = ascii_token(0, "111111111111", true, false);
+    let pad = |total: usize| format!("{dirty}{}", " ".repeat(total - dirty.len()));
+    let at_limit = write("at.json", &pad(64));
+    let over = write("over.json", &pad(65));
+    let small = write("small.json", "{}");
+    let corpus = scan(&[at_limit.clone(), over.clone(), small], 64);
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+    assert_eq!(
+        corpus,
+        Corpus {
+            refused: vec![format!("{} (ASCII digits)", at_limit.display())],
+            oversize: vec![over.display().to_string()],
+            varint_masks: 0,
+            ascii_masks: 0,
+        }
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "a file is larger than the scan limit and was not scanned: [\"big.json\"]"
+)]
+fn a_corpus_with_an_unscanned_file_fails_and_names_it() {
+    assert_corpus_clean(&Corpus {
+        refused: vec![],
+        oversize: vec!["big.json".to_string()],
+        varint_masks: 1,
+        ascii_masks: 1,
+    });
+}
+
+/// A scratch git repository whose index and work tree hold the given files (nothing is committed).
+fn scratch_repository(name: &str, tracked: &[&str], untracked: &[&str], ignore: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join(".gitignore"), ignore).expect("ignore file");
+    for path in tracked.iter().chain(untracked) {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("directories");
+        std::fs::write(file, "x").expect("file");
+    }
+    for path in tracked {
+        git(&["add", path]);
+    }
+    dir
+}
+
+#[test]
+fn the_listing_holds_every_tracked_file_and_the_unignored_new_files_of_crates_and_conformance_only()
+{
+    let dir = scratch_repository(
+        "listing",
+        &[
+            "Cargo.toml",
+            "tools/a.txt",
+            "spec/b/c.json",
+            "crates/x/t.rs",
+            "conformance/y.json",
+        ],
+        &[
+            "conformance/new/rec.json",
+            "crates/new/rec.json",
+            "tools/new.txt",
+            "scratch.txt",
+            "crates/ignored/skip.json",
+            "node_modules/pkg/i.js",
+        ],
+        "crates/ignored/\nnode_modules/\n",
+    );
+    let mut listed: Vec<String> = corpus_files(&dir)
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&dir)
+                .expect("under the root")
+                .display()
+                .to_string()
+        })
+        .collect();
+    listed.sort();
+    // A tracked file that was deleted from the work tree is listed too: the scan skips what it cannot read.
+    std::fs::remove_file(dir.join("tools/a.txt")).expect("remove");
+    let after = corpus_files(&dir).len();
+    std::fs::remove_dir_all(&dir).expect("remove the scratch repository");
+    assert_eq!(
+        listed,
+        [
+            "Cargo.toml",
+            "conformance/new/rec.json",
+            "conformance/y.json",
+            "crates/new/rec.json",
+            "crates/x/t.rs",
+            "spec/b/c.json",
+            "tools/a.txt",
+        ],
+        "untracked files outside crates/ and conformance/ (tools/new.txt, scratch.txt, .gitignore) and ignored ones are not listed"
+    );
+    assert_eq!(after, 7, "the deleted tracked file is still listed");
 }
 
 #[test]
@@ -925,7 +1169,12 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"sha1-x",
         b"sha256-",
         b"a_snake_case_identifier_9",
+        b"auth-refusal-precedence-comparison-approval",
+        b"tools/compat-check/src/inventory/render",
         b"zzz_aaa",
+        b"changed-ccccccccccccccccccccccccccccccccPrincipal",
+        b"schemasGoogleFirestoreAdminIndexConfigDelta",
+        b"Words/With/Upper_And_Lower-Case_Only_Here",
         b"___",
         b"0123456789",
     ] {
@@ -941,9 +1190,11 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"sha512r1w81DpR",
         b"xsha512-r1w81DpR",
         b"a_snake_Case_identifier_9",
-        b"a_snake_case-identifier_9",
         b"a_snake_case+identifier_9",
         b"A_SNAKE",
+        b"ShortWordsOnlyHereLessThanThirt",
+        b"WordsWithOneDigit1AndLongEnoughToCount",
+        b"WordsWithAPlusAndLongEnough+ToCountOk",
     ] {
         assert!(
             !is_digest_or_identifier(run),

@@ -438,3 +438,83 @@ mod properties {
         }
     }
 }
+
+/// A connection that registers (`o`) and cancels (`oc`) `ops` on children of `/k`, then ends: what its listens hear.
+fn after_ops(ns: &str, keys: &[String], ops: &[(bool, String)]) -> Vec<String> {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let data = init(&keys.iter().map(String::as_str).collect::<Vec<_>>());
+    rest(&mut db, "PUT", &format!("/k.json?ns={ns}"), &data);
+    let mut a = open(&mut db, ns);
+    for (r, key) in (1..).zip(keys) {
+        send(
+            &mut db,
+            &mut a,
+            &format!(r#"{{"t":"d","d":{{"r":{r},"a":"q","b":{{"p":"/k/{key}","h":""}}}}}}"#),
+        );
+    }
+    db.drain_pushes();
+    let mut b = open(&mut db, ns);
+    for (r, (register, key)) in (1..).zip(ops) {
+        let frame = if *register {
+            format!(r#"{{"t":"d","d":{{"r":{r},"a":"o","b":{{"p":"/k/{key}","d":"fired"}}}}}}"#)
+        } else {
+            format!(r#"{{"t":"d","d":{{"r":{r},"a":"oc","b":{{"p":"/k/{key}"}}}}}}"#)
+        };
+        send(&mut db, &mut b, &frame);
+    }
+    db.drain_pushes();
+    db.close_realtime(b.client(), NOW + 1);
+    db.drain_pushes()
+        .into_iter()
+        .filter(|(client, _)| *client == a.client())
+        .map(|(_, frame)| summary(&frame))
+        .collect()
+}
+
+mod model {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// Registering and cancelling children of one node: up to four registered children fire in
+        /// the order they were registered (a cancelled one that registers again goes last); once the
+        /// node has held five it stays a hash map and fires by the fixed hash order of the keys,
+        /// which the jar recorded for a 40-key set.
+        #[test]
+        fn registrations_and_cancels_fire_as_the_model_says(
+            ops in prop::collection::vec((any::<bool>(), 0usize..9), 1..24),
+            sticky_seed in any::<u8>(),
+        ) {
+            let sets = recorded_sets();
+            let (keys, order) = sets.iter().max_by_key(|(k, _)| k.len()).unwrap();
+            let pool: Vec<String> = keys.iter().take(9).cloned().collect();
+            let position = |key: &String| order.iter().position(|k| k == key).unwrap();
+            // Make the node hashed sometimes at the start, so both regimes are covered.
+            let mut ops: Vec<(bool, String)> = ops.into_iter().map(|(register, i)| (register, pool[i].clone())).collect();
+            if sticky_seed % 3 == 0 {
+                let warm: Vec<(bool, String)> = pool.iter().take(5).map(|k| (true, k.clone())).collect();
+                ops.splice(0..0, warm);
+            }
+            let mut held: Vec<String> = Vec::new();
+            let mut hashed = false;
+            for (register, key) in &ops {
+                if *register {
+                    if !held.contains(key) {
+                        held.push(key.clone());
+                        hashed |= held.len() >= 5;
+                    }
+                } else {
+                    held.retain(|k| k != key);
+                }
+            }
+            let mut want = held.clone();
+            if hashed {
+                want.sort_by_key(position);
+            }
+            let want: Vec<String> = want.into_iter().map(|k| format!("d:k/{k}")).collect();
+            prop_assert_eq!(after_ops("q1", &pool, &ops), want);
+        }
+    }
+}

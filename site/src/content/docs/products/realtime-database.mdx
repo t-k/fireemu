@@ -1,11 +1,11 @@
 ---
 title: Realtime Database
-description: The Firebase Realtime Database with Security Rules, export and import, served without a compatibility claim yet.
+description: The Firebase Realtime Database with Security Rules, export and import, verified against production for its recorded cases.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs). It has no parity claim yet: production equivalence remains unverified and rules coverage reports are not implemented, so the [compatibility contract](../../compatibility/) lists it as an open gap, and behavior copied from the official emulator may change once production is observed (see [Provisional behavior](#provisional-behavior)).
+Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs), against which it has no parity claim yet, so the [compatibility contract](../../compatibility/) lists it as an open gap. Against production it is verified for the recorded cases of its closure only (see [Differences from production](#differences-from-production)). Behavior copied from the official emulator where production has not been observed may change (see [Provisional behavior](#provisional-behavior)).
 
 ## Start it
 
@@ -103,6 +103,8 @@ An event stream whose query bounds or limits it is judged with that query; one w
 | Any other `auth=` value | Anonymous | Refused with 401 |
 
 Before applying this table, Fireemu refuses ambiguous HTTP requests with 400 in either profile: any repeated query parameter (including `auth` and `access_token`), more than one `Authorization` header, or any combination of query credentials and an `Authorization` header. Identical repeated credentials are still ambiguous. The official emulator instead selects a value, so this is a listed difference.
+
+An administrator REST request that also carries `auth_variable_override` (what the Admin SDK sends for `databaseAuthVariableOverride`) is evaluated by the rules as that `auth` value, as production evaluated it in the recorded cases; `null` reads as unauthenticated, and a malformed override or one that is neither an object nor `null` is refused.
 
 `/.inspect/databases.json`, which `firebase emulators:export` reads, answers anyone under the `emulator` profile and only the `owner` credential under `strict` or with a locked database.
 
@@ -236,9 +238,23 @@ Local v1 and v2 database handlers receive create, update, delete and write event
 
 These are local resource and delivery guarantees, not a claim of native event compatibility. Native authentication, event metadata, regional delivery and retry behavior still require production verification.
 
+## Emulator UI
+
+The Realtime Database page of the [Emulator UI](../../guides/ui/) browses the data at a path, replaces, patches or deletes it as the local administrator (so these edits do not test client permissions), reads and replaces the instance's rules, and runs an anonymous request to see how the rules answer it.
+
+## Differences from production
+
+The recorded cases are REST PUT, GET and PATCH values and priorities, `format=export`, `orderBy` with `startAt`, `limitToFirst` and `limitToLast`, ETag and `if-match`, and the recorded errors; rules loading and owner and UID `.read` and `.write` evaluation; anonymous event streams; and the web SDK's value listeners, `onDisconnect` `set`, `remove`, one transaction schedule and email/password Auth over WebSocket and long polling. Within them, these differences are known:
+
+- Two REST answers keep a different JSON member order: a multi-path PATCH answer, which production returns in the request's order, and an `orderBy` query answer, which production lists in query order. Status, parsed JSON and ETag are equal.
+- A long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, about 100 s to 105 s after its last request; production ran them after 100.8 s to 104.0 s.
+- Production answers an event stream with `Connection: close` and closes the socket after the `cancel` event; Fireemu uses a chunked body, ends it after `cancel` and keeps the connection open. The event bytes are identical.
+- Production's Google-signed Firebase ID tokens are not accepted. Tokens issued by Fireemu's Auth and the `owner` credential are, and `strict` refuses another `gauth` credential with production's `permission_denied`.
+
+Not observed in production, and following the official emulator: REST POST and push ids, DELETE, server values (`.sv`), `shallow`, `print=silent`, `equalTo`, `endAt`, `startAfter` and `endBefore`, `$priority` ordering, `timeout` and `writeSizeLimit`; rules `.validate`, cascading, `data`, `newData` and `root`, query-based rules, `auth.token` claims and `.indexOn` refusal texts beyond the recorded query; SDK child events, SDK queries, `update`, `push` and multi-location updates, SDK server values, reconnect and resume and event ordering, query-scoped cancellation, `onDisconnect` cancel and re-register, and Functions trigger delivery.
+
 ## Not supported yet
 
-- A view in the Emulator UI.
 - Android, Apple, Unity and the Java and Python Admin SDKs are outside the current Node and Web scope.
 
 ## Provisional behavior

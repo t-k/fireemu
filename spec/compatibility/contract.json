@@ -2221,7 +2221,7 @@
       "gaps": [
         "Android, Apple and Unity SDK/browser matrices",
         "optional accessibility and visual-snapshot coverage",
-        "the Realtime Database has no UI view yet, and Extensions is a not planned product surface"
+        "Extensions is a not planned product surface"
       ],
       "prohibitedClaimTerms": [],
       "claims": [

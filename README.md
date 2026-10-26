@@ -57,7 +57,7 @@ Running Functions requires `firebase-functions` v6 or v7 in the codebase.
 
 ## Supported scope
 
-Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also serves the Firebase Realtime Database as an open gap, without a compatibility claim yet (see the table below). It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
+Fireemu supports Cloud Firestore, Firebase Authentication (Identity Platform), Cloud Storage for Firebase, Cloud Functions for Firebase, Cloud Pub/Sub, and Eventarc. It also serves the Firebase Realtime Database, an open gap against the official emulator whose production parity is `COMPAT_VERIFIED` for the recorded cases only (see the table below). It also provides a local Firebase App Check implementation and a UI for managing data and viewing logs. 
 
 ### Key unsupported features and limitations
 
@@ -121,7 +121,7 @@ npx fireemu emulators:exec -- npm test
 
 ### Realtime Database (an open gap)
 
-The Realtime Database, served as an open gap without a compatibility claim, starts when it is selected with `--only database`, configured under `emulators.database` in `firebase.json`, or given a port with `daemon.databasePort` or `--database-port`; it listens on 9000 by default. `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the child command.
+The Realtime Database, served as an open gap against the official emulator (its production parity covers the recorded cases only), starts when it is selected with `--only database`, configured under `emulators.database` in `firebase.json`, or given a port with `daemon.databasePort` or `--database-port`; it listens on 9000 by default. `exec` sets `FIREBASE_DATABASE_EMULATOR_HOST` for the child command.
 
 ```sh
 npx fireemu exec --only database -- npm test
@@ -129,7 +129,7 @@ npx fireemu exec --only database -- npm test
 
 Databases are addressed as on the official emulator: by the `ns` query parameter (`http://127.0.0.1:9000/path.json?ns=my-project-default-rtdb`), which the SDKs send when `connectDatabaseEmulator` is used, or by the first label of the host name. A session reset empties the namespaces of the project being reset, `<project>` and `<project>-default-rtdb`.
 
-Security Rules load from the `database` section of `firebase.json`, the single form into `<project>-default-rtdb` and the array form into each entry's instance or deploy target, and `@firebase/rules-unit-testing` loads them through `/.settings/rules.json`. Comparison with the official emulator is limited to recorded cases. The listed unsupported syntax and evaluation cases are refused when rules load or produce rule errors. The eight recorded patterns refused by the official emulator's determinization resource limit are also rejected when fireemu loads rules, including in unevaluated expression branches. This does not establish complete regular-expression or production equivalence. Under `strict` only the emulator's `owner` credential is an administrator, and an `auth=` token must be one Fireemu's Auth verifies for the instance's project (the SDK's mock tokens are accepted while `auth.allowUnsignedIdTokens` is `true`, the default). `/.inspect/databases.json` needs the `owner` credential under `strict` or with a locked database. Export and import write and read `database_export/` as the Firebase CLI does. The Realtime Database has no parity claim yet: rules coverage reports are not implemented and production equivalence remains unverified. Local v1 and v2 Functions handlers receive scoped database changes, with atomic refusal when event admission is exhausted. See the [Realtime Database page](site/src/content/docs/products/realtime-database.mdx) for credentials per profile, the regular-expression differences and the limits.
+Security Rules load from the `database` section of `firebase.json`, the single form into `<project>-default-rtdb` and the array form into each entry's instance or deploy target, and `@firebase/rules-unit-testing` loads them through `/.settings/rules.json`. Comparison with the official emulator is limited to recorded cases. The listed unsupported syntax and evaluation cases are refused when rules load or produce rule errors. The eight recorded patterns refused by the official emulator's determinization resource limit are also rejected when fireemu loads rules, including in unevaluated expression branches. This does not establish complete regular-expression or production equivalence. Under `strict` only the emulator's `owner` credential is an administrator, and an `auth=` token must be one Fireemu's Auth verifies for the instance's project (the SDK's mock tokens are accepted while `auth.allowUnsignedIdTokens` is `true`, the default). `/.inspect/databases.json` needs the `owner` credential under `strict` or with a locked database. Export and import write and read `database_export/` as the Firebase CLI does. The Realtime Database has no parity claim against the official emulator, and its production parity is `COMPAT_VERIFIED` only for the recorded cases of the [RTDB closure](spec/compatibility/closure/RTDB.json). Rules coverage reports are served at `/.inspect/coverage`, the Emulator UI has a Realtime Database page, and local v1 and v2 Functions database triggers receive scoped changes; while the event queue is full, a write whose events would fit an empty queue is refused whole with 503. See the [Realtime Database page](site/src/content/docs/products/realtime-database.mdx) for credentials per profile, the regular-expression differences and the limits.
 
 An instance without a rules file is open, or, with `database.defaultAccess = "locked"` (the `productionExact` default), answers only the emulator's `owner` credential, which firebase-admin uses against an emulator.
 
@@ -151,6 +151,8 @@ npx fireemu exec --ui -- npm test
 Use `--ui-port 0` to disable the UI. When automatic UI startup cannot bind the default port, the emulator starts without the UI. Check the startup output if the UI is unavailable.  
 
 When a Functions codebase is loaded, the Functions page shows registered functions, triggers, invocation results, and logs. You can run scheduled functions immediately or advance the virtual clock to their next scheduled execution. 
+
+When the Realtime Database (an open gap) is served, its page browses and edits data as the local administrator, reads and replaces the Rules, and runs anonymous requests to see how the Rules answer them.
 
 For clock-sensitive and parallel integration tests, [test clocks and independent worlds](docs/test-worlds.md) describes explicit Node Date/timer/Cloud Tasks policies and the `fireemu/testing` helper. Separate worlds isolate their clocks, Rules, Functions and service state, including when they use the same project ID. The `fireemu/control` client also works in `fireemu exec` commands and shares URL resolution and authentication with `world.control()`, so callers do not need to concatenate control URLs.
 

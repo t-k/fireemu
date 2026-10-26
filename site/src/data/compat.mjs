@@ -11,6 +11,7 @@ const PRODUCT_ORDER = [
 	'Cloud Firestore',
 	'Authentication',
 	'Cloud Storage',
+	'Realtime Database',
 	'Cloud Functions',
 	'Cloud Pub/Sub',
 	'Eventarc',
@@ -104,6 +105,11 @@ export const AREAS = {
 		product: 'Cloud Storage',
 		title: 'Storage Security Rules',
 		covers: 'Method grants, request and stored resources, token claims, path matching, Firestore lookups from Storage rules, denial shapes and rules releases.',
+	},
+	RTDB: {
+		product: 'Realtime Database',
+		title: 'Realtime Database',
+		covers: 'REST reads, writes and queries with ETags, export format, rules loading and owner and UID evaluation, anonymous event streams, and the Web SDK over WebSocket and long polling: value listeners, onDisconnect, a transaction and email/password sign-in.',
 	},
 	'FUNCTIONS-HTTP': {
 		product: 'Cloud Functions',

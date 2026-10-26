@@ -1,6 +1,6 @@
 # Local Enterprise text search
 
-Text search is an unreleased Firestore Enterprise Native feature after fireemu 0.29. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response and match production for Latin-script text; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
+Text search is a Firestore Enterprise Native feature, added in fireemu 0.30.0. It is owner-only while Security Rules are configured. Its membership and result order are compared with every recorded production search response and match production for Latin-script text; the known differences are listed under [Production comparison](#production-comparison), and numeric `score()` values are approximate.
 
 ## Configure a text index
 

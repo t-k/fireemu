@@ -23,6 +23,7 @@ If the default port is busy, `up` starts without the UI; check the startup outpu
 - **Overview:** the project, version, virtual clock and running services.
 - **Authentication, Firestore and Storage:** browse and manage users, documents and objects.
 - **Functions:** registered functions, their triggers, invocation results and logs. Run a scheduled function immediately, or advance the clock to its next occurrence.
+- **Realtime Database:** browse the data at a path, replace, patch or delete it as the local administrator, read and replace the instance's Rules, and run an anonymous request to see how the Rules answer it.
 - **Alerts:** publish Firebase alerts to functions that listen for them.
 - **Rules:** every Security Rules decision since the start of the run, with what each expression evaluated to.
 - **App Check:** registered apps and debug tokens.

@@ -540,3 +540,29 @@ test("the image residue check looks at the target's two package names exactly", 
     await rm(world.dir, { recursive: true, force: true });
   }
 });
+
+test("the image residue check runs in cleanup and is counted in the cleanup budget", async () => {
+  const world = await deployWorld({
+    deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    caps: PROBE_LIMITS,
+  });
+  const seen = [];
+  try {
+    await runUploadProbe({
+      control: async (method, url, body, kind, allowed) => {
+        seen.push([kind, url]);
+        return world.control(method, url, body, kind, allowed);
+      },
+      adcPath: "/adc",
+      budget: world.budget,
+      runDir: join(world.dir, "run"),
+      projectNumber: NUMBER,
+      run: world.run,
+    });
+    const listing = seen.filter(([, url]) => url.endsWith("/gcf-artifacts/packages?pageSize=1000"));
+    assert.equal(listing.length, 1);
+    assert.equal(listing[0][0], "cleanup");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});

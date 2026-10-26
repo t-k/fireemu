@@ -4,10 +4,16 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  redactUploadSecrets,
+  createReceiptScanner,
+  openSourceUploads,
+} from "../src/shared/gen2-source-uploads.mjs";
+import {
+  BOUNDS,
   PROJECT,
   REGION,
   createBudget,
@@ -28,7 +34,7 @@ const COMMON_GIT = execFileSync(
   ["rev-parse", "--path-format=absolute", "--git-common-dir"],
   { cwd: ROOT, encoding: "utf8" },
 ).trim();
-const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
+export const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
 const LEDGER = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl");
 const LOCK = `${LEDGER}.lock`;
 const OWNER_DECISIONS = join(PRIVATE_ROOT, "instructions/owner-decisions.md");
@@ -40,11 +46,12 @@ const KEY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-auth-key-20260925.json",
 );
-const PROJECT_IDENTITY_FILE = join(
+export const PROJECT_IDENTITY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-project.json",
 );
-const PROJECT_IDENTITY_SHA = "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108ef4628df8fad58";
+export const PROJECT_IDENTITY_SHA =
+  "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108ef4628df8fad58";
 const SANDBOX_DOC = join(PRIVATE_ROOT, "sandbox-oracles.md");
 const CLI = join(CONFORMANCE, "node_modules/firebase-tools/lib/bin/firebase.js");
 const TASK = "FUNCTIONS-HTTP-SANDBOX";
@@ -65,7 +72,7 @@ const CORPUS_SHA = "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a64810
 const FIXTURE_SHA = "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5";
 const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e025436a0d7f9f7197";
 const FIXTURE_PACKAGE_SHA = "5a2a9739e294a24104b837a940a65dd38746140dd64fd5744ac85f1d13c4043c";
-const FIXTURE_LOCK_SHA = "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb";
+const FIXTURE_LOCK_SHA = "bcec0509ef824246fc0773859a02561ef178cfd59ede9aab5d39fbcfc178485d";
 const AUTH_HOST = "https://identitytoolkit.googleapis.com";
 const FIREBASE_HOST = "https://firebase.googleapis.com";
 const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
@@ -73,6 +80,7 @@ const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
 const RESOURCE_MANAGER_HOST = "https://cloudresourcemanager.googleapis.com";
+const STORAGE_HOST = "https://storage.googleapis.com";
 const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
 const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
 const SERVICE_AGENT_DOMAINS = {
@@ -343,7 +351,7 @@ export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir
         )
       )
         return "[REDACTED CREDENTIAL LINE]";
-      return line
+      return redactUploadSecrets(line)
         .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[REDACTED API KEY]")
         .replace(/ya29\.[0-9A-Za-z._-]+/g, "[REDACTED ACCESS TOKEN]")
         .replace(/[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[REDACTED JWT]")
@@ -370,7 +378,7 @@ export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir
   return file;
 }
 
-async function requiredSourceDigests() {
+export async function requiredSourceDigests(readSource = (file) => readFile(join(HERE, file))) {
   const checked = [
     ["corpus.json", CORPUS_SHA],
     ["fixtures/index.js", FIXTURE_SHA],
@@ -379,14 +387,14 @@ async function requiredSourceDigests() {
     ["fixtures/package-lock.json", FIXTURE_LOCK_SHA],
   ];
   for (const [file, expected] of checked) {
-    if (digest(await readFile(join(HERE, file))) !== expected)
+    if (digest(await readSource(file)) !== expected)
       throw new Error(`reviewed source changed: ${file}`);
   }
   const cliPackage = JSON.parse(
-    await readFile(join(CONFORMANCE, "node_modules/firebase-tools/package.json"), "utf8"),
+    (await readSource("../node_modules/firebase-tools/package.json")).toString("utf8"),
   );
   if (cliPackage.version !== "15.28.2") throw new Error("pinned Firebase CLI 15.28.2 is required");
-  const corpus = JSON.parse(await readFile(join(HERE, "corpus.json"), "utf8"));
+  const corpus = JSON.parse((await readSource("corpus.json")).toString("utf8"));
   validateCorpus(corpus);
   return corpus;
 }
@@ -455,7 +463,7 @@ async function assertPrivateApproval() {
   return gitSha;
 }
 
-async function ownerAdc() {
+export async function ownerAdc() {
   const path = resolve(
     process.env.FIREEMU_OWNER_ADC ||
       join(homedir(), ".config/gcloud/application_default_credentials.json"),
@@ -605,12 +613,31 @@ async function acquireToken(adc, budget, kind) {
   return { value: value.access_token, expiresAt: Date.now() + value.expires_in * 1000 - 120_000 };
 }
 
+/** Reads a response body, stopping at 1 MiB counted in bytes. */
+export async function readBoundedText(response) {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_RESPONSE_BYTES) {
+      await reader.cancel("control response exceeded 1 MiB");
+      throw new Error("control response exceeded 1 MiB");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// `body` was read through readBoundedText, which already enforces the 1 MiB bound in bytes.
 function safeJsonResponse(body) {
-  if (body.length > MAX_RESPONSE_BYTES) throw new Error("control response exceeded 1 MiB");
   return body ? JSON.parse(body) : {};
 }
 
-function createControl(adc, budget) {
+export function createControl(adc, budget) {
   let token;
   return async function control(method, url, body, kind = "control", allowed = [200]) {
     if (
@@ -622,11 +649,12 @@ function createControl(adc, budget) {
         FIREBASE_HOST,
         SERVICE_USAGE_HOST,
         RESOURCE_MANAGER_HOST,
+        STORAGE_HOST,
       ].some((host) => url.startsWith(`${host}/`))
     ) {
       throw new Error("unreviewed REST host");
     }
-    if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, kind);
+    if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, "token");
     if (method === "GET" && body !== undefined) throw new Error("GET request cannot have a body");
     budget.take(kind);
     const response = await fetch(url, {
@@ -640,15 +668,47 @@ function createControl(adc, budget) {
       redirect: "manual",
       signal: AbortSignal.timeout(60_000),
     });
-    const text = await response.text();
-    if (!allowed.includes(response.status))
+    const text = await readBoundedText(response);
+    if (allowed !== "any" && !allowed.includes(response.status))
       throw new Error(`bounded ${kind} REST ${method} returned ${response.status}`);
-    return { status: response.status, value: safeJsonResponse(text) };
+    return {
+      status: response.status,
+      value: safeJsonResponse(text),
+      bytes: Buffer.byteLength(text),
+    };
   };
 }
 
+/** The `send` of the source upload helper: every request is counted as an `upload` request. */
+export const storageSend = (control) => async (method, url) => {
+  const reply = await control(method, url, undefined, "upload", "any");
+  return { status: reply.status, bodyReadable: true, value: reply.value, bytes: reply.bytes };
+};
+
+const DEBUG_LINE = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] /u;
+
+/** The CLI output without its --debug lines, which carry signed upload URLs. */
+export const withoutDebugLines = (output) =>
+  output
+    .split(/\r?\n/u)
+    .filter((line) => !DEBUG_LINE.test(line))
+    .join("\n");
+
+async function removeCliDebugLogs() {
+  const { rm } = await import("node:fs/promises");
+  for (const name of [
+    "firebase-debug.log",
+    ...Array.from({ length: 9 }, (_, i) => `firebase-debug.${i + 1}.log`),
+  ]) {
+    await rm(join(HERE, name), { force: true });
+  }
+}
+
+// FIREBASE_CLI_EXPERIMENTS can move a 2nd gen upload to a bucket the upload helper does not list
+// (`functionsrunapionly` uploads to firebase-functions-src-<number>), and DEBUG changes the CLI's
+// logging, so neither reaches the CLI from the launch shell.
 export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
-  return {
+  const environment = {
     ...base,
     GOOGLE_APPLICATION_CREDENTIALS: adcPath,
     GOOGLE_CLOUD_QUOTA_PROJECT: PROJECT,
@@ -657,45 +717,102 @@ export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
     FIREBASE_CLI_DISABLE_UPDATE_CHECK: "1",
     CI: "1",
   };
+  delete environment.FIREBASE_CLI_EXPERIMENTS;
+  delete environment.DEBUG;
+  return environment;
 }
 
-async function cli(args, adcPath, budget, kind, runDir) {
+// `deployTrack` is set for a deploy: the CLI then runs with --debug so that the generateUploadUrl
+// answer (the source upload receipt) is seen even when the deploy fails afterwards. Receipts go to
+// `deployTrack.onEvent` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
+// (not killed by this runner or a signal), and the debug lines never reach the stored diagnostic.
+export async function cli(
+  args,
+  adcPath,
+  budget,
+  kind,
+  runDir,
+  deployTrack,
+  command = [process.execPath, CLI],
+) {
   const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
-  const child = spawn(process.execPath, [CLI, ...args, "--project", PROJECT, "--non-interactive"], {
-    cwd: HERE,
-    detached: true,
-    env: cliEnvironment(adcPath, isolatedConfig),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const debug = deployTrack !== undefined;
+  // A debug log left by an earlier run holds a signed upload URL and must not be mistaken for ours.
+  if (debug) await removeCliDebugLogs();
+  const outputLimit = debug ? 16_000_000 : 1_000_000;
+  const child = spawn(
+    command[0],
+    [
+      ...command.slice(1),
+      ...args,
+      ...(debug ? ["--debug"] : []),
+      "--project",
+      PROJECT,
+      "--non-interactive",
+    ],
+    {
+      cwd: HERE,
+      detached: true,
+      env: cliEnvironment(adcPath, isolatedConfig),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let output = "";
+  let stopped = false;
   const stopGroup = (signal) => {
+    stopped = true;
     try {
       process.kill(-child.pid, signal);
     } catch {
       /* already exited */
     }
   };
-  for (const stream of [child.stdout, child.stderr])
+  const scanners = [child.stdout, child.stderr].map(() =>
+    createReceiptScanner((event, line) => deployTrack?.onEvent(event, line)),
+  );
+  [child.stdout, child.stderr].forEach((stream, index) =>
     stream.on("data", (chunk) => {
-      output += chunk.toString("utf8");
-      if (output.length > 1_000_000) stopGroup("SIGTERM");
-    });
+      const text = chunk.toString("utf8");
+      output += text;
+      if (debug) scanners[index].feed(text);
+      if (output.length > outputLimit) stopGroup("SIGTERM");
+    }),
+  );
   const timeout = setTimeout(() => stopGroup("SIGTERM"), 20 * 60 * 1000);
   const force = setTimeout(() => stopGroup("SIGKILL"), 20 * 60 * 1000 + 10_000);
-  const code = await new Promise((resolveChild, reject) => {
-    child.once("error", reject);
-    child.once("close", resolveChild);
-  });
-  clearTimeout(timeout);
-  clearTimeout(force);
-  const summary = summarizeCliOutput(output, code);
+  let signal = null;
+  let code;
+  try {
+    code = await new Promise((resolveChild, reject) => {
+      child.once("error", reject);
+      child.once("close", (exitCode, exitSignal) => {
+        signal = exitSignal;
+        resolveChild(exitCode);
+      });
+    });
+  } finally {
+    clearTimeout(timeout);
+    clearTimeout(force);
+    if (debug) {
+      for (const scanner of scanners) scanner.flush();
+      deployTrack.exited = false;
+      deployTrack.exitCode = null;
+      await removeCliDebugLogs();
+    }
+  }
+  if (debug) {
+    deployTrack.exited = !stopped && signal === null && typeof code === "number";
+    deployTrack.exitCode = deployTrack.exited ? code : null;
+  }
+  const visible = debug ? withoutDebugLines(output) : output;
+  const summary = summarizeCliOutput(visible, code);
   if (code !== 0 || summary.autoEnabledApi) {
     const failure = new Error(`${kind} failed or attempted API enablement (exit ${code})`);
     failure.indeterminate = kind === "cliDeploy";
     try {
-      await writeCliDiagnostic(output, code, kind, attempt, runDir);
+      await writeCliDiagnostic(visible, code, kind, attempt, runDir);
     } catch {
       failure.message += "; private CLI diagnostic could not be written";
     }
@@ -878,7 +995,7 @@ async function policy(control, target, kind) {
   return response.value;
 }
 
-async function publicInvoker(control, target, enabled, kind) {
+async function publicInvoker(control, target, enabled, kind, log = logChange) {
   const current = await policy(control, target, kind);
   if (
     enabled &&
@@ -894,13 +1011,13 @@ async function publicInvoker(control, target, enabled, kind) {
   }
   const readback = await policy(control, target, kind);
   assertPublicReadback(readback, enabled);
-  await logChange(
+  await log(
     enabled ? "public-invoker-granted" : "public-invoker-revoked",
     `${serviceName(target)}; service-level policy read back`,
   );
 }
 
-async function createUser(key, budget, runDir, programId) {
+export async function createUser(key, budget, runDir, programId) {
   const email = `fireemu-fh-${randomBytes(8).toString("hex")}@example.com`;
   await appendFile(
     join(runDir, "owned-users.jsonl"),
@@ -920,7 +1037,7 @@ async function createUser(key, budget, runDir, programId) {
     signal: AbortSignal.timeout(30_000),
   });
   if (response.status !== 200) throw new Error(`Auth signUp returned ${response.status}`);
-  const user = safeJsonResponse(await response.text());
+  const user = safeJsonResponse(await readBoundedText(response));
   await appendFile(
     join(runDir, "owned-users.jsonl"),
     `${JSON.stringify({ ts: now(), programId, email, localId: user.localId ?? null, state: "signup-accepted" })}\n`,
@@ -968,30 +1085,57 @@ async function waitForExpiry(token, abort) {
   }
 }
 
-async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
+// `state.upload` is the target's source upload deploy (see gen2-source-uploads.mjs) and
+// `state.deployTrack` what the deploy CLI reported. The target is cleaned only when its function,
+// service, image version and source upload are all accounted for.
+export async function cleanupTarget(
+  control,
+  target,
+  adcPath,
+  budget,
+  runDir,
+  state,
+  { run = cli, log = logChange } = {},
+) {
   if (!state.started) return;
   try {
     const current = await inspectAbsence(control, target, "cleanup");
     if (!current.serviceAbsent) {
       try {
-        await publicInvoker(control, target, false, "cleanup");
+        await publicInvoker(control, target, false, "cleanup", log);
       } catch (error) {
         state.iamRevocationError = error.message;
       }
     }
     if (!current.functionAbsent || !current.serviceAbsent) {
-      await cli(
+      await run(
         ["functions:delete", expectedFunctionName(target), "--region", REGION, "--force"],
         adcPath,
         budget,
         "cliDelete",
         runDir,
       );
-      await logChange("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
+      await log("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
     }
     const absent = await inspectAbsence(control, target, "cleanup");
     if (!absent.functionAbsent || !absent.serviceAbsent)
       throw new Error("function or Cloud Run service remains after delete");
+    // The function and service are gone, so no build still needs the source upload. It is cleaned
+    // before the image, which can stop on an image version that cannot be distinguished.
+    if (state.upload) {
+      const uploads = await state.upload.finish({
+        cliExited: state.deployTrack?.exited === true,
+        exitCode: state.deployTrack?.exitCode ?? null,
+      });
+      if (uploads.clean) {
+        await log(
+          "source-upload-deleted",
+          `${functionUrl(target)}; owned uploads absence read back`,
+        );
+      } else {
+        state.uploadCleanupError = `source upload not cleaned: ${uploads.reasons.join(", ")}`;
+      }
+    }
     const packageExists = await inspectOwnedPackage(control, target, "cleanup");
     if (packageExists) {
       const versions = await listOwnedVersions(control, target, "cleanup");
@@ -1040,15 +1184,97 @@ async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
         [404],
       );
       if (after.status !== 404) throw new Error("owned image version remains");
-      await logChange("image-version-deleted", `${state.versionName}; absence read back`);
+      await log("image-version-deleted", `${state.versionName}; absence read back`);
     }
+    if (state.uploadCleanupError) throw new Error(state.uploadCleanupError);
     state.cleaned = true;
   } catch (error) {
     state.cleanupError = error.message;
   }
 }
 
-async function observeProgram(program, control, adcPath, budget, runDir, recordings, abort) {
+/**
+ * Starts the target's source upload ledger entry, then runs the deploy. From the first receipt on,
+ * `state.upload` holds the responsibility for what the deploy uploads, whatever the CLI does next.
+ */
+export async function deployTarget(
+  target,
+  programId,
+  state,
+  uploads,
+  adcPath,
+  budget,
+  runDir,
+  run = cli,
+  tap = () => {},
+) {
+  const upload = await uploads.beginDeploy(`${programId}:${target}`);
+  // `tap` sees every upload event with its raw line (the stage 1 probe records the line forms).
+  const deployTrack = {
+    onEvent: (event, line) => {
+      tap(event, line);
+      upload.observe(event);
+    },
+  };
+  Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
+  await run(
+    ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
+    adcPath,
+    budget,
+    "cliDeploy",
+    runDir,
+    deployTrack,
+  );
+}
+
+/** The reserved function, service and image package must not exist before a deploy. */
+export async function assertTargetAbsent(control, target) {
+  const absence = await inspectAbsence(control, target, "control");
+  if (
+    !absence.functionAbsent ||
+    !absence.serviceAbsent ||
+    (await inspectOwnedPackage(control, target, "control"))
+  ) {
+    throw new Error("reserved function, service or image package already exists");
+  }
+}
+
+/** Reads the deployed function, its service and its one owned image version into `state`. */
+export async function readDeployedTarget(control, target, state) {
+  const functionRecord = (await control("GET", functionUrl(target), undefined, "control")).value;
+  state.url = validateFunctionRecord(functionRecord, target);
+  const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
+  if (
+    service.name?.toLowerCase() !== serviceName(target).toLowerCase() ||
+    !service.template?.containers?.[0]?.image
+  ) {
+    throw new Error("Cloud Run service does not identify the deployed image");
+  }
+  const ownedImage = assertOwnedImage(service.template.containers[0].image, target);
+  const versions = await listOwnedVersions(control, target, "control");
+  if (versions.length !== 1)
+    throw new Error("deployed function did not create exactly one owned image version");
+  if (
+    ownedImage.digest &&
+    decodeURIComponent(versions[0].name.split("/").at(-1)) !== ownedImage.digest
+  ) {
+    throw new Error("Cloud Run image digest does not match the owned Artifact Registry version");
+  }
+  if (ownedImage.tag) await assertOwnedTag(control, target, ownedImage.tag, versions[0].name);
+  state.versionName = versions[0].name;
+}
+
+export async function observeProgram(
+  program,
+  control,
+  adcPath,
+  budget,
+  runDir,
+  recordings,
+  abort,
+  uploads,
+  { run = cli, log = logChange, fetchImpl } = {},
+) {
   const targets = [...new Set(program.cases.map((step) => step.target))];
   const states = Object.fromEntries(
     targets.map((target) => [target, { started: false, cleaned: false }]),
@@ -1067,50 +1293,11 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
     }
     for (const target of targets) {
       if (abort.stopped) throw new Error("signal stopped observation before deploy");
-      const absence = await inspectAbsence(control, target, "control");
-      if (
-        !absence.functionAbsent ||
-        !absence.serviceAbsent ||
-        (await inspectOwnedPackage(control, target, "control"))
-      ) {
-        throw new Error("reserved function, service or image package already exists");
-      }
-      states[target].started = true;
-      states[target].exposureStart = Date.now();
-      await cli(
-        ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
-        adcPath,
-        budget,
-        "cliDeploy",
-        runDir,
-      );
-      await logChange("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
-      const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
-        .value;
-      states[target].url = validateFunctionRecord(functionRecord, target);
-      const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
-      if (
-        service.name?.toLowerCase() !== serviceName(target).toLowerCase() ||
-        !service.template?.containers?.[0]?.image
-      ) {
-        throw new Error("Cloud Run service does not identify the deployed image");
-      }
-      const image = service.template.containers[0].image;
-      const ownedImage = assertOwnedImage(image, target);
-      const versions = await listOwnedVersions(control, target, "control");
-      if (versions.length !== 1)
-        throw new Error("deployed function did not create exactly one owned image version");
-      if (
-        ownedImage.digest &&
-        decodeURIComponent(versions[0].name.split("/").at(-1)) !== ownedImage.digest
-      ) {
-        throw new Error(
-          "Cloud Run image digest does not match the owned Artifact Registry version",
-        );
-      }
-      if (ownedImage.tag) await assertOwnedTag(control, target, ownedImage.tag, versions[0].name);
-      states[target].versionName = versions[0].name;
-      await publicInvoker(control, target, true, "control");
+      await assertTargetAbsent(control, target);
+      await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir, run);
+      await log("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
+      await readDeployedTarget(control, target, states[target]);
+      await publicInvoker(control, target, true, "control", log);
       states[target].publicSince = Date.now();
     }
     const endpoints = Object.fromEntries(targets.map((target) => [target, states[target].url]));
@@ -1130,6 +1317,7 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
         throw new Error("signal or public exposure limit stopped observation");
       }
       recordings[pass][program.id] = await runCases(program, endpoints, tokens, budget, {
+        fetchImpl,
         replacements,
         deadline,
       });
@@ -1147,7 +1335,7 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
     error = caught;
   } finally {
     for (const target of targets.toReversed())
-      await cleanupTarget(control, target, adcPath, budget, runDir, states[target]);
+      await cleanupTarget(control, target, adcPath, budget, runDir, states[target], { run, log });
     if (user) {
       try {
         await deleteUser(control, user, runDir, program.id);
@@ -1163,12 +1351,24 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
     error?.indeterminate;
   if (incomplete) {
     const failure = new Error(
-      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" ? undefined : value))}`,
+      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" ? undefined : value))}`,
     );
     failure.residual = true;
     throw failure;
   }
   if (error) throw error;
+}
+
+/** A run whose source upload ledger is not closed never ends with a terminal line or unlocks. */
+export function withUploadClosure(report, { outcome, reason, residual }) {
+  if (report.closureReady) return { outcome, reason, residual };
+  return {
+    outcome: "stopped-needs-review",
+    reason: [reason, `source upload ledger is not closed (${report.reasons.length} open)`]
+      .filter(Boolean)
+      .join("; "),
+    residual: true,
+  };
 }
 
 export async function recordProduction() {
@@ -1252,6 +1452,14 @@ export async function recordProduction() {
       `${JSON.stringify({ ...base, event: "started", requests: null, estimatedUsd: 0 })}\n`,
     );
     const control = createControl(adc.file, budget);
+    const uploads = openSourceUploads({
+      ledgerPath: join(runDir, "owned-uploads.jsonl"),
+      runId: basename(runDir),
+      projectNumber,
+      region: REGION,
+      send: storageSend(control),
+      requestsLeft: () => BOUNDS.upload - budget.snapshot().upload,
+    });
     const recordings = [{}, {}];
     let outcome = "recorded";
     let reason;
@@ -1267,7 +1475,16 @@ export async function recordProduction() {
       );
       for (const program of corpus.programs) {
         if (abort.stopped) throw new Error("signal stopped the observation");
-        await observeProgram(program, control, adc.path, budget, runDir, recordings, abort);
+        await observeProgram(
+          program,
+          control,
+          adc.path,
+          budget,
+          runDir,
+          recordings,
+          abort,
+          uploads,
+        );
       }
       await writeFile(
         join(runDir, "recording-1.json"),
@@ -1289,6 +1506,12 @@ export async function recordProduction() {
       reason = error.message;
       residual = Boolean(error.residual);
     }
+    ({ outcome, reason, residual } = withUploadClosure(uploads.report(), {
+      outcome,
+      reason,
+      residual,
+    }));
+    uploads.close();
     if (grantsBefore && budget.snapshot().cliDeploy > 0) {
       try {
         const grantsAfter = await readServiceAgentGrants(control, projectNumber);

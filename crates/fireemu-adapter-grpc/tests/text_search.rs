@@ -274,6 +274,39 @@ fn score_projection_paging_and_downstream_select_keep_unprojected_search_fields(
         .iter()
         .all(|row| row["fields"]["label"]["stringValue"].is_string()));
 }
+/// A select that keeps `__name__` as itself carries the document name on search results too.
+#[test]
+fn a_search_select_of_the_name_as_itself_keeps_the_document_name() {
+    let state = fixture();
+    let _catalog = install(&state, false);
+    put(&state, "a", "first", "waffles");
+    let mut query = search_query("body:\"waffles\"");
+    query["structuredPipeline"]["pipeline"]["stages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"select","args":[{"mapValue":{"fields":{
+            "__name__":{"fieldReferenceValue":"__name__"},
+            "label":{"fieldReferenceValue":"title"}
+        }}}]}));
+    let answer = request(
+        &state,
+        "POST",
+        &format!("{DB}/documents:executePipeline"),
+        query,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let rows = results(&answer.body);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["name"],
+        format!("{DB}/documents/products/a"),
+        "{}",
+        answer.body
+    );
+    assert_eq!(rows[0]["fields"]["label"]["stringValue"], "first");
+    assert!(rows[0]["fields"].get("__name__").is_none());
+}
+
 #[test]
 fn unavailable_builds_and_production_exact_never_return_approximate_search_results() {
     let state = fixture();

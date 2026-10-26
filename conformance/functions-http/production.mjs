@@ -72,7 +72,7 @@ const CORPUS_SHA = "836c138ba213546428e700e7ecb51644089bb5b0cdc91946eb9904a64810
 const FIXTURE_SHA = "0c481ec6b6ec87db71a2f90550238ce69ec2b923c7a92b7ea5171cb7909886a5";
 const FIREBASE_CONFIG_SHA = "0b76734c83f808f8842ee093177fc9ecc2fda2ec9f9d06e025436a0d7f9f7197";
 const FIXTURE_PACKAGE_SHA = "5a2a9739e294a24104b837a940a65dd38746140dd64fd5744ac85f1d13c4043c";
-const FIXTURE_LOCK_SHA = "9d0a9bc3287ad79bc66ee7174c2486dd078d18e77b2c27d612c3c8712d703eeb";
+const FIXTURE_LOCK_SHA = "bcec0509ef824246fc0773859a02561ef178cfd59ede9aab5d39fbcfc178485d";
 const AUTH_HOST = "https://identitytoolkit.googleapis.com";
 const FIREBASE_HOST = "https://firebase.googleapis.com";
 const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
@@ -378,7 +378,7 @@ export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir
   return file;
 }
 
-export async function requiredSourceDigests() {
+export async function requiredSourceDigests(readSource = (file) => readFile(join(HERE, file))) {
   const checked = [
     ["corpus.json", CORPUS_SHA],
     ["fixtures/index.js", FIXTURE_SHA],
@@ -387,14 +387,14 @@ export async function requiredSourceDigests() {
     ["fixtures/package-lock.json", FIXTURE_LOCK_SHA],
   ];
   for (const [file, expected] of checked) {
-    if (digest(await readFile(join(HERE, file))) !== expected)
+    if (digest(await readSource(file)) !== expected)
       throw new Error(`reviewed source changed: ${file}`);
   }
   const cliPackage = JSON.parse(
-    await readFile(join(CONFORMANCE, "node_modules/firebase-tools/package.json"), "utf8"),
+    (await readSource("../node_modules/firebase-tools/package.json")).toString("utf8"),
   );
   if (cliPackage.version !== "15.28.2") throw new Error("pinned Firebase CLI 15.28.2 is required");
-  const corpus = JSON.parse(await readFile(join(HERE, "corpus.json"), "utf8"));
+  const corpus = JSON.parse((await readSource("corpus.json")).toString("utf8"));
   validateCorpus(corpus);
   return corpus;
 }

@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admin_app_check;
 pub mod application_clock;
 pub mod callable;
 pub mod eventarc;

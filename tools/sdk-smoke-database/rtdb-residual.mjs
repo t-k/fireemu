@@ -23,11 +23,12 @@ import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
 import { adminClient, assertNoSecrets, LAUNCH, redact } from './cv11-genuine-auth.mjs';
+import { ADC_ARGS, adcPreflight } from './adc-preflight.mjs';
 import { DEFAULT_JAR, startJar } from './jar.mjs';
 import { judgeRuns, sanitizeProfiles, SCENARIOS } from './rtdb-residual-judge.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const SOURCES = ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs'];
+export const SOURCES = ['rtdb-residual.mjs', 'rtdb-residual-page.js', 'rtdb-residual-judge.mjs', 'adc-preflight.mjs'];
 export const PROFILES = [[1, 'ws'], [1, 'lp'], [2, 'ws'], [2, 'lp']].map(([round, transport]) => ({ round, transport, name: `r${round}-${transport}` }));
 // observe/cleanup: admin requests per phase; mutations: admin writes overall; browser caps per profile.
 export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation: 12, browserHttp: 400, browserWs: 24, browserFrames: 2500 };
@@ -59,30 +60,9 @@ export function rulesFor(prefix, { deny = false } = {}) {
   };
 }
 
-/** The ADC token comes from `gcloud auth application-default print-access-token`; the scopes are those of the login. */
-export const ADC_ARGS = ['auth', 'application-default', 'print-access-token'];
+export { ADC_ARGS };
 /** Every management and data request carries the token as a Bearer header (never in the URL) and the quota project. */
 export const productionHeaders = (token, projectId) => ({ authorization: `Bearer ${token}`, 'x-goog-user-project': projectId });
-
-// RTDB REST accepts an OAuth token only with one of these scopes (production-1 and production-2, 2026-10-26: an ADC
-// login with cloud-platform and androidpublisher only answered 401 "Unauthorized request." on the instance host).
-export const RTDB_SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/firebase.database'];
-export const TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
-
-/**
- * One tokeninfo request before any admin request: the token travels in the POST body (never in the URL), nothing of
- * the answer is kept but its scope list. Fails closed: an answer that cannot be read is 'adc-scopes-unverified'.
- */
-export async function adcPreflight(fetchImpl, token) {
-  let scopes;
-  try {
-    const res = await fetchImpl(TOKENINFO_URL, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ access_token: token }).toString(), signal: AbortSignal.timeout(TIMEOUT_MS) });
-    const doc = res.status === 200 ? JSON.parse(await res.text()) : undefined;
-    if (typeof doc?.scope === 'string') scopes = doc.scope.split(/\s+/).filter(Boolean);
-  } catch { /* unverified */ }
-  if (!scopes) return { ok: false, reason: 'adc-scopes-unverified', scopes: [] };
-  return RTDB_SCOPES.some((x) => scopes.includes(x)) ? { ok: true, scopes } : { ok: false, reason: 'adc-scopes-missing', scopes };
-}
 
 /** Runs the preflight and writes preflight.json (and result.json when it stops). Returns the exit code, 0 to go on. */
 export async function runPreflight(out, token, fetchImpl, secrets = []) {
@@ -90,7 +70,7 @@ export async function runPreflight(out, token, fetchImpl, secrets = []) {
   const write = (f, v) => writeFileSync(path.join(out, f), assertNoSecrets(`${JSON.stringify(v, null, 2)}\n`, secrets));
   write('preflight.json', pre);
   if (pre.ok) return 0;
-  write('result.json', { status: 'stopped', reason: pre.reason, scopes: pre.scopes, changed: 'nothing: no admin request was sent' });
+  write('result.json', { status: 'stopped', reason: pre.reason, missing: pre.missing, changed: 'nothing: no admin request was sent' });
   console.log(`production: ${pre.reason}`);
   return 4;
 }
@@ -118,8 +98,9 @@ async function read(run, step, method, url, accept, body) {
   const options = { raw: method === 'GET' && url.includes('.settings/rules') };
   let r = await run.call(step, method, url, body, options);
   // Bounded backoff 2, 4, 8, 16, 30, 30, 30 s (120 s in all), counted against the caps; GETs only.
-  // 403: the management API list right after the enable (CV11 production-1). 401: the instance host's first
-  // Rules GET right after the reenable (this recorder's production-1, body "Unauthorized request.").
+  // 403: the management API list right after the enable (CV11 production-1, propagation). 401 is retried too; it is
+  // harmless, but the 401 of this recorder's production-1 and production-2 was a credential cause (an ADC token
+  // without userinfo.email, which adc-preflight.mjs now refuses before any request), not propagation.
   for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401); k++) {
     const wait = Math.min(2000 * 2 ** (k - 1), 30000, PROPAGATION_MS - run.propagationWaited);
     if (wait <= 0) break;

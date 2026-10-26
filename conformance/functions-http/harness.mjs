@@ -2,6 +2,8 @@
 
 import { createHash } from "node:crypto";
 
+import { REQUESTS_PER_DEPLOY } from "../src/shared/gen2-source-uploads.mjs";
+
 export const PROJECT = "fireemu-oracle-query";
 export const REGION = "us-central1";
 export const FUNCTION_NAMES = Object.freeze({
@@ -15,6 +17,9 @@ export const BOUNDS = Object.freeze({
   auth: 12,
   cliDeploy: 16,
   cliDelete: 16,
+  // Source upload bucket requests: the bound of one deploy for each of the 16 deployments, plus
+  // slack for an access token refresh that is counted under the same kind.
+  upload: 16 * REQUESTS_PER_DEPLOY + 4,
 });
 
 const ALLOWED_HEADERS = new Set([
@@ -125,7 +130,15 @@ export function validateCorpus(corpus) {
 }
 
 export function createBudget() {
-  const used = { invocation: 0, control: 0, cleanup: 0, auth: 0, cliDeploy: 0, cliDelete: 0 };
+  const used = {
+    invocation: 0,
+    control: 0,
+    cleanup: 0,
+    auth: 0,
+    cliDeploy: 0,
+    cliDelete: 0,
+    upload: 0,
+  };
   const limits = {
     invocation: BOUNDS.invocations,
     control: BOUNDS.control,
@@ -133,6 +146,7 @@ export function createBudget() {
     auth: BOUNDS.auth,
     cliDeploy: BOUNDS.cliDeploy,
     cliDelete: BOUNDS.cliDelete,
+    upload: BOUNDS.upload,
   };
   return {
     take(kind) {

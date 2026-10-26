@@ -751,3 +751,262 @@ test("fourth attempt accounts for the successful prior build within the extended
   });
   assert.throws(() => retryAccounting({ cliDeploy: 17, invocation: 136 }), /stage 3 budget/);
 });
+
+// ---- Gen2 source upload cleanup (FH-UPLOAD-1..6) ----
+
+const UPLOAD_NUMBER = "123456789012";
+const UPLOAD_OBJECT = "9be229fd-1507-4797-ab4b-69f2fda6e54a.zip";
+
+async function uploadWorld(overrides = {}) {
+  const { createFakeGcs, FAKE_BUCKET, SECRET_MARKER, answer } =
+    await import("../src/shared/gen2-source-uploads.fake.mjs");
+  const { openSourceUploads } = await import("../src/shared/gen2-source-uploads.mjs");
+  const { createBudget } = await import("./harness.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "functions-http-uploads-"));
+  const gcs = createFakeGcs();
+  const budget = createBudget();
+  const functions = { present: overrides.functionPresent ?? false, record: null };
+  if (functions.present) {
+    functions.record = {
+      name: "projects/fireemu-oracle-query/locations/us-central1/functions/fireemuHttpProbe",
+      buildConfig: { source: { storageSource: { bucket: FAKE_BUCKET, object: UPLOAD_OBJECT } } },
+    };
+  }
+  const control = async (method, url, body, kind = "control", allowed = [200]) => {
+    budget.take(kind);
+    let reply;
+    if (url.startsWith("https://storage.googleapis.com/")) {
+      reply = await gcs.send(method, url);
+    } else if (url.includes("/functions/") && method === "GET") {
+      reply = functions.present
+        ? { status: 200, value: functions.record, bytes: 10 }
+        : { status: 404, value: {}, bytes: 2 };
+    } else {
+      reply = { status: 404, value: {}, bytes: 2 };
+    }
+    if (allowed !== "any" && !allowed.includes(reply.status))
+      throw new Error(`status ${reply.status}`);
+    return reply;
+  };
+  const uploads = openSourceUploads({
+    ledgerPath: join(dir, "owned-uploads.jsonl"),
+    runId: "run-f",
+    projectNumber: UPLOAD_NUMBER,
+    region: "us-central1",
+    send: production.storageSend(control),
+    requestsLeft: () => 244 - budget.snapshot().upload,
+  });
+  const logs = [];
+  const deps = {
+    log: async (action) => logs.push(action),
+    run: async () => {
+      functions.present = false;
+    },
+  };
+  return {
+    dir,
+    gcs,
+    budget,
+    control,
+    uploads,
+    logs,
+    deps,
+    functions,
+    answer,
+    SECRET_MARKER,
+    FAKE_BUCKET,
+  };
+}
+
+test("deploy debug lines are dropped from the CLI output that is judged and stored", () => {
+  const output = [
+    "i  functions: deploying",
+    '[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://x/functions:generateUploadUrl {"uploadUrl":"u"}',
+    "+  Deploy complete!",
+  ].join("\n");
+  assert.equal(
+    production.withoutDebugLines(output),
+    "i  functions: deploying\n+  Deploy complete!",
+  );
+  assert.equal(
+    production.withoutDebugLines("Enabling API run.googleapis.com"),
+    "Enabling API run.googleapis.com",
+  );
+});
+
+test("a stored CLI diagnostic never keeps a signed upload URL", async () => {
+  const runDir = await mkdtemp(join(tmpdir(), "functions-http-cli-signed-"));
+  try {
+    const output = [
+      "Error: upload failed",
+      "PUT https://storage.googleapis.com/b/o.zip?GoogleAccessId=a%40b&X-Goog-Signature=SECRET-MARKER-9f3a",
+      "  at retry X-Goog-Signature=SECRET-MARKER-9f3a",
+    ].join("\n");
+    const file = await writeCliDiagnostic(output, 1, "cliDeploy", 1, runDir);
+    assert.doesNotMatch(await readFile(file, "utf8"), /SECRET-MARKER|X-Goog-Signature=/);
+  } finally {
+    await rm(runDir, { recursive: true, force: true });
+  }
+});
+
+test("upload bucket requests are counted as upload requests and stop at the ceiling", async () => {
+  const world = await uploadWorld();
+  try {
+    const send = production.storageSend(world.control);
+    const reply = await send(
+      "GET",
+      `https://storage.googleapis.com/storage/v1/b/${world.FAKE_BUCKET}/o`,
+    );
+    assert.equal(reply.status, 200);
+    assert.equal(world.budget.snapshot().upload, 1);
+    const { BOUNDS } = await import("./harness.mjs");
+    for (let n = 1; n < BOUNDS.upload; n += 1) world.budget.take("upload");
+    await assert.rejects(
+      () => send("GET", "https://storage.googleapis.com/storage/v1/b/x/o"),
+      /ceiling/,
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("cleanup of a deploy that failed after the upload deletes the owned object and closes", async () => {
+  const world = await uploadWorld();
+  try {
+    const upload = await world.uploads.beginDeploy("program:http");
+    const state = {
+      started: true,
+      cleaned: false,
+      upload,
+      deployTrack: { exited: true, onReceipt: (r) => upload.receipt(r) },
+    };
+    world.gcs.put(UPLOAD_OBJECT);
+    state.deployTrack.onReceipt({ bucket: world.FAKE_BUCKET, object: UPLOAD_OBJECT });
+    await production.cleanupTarget(
+      world.control,
+      "http",
+      "/adc",
+      world.budget,
+      world.dir,
+      state,
+      world.deps,
+    );
+    assert.equal(state.cleanupError, undefined);
+    assert.equal(state.cleaned, true);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+    assert.deepEqual(world.logs, ["source-upload-deleted"]);
+    assert.equal(world.uploads.report().closureReady, true);
+    assert.ok(
+      world.budget.snapshot().upload >= 4,
+      "list, list, metadata, delete and read-back are counted",
+    );
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("cleanup takes the receipt from a function record that is still there", async () => {
+  const world = await uploadWorld({ functionPresent: true });
+  try {
+    const upload = await world.uploads.beginDeploy("program:http");
+    const state = { started: true, cleaned: false, upload, deployTrack: { exited: false } };
+    world.gcs.put(UPLOAD_OBJECT);
+    await production.cleanupTarget(
+      world.control,
+      "http",
+      "/adc",
+      world.budget,
+      world.dir,
+      state,
+      world.deps,
+    );
+    assert.equal(state.cleanupError, undefined);
+    assert.equal(state.cleaned, true);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT), "the receipt came from the function record");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a refused upload DELETE leaves the target uncleaned and the ledger open", async () => {
+  const world = await uploadWorld();
+  try {
+    const upload = await world.uploads.beginDeploy("program:http");
+    const state = { started: true, cleaned: false, upload, deployTrack: { exited: true } };
+    world.gcs.put(UPLOAD_OBJECT);
+    upload.receipt({ bucket: world.FAKE_BUCKET, object: UPLOAD_OBJECT });
+    world.gcs.override({ method: "DELETE", url: UPLOAD_OBJECT }, world.answer(403));
+    await production.cleanupTarget(
+      world.control,
+      "http",
+      "/adc",
+      world.budget,
+      world.dir,
+      state,
+      world.deps,
+    );
+    assert.equal(state.cleaned, false);
+    assert.match(state.cleanupError, /source upload not cleaned/);
+    assert.deepEqual(world.logs, []);
+    assert.equal(world.uploads.report().closureReady, false);
+    assert.equal(world.gcs.count("DELETE"), 1);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("an unfinished deploy upload (no explanation of the bucket) is never called cleaned", async () => {
+  const world = await uploadWorld();
+  try {
+    const upload = await world.uploads.beginDeploy("program:http");
+    const state = { started: true, cleaned: false, upload, deployTrack: { exited: true } };
+    world.gcs.put(UPLOAD_OBJECT); // an upload nobody has a receipt for
+    await production.cleanupTarget(
+      world.control,
+      "http",
+      "/adc",
+      world.budget,
+      world.dir,
+      state,
+      world.deps,
+    );
+    assert.equal(state.cleaned, false);
+    assert.match(state.cleanupError, /unexplained-object/);
+    assert.ok(world.gcs.objects.has(UPLOAD_OBJECT), "an object without a receipt is never deleted");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the run never closes with an open source upload ledger, whatever else it recorded", () => {
+  const open = { closureReady: false, reasons: ["owned-not-deleted:b/o"] };
+  assert.deepEqual(
+    production.withUploadClosure(open, { outcome: "recorded", reason: undefined, residual: false }),
+    {
+      outcome: "stopped-needs-review",
+      reason: "source upload ledger is not closed (1 open)",
+      residual: true,
+    },
+  );
+  assert.deepEqual(
+    production.withUploadClosure(open, {
+      outcome: "stopped-needs-review",
+      reason: "x",
+      residual: false,
+    }),
+    {
+      outcome: "stopped-needs-review",
+      reason: "x; source upload ledger is not closed (1 open)",
+      residual: true,
+    },
+  );
+  const closed = { closureReady: true, reasons: [] };
+  assert.deepEqual(
+    production.withUploadClosure(closed, {
+      outcome: "recorded",
+      reason: undefined,
+      residual: false,
+    }),
+    { outcome: "recorded", reason: undefined, residual: false },
+  );
+});

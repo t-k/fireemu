@@ -4,10 +4,17 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  redactUploadSecrets,
+  createReceiptScanner,
+  openSourceUploads,
+  uploadReceiptFromFunctionRecord,
+} from "../src/shared/gen2-source-uploads.mjs";
+import {
+  BOUNDS,
   PROJECT,
   REGION,
   createBudget,
@@ -73,6 +80,7 @@ const RUN_HOST = "https://run.googleapis.com";
 const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
 const RESOURCE_MANAGER_HOST = "https://cloudresourcemanager.googleapis.com";
+const STORAGE_HOST = "https://storage.googleapis.com";
 const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
 const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
 const SERVICE_AGENT_DOMAINS = {
@@ -343,7 +351,7 @@ export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir
         )
       )
         return "[REDACTED CREDENTIAL LINE]";
-      return line
+      return redactUploadSecrets(line)
         .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[REDACTED API KEY]")
         .replace(/ya29\.[0-9A-Za-z._-]+/g, "[REDACTED ACCESS TOKEN]")
         .replace(/[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[REDACTED JWT]")
@@ -622,6 +630,7 @@ function createControl(adc, budget) {
         FIREBASE_HOST,
         SERVICE_USAGE_HOST,
         RESOURCE_MANAGER_HOST,
+        STORAGE_HOST,
       ].some((host) => url.startsWith(`${host}/`))
     ) {
       throw new Error("unreviewed REST host");
@@ -641,10 +650,35 @@ function createControl(adc, budget) {
       signal: AbortSignal.timeout(60_000),
     });
     const text = await response.text();
-    if (!allowed.includes(response.status))
+    if (allowed !== "any" && !allowed.includes(response.status))
       throw new Error(`bounded ${kind} REST ${method} returned ${response.status}`);
-    return { status: response.status, value: safeJsonResponse(text) };
+    return { status: response.status, value: safeJsonResponse(text), bytes: text.length };
   };
+}
+
+/** The `send` of the source upload helper: every request is counted as an `upload` request. */
+export const storageSend = (control) => async (method, url) => {
+  const reply = await control(method, url, undefined, "upload", "any");
+  return { status: reply.status, bodyReadable: true, value: reply.value, bytes: reply.bytes };
+};
+
+const DEBUG_LINE = /^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] /u;
+
+/** The CLI output without its --debug lines, which carry signed upload URLs. */
+export const withoutDebugLines = (output) =>
+  output
+    .split(/\r?\n/u)
+    .filter((line) => !DEBUG_LINE.test(line))
+    .join("\n");
+
+async function removeCliDebugLogs() {
+  const { rm } = await import("node:fs/promises");
+  for (const name of [
+    "firebase-debug.log",
+    ...Array.from({ length: 9 }, (_, i) => `firebase-debug.${i + 1}.log`),
+  ]) {
+    await rm(join(HERE, name), { force: true });
+  }
 }
 
 export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
@@ -659,43 +693,76 @@ export function cliEnvironment(adcPath, isolatedConfig, base = process.env) {
   };
 }
 
-async function cli(args, adcPath, budget, kind, runDir) {
+// `deployTrack` is set for a deploy: the CLI then runs with --debug so that the generateUploadUrl
+// answer (the source upload receipt) is seen even when the deploy fails afterwards. Receipts go to
+// `deployTrack.onReceipt` as they arrive, `deployTrack.exited` tells whether the CLI ended by itself
+// (not killed by this runner or a signal), and the debug lines never reach the stored diagnostic.
+async function cli(args, adcPath, budget, kind, runDir, deployTrack) {
   const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
-  const child = spawn(process.execPath, [CLI, ...args, "--project", PROJECT, "--non-interactive"], {
-    cwd: HERE,
-    detached: true,
-    env: cliEnvironment(adcPath, isolatedConfig),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const debug = deployTrack !== undefined;
+  const outputLimit = debug ? 16_000_000 : 1_000_000;
+  const child = spawn(
+    process.execPath,
+    [CLI, ...args, ...(debug ? ["--debug"] : []), "--project", PROJECT, "--non-interactive"],
+    {
+      cwd: HERE,
+      detached: true,
+      env: cliEnvironment(adcPath, isolatedConfig),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
   let output = "";
+  let stopped = false;
   const stopGroup = (signal) => {
+    stopped = true;
     try {
       process.kill(-child.pid, signal);
     } catch {
       /* already exited */
     }
   };
-  for (const stream of [child.stdout, child.stderr])
+  const scanners = [child.stdout, child.stderr].map(() =>
+    createReceiptScanner((receipt) => deployTrack?.onReceipt(receipt)),
+  );
+  [child.stdout, child.stderr].forEach((stream, index) =>
     stream.on("data", (chunk) => {
-      output += chunk.toString("utf8");
-      if (output.length > 1_000_000) stopGroup("SIGTERM");
-    });
+      const text = chunk.toString("utf8");
+      output += text;
+      if (debug) scanners[index].feed(text);
+      if (output.length > outputLimit) stopGroup("SIGTERM");
+    }),
+  );
   const timeout = setTimeout(() => stopGroup("SIGTERM"), 20 * 60 * 1000);
   const force = setTimeout(() => stopGroup("SIGKILL"), 20 * 60 * 1000 + 10_000);
-  const code = await new Promise((resolveChild, reject) => {
-    child.once("error", reject);
-    child.once("close", resolveChild);
-  });
-  clearTimeout(timeout);
-  clearTimeout(force);
-  const summary = summarizeCliOutput(output, code);
+  let signal = null;
+  let code;
+  try {
+    code = await new Promise((resolveChild, reject) => {
+      child.once("error", reject);
+      child.once("close", (exitCode, exitSignal) => {
+        signal = exitSignal;
+        resolveChild(exitCode);
+      });
+    });
+  } finally {
+    clearTimeout(timeout);
+    clearTimeout(force);
+    if (debug) {
+      for (const scanner of scanners) scanner.flush();
+      deployTrack.exited = false;
+      await removeCliDebugLogs();
+    }
+  }
+  if (debug) deployTrack.exited = !stopped && signal === null && typeof code === "number";
+  const visible = debug ? withoutDebugLines(output) : output;
+  const summary = summarizeCliOutput(visible, code);
   if (code !== 0 || summary.autoEnabledApi) {
     const failure = new Error(`${kind} failed or attempted API enablement (exit ${code})`);
     failure.indeterminate = kind === "cliDeploy";
     try {
-      await writeCliDiagnostic(output, code, kind, attempt, runDir);
+      await writeCliDiagnostic(visible, code, kind, attempt, runDir);
     } catch {
       failure.message += "; private CLI diagnostic could not be written";
     }
@@ -821,7 +888,11 @@ export function serviceAgentGrantChanges(before, after) {
 async function inspectAbsence(control, target, kind) {
   const f = await control("GET", functionUrl(target), undefined, kind, [200, 404]);
   const s = await control("GET", serviceUrl(target), undefined, kind, [200, 404]);
-  return { functionAbsent: f.status === 404, serviceAbsent: s.status === 404 };
+  return {
+    functionAbsent: f.status === 404,
+    serviceAbsent: s.status === 404,
+    functionRecord: f.status === 200 ? f.value : null,
+  };
 }
 
 async function inspectOwnedPackage(control, target, kind) {
@@ -968,10 +1039,24 @@ async function waitForExpiry(token, abort) {
   }
 }
 
-async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
+// `state.upload` is the target's source upload deploy (see gen2-source-uploads.mjs) and
+// `state.deployTrack` what the deploy CLI reported. The target is cleaned only when its function,
+// service, image version and source upload are all accounted for.
+export async function cleanupTarget(
+  control,
+  target,
+  adcPath,
+  budget,
+  runDir,
+  state,
+  { run = cli, log = logChange } = {},
+) {
   if (!state.started) return;
   try {
     const current = await inspectAbsence(control, target, "cleanup");
+    if (current.functionRecord) {
+      state.upload?.receipt(uploadReceiptFromFunctionRecord(current.functionRecord));
+    }
     if (!current.serviceAbsent) {
       try {
         await publicInvoker(control, target, false, "cleanup");
@@ -980,14 +1065,14 @@ async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
       }
     }
     if (!current.functionAbsent || !current.serviceAbsent) {
-      await cli(
+      await run(
         ["functions:delete", expectedFunctionName(target), "--region", REGION, "--force"],
         adcPath,
         budget,
         "cliDelete",
         runDir,
       );
-      await logChange("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
+      await log("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
     }
     const absent = await inspectAbsence(control, target, "cleanup");
     if (!absent.functionAbsent || !absent.serviceAbsent)
@@ -1040,7 +1125,14 @@ async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
         [404],
       );
       if (after.status !== 404) throw new Error("owned image version remains");
-      await logChange("image-version-deleted", `${state.versionName}; absence read back`);
+      await log("image-version-deleted", `${state.versionName}; absence read back`);
+    }
+    if (state.upload) {
+      const uploads = await state.upload.finish({ cliExited: state.deployTrack?.exited === true });
+      if (!uploads.clean) {
+        throw new Error(`source upload not cleaned: ${uploads.reasons.join(", ")}`);
+      }
+      await log("source-upload-deleted", `${functionUrl(target)}; owned uploads absence read back`);
     }
     state.cleaned = true;
   } catch (error) {
@@ -1048,7 +1140,16 @@ async function cleanupTarget(control, target, adcPath, budget, runDir, state) {
   }
 }
 
-async function observeProgram(program, control, adcPath, budget, runDir, recordings, abort) {
+async function observeProgram(
+  program,
+  control,
+  adcPath,
+  budget,
+  runDir,
+  recordings,
+  abort,
+  uploads,
+) {
   const targets = [...new Set(program.cases.map((step) => step.target))];
   const states = Object.fromEntries(
     targets.map((target) => [target, { started: false, cleaned: false }]),
@@ -1075,6 +1176,9 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
       ) {
         throw new Error("reserved function, service or image package already exists");
       }
+      const upload = await uploads.beginDeploy(`${program.id}:${target}`);
+      const deployTrack = { onReceipt: (receipt) => upload.receipt(receipt) };
+      Object.assign(states[target], { upload, deployTrack });
       states[target].started = true;
       states[target].exposureStart = Date.now();
       await cli(
@@ -1083,10 +1187,12 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
         budget,
         "cliDeploy",
         runDir,
+        deployTrack,
       );
       await logChange("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
       const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
         .value;
+      upload.receipt(uploadReceiptFromFunctionRecord(functionRecord));
       states[target].url = validateFunctionRecord(functionRecord, target);
       const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
       if (
@@ -1163,12 +1269,24 @@ async function observeProgram(program, control, adcPath, budget, runDir, recordi
     error?.indeterminate;
   if (incomplete) {
     const failure = new Error(
-      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" ? undefined : value))}`,
+      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" ? undefined : value))}`,
     );
     failure.residual = true;
     throw failure;
   }
   if (error) throw error;
+}
+
+/** A run whose source upload ledger is not closed never ends with a terminal line or unlocks. */
+export function withUploadClosure(report, { outcome, reason, residual }) {
+  if (report.closureReady) return { outcome, reason, residual };
+  return {
+    outcome: "stopped-needs-review",
+    reason: [reason, `source upload ledger is not closed (${report.reasons.length} open)`]
+      .filter(Boolean)
+      .join("; "),
+    residual: true,
+  };
 }
 
 export async function recordProduction() {
@@ -1252,6 +1370,14 @@ export async function recordProduction() {
       `${JSON.stringify({ ...base, event: "started", requests: null, estimatedUsd: 0 })}\n`,
     );
     const control = createControl(adc.file, budget);
+    const uploads = openSourceUploads({
+      ledgerPath: join(runDir, "owned-uploads.jsonl"),
+      runId: basename(runDir),
+      projectNumber,
+      region: REGION,
+      send: storageSend(control),
+      requestsLeft: () => BOUNDS.upload - budget.snapshot().upload,
+    });
     const recordings = [{}, {}];
     let outcome = "recorded";
     let reason;
@@ -1267,7 +1393,16 @@ export async function recordProduction() {
       );
       for (const program of corpus.programs) {
         if (abort.stopped) throw new Error("signal stopped the observation");
-        await observeProgram(program, control, adc.path, budget, runDir, recordings, abort);
+        await observeProgram(
+          program,
+          control,
+          adc.path,
+          budget,
+          runDir,
+          recordings,
+          abort,
+          uploads,
+        );
       }
       await writeFile(
         join(runDir, "recording-1.json"),
@@ -1289,6 +1424,12 @@ export async function recordProduction() {
       reason = error.message;
       residual = Boolean(error.residual);
     }
+    ({ outcome, reason, residual } = withUploadClosure(uploads.report(), {
+      outcome,
+      reason,
+      residual,
+    }));
+    uploads.close();
     if (grantsBefore && budget.snapshot().cliDeploy > 0) {
       try {
         const grantsAfter = await readServiceAgentGrants(control, projectNumber);

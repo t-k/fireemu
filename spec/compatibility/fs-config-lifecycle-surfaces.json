@@ -367,9 +367,9 @@
       "id": "config.firestoreIndexes",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:375",
-          "crates/fireemu/src/control.rs:165",
-          "crates/fireemu/src/control.rs:408"
+          "crates/fireemu/src/control.rs:572",
+          "crates/fireemu/src/control.rs:362",
+          "crates/fireemu/src/control.rs:605"
         ],
         "status": "implemented"
       },
@@ -381,8 +381,8 @@
       "id": "config.singleFieldExemption",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:408",
-          "crates/fireemu/src/control.rs:510",
+          "crates/fireemu/src/control.rs:605",
+          "crates/fireemu/src/control.rs:707",
           "crates/fireemu-core-firestore/src/index.rs:214",
           "crates/fireemu-core-firestore/src/index.rs:233"
         ],
@@ -424,7 +424,7 @@
       "id": "runtime.lazyDatabaseCreation",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/local.rs:2794",
+          "crates/fireemu-adapter-grpc/src/local.rs:2835",
           "crates/fireemu-core-types/src/ids.rs:183"
         ],
         "status": "implemented"
@@ -437,7 +437,7 @@
       "id": "control.textIndexLifecycle",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-http/src/control.rs:1813"
+          "crates/fireemu-adapter-http/src/control.rs:1829"
         ],
         "status": "implemented"
       },
@@ -595,7 +595,7 @@
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
           "crates/fireemu-adapter-grpc/src/admin/fields.rs:72",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:4484"
+          "crates/fireemu-adapter-grpc/src/local.rs:4806"
         ],
         "status": "implemented"
       },
@@ -607,8 +607,8 @@
       "dataPlaneConsequence": "An index created through the Admin API is CREATING, then READY and used by the planner; a query that needs it while it builds is refused as production refuses it.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:300",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:182"
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:307",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:196"
         ],
         "status": "implemented"
       },
@@ -620,8 +620,8 @@
       "dataPlaneConsequence": "Deleting an index, including one the index file declares, withdraws it from the planner, so the refusal direction of the transition is reachable at runtime.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:378",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:405"
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:392",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:419"
         ],
         "status": "implemented"
       },
@@ -633,8 +633,8 @@
       "dataPlaneConsequence": "An index reads back CREATING then READY, as production reports it, so index-dependent query acceptance is testable against the same contract.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:300",
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:363"
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:307",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:377"
         ],
         "status": "implemented"
       },
@@ -646,8 +646,8 @@
       "dataPlaneConsequence": "The list names the index file's indexes and those the Admin API created, which are exactly the ones the planner uses.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:363",
-          "crates/fireemu-adapter-grpc/src/local.rs:3839"
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:377",
+          "crates/fireemu-adapter-grpc/src/local.rs:4161"
         ],
         "status": "implemented"
       },
@@ -756,8 +756,8 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:4320",
-          "crates/fireemu-adapter-grpc/src/local.rs:4362"
+          "crates/fireemu-adapter-grpc/src/local.rs:4642",
+          "crates/fireemu-adapter-grpc/src/local.rs:4684"
         ],
         "status": "partial"
       },
@@ -770,7 +770,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:4374"
+          "crates/fireemu-adapter-grpc/src/local.rs:4696"
         ],
         "status": "partial"
       },
@@ -922,8 +922,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:2794",
-        "crates/fireemu-adapter-grpc/src/local.rs:2324",
+        "crates/fireemu-adapter-grpc/src/local.rs:2835",
+        "crates/fireemu-adapter-grpc/src/local.rs:2349",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",
@@ -971,7 +971,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
-        "crates/fireemu/src/control.rs:408",
+        "crates/fireemu/src/control.rs:605",
         "crates/fireemu-core-firestore/src/index.rs:316"
       ],
       "class": "data-plane-contract",

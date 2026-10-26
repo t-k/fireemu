@@ -31,7 +31,8 @@ import { openSourceUploads, redactUploadSecrets } from "../src/shared/gen2-sourc
 
 const TARGET = "http";
 const PROBE_ID = "upload-probe/http";
-const MASK_DIGITS = "123456789012345678";
+// The number every committed fixture uses in place of a project number, whatever its real length.
+const MASK = "123456789012";
 
 /** The probe's own request caps (the packet's request list); they can only lower the global ones. */
 export const PROBE_LIMITS = Object.freeze({
@@ -50,8 +51,7 @@ const sha256 = (bytes) =>
 
 /** A recorded line with the project number masked and every signed URL removed. */
 export function maskProbeLine(line, projectNumber) {
-  const mask = MASK_DIGITS.slice(0, projectNumber.length);
-  return redactUploadSecrets(line.replaceAll(projectNumber, mask)).replace(
+  return redactUploadSecrets(line.replaceAll(projectNumber, MASK)).replace(
     /"uploadUrl":"[^"]*"/gu,
     '"uploadUrl":"[REDACTED UPLOAD URL]"',
   );

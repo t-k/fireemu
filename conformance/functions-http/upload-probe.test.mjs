@@ -36,9 +36,9 @@ test("a recorded line is masked: the project number, the signed URL and nothing 
   assert.ok(masked.includes(UPLOAD_OBJECT), "the object name is kept");
   assert.ok(masked.includes('"uploadUrl":"[REDACTED UPLOAD URL]"'));
   assert.equal(maskProbeLine(B_LINE.replaceAll(NUMBER, REAL_LOOKING), REAL_LOOKING), B_LINE);
-  // a number of another length is masked with a prefix of the fixture digits, never kept
-  assert.equal(maskProbeLine("x 1234567890 y", "1234567890"), "x 1234567890 y");
-  assert.equal(maskProbeLine("x 4444444444 y", "4444444444"), "x 1234567890 y");
+  // a number of another length is still masked with the fixture number, never kept
+  assert.equal(maskProbeLine("x 4444444444 y", "4444444444"), "x 123456789012 y");
+  assert.equal(maskProbeLine("x 4444444444444 y", "4444444444444"), "x 123456789012 y");
 });
 
 test("the forms collector records only the shapes: seen or not, codes, byte lengths, masked lines", () => {

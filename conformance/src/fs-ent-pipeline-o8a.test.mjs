@@ -66,11 +66,10 @@ const depthOf = (value, key) => {
 
 test("O-8A programs follow the O-7 programs in PROGRAMS, under their own prefix, unique and valid", () => {
   assert.ok(O8A_PROGRAMS.length > 0);
-  assert.deepEqual(PROGRAMS.slice(-O8A_PROGRAMS.length), O8A_PROGRAMS);
-  assert.deepEqual(
-    PROGRAMS.slice(-O8A_PROGRAMS.length - O7_PROGRAMS.length, -O8A_PROGRAMS.length),
-    O7_PROGRAMS,
-  );
+  // The O-8A programs follow the O-7 programs, in order (the O-8B to O-8D programs follow them).
+  const at = PROGRAMS.findIndex((p) => p.id === O8A_PROGRAMS[0].id);
+  assert.deepEqual(PROGRAMS.slice(at, at + O8A_PROGRAMS.length), O8A_PROGRAMS);
+  assert.deepEqual(PROGRAMS.slice(at - O7_PROGRAMS.length, at), O7_PROGRAMS);
   assert.equal(new Set(O8A_PROGRAMS.map((p) => p.id)).size, O8A_PROGRAMS.length);
   for (const program of O8A_PROGRAMS) assert.ok(program.id.startsWith(O8A_PREFIX), program.id);
   for (const other of ["fs-ent-pipeline/o6/", "fs-ent-pipeline/o7/"]) {

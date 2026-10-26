@@ -41,9 +41,9 @@ import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 
-// The O-8A programs join the pinned counts below after their recording;
-// fs-ent-pipeline-o8a.test.mjs covers them until then.
-const PROGRAMS = ALL_PROGRAMS.filter((program) => !program.id.startsWith("fs-ent-pipeline/o8a/"));
+// The O-8 programs join the pinned counts below after their recording;
+// fs-ent-pipeline-o8a.test.mjs and fs-ent-pipeline-o8fn.test.mjs cover them until then.
+const PROGRAMS = ALL_PROGRAMS.filter((program) => !/^fs-ent-pipeline\/o8[a-d]\//.test(program.id));
 
 const production = (database = lane.database) =>
   createContext({

@@ -83,7 +83,7 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
 - what a real project would settle: Identity Platform issues TOTP secrets only for a project with multi-factor authentication enabled in the console; neither the official Auth emulator nor fireemu can produce the production shape, so no local run may stand in for it.
 
 
-## Documented divergences (33)
+## Documented divergences (34)
 
 - `appcheck/enforced-header-matrix#firestore-rest-no-app-check-field` -- The official emulators have no enforcement mode to configure, so they admit the request. This is the whole point of the variant: fireemu denies with 403 PERMISSION_DENIED before Security Rules and before any side effect.
   documented in: capability manifest APPCHECK-ENFORCE-1 (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md sections 12.1 and 17
@@ -151,6 +151,8 @@ Three kinds of row appear here, and none of them fails `pnpm -C conformance run 
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
 - `functions/callable-auth-context#bearer-owner-is-not-a-callable-identity` -- `Bearer owner` is the privileged emulator credential. The official emulator hands it to the callable as an authenticated context with a null uid; fireemu never treats it as a callable user identity.
   documented in: capability manifest APPCHECK-FUNCTIONS-1, "callable Authorization integrity" (crates/fireemu/src/control.rs); docs/specifications/firebase-app-check.md section 25 decision 3
+- `storage/admin-upload-download-metadata#metadata-shape` -- The JSON API object resource carries timeFinalized in fireemu, as production writes it (recorded in stage 3 v9, 2026-09-30); the official emulator omits it.
+  documented in: README.md, "Storage"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)
 
 ## Standing proposal: precision of the App Check boundary rows
 

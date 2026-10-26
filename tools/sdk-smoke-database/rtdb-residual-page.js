@@ -12,6 +12,7 @@ import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/12.
 import * as D from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// c.waitScale shortens every wait of this page (the page tests use it with a stub SDK); production leaves it at 1.
 const errorCode = (e) => (typeof e?.code === 'string' ? e.code : /permission.denied/i.test(String(e?.message)) ? 'message:permission-denied' : 'other');
 // Server timestamps are masked by their field name `at`: inside ten minutes of the browser clock or not.
 const shapeOf = (v) => JSON.stringify(v, (k, x) => (k === 'at' && typeof x === 'number' ? (Math.abs(x - Date.now()) < 600000 ? '<TS>' : '<TS-OFF>') : x));
@@ -24,7 +25,9 @@ window.__rrRun = async (c) => {
   // The SDK's message names the path it failed on; the run's random prefix is replaced.
   const message = (e) => String(e?.message ?? '').toLowerCase().split(c.base.toLowerCase()).join('<base>').slice(0, 160);
   const emit = (type, fields = {}) => window.__rrEvent({ scenario: c.scenario, step, type, actor: 'o', ms: Math.round(performance.now() - t0), ...fields });
-  const waitFor = async (done, ms) => { for (const end = performance.now() + ms; performance.now() < end; await sleep(50)) if (done()) return true; return done(); };
+  const scale = c.waitScale ?? 1;
+  const nap = (ms) => sleep(ms * scale);
+  const waitFor = async (done, ms) => { for (const end = performance.now() + ms * scale; performance.now() < end; await sleep(Math.min(50, Math.max(1, 50 * scale)))) if (done()) return true; return done(); };
   // A wait for a required event: a bound that is hit is a recorded timeout, never a guessed answer.
   const need = async (what, done, ms) => { if (!(await waitFor(done, ms))) emit('timeout', { label: what }); };
   if (c.transport === 'ws') D.forceWebSockets(); else D.forceLongPolling();
@@ -35,7 +38,7 @@ window.__rrRun = async (c) => {
     return { app, db: D.getDatabase(app) };
   };
   const at = (x, p) => D.ref(x.db, `${c.base}/${p}`);
-  const settle = async (ms) => { await sleep(ms); };
+  const settle = async (ms) => { await nap(ms); };
   // The actor is the connection a row belongs to: w (writer), o (observer) or host. Rows of two actors race.
   const on = (promise, label, actor = 'w') => promise.then(() => emit('ack', { actor, label }), (e) => emit('rejected', { actor, label, code: errorCode(e), shape: message(e) }));
   try {
@@ -104,7 +107,7 @@ window.__rrRun = async (c) => {
     const gatedBefore = seen.gated ?? 0;
     D.goOnline(o.db);
     await need('queued acks and gated answer', () => (seen.other ?? 0) >= 2 && (cancelled.gated || (seen.gated ?? 0) > gatedBefore), 30000);
-    await Promise.race([Promise.allSettled(queued), sleep(30000)]);
+    await Promise.race([Promise.allSettled(queued), nap(30000)]);
     await settle(2500);
 
     // A fresh listen on the dropped window starts from the server's current state.
@@ -139,7 +142,7 @@ window.__rrRun = async (c) => {
         let ok = true;
         try { await D.set(at(o, 'dprobe'), i); } catch { ok = false; }
         if (ok === allowed) return emit('rules', { code: allowed ? 'allowed' : 'denied' });
-        await sleep(1000);
+        await nap(1000);
       }
       emit('timeout', { label: allowed ? 'rules-allowed' : 'rules-denied' });
     };
@@ -155,7 +158,7 @@ window.__rrRun = async (c) => {
     step = 'attach';
     for (const p of PATHS) unsubs.push(D.onValue(at(o, p), (s) => { seen[p] = (seen[p] ?? 0) + 1; emit('value', { label: p, shape: shapeOf(s.val()) }); }, (e) => emit('cancel', { label: p, code: errorCode(e) })));
     await need('first values', () => PATHS.every((p) => seen[p]), 20000);
-    await sleep(500);
+    await nap(500);
 
     step = 'register';
     await on(od('e1').set({ state: 'offline' }), 'e1-set');
@@ -186,7 +189,7 @@ window.__rrRun = async (c) => {
     D.goOffline(w.db);
     await need('marker fire', () => seen.marker > 1, c.transport === 'lp' ? 240000 : 30000);
     const seconds = Math.round((performance.now() - start) / 100) / 10;
-    await sleep(3000);
+    await nap(3000);
     window.__rrEvent({ scenario: c.scenario, step: 'fire', type: 'timing', actor: 'host', seconds, ms: Math.round(performance.now() - t0) });
 
     step = 'final';

@@ -1,6 +1,6 @@
 // Executes the same bounded request corpus against a deployed function or local fireemu.
 
-import { buildInvocation, normalizeInvocation } from "./harness.mjs";
+import { buildInvocation, normalizeInvocation, targetKey } from "./harness.mjs";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -51,7 +51,7 @@ export async function runCases(
 ) {
   const results = {};
   for (const step of program.cases) {
-    const endpoint = endpoints[step.target];
+    const endpoint = endpoints[targetKey(step.target)];
     if (!endpoint) throw new Error(`${program.id}#${step.id}: no reviewed endpoint`);
     const { url, init } = buildInvocation(step, endpoint, tokens);
     const controller = new AbortController();

@@ -26,6 +26,8 @@ const spec = (extra = {}) => ({
 test("the named targets resolve to the FUNCTIONS-HTTP fixture functions", () => {
   assert.deepEqual(resolveTarget("http"), {
     key: "http",
+    resourceId: "us-central1/fireemuHttpProbe",
+    named: true,
     project: P,
     region: "us-central1",
     codebase: "functions-http-oracle",
@@ -72,7 +74,8 @@ test("a target spec gets its own resources, and the named target keeps its old o
     packageName: `projects/${P}/locations/europe-west1/repositories/gcf-artifacts/packages/fireemu--oracle--query__europe--west1__cv14_db_created_v2`,
     imagePrefix: `europe-west1-docker.pkg.dev/${P}/gcf-artifacts/fireemu--oracle--query__europe--west1__cv14_db_created_v2`,
     deployArgs: ["deploy", "--only", "functions:rtdb-functions-oracle:cv14DbCreatedV2"],
-    deleteArgs: ["functions:delete", "cv14DbCreatedV2", "--region", "europe-west1", "--force"],
+    // a spec has no CLI delete: `functions:delete <name>` can reach a codebase or every `<name>-*`
+    deleteArgs: null,
   });
 });
 
@@ -217,14 +220,55 @@ test("a function record is checked against its own target's name, region, entry 
   }
 });
 
-test("a deploy and a cleanup of a target spec use its codebase, region, key and resource names", async () => {
+const OPERATION = `projects/${P}/locations/europe-west1/operations/op-1`;
+
+/** A control for one europe-west1 function that is deployed, then deleted through its exact resource. */
+function worldFor(
+  target,
+  { operation = { name: OPERATION, done: true }, deleteAnswer, siblings = [] } = {},
+) {
+  const calls = [];
+  let present = true;
+  const control = async (method, url, body, kind, allowed = [200]) => {
+    calls.push({ method, url, kind });
+    const answer = await respond(method, url);
+    if (!allowed.includes(answer.status)) throw new Error(`status ${answer.status}`);
+    return answer;
+  };
+  const respond = async (method, url) => {
+    if (method === "DELETE" && url.endsWith(`/functions/${target.functionName}`)) {
+      if (deleteAnswer) return deleteAnswer();
+      present = false;
+      return { status: 200, value: operation };
+    }
+    if (method === "GET" && url.endsWith(`/operations/op-1`)) {
+      return { status: 200, value: { name: OPERATION, done: true } };
+    }
+    if (url.includes("/functions?")) {
+      return { status: 200, value: { functions: siblings } };
+    }
+    if (url.includes("/functions/")) {
+      return present ? { status: 200, value: {} } : { status: 404, value: {} };
+    }
+    return { status: 404, value: {} };
+  };
+  return { control, calls, present: () => present };
+}
+
+const fakeUploads = (region) => ({
+  region,
+  beginDeploy: async () => ({ observe() {}, receipt() {}, finish: async () => ({ clean: true }) }),
+});
+
+test("a deploy of a spec uses its codebase, key and region, and refuses another region before anything starts", async () => {
   const target = spec({ region: "europe-west1" });
-  const keys = [];
   const deployArgs = [];
+  const keys = [];
   const uploads = {
+    region: "europe-west1",
     beginDeploy: async (key) => {
       keys.push(key);
-      return { observe() {}, receipt() {}, finish: async () => ({ clean: true, reasons: [] }) };
+      return { observe() {}, receipt() {}, finish: async () => ({ clean: true }) };
     },
   };
   const state = { started: false, cleaned: false };
@@ -236,7 +280,7 @@ test("a deploy and a cleanup of a target spec use its codebase, region, key and 
     "/adc",
     {},
     "/run",
-    async (args, _adc, _budget, kind) => {
+    async (args, _a, _b, kind) => {
       deployArgs.push([args, kind]);
     },
   );
@@ -245,14 +289,45 @@ test("a deploy and a cleanup of a target spec use its codebase, region, key and 
     [["deploy", "--only", "functions:rtdb-functions-oracle:cv14DbCreatedV2"], "cliDeploy"],
   ]);
   assert.equal(state.started, true);
+  assert.equal(state.target.functionName, "cv14DbCreatedV2");
+  assert.ok(Object.isFrozen(state.target));
 
-  // the named target keeps its old key
+  // a helper of another region (the uploads bucket is per region): nothing is started, no CLI is spawned
+  const ran = [];
+  const begun = [];
+  const wrong = { region: "us-central1", beginDeploy: async (key) => begun.push(key) };
+  const fresh = { started: false };
+  await assert.rejects(
+    () =>
+      production.deployTarget(target, "program-x", fresh, wrong, "/adc", {}, "/run", async () =>
+        ran.push(1),
+      ),
+    /target region differs from the region of the upload helper/,
+  );
+  assert.deepEqual([ran, begun, fresh], [[], [], { started: false }]);
+  // a helper without a region is refused as well
+  await assert.rejects(
+    () =>
+      production.deployTarget(
+        target,
+        "p",
+        { started: false },
+        { beginDeploy: async () => {} },
+        "/adc",
+        {},
+        "/run",
+        async () => {},
+      ),
+    /differs from the region/,
+  );
+  // the named target keeps its old key and region
   const named = [];
   await production.deployTarget(
     "http",
     "program-y",
     { started: false },
     {
+      region: "us-central1",
       beginDeploy: async (key) => (
         named.push(key),
         { observe() {}, finish: async () => ({ clean: true }) }
@@ -264,35 +339,342 @@ test("a deploy and a cleanup of a target spec use its codebase, region, key and 
     async () => {},
   );
   assert.deepEqual(named, ["program-y:http"]);
+});
 
-  // cleanup: the function is there, then gone; nothing else exists
-  const urls = [];
-  let present = true;
-  const control = async (method, url) => {
-    urls.push(`${method} ${url}`);
-    if (url.includes("/functions/")) return { status: present ? 200 : 404, value: {} };
-    return { status: 404, value: {} };
-  };
-  const deleted = [];
-  const cleanupState = { started: true, cleaned: false };
-  await production.cleanupTarget(control, target, "/adc", {}, "/run", cleanupState, {
-    run: async (args) => {
-      deleted.push(args);
-      present = false;
-    },
+test("a spec is deleted by its exact resource, once, never by a selector (M1)", async () => {
+  const target = spec({ region: "europe-west1" });
+  const { control, calls } = worldFor(target);
+  const state = { started: true, cleaned: false, target: resolveTarget(target) };
+  const ran = [];
+  await production.cleanupTarget(control, target, "/adc", {}, "/run", state, {
+    run: async (args) => ran.push(args),
     log: async () => {},
+    sleep: async () => {},
   });
-  assert.deepEqual(deleted, [
-    ["functions:delete", "cv14DbCreatedV2", "--region", "europe-west1", "--force"],
+  assert.deepEqual(ran, [], "no CLI delete for a spec");
+  assert.equal(state.cleaned, true, state.cleanupError);
+  const deletes = calls.filter((c) => c.method === "DELETE");
+  assert.deepEqual(
+    deletes.map((c) => c.url),
+    [
+      `https://cloudfunctions.googleapis.com/v2/projects/${P}/locations/europe-west1/functions/cv14DbCreatedV2`,
+    ],
+  );
+  assert.ok(calls.every((c) => c.url.includes("europe-west1")));
+  // the function and the service were read back
+  assert.ok(
+    calls.filter((c) => c.method === "GET" && c.url.includes("/functions/cv14DbCreatedV2"))
+      .length >= 2,
+  );
+  assert.ok(calls.some((c) => c.url.includes("/services/cv14dbcreatedv2")));
+});
+
+test("the exact delete is sent once; an unknown answer, a refusal or a bad operation leaves the target residual", async () => {
+  const target = spec({ region: "europe-west1" });
+  const cases = [
+    [
+      "a thrown request",
+      {
+        deleteAnswer: () => {
+          throw new Error("reset");
+        },
+      },
+      /reset/,
+    ],
+    ["a 503", { deleteAnswer: () => ({ status: 503, value: {} }) }, /returned 503|status 503/],
+    [
+      "an operation of another project",
+      { operation: { name: "projects/other/locations/europe-west1/operations/o", done: true } },
+      /unreviewed delete operation/,
+    ],
+    ["no operation name", { operation: { done: true } }, /unreviewed delete operation/],
+    [
+      "an operation with an error",
+      { operation: { name: OPERATION, done: true, error: { code: 9 } } },
+      /delete operation failed/,
+    ],
+    [
+      "an operation that never finishes",
+      { operation: { name: OPERATION, done: false } },
+      /did not complete within 10 polls/,
+    ],
+  ];
+  for (const [label, options, pattern] of cases) {
+    const world = worldFor(target, options);
+    if (options.operation && !options.operation.done) {
+      const inner = world.control;
+      world.control = async (method, url, body, kind, allowed) =>
+        method === "GET" && url.endsWith("/operations/op-1")
+          ? { status: 200, value: { name: OPERATION, done: false } }
+          : inner(method, url, body, kind, allowed);
+    }
+    const state = { started: true, cleaned: false, target: resolveTarget(target) };
+    let slept = 0;
+    await production.cleanupTarget(world.control, target, "/adc", {}, "/run", state, {
+      run: async () => {
+        throw new Error("no CLI");
+      },
+      log: async () => {},
+      sleep: async () => {
+        slept += 1;
+      },
+    });
+    assert.equal(state.cleaned, false, label);
+    assert.match(state.cleanupError, pattern, label);
+    assert.equal(world.calls.filter((c) => c.method === "DELETE").length, 1, `${label}: sent once`);
+    if (label === "an operation that never finishes") assert.equal(slept, 10);
+  }
+});
+
+test("a spec is cleaned as it was deployed, even when the caller's object changed afterwards (S1)", async () => {
+  const raw = spec({ region: "europe-west1" });
+  const uploads = fakeUploads("europe-west1");
+  const state = { started: false, cleaned: false };
+  await production.deployTarget(
+    raw,
+    "program-x",
+    state,
+    uploads,
+    "/adc",
+    {},
+    "/run",
+    async () => {},
+  );
+  raw.functionName = "somethingElse";
+  raw.region = "us-central1";
+  const world = worldFor(resolveTarget(state.target));
+  await production.cleanupTarget(world.control, raw, "/adc", {}, "/run", state, {
+    log: async () => {},
+    sleep: async () => {},
+  });
+  assert.equal(state.cleaned, true, state.cleanupError);
+  const deletes = world.calls.filter((c) => c.method === "DELETE").map((c) => c.url);
+  assert.deepEqual(deletes, [
+    `https://cloudfunctions.googleapis.com/v2/projects/${P}/locations/europe-west1/functions/cv14DbCreatedV2`,
   ]);
-  assert.equal(cleanupState.cleaned, true, cleanupState.cleanupError);
-  assert.ok(
-    urls.every((u) => u.includes("europe-west1")),
-    urls.join("\n"),
+});
+
+test("only plain objects with own data fields are specs, and a resolved spec resolves to itself (S1)", () => {
+  const inherited = Object.create(spec());
+  const withGetter = { ...spec() };
+  Object.defineProperty(withGetter, "functionName", { get: () => "aaa", enumerable: true });
+  const hidden = Object.defineProperty({ ...spec() }, "region", {
+    value: "us-central1",
+    enumerable: false,
+  });
+  const nullProto = Object.assign(Object.create(null), spec());
+  class Spec {
+    constructor() {
+      Object.assign(this, spec());
+    }
+  }
+  const withSymbol = { ...spec(), [Symbol("x")]: 1 };
+  for (const candidate of [inherited, withGetter, nullProto, new Spec(), withSymbol]) {
+    assert.throws(() => resolveTarget(candidate), /invalid target spec/);
+  }
+  assert.doesNotThrow(
+    () => resolveTarget(hidden),
+    "a non-enumerable own data field is still an own data field",
+  );
+  const resolved = resolveTarget(spec());
+  assert.equal(resolveTarget(resolved), resolved);
+  const named = resolveTarget("http");
+  assert.equal(resolveTarget(named), named);
+  // a frozen result is not a spec the caller could have forged
+  assert.throws(() => resolveTarget({ ...resolved }), /unknown field (key|resourceId|named)/);
+  // a mutable raw object is read once per resolve: later changes do not touch the result
+  const raw = spec();
+  const once = resolveTarget(raw);
+  raw.functionName = "changed";
+  assert.equal(once.functionName, "cv14DbCreatedV2");
+});
+
+test("a spec cannot be named like a codebase, and cannot sit beside functions of a similar name (M1)", async () => {
+  for (const name of ["default", "functions-http-oracle", "rtdb-functions-oracle"]) {
+    assert.throws(
+      () => resolveTarget(spec({ functionName: name })),
+      /functionName equals a codebase name/,
+      name,
+    );
+  }
+  assert.throws(
+    () => resolveTarget(spec({ functionName: "same-name", codebase: "same-name" })),
+    /equals a codebase name/,
+  );
+  const target = spec({ functionName: "fireemuHttpProbe-x" });
+  assert.equal(resolveTarget(target).functionName, "fireemuHttpProbe-x");
+  const listOf = (functions) => async (_m, url) =>
+    url.includes("/functions?")
+      ? { status: 200, value: { functions } }
+      : { status: 404, value: {} };
+  const fn = (id, codebase) => ({
+    name: `projects/${P}/locations/us-central1/functions/${id}`,
+    labels: codebase ? { "deployment-codebase": codebase } : {},
+  });
+  // nothing similar: accepted
+  await assert.doesNotReject(() => production.assertTargetAbsent(listOf([fn("other")]), target));
+  // a sibling that starts with `<name>-`, and an exact name in the list
+  await assert.rejects(
+    () => production.assertTargetAbsent(listOf([fn("fireemuHttpProbe-x-y")]), target),
+    /collides with the function fireemuHttpProbe-x-y/,
+  );
+  await assert.rejects(
+    () => production.assertNoNameCollisions(listOf([fn("fireemuHttpProbe-x")]), target),
+    /collides/,
+  );
+  // a function deployed from a codebase named like the target
+  await assert.rejects(
+    () => production.assertTargetAbsent(listOf([fn("other", "fireemuHttpProbe-x")]), target),
+    /equals the codebase of the function other/,
+  );
+  // `fireemuHttpProbe-xy` does not start with `fireemuHttpProbe-x-`: not a sibling
+  await assert.doesNotReject(() =>
+    production.assertNoNameCollisions(listOf([fn("fireemuHttpProbe-xy")]), target),
+  );
+});
+
+test("the function list of a region must be complete, and the named targets are not listed at all", async () => {
+  const target = spec();
+  let pages = 0;
+  const endless = async (_m, url) => {
+    if (!url.includes("/functions?")) return { status: 404, value: {} };
+    pages += 1;
+    return { status: 200, value: { functions: [], nextPageToken: `t${pages}` } };
+  };
+  await assert.rejects(() => production.assertNoNameCollisions(endless, target), /incomplete/);
+  assert.equal(pages, 5);
+  const urls = [];
+  await production.assertTargetAbsent(
+    async (_m, url) => (urls.push(url), { status: 404, value: {} }),
+    "http",
   );
   assert.ok(
-    urls.some((u) =>
-      u.includes("/packages/fireemu--oracle--query__europe--west1__cv14_db_created_v2"),
-    ),
+    urls.every((u) => !u.includes("/functions?")),
+    "the named target reads exactly what it read before",
   );
+  // the listing of pages follows the token
+  const seen = [];
+  const paged = async (_m, url) => {
+    if (!url.includes("/functions?")) return { status: 404, value: {} };
+    seen.push(url);
+    return url.includes("pageToken=p2")
+      ? { status: 200, value: { functions: [] } }
+      : { status: 200, value: { functions: [], nextPageToken: "p2" } };
+  };
+  await production.assertNoNameCollisions(paged, target);
+  assert.equal(seen.length, 2);
+});
+
+test("the programs of a corpus key their states by the canonical target, and a function is named once (S2)", () => {
+  const program = (...targets) => ({ cases: targets.map((target) => ({ target })) });
+  const a = spec({ functionName: "cv14A" });
+  const b = spec({ functionName: "cv14B" });
+  assert.deepEqual(
+    production.programTargets(program("http", "callable", "http")).map((t) => t.key),
+    ["http", "callable"],
+  );
+  assert.deepEqual(
+    production.programTargets(program(a, b, a)).map((t) => t.key),
+    ["cv14A", "cv14B"],
+  );
+  assert.deepEqual(
+    production.programTargets(program(a, { ...a })).map((t) => t.key),
+    ["cv14A"],
+  );
+  // the same function through a name and a spec, or two keys for one resource
+  assert.throws(
+    () =>
+      production.programTargets(
+        program("http", {
+          functionName: "fireemuHttpProbe",
+          region: "us-central1",
+          codebase: "functions-http-oracle",
+          generation: "gcfv2",
+        }),
+      ),
+    /name the same function us-central1\/fireemuHttpProbe/,
+  );
+  assert.throws(
+    () =>
+      production.programTargets(
+        program(a, spec({ functionName: "cv14A", region: "europe-west1" })),
+      ),
+    /share the key cv14A/,
+  );
+  assert.throws(() => production.programTargets(program("nope")), /unreviewed target nope/);
+});
+
+test("the preflight checks the Artifact Registry repository of the region it is given", async () => {
+  const seen = [];
+  const control = async (_m, url) => {
+    seen.push(url);
+    if (url.includes("serviceusage")) {
+      return {
+        status: 200,
+        value: {
+          services: [
+            "cloudfunctions",
+            "cloudbuild",
+            "artifactregistry",
+            "run",
+            "eventarc",
+            "pubsub",
+            "storage",
+            "firebaseextensions",
+          ].map((name) => ({ config: { name: `${name}.googleapis.com` } })),
+        },
+      };
+    }
+    if (url.includes("/repositories/")) {
+      const region = url.split("/locations/")[1].split("/")[0];
+      return {
+        status: 200,
+        value: {
+          name: `projects/${P}/locations/${region}/repositories/gcf-artifacts`,
+          format: "DOCKER",
+          mode: "STANDARD_REPOSITORY",
+          cleanupPolicies: {
+            "firebase-functions-cleanup": {
+              id: "firebase-functions-cleanup",
+              action: "DELETE",
+              condition: { tagState: "ANY", olderThan: "86400s" },
+            },
+          },
+        },
+      };
+    }
+    return { status: 200, value: { projectId: P } };
+  };
+  await production.preflightCliSideEffects(control, "europe-west1");
+  assert.ok(seen.some((u) => u.endsWith("/locations/europe-west1/repositories/gcf-artifacts")));
+  seen.length = 0;
+  await production.preflightCliSideEffects(control);
+  assert.ok(seen.some((u) => u.endsWith("/locations/us-central1/repositories/gcf-artifacts")));
+  // a repository that answers with another region's name is refused
+  await assert.rejects(
+    () =>
+      production.preflightCliSideEffects(
+        async (m, u) =>
+          u.includes("/repositories/")
+            ? {
+                status: 200,
+                value: { name: `projects/${P}/locations/us-central1/repositories/gcf-artifacts` },
+              }
+            : control(m, u),
+        "europe-west1",
+      ),
+    /gcf-artifacts repository is absent/,
+  );
+});
+
+test("the named targets keep their literal CLI arguments and resource names (golden)", () => {
+  assert.deepEqual(production.targetResources("callable"), {
+    functionUrl: `https://cloudfunctions.googleapis.com/v2/projects/${P}/locations/us-central1/functions/fireemuCallableProbe`,
+    serviceName: `projects/${P}/locations/us-central1/services/fireemucallableprobe`,
+    serviceUrl: `https://run.googleapis.com/v2/projects/${P}/locations/us-central1/services/fireemucallableprobe`,
+    packageName: `projects/${P}/locations/us-central1/repositories/gcf-artifacts/packages/fireemu--oracle--query__us--central1__fireemu_callable_probe`,
+    imagePrefix: `us-central1-docker.pkg.dev/${P}/gcf-artifacts/fireemu--oracle--query__us--central1__fireemu_callable_probe`,
+    deployArgs: ["deploy", "--only", "functions:functions-http-oracle:fireemuCallableProbe"],
+    deleteArgs: ["functions:delete", "fireemuCallableProbe", "--region", "us-central1", "--force"],
+  });
 });

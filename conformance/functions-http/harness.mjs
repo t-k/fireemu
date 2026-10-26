@@ -77,17 +77,36 @@ const SPEC_KEYS = new Set([
   "entryPoint",
 ]);
 
+/** Codebase names a spec's function name may never equal: firebase-tools' own default and this recorder's. */
+const RESERVED_CODEBASES = new Set(["default", "functions-http-oracle"]);
+
+/** The frozen results of `resolveTarget`: resolving one again returns it unchanged. */
+const RESOLVED = new WeakSet();
+
+function ownData(target, field) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, field);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor))
+    throw new Error(`invalid target spec: ${field} is not a data field`);
+  return descriptor.value;
+}
+
 /**
  * A target is a named fixture function (`http`, `callable`) or a spec object for another reviewed 2nd gen
- * function of this project: `{ functionName, region, codebase, generation: "gcfv2" }` with optional
- * `project` (this project only), `runtime` (default nodejs22) and `entryPoint` (default the function name).
- * The result is frozen and complete; a named target resolves exactly as before.
+ * function of this project: a plain object with own data fields `{ functionName, region, codebase,
+ * generation: "gcfv2" }` and optional `project` (this project only), `runtime` (default nodejs22) and
+ * `entryPoint` (default the function name). The result is frozen, complete and read exactly once: resolving
+ * it again returns it. `named` tells the CLI-deleted fixture functions from specs (which are deleted by
+ * their exact resource, never by a selector); `resourceId` is the identity of the function itself.
  */
 export function resolveTarget(target) {
+  if (RESOLVED.has(target)) return target;
   if (typeof target === "string" || typeof target !== "object") {
     const functionName = expectedFunctionName(target);
-    return Object.freeze({
+    const resolved = Object.freeze({
       key: target,
+      resourceId: `${REGION}/${functionName}`,
+      named: true,
       project: PROJECT,
       region: REGION,
       codebase: "functions-http-oracle",
@@ -96,19 +115,29 @@ export function resolveTarget(target) {
       entryPoint: functionName,
       runtime: "nodejs22",
     });
+    RESOLVED.add(resolved);
+    return resolved;
   }
   if (target === null || Array.isArray(target)) throw new Error("invalid target spec");
-  for (const key of Object.keys(target)) {
-    if (!SPEC_KEYS.has(key)) throw new Error(`invalid target spec: unknown field ${key}`);
+  if (Object.getPrototypeOf(target) !== Object.prototype) {
+    throw new Error("invalid target spec: a plain object is required");
   }
-  if (target.generation === "gcfv1")
-    throw new Error("1st gen targets are not supported by this recorder");
-  if (target.generation !== "gcfv2") throw new Error("invalid target spec: generation");
-  const { functionName, region, codebase } = target;
-  const project = target.project ?? PROJECT;
-  const runtime = target.runtime ?? "nodejs22";
-  const entryPoint = target.entryPoint ?? functionName;
-  const bad = (field) => new Error(`invalid target spec: ${field}`);
+  for (const key of Reflect.ownKeys(target)) {
+    if (typeof key !== "string" || !SPEC_KEYS.has(key)) {
+      throw new Error(`invalid target spec: unknown field ${String(key)}`);
+    }
+  }
+  const field = (name) => ownData(target, name);
+  const generation = field("generation");
+  if (generation === "gcfv1") throw new Error("1st gen targets are not supported by this recorder");
+  if (generation !== "gcfv2") throw new Error("invalid target spec: generation");
+  const functionName = field("functionName");
+  const region = field("region");
+  const codebase = field("codebase");
+  const project = field("project") ?? PROJECT;
+  const runtime = field("runtime") ?? "nodejs22";
+  const entryPoint = field("entryPoint") ?? functionName;
+  const bad = (name) => new Error(`invalid target spec: ${name}`);
   if (project !== PROJECT) throw new Error("unreviewed target project");
   if (typeof functionName !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,62}$/u.test(functionName))
     throw bad("functionName");
@@ -118,8 +147,13 @@ export function resolveTarget(target) {
   if (typeof runtime !== "string" || !/^[a-z]+\d+$/u.test(runtime)) throw bad("runtime");
   if (typeof entryPoint !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,126}$/u.test(entryPoint))
     throw bad("entryPoint");
-  return Object.freeze({
+  if (functionName === codebase || RESERVED_CODEBASES.has(functionName)) {
+    throw bad("functionName equals a codebase name");
+  }
+  const resolved = Object.freeze({
     key: functionName,
+    resourceId: `${region}/${functionName}`,
+    named: false,
     project,
     region,
     codebase,
@@ -128,7 +162,12 @@ export function resolveTarget(target) {
     entryPoint,
     runtime,
   });
+  RESOLVED.add(resolved);
+  return resolved;
 }
+
+/** The canonical key of a target, as used for states, endpoints and ledger keys. */
+export const targetKey = (target) => resolveTarget(target).key;
 
 export function validateCorpus(corpus) {
   if (corpus.project !== PROJECT) throw new Error("corpus project changed");

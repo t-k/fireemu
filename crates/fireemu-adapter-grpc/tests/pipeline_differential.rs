@@ -28,14 +28,6 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// Rows the emulator profile accepts or refuses unlike the official emulator, with why.
 const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "sweep-20261021-822",
-        "select of __name__ as itself: the official emulator returns the document name, fireemu refuses the alias (results without the name are not supported)",
-    ),
-    (
-        "sweep-42-2470",
-        "select of __name__ as itself: the official emulator returns the document name, fireemu refuses the alias (results without the name are not supported)",
-    ),
-    (
         "r3 O12 aggregate{c: count(n) opts} by {}",
         "aggregate is a stage fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
     ),

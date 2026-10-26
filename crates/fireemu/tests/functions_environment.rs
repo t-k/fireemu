@@ -1644,6 +1644,7 @@ const { onRequest } = require('firebase-functions/v2/https');
 const routes = async (req, res) => {
   const host = process.env.FIREEMU_APP_CHECK_EMULATOR_HOST ?? null;
   const jwks = process.env.FIREEMU_APP_CHECK_JWKS_URL ?? null;
+  const admin = process.env.FIREEMU_APP_CHECK_ADMIN ?? null;
   const auth = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null;
   let keys = null;
   if (req.query.probe === '1') {
@@ -1654,16 +1655,16 @@ const routes = async (req, res) => {
     if (!response.ok) { res.status(500).json({ error: 'JWKS unavailable' }); return; }
     keys = (await response.json()).keys.length;
   }
-  res.json({host, jwks, auth, keys});
+  res.json({host, jwks, admin, auth, keys});
 };
 exports.routes = onRequest(routes);
-exports.routesWithSecret = onRequest({secrets: ['FIREEMU_APP_CHECK_EMULATOR_HOST', 'FIREEMU_APP_CHECK_JWKS_URL']}, routes);
+exports.routesWithSecret = onRequest({secrets: ['FIREEMU_APP_CHECK_EMULATOR_HOST', 'FIREEMU_APP_CHECK_JWKS_URL', 'FIREEMU_APP_CHECK_ADMIN']}, routes);
 ",
     );
     write(
         &dir,
         ".env",
-        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:1\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:1/v1/jwks\n",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:1\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:1/v1/jwks\nFIREEMU_APP_CHECK_ADMIN=0\n",
     );
     let script = r"
 const assert = require('node:assert/strict');
@@ -1676,6 +1677,8 @@ const assert = require('node:assert/strict');
   const available = process.env.EXPECT_APP_CHECK === 'true';
   assert.equal(body.host, available ? process.env.FIREEMU_APP_CHECK_EMULATOR_HOST : null);
   assert.equal(body.jwks, available ? process.env.FIREEMU_APP_CHECK_JWKS_URL : null);
+  // The daemon alone decides whether the Admin SDK instrumentation is asked for.
+  assert.equal(body.admin, available ? '1' : null);
   assert.equal(body.auth, process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null);
   if (body.host) {
     assert.equal(body.jwks, `http://${body.host}/v1/jwks`);
@@ -1742,7 +1745,7 @@ const assert = require('node:assert/strict');
             write(
         &dir,
         ".secret.local",
-        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:3\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:3/v1/jwks\n",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:3\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:3/v1/jwks\nFIREEMU_APP_CHECK_ADMIN=0\n",
     );
         } else {
             std::fs::remove_file(dir.join(".secret.local")).unwrap();
@@ -1763,6 +1766,7 @@ const assert = require('node:assert/strict');
             .env("EXPECT_APP_CHECK", available.to_string())
             .env("FIREEMU_APP_CHECK_EMULATOR_HOST", "127.0.0.1:2")
             .env("FIREEMU_APP_CHECK_JWKS_URL", "http://127.0.0.1:2/v1/jwks")
+            .env("FIREEMU_APP_CHECK_ADMIN", "0")
             .stdin(Stdio::null())
             .output()
             .unwrap();

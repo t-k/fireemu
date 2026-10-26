@@ -811,6 +811,7 @@ version = "0.30.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-types",
+ "proptest",
 ]
 
 [[package]]

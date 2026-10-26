@@ -1248,6 +1248,9 @@ pub struct FunctionsRuntime {
     /// The callable trust boundary, when the callable trusted protocol is active
     /// (specification section 13.4). `None` leaves the pre-App-Check behaviour untouched.
     callable_trust: std::sync::RwLock<Option<Arc<crate::callable::CallableTrust>>>,
+    /// Answers the Admin SDK App Check questions of every runner this runtime respawns.
+    admin_app_check:
+        std::sync::RwLock<Option<Arc<dyn crate::admin_app_check::AdminAppCheckVerifier>>>,
     /// The control token, presented by the console and the control API as the owner's credential.
     owner_token: std::sync::OnceLock<String>,
     /// Strict callable ingress verifies a presented Bearer even without App Check.
@@ -1528,6 +1531,7 @@ impl FunctionsRuntime {
             retry,
             faults: Mutex::new(None),
             callable_trust: std::sync::RwLock::new(None),
+            admin_app_check: std::sync::RwLock::new(None),
             owner_token: std::sync::OnceLock::new(),
             callable_auth_verifier: std::sync::RwLock::new(None),
             schedule_publisher: std::sync::RwLock::new(None),
@@ -1987,6 +1991,22 @@ impl FunctionsRuntime {
         if let Ok(mut slot) = self.callable_trust.write() {
             *slot = Some(trust);
         }
+    }
+
+    /// Installs the verifier that answers the Admin SDK App Check questions of runners this
+    /// runtime respawns (the first runners were started with it by the daemon). Without one a
+    /// respawned runner answers every such question as unavailable.
+    pub fn set_admin_app_check(
+        &self,
+        verifier: Arc<dyn crate::admin_app_check::AdminAppCheckVerifier>,
+    ) {
+        if let Ok(mut slot) = self.admin_app_check.write() {
+            *slot = Some(verifier);
+        }
+    }
+
+    fn admin_app_check(&self) -> Option<Arc<dyn crate::admin_app_check::AdminAppCheckVerifier>> {
+        self.admin_app_check.read().ok().and_then(|v| v.clone())
     }
 
     /// Installs the owner's credential: the control token the console and the control API
@@ -4396,7 +4416,7 @@ impl FunctionsRuntime {
             }
             let _source_generation = respawn.cleanup_dir.clone();
             let spawn = self.clock_spawn_spec(spawn);
-            let runner = match Runner::spawn_spec(&spawn).await {
+            let runner = match Runner::spawn_spec_with(&spawn, self.admin_app_check()).await {
                 Ok(runner) => Arc::new(runner),
                 Err(error) => {
                     eprintln!("[functions] runner restart attempt failed: {error}");

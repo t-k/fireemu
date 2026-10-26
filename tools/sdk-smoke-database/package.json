@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "smoke": "node run.mjs",
-    "test": "node --test compare.test.mjs jar.test.mjs cv11-genuine-auth.test.mjs cv11-fixture.test.mjs cv07-ondisconnect.test.mjs rtdb-residual-judge.test.mjs rtdb-residual.test.mjs rtdb-residual-page.test.mjs adc-preflight.test.mjs rest-replay.test.mjs production-fixture.test.mjs production-corpus.test.mjs production-live.test.mjs"
+    "test": "node --test compare.test.mjs jar.test.mjs cv11-genuine-auth.test.mjs cv11-fixture.test.mjs cv07-ondisconnect.test.mjs rtdb-residual-judge.test.mjs rtdb-admin.test.mjs rtdb-residual.test.mjs rtdb-residual-page.test.mjs adc-preflight.test.mjs rest-replay.test.mjs production-fixture.test.mjs production-corpus.test.mjs production-live.test.mjs"
   },
   "devDependencies": {
     "firebase": "12.18.0",

@@ -59,6 +59,11 @@ export function rulesFor(prefix, { deny = false } = {}) {
   };
 }
 
+/** The ADC token comes from `gcloud auth application-default print-access-token`; the scopes are those of the login. */
+export const ADC_ARGS = ['auth', 'application-default', 'print-access-token'];
+/** Every management and data request carries the token as a Bearer header (never in the URL) and the quota project. */
+export const productionHeaders = (token, projectId) => ({ authorization: `Bearer ${token}`, 'x-goog-user-project': projectId });
+
 /** Chromium may reach loopback and Firebase hosts only: the page and SDK bundles are served locally. */
 export const hostRules = () => '--host-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE *.firebaseio.com';
 
@@ -413,11 +418,11 @@ async function main(argv) {
       const browser = browserRunner({ modules: opt('--modules') ?? path.join(here, 'node_modules'), stop, page: { projectId: 'demo-rtdb-residual', databaseURL: `${db}/?ns=${ns}`, emulator: true, allowHost: (h) => h === `127.0.0.1:${dbPort}` } });
       o = { mode, local: { db, ns }, headers: { authorization: 'Bearer owner' }, browser, ...common, ...narrowing(opt('--scenarios'), opt('--transports')) };
     } else {
-      const token = execFileSync(packet.gcloud, ['auth', 'application-default', 'print-access-token'], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
+      const token = execFileSync(packet.gcloud, ADC_ARGS, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(token);
       const browser = browserRunner({ modules: packet.modules, stop, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
-      o = { mode, packet, headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }, browser, ...common };
+      o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common };
     }
     const result = await runScenario(o);
     const status = writeOutputs(out, mode, result, prefix.split('/')[0], secrets);

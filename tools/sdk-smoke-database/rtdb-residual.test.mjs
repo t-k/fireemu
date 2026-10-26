@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LAUNCH } from './cv11-genuine-auth.mjs';
-import { CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
+import { ADC_ARGS, CAPS, FIRE_GRACE_MS, PROFILES, PROFILE_TIMEOUT_MS, SOURCES, compareFiles, hostRules, narrowing, productionHeaders, profileTimeout, refuseNarrowing, rulesFor, runScenario, transportOf, urls, verifyBundles, verifyPacket, writeOutputs } from './rtdb-residual.mjs';
 
 const N = '000000000000', P = 'demo-project', BASE = '// baseline\n{"rules":{".read":false,".write":false}}', PREFIX = 'parity1/rr1';
 const json = (status, v) => ({ status, text: async () => (typeof v === 'string' ? v : JSON.stringify(v)) });
@@ -524,4 +524,33 @@ test('a 401 is retried only for read-only GETs during setup: not a mutation, not
   w3.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 404, body: UNAUTHORIZED };
   await prod(w3, { sleep: clocked().sleep, log: (x) => rows3.push(x.step) });
   assert.ok(!rows3.some((x) => x.includes('-retry-')), 'a 404 is not propagation');
+});
+
+// production-1 and production-2 (2026-10-26): the first Rules GET on the instance host answered 401 "Unauthorized
+// request." with the same flow that got 200 in CV11 lean-02. This pins the exact request the recorder sends, so a
+// change in how the token travels shows up here. It is the CV11 request: Bearer header, quota project header,
+// content-type from the admin client, no query, no body, redirects not followed.
+test('the first Rules GET is exactly the request CV11 sent: URL, Bearer header, quota project, no token in the URL', async () => {
+  const w = fakeWorld(), sent = [];
+  const base = w.fetch;
+  const TOKEN = 'ya29.TESTTOKEN-not-real', headers = productionHeaders(TOKEN, P);
+  w.fetch = async (url, init) => { sent.push({ url, init }); return base(url, init); };
+  await runScenario({ mode: 'production', packet, fetchImpl: w.fetch, headers, browser: fakeBrowser(w), sleep: async () => {}, log: () => {}, prefix: PREFIX });
+  const rules = sent.find((x) => x.init.method === 'GET' && x.url.includes('.settings/rules'));
+  assert.equal(rules.url, 'https://fireemu-q-rtdb2.firebaseio.com/.settings/rules.json');
+  assert.deepEqual(rules.init.headers, { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, 'x-goog-user-project': P });
+  assert.equal(rules.init.body, undefined); assert.equal(rules.init.redirect, 'manual'); assert.equal(rules.init.method, 'GET');
+  for (const { url, init } of sent) {
+    assert.ok(!/[?&](access_token|auth|key|token)=/.test(url), url);
+    assert.equal(init.headers.authorization, `Bearer ${TOKEN}`, `${init.method} ${url}`);
+    assert.equal(init.headers['x-goog-user-project'], P);
+  }
+  assert.equal(sent.findIndex((x) => x.url.includes('.settings/rules')) > sent.findIndex((x) => x.url.endsWith('/instances/fireemu-q-rtdb2') && x.init.method === 'GET' && sent.indexOf(x) > 6), true, 'after the instance is ACTIVE');
+});
+
+test('the token is asked of gcloud ADC with no scopes argument, and travels only as a Bearer header', () => {
+  assert.deepEqual(ADC_ARGS, ['auth', 'application-default', 'print-access-token']);
+  assert.deepEqual(productionHeaders('T', 'proj'), { authorization: 'Bearer T', 'x-goog-user-project': 'proj' });
+  const cv11 = readFileSync(new URL('./cv11-genuine-auth.mjs', import.meta.url), 'utf8');
+  assert.ok(cv11.includes("['auth', 'application-default', 'print-access-token']") && cv11.includes("headers: { authorization: `Bearer ${token}`, 'x-goog-user-project': packet.projectId }"), 'the CV11 recorder that got 200 builds the same token request');
 });

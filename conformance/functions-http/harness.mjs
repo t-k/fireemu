@@ -10,10 +10,16 @@ export const FUNCTION_NAMES = Object.freeze({
   http: "fireemuHttpProbe",
   callable: "fireemuCallableProbe",
 });
+// Worst cases of one deployment, counted from the code: a 2nd gen target given as a spec adds the
+// complete function list of its region (at most 5 pages) to the control reads and the exact delete with
+// its polls to the cleanup. Cleanup: absence 2, IAM removal 3, exact delete 1 + 10 polls, absence 2,
+// package 1, versions 1, image delete 1 + 10 polls, read-back 1, residue 2 packages + 2 version lists.
+const CONTROL_PER_DEPLOYMENT = 17;
+const CLEANUP_PER_DEPLOYMENT = 36;
 export const BOUNDS = Object.freeze({
   invocations: 136,
-  control: 192,
-  cleanup: 480,
+  control: 16 * CONTROL_PER_DEPLOYMENT,
+  cleanup: 16 * CLEANUP_PER_DEPLOYMENT,
   auth: 12,
   cliDeploy: 16,
   cliDelete: 16,
@@ -149,6 +155,12 @@ export function resolveTarget(target) {
     throw bad("entryPoint");
   if (functionName === codebase || RESERVED_CODEBASES.has(functionName)) {
     throw bad("functionName equals a codebase name");
+  }
+  // The named targets are deleted by the CLI, whose `functions:delete <name>` also removes every
+  // `<name>-*` function of the region: a spec named like that would be deleted with them.
+  for (const named of Object.values(FUNCTION_NAMES)) {
+    if (functionName.startsWith(`${named}-`))
+      throw bad("functionName extends a named target's name");
   }
   const resolved = Object.freeze({
     key: functionName,

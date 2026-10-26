@@ -1170,8 +1170,12 @@ export async function cleanupTarget(
       } else {
         // A spec is deleted by its exact resource: `functions:delete <name>` also deletes a codebase
         // of that name and every `<name>-*` function (firebase-tools 15.28.2).
-        if (!current.functionAbsent) await deleteFunctionExact(control, target, pause);
-        await log("function-deleted", `${functionUrl(target)}; exact delete completed`);
+        if (!current.functionAbsent) {
+          await deleteFunctionExact(control, target, pause);
+          await log("function-deleted", `${functionUrl(target)}; exact delete completed`);
+        } else {
+          await log("function-already-absent", `${functionUrl(target)}; no delete sent`);
+        }
       }
     }
     const absent = await inspectAbsence(control, target, "cleanup");
@@ -1208,9 +1212,9 @@ export async function cleanupTarget(
       );
       if (
         deleted.value.name &&
-        !new RegExp(`^projects/${PROJECT}/locations/${REGION}/operations/[A-Za-z0-9_-]+$`).test(
-          deleted.value.name,
-        )
+        !new RegExp(
+          `^projects/${target.project}/locations/${target.region}/operations/[A-Za-z0-9_-]+$`,
+        ).test(deleted.value.name)
       ) {
         throw new Error("Artifact Registry returned an unreviewed delete operation");
       }
@@ -1333,7 +1337,7 @@ export async function assertNoNameCollisions(control, target) {
       if (id === spec.functionName || id.startsWith(`${spec.functionName}-`)) {
         throw new Error(`target name collides with the function ${id}`);
       }
-      if (entry.labels?.["deployment-codebase"] === spec.functionName) {
+      if (entry.labels?.["firebase-functions-codebase"] === spec.functionName) {
         throw new Error(`target name equals the codebase of the function ${id}`);
       }
     }
@@ -1398,11 +1402,13 @@ export function programTargets(program) {
       }
       continue;
     }
-    if (byResource.has(spec.resourceId)) {
+    // Function ids that differ only in case share one Cloud Run service.
+    const resource = spec.resourceId.toLowerCase();
+    if (byResource.has(resource)) {
       throw new Error(`two targets name the same function ${spec.resourceId}`);
     }
     byKey.set(spec.key, spec);
-    byResource.set(spec.resourceId, spec);
+    byResource.set(resource, spec);
   }
   return [...byKey.values()];
 }

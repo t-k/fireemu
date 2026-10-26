@@ -514,35 +514,50 @@ test("a spec cannot be named like a codebase, and cannot sit beside functions of
     () => resolveTarget(spec({ functionName: "same-name", codebase: "same-name" })),
     /equals a codebase name/,
   );
-  const target = spec({ functionName: "fireemuHttpProbe-x" });
-  assert.equal(resolveTarget(target).functionName, "fireemuHttpProbe-x");
+  const target = spec({ functionName: "cv14Probe-x" });
+  assert.equal(resolveTarget(target).functionName, "cv14Probe-x");
   const listOf = (functions) => async (_m, url) =>
     url.includes("/functions?")
       ? { status: 200, value: { functions } }
       : { status: 404, value: {} };
+  // The labels are the ones of a recorded function list (FE v4, masked), not a form made up here.
+  const recorded = JSON.parse(
+    readFileSync(
+      new URL(
+        "../src/functions-events/record/recorded/v4-run/0140-lists.functions-v2.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const recordedBody =
+    typeof recorded.body === "string" ? JSON.parse(recorded.body) : recorded.body;
+  const recordedLabels = recordedBody.functions[0].labels;
+  assert.ok("firebase-functions-codebase" in recordedLabels);
+  assert.ok(!("deployment-codebase" in recordedLabels));
   const fn = (id, codebase) => ({
     name: `projects/${P}/locations/us-central1/functions/${id}`,
-    labels: codebase ? { "deployment-codebase": codebase } : {},
+    labels: codebase ? { ...recordedLabels, "firebase-functions-codebase": codebase } : {},
   });
   // nothing similar: accepted
   await assert.doesNotReject(() => production.assertTargetAbsent(listOf([fn("other")]), target));
   // a sibling that starts with `<name>-`, and an exact name in the list
   await assert.rejects(
-    () => production.assertTargetAbsent(listOf([fn("fireemuHttpProbe-x-y")]), target),
-    /collides with the function fireemuHttpProbe-x-y/,
+    () => production.assertTargetAbsent(listOf([fn("cv14Probe-x-y")]), target),
+    /collides with the function cv14Probe-x-y/,
   );
   await assert.rejects(
-    () => production.assertNoNameCollisions(listOf([fn("fireemuHttpProbe-x")]), target),
+    () => production.assertNoNameCollisions(listOf([fn("cv14Probe-x")]), target),
     /collides/,
   );
   // a function deployed from a codebase named like the target
   await assert.rejects(
-    () => production.assertTargetAbsent(listOf([fn("other", "fireemuHttpProbe-x")]), target),
+    () => production.assertTargetAbsent(listOf([fn("other", "cv14Probe-x")]), target),
     /equals the codebase of the function other/,
   );
-  // `fireemuHttpProbe-xy` does not start with `fireemuHttpProbe-x-`: not a sibling
+  // `cv14Probe-xy` does not start with `cv14Probe-x-`: not a sibling
   await assert.doesNotReject(() =>
-    production.assertNoNameCollisions(listOf([fn("fireemuHttpProbe-xy")]), target),
+    production.assertNoNameCollisions(listOf([fn("cv14Probe-xy")]), target),
   );
 });
 
@@ -745,4 +760,133 @@ test("the image residue check follows the target's region and package names (aft
   assert.ok(seen[0].includes("/locations/europe-west1/repositories/gcf-artifacts/packages/"));
   assert.ok(seen[1].endsWith("%2Fcache"));
   assert.ok(seen[2].includes(`${pkg}%2Fcache/versions?`));
+});
+
+test("a spec cannot extend a named target's name, and ids that differ only in case are one function (R2-S3)", () => {
+  for (const name of ["fireemuHttpProbe-x", "fireemuCallableProbe-x-y"]) {
+    assert.throws(
+      () => resolveTarget(spec({ functionName: name })),
+      /extends a named target's name/,
+    );
+  }
+  // not an extension: no `-`, or a different case
+  for (const name of ["fireemuHttpProbex", "fireemuHttpProbe_x", "FireemuHttpProbe-x"]) {
+    assert.equal(resolveTarget(spec({ functionName: name })).functionName, name);
+  }
+  const program = (...targets) => ({ cases: targets.map((target) => ({ target })) });
+  assert.throws(
+    () =>
+      production.programTargets(
+        program(spec({ functionName: "cv14Foo" }), spec({ functionName: "cv14foo" })),
+      ),
+    /two targets name the same function/,
+  );
+});
+
+test("the journal says a delete completed only when one was sent (R2-S1)", async () => {
+  const target = spec({ region: "europe-west1" });
+  const lines = [];
+  const log = async (action, text) => lines.push([action, text]);
+  const live = worldFor(target);
+  await production.cleanupTarget(
+    live.control,
+    target,
+    "/adc",
+    {},
+    "/run",
+    { started: true, cleaned: false, target: resolveTarget(target) },
+    { log, sleep: async () => {} },
+  );
+  assert.ok(
+    lines.some(
+      ([action, text]) => action === "function-deleted" && /exact delete completed/.test(text),
+    ),
+  );
+
+  // the function is gone and only the service answers: no DELETE, so no "completed" line
+  lines.length = 0;
+  const control = async (_m, url, _b, _k, allowed = [200]) => {
+    const answer = url.includes("/services/")
+      ? { status: 200, value: {} }
+      : { status: 404, value: {} };
+    if (!allowed.includes(answer.status)) throw new Error(`status ${answer.status}`);
+    return answer;
+  };
+  await production.cleanupTarget(
+    control,
+    target,
+    "/adc",
+    {},
+    "/run",
+    { started: true, cleaned: false, target: resolveTarget(target) },
+    { log, sleep: async () => {} },
+  );
+  assert.ok(!lines.some(([, text]) => /exact delete completed/.test(text)));
+  assert.ok(lines.some(([action]) => action === "function-already-absent"));
+});
+
+test("the request ceilings cover the worst case of one spec deployment (R2-S2)", async () => {
+  const { BOUNDS } = await import("./harness.mjs");
+  assert.equal(BOUNDS.cleanup, 16 * 36);
+  assert.equal(BOUNDS.control, 16 * 17);
+  // Every operation stays pending until its tenth poll, the policy holds the public binding until it is
+  // set, and the image package and its cache package are left empty: the longest cleanup of a spec.
+  const target = spec({ region: "europe-west1" });
+  const pkg = `projects/${P}/locations/europe-west1/repositories/gcf-artifacts/packages/fireemu--oracle--query__europe--west1__cv14_db_created_v2`;
+  const imageOperation = `projects/${P}/locations/europe-west1/operations/op-image`;
+  const requests = [];
+  let functionPresent = true;
+  let imagePresent = true;
+  let polls = 0;
+  let bindings = [{ role: "roles/run.invoker", members: ["allUsers"] }];
+  const control = async (method, url, _body, kind, allowed = [200]) => {
+    requests.push(kind);
+    const answer = (() => {
+      if (url.includes(":setIamPolicy")) {
+        bindings = [];
+        return { status: 200, value: {} };
+      }
+      if (url.includes(":getIamPolicy")) return { status: 200, value: { bindings } };
+      if (method === "DELETE" && url.includes("/functions/")) {
+        return { status: 200, value: { name: OPERATION, done: false } };
+      }
+      if (method === "DELETE") {
+        return { status: 200, value: { name: imageOperation, done: false } };
+      }
+      if (url.includes("/operations/")) {
+        polls += 1;
+        const done = polls % 10 === 0;
+        if (done && polls === 10) functionPresent = false;
+        if (done && polls === 20) imagePresent = false;
+        return { status: 200, value: { name: url.split("/v1/").at(-1), done } };
+      }
+      if (url.includes("/versions/sha256:x")) return { status: 404, value: {} };
+      if (url.includes("/versions?")) {
+        const owned = url.includes("%2Fcache") || !imagePresent;
+        return {
+          status: 200,
+          value: owned ? {} : { versions: [{ name: `${pkg}/versions/sha256:x` }] },
+        };
+      }
+      if (url.includes("/packages/")) {
+        return { status: 200, value: { name: url.split("/v1/").at(-1) } };
+      }
+      return functionPresent ? { status: 200, value: {} } : { status: 404, value: {} };
+    })();
+    if (!allowed.includes(answer.status)) throw new Error(`status ${answer.status}`);
+    return answer;
+  };
+  const state = {
+    started: true,
+    cleaned: false,
+    target: resolveTarget(target),
+    versionName: `${pkg}/versions/sha256:x`,
+  };
+  await production.cleanupTarget(control, target, "/adc", {}, "/run", state, {
+    log: async () => {},
+    sleep: async () => {},
+  });
+  assert.equal(state.cleanupError, undefined);
+  assert.equal(state.cleaned, true);
+  assert.equal(requests.filter((kind) => kind === "cleanup").length, 36);
 });

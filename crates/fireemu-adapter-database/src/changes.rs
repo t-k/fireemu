@@ -4,7 +4,7 @@ use std::fmt;
 
 use fireemu_core_database::DatabaseError;
 /// Database types required by source-event capture implementations.
-pub use fireemu_core_database::{Content, Node, Path, Tree};
+pub use fireemu_core_database::{Content, Leaf, Node, Path, Tree};
 use fireemu_core_types::admission::EventAdmissionError;
 use serde_json::Value;
 
@@ -80,6 +80,13 @@ pub trait ChangeSink: fmt::Debug + Send + Sync {
         true
     }
 
+    /// Whether a write confined to `scope` (the node at `scope` and below, and the existence
+    /// of its ancestors) can change a trigger reference. A write it does not affect is applied
+    /// in place: no candidate tree, no snapshot comparison and no reservation (review S3).
+    fn affects(&self, _namespace: &str, _scope: &Path) -> bool {
+        true
+    }
+
     /// Selects exact changed trigger references without exporting unrelated data.
     /// A bounded matcher may reject excessive fanout before retaining all paths.
     fn capture_references(
@@ -89,6 +96,18 @@ pub trait ChangeSink: fmt::Debug + Send + Sync {
         _after: &Tree,
     ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
         Ok(None)
+    }
+
+    /// [`Self::capture_references`] for a write confined to `scope`: nothing outside `scope`
+    /// and its ancestors changed, so a matcher need not compare other branches.
+    fn capture_references_within(
+        &self,
+        namespace: &str,
+        before: &Tree,
+        after: &Tree,
+        _scope: &Path,
+    ) -> Result<Option<Vec<Path>>, EventAdmissionError> {
+        self.capture_references(namespace, before, after)
     }
 
     /// Refuses before source publication, or returns the complete reservation.
@@ -126,9 +145,22 @@ pub fn prepare<R>(
     sink: Option<&dyn ChangeSink>,
     operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
 ) -> Result<(R, PreparedChange), ChangeError> {
+    prepare_within(tree, &Path::root(), context, sink, operation)
+}
+
+/// [`prepare`] for an operation that changes only the node at `scope`, its descendants and
+/// whether its ancestors exist (a set or an update at `scope`): whether anything changed is
+/// read at `scope` alone, never by comparing the whole tree.
+pub fn prepare_within<R>(
+    tree: &Tree,
+    scope: &Path,
+    context: ChangeContext,
+    sink: Option<&dyn ChangeSink>,
+    operation: impl FnOnce(&mut Tree) -> Result<R, DatabaseError>,
+) -> Result<(R, PreparedChange), ChangeError> {
     let mut candidate = tree.clone();
     let result = operation(&mut candidate).map_err(ChangeError::Database)?;
-    let publication = if tree == &candidate {
+    let publication = if tree.get(scope) == candidate.get(scope) {
         None
     } else if let Some(sink) = sink {
         let encode = |tree: &Tree, path: &Path| {
@@ -140,7 +172,7 @@ pub fn prepare<R>(
             .expect("the database tree renders valid JSON")
         };
         let data = match sink
-            .capture_references(&context.namespace, tree, &candidate)
+            .capture_references_within(&context.namespace, tree, &candidate, scope)
             .map_err(ChangeError::Admission)?
         {
             None => ChangeData::Whole {

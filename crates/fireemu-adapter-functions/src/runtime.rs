@@ -59,6 +59,8 @@ pub const RETRY_BASE_BACKOFF_SECONDS: i64 = 10;
 pub const RETRY_MAX_BACKOFF_SECONDS: i64 = 600;
 /// Maximum non-terminal event records retained by one Functions runtime.
 pub const MAX_ACTIVE_EVENT_RECORDS: usize = 4096;
+/// The admission-refusal category of RTDB writes applied without their trigger events.
+pub const DATABASE_FANOUT_DROPPED: &str = "database_fanout_dropped";
 /// Logical events whose causal phases the runtime keeps for `await-idle` diagnostics
 /// (spec 10.5). Older entries are evicted and counted; eviction is never a completion.
 pub const MAX_CAUSALITY_ENTRIES: usize = 512;
@@ -2450,7 +2452,38 @@ impl FunctionsRuntime {
             .collect()
     }
 
+    /// Counts an RTDB source write admitted without some or all of its trigger events because
+    /// they could never fit the local event budget, however empty the queue (review S4):
+    /// production accepts such a write, so refusing it would fail every retry. The count is
+    /// the resource report's `admission.database_fanout_dropped`; the first one in a session
+    /// is also printed, and only then is `true` returned.
+    pub fn drop_database_fanout(&self, instance: &str, reason: &str) -> bool {
+        let first = self.inner.lock().is_ok_and(|mut inner| {
+            let count = inner
+                .admission_refusals
+                .entry(DATABASE_FANOUT_DROPPED)
+                .or_default();
+            *count = count.saturating_add(1);
+            *count == 1
+        });
+        if first {
+            eprintln!(
+                "warning: functions: a Realtime Database write to {instance} was applied, but \
+                 {reason}, so those trigger events were dropped. Later drops are counted as \
+                 admission.{DATABASE_FANOUT_DROPPED} in the resource diagnostics"
+            );
+        }
+        first
+    }
+
     /// Reserves an RTDB source operation's complete trigger fanout before data publication.
+    /// What can never be delivered is settled first, on real serialized sizes, whatever the
+    /// queue holds: an event larger than an invocation frame is dropped alone, and a fanout of
+    /// more events or bytes than the whole budget is dropped whole; each is counted with
+    /// [`Self::drop_database_fanout`] and the write proceeds. Only then is the current queue
+    /// consulted: a fanout that fits an empty queue but not the current one is refused
+    /// (back-pressure: a retry succeeds once deliveries drain).
+    #[allow(clippy::too_many_lines)]
     pub fn reserve_database_events(
         self: &Arc<Self>,
         commit: &crate::events::DatabaseCommit,
@@ -2458,6 +2491,8 @@ impl FunctionsRuntime {
         if commit.project != self.config.project || !self.background_triggers_enabled() {
             return Ok(self.empty_event_reservation());
         }
+        let mut oversized = None;
+        let mut oversized_events = Vec::new();
         let result = (|| {
             let mut inner = self
                 .inner
@@ -2493,7 +2528,10 @@ impl FunctionsRuntime {
                             ordinal,
                             inner.epoch,
                         ) {
-                            return Err(SourceEventAdmissionError::Capacity);
+                            // This event alone can never be delivered; the write's other
+                            // events still are (merge review S2).
+                            oversized_events.push(function.name.clone());
+                            return Ok(());
                         }
                         let retained_bytes = Self::retained_event_bytes(
                             &function.name,
@@ -2513,12 +2551,11 @@ impl FunctionsRuntime {
                             .len()
                             .checked_add(copies)
                             .ok_or(SourceEventAdmissionError::Capacity)?;
-                        if !Self::can_admit_events(
-                            &inner,
-                            EventSource::Database,
-                            count,
-                            draft_bytes,
-                        ) {
+                        // Whether the fanout can ever fit is settled on the whole fanout
+                        // before the current queue is consulted (merge review S1).
+                        if count > MAX_ACTIVE_EVENT_RECORDS || draft_bytes > MAX_ACTIVE_EVENT_BYTES
+                        {
+                            oversized = Some("its events exceed the whole local event budget");
                             return Err(SourceEventAdmissionError::Capacity);
                         }
                         let payload = Arc::new(payload);
@@ -2541,8 +2578,24 @@ impl FunctionsRuntime {
                     },
                 )?;
             }
+            // The current queue decides only now: a refusal here is back-pressure.
+            if !Self::can_admit_events(&inner, EventSource::Database, drafts.len(), draft_bytes) {
+                return Err(SourceEventAdmissionError::Capacity);
+            }
             self.reserve_drafts(EventSource::Database, drafts, &mut inner)
         })();
+        if let Some(reason) = oversized {
+            let _ = self.drop_database_fanout(&commit.instance, reason);
+            return Ok(self.empty_event_reservation());
+        }
+        // Only an admitted write is applied, so only then are its over-frame events dropped
+        // (merge review R2-S1): a 503 neither counts nor spends the session's warning.
+        for function in oversized_events.iter().filter(|_| result.is_ok()) {
+            let _ = self.drop_database_fanout(
+                &commit.instance,
+                &format!("one event for {function} exceeds the invocation frame limit"),
+            );
+        }
         if let Err(error) = &result {
             self.note_admission_refusal(*error);
         }

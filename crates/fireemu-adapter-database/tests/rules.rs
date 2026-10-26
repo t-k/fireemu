@@ -3190,3 +3190,49 @@ fn gauth_refusal_profile_shape_and_prior_access_matrix() {
         }
     }
 }
+
+/// Review M1 (2026-10-25): every read mints fresh opaque `data` identities, so a long-lived
+/// daemon's coverage keeps the first values of each expression and counts the rest instead of
+/// growing; the JSON and the HTML viewer both carry the omitted count.
+#[test]
+fn coverage_of_a_long_run_keeps_its_first_values_and_counts_the_rest() {
+    const READS: usize = 100;
+    let mut database = db();
+    let source = r#"{"rules":{".read":"data.child('x').exists() || true"}}"#;
+    load(&mut database, "coverage-bounded", source);
+    for _ in 0..READS {
+        assert_eq!(
+            call(&mut database, "GET", "/.json?ns=coverage-bounded", &[], "").0,
+            200
+        );
+    }
+    let report = coverage(&mut database, "coverage-bounded");
+    let read = &report["report"][".read"];
+    assert_eq!(
+        read["values"],
+        serde_json::json!([{"value": true, "count": READS}])
+    );
+    assert!(read.get("values-omitted").is_none(), "{read}");
+    let mut data = &read["children"][0];
+    while let Some(first) = data.get("children") {
+        data = &first[0];
+    }
+    assert_eq!(data["text"], "data");
+    let kept = data["values"].as_array().unwrap();
+    assert_eq!(
+        kept.len(),
+        fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION
+    );
+    assert!(kept.iter().all(|entry| entry["count"] == 1));
+    assert_eq!(data["values-omitted"], READS - kept.len());
+    let (status, html) = call(
+        &mut database,
+        "GET",
+        "/.inspect/coverage?ns=coverage-bounded",
+        &[],
+        "",
+    );
+    assert_eq!(status, 200);
+    assert!(html.contains(r#""values-omitted":36"#), "{html}");
+    assert!(html.contains("more result(s) with other values"));
+}

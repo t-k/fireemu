@@ -598,15 +598,16 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         cfg.seed ^ 0x5254_4442,
     )));
     if let Some(runtime) = &functions_runtime {
-        // The local instance region and DNS suffix are trusted runtime defaults, never request input.
+        // The local instance region and DNS suffix are trusted runtime defaults, never request
+        // input; a 2nd-gen trigger elsewhere is warned about when its manifest loads.
         realtime_database
             .lock()
             .map_err(|_| "the Realtime Database state lock is poisoned".to_owned())?
             .set_change_sink(functions::database_sink(
                 runtime,
                 &cfg.auth_project,
-                "us-central1",
-                "firebaseio.com",
+                functions::LOCAL_DATABASE_LOCATION,
+                functions::LOCAL_DATABASE_HOST,
             ));
     }
     // The rules files of `firebase.json`, each in its instance; one that does not load stops

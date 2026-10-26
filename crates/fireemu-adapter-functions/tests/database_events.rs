@@ -96,7 +96,8 @@ fn unchanged_wrong_instance_wrong_region_and_wrong_mutation_family_emit_nothing(
 
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 use fireemu_adapter_functions::runtime::{
-    FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, MAX_ACTIVE_EVENT_RECORDS,
+    FunctionsConfig, FunctionsRuntime, SourceEventAdmissionError, DATABASE_FANOUT_DROPPED,
+    MAX_ACTIVE_EVENT_RECORDS,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::LogicalDuration;
@@ -221,33 +222,238 @@ async fn database_reservations_are_invisible_refundable_and_invalidated_by_reset
     runtime.shutdown().await;
 }
 
-#[tokio::test]
-async fn database_complete_fanout_capacity_refusal_does_not_charge_partial_records() {
+fn dropped_fanouts(runtime: &FunctionsRuntime) -> u64 {
+    runtime
+        .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+        .unwrap()
+        .refusals
+        .into_iter()
+        .find(|refusal| refusal.reason == format!("admission.{DATABASE_FANOUT_DROPPED}"))
+        .map_or(0, |refusal| refusal.count)
+}
+
+fn user_changes(count: usize) -> DatabaseChangeData {
     use fireemu_adapter_functions::events::DatabaseReferenceChange;
-    let (runtime, _) = runtime(false).await;
-    let mut change = commit();
-    change.data = DatabaseChangeData::References(
-        (0..=MAX_ACTIVE_EVENT_RECORDS)
+    DatabaseChangeData::References(
+        (0..count)
             .map(|n| DatabaseReferenceChange {
                 reference: format!("/users/id{n}"),
                 before: serde_json::Value::Null,
                 after: json!(n),
             })
             .collect(),
-    );
-    assert!(matches!(
-        runtime.reserve_database_events(&change),
-        Err(SourceEventAdmissionError::Capacity)
-    ));
+    )
+}
+
+/// Review S4 (2026-10-25): a fanout larger than the whole event budget can never be admitted,
+/// so it is dropped (counted, nothing charged) and the source write proceeds, as production
+/// accepts it.
+#[tokio::test]
+async fn database_fanout_beyond_the_whole_budget_is_dropped_without_charging_records() {
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS + 1);
+    let reservation = runtime
+        .reserve_database_events(&change)
+        .expect("a fanout that can never fit is dropped, not refused");
     assert_eq!(
         runtime.source_event_accounting().unwrap().reserved_records,
         0
     );
+    reservation.publish();
     assert_eq!(
         runtime.source_event_accounting().unwrap().published_records,
         0
     );
-    // A refused larger source operation cannot consume the following operation's capacity.
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    // A dropped larger source operation cannot consume the following operation's capacity.
+    let reservation = runtime.reserve_database_events(&commit()).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        2
+    );
+    drop(reservation);
+    runtime.shutdown().await;
+}
+
+fn outbox_bytes(runtime: &FunctionsRuntime) -> u64 {
+    runtime
+        .resources(fireemu_core_types::resources::RootBudget::DEFAULT)
+        .unwrap()
+        .gauges
+        .into_iter()
+        .find(|gauge| gauge.id == "outbox.bytes")
+        .unwrap()
+        .current
+}
+
+/// The budget is inclusive: exactly 4096 events, or exactly 64 MiB, fit an empty queue and are
+/// reserved, never dropped.
+#[tokio::test]
+async fn database_fanout_of_exactly_the_whole_budget_is_reserved() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    use fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENT_BYTES;
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        MAX_ACTIVE_EVENT_RECORDS
+    );
+    drop(reservation);
+    // Eight events of exactly an eighth of the byte budget each: measure one event's overhead
+    // with an empty string, then pad.
+    let events = |padding: usize| {
+        let mut change = commit();
+        change.data = DatabaseChangeData::References(
+            (0..8)
+                .map(|n| DatabaseReferenceChange {
+                    reference: format!("/users/id{n}"),
+                    before: serde_json::Value::Null,
+                    after: json!("x".repeat(padding)),
+                })
+                .collect(),
+        );
+        change
+    };
+    let probe = runtime.reserve_database_events(&events(0)).unwrap();
+    let overhead = usize::try_from(outbox_bytes(&runtime)).unwrap() / 8;
+    drop(probe);
+    let exact = events(MAX_ACTIVE_EVENT_BYTES / 8 - overhead);
+    let reservation = runtime.reserve_database_events(&exact).unwrap();
+    assert_eq!(
+        usize::try_from(outbox_bytes(&runtime)).unwrap(),
+        MAX_ACTIVE_EVENT_BYTES
+    );
+    drop(reservation);
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    // One byte more can never fit.
+    let over = events(MAX_ACTIVE_EVENT_BYTES / 8 - overhead + 1);
+    drop(runtime.reserve_database_events(&over).unwrap());
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert_eq!(outbox_bytes(&runtime), 0);
+    runtime.shutdown().await;
+}
+
+/// Merge review S1 (2026-10-26): whether a fanout can ever fit is decided before the current
+/// queue is consulted, so an oversized fanout is dropped at once even while the queue is busy,
+/// never refused with a 503 that only a later retry turns into a drop.
+#[tokio::test]
+async fn an_oversized_fanout_is_dropped_even_while_the_queue_is_busy() {
+    let (runtime, _) = runtime(false).await;
+    let holding = runtime.reserve_database_events(&commit()).unwrap();
+    let mut change = commit();
+    change.data = user_changes(MAX_ACTIVE_EVENT_RECORDS + 1);
+    drop(
+        runtime
+            .reserve_database_events(&change)
+            .expect("a fanout that can never fit is dropped whatever the queue holds"),
+    );
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        2,
+        "only the held reservation remains"
+    );
+    drop(holding);
+    runtime.shutdown().await;
+}
+
+/// Merge review S2: an event larger than an invocation frame is dropped alone; the write's other
+/// events are still delivered, as production delivers them.
+#[tokio::test]
+async fn only_the_event_larger_than_a_frame_is_dropped() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    let (runtime, _) = runtime(false).await;
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![
+        DatabaseReferenceChange {
+            reference: "/users/big".to_owned(),
+            before: json!("a".repeat(8 * 1024 * 1024)),
+            after: json!("b".repeat(8 * 1024 * 1024)),
+        },
+        DatabaseReferenceChange {
+            reference: "/users/small".to_owned(),
+            before: serde_json::Value::Null,
+            after: json!(1),
+        },
+    ]);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        1
+    );
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    reservation.publish();
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().published_records,
+        1
+    );
+    runtime.shutdown().await;
+}
+
+/// Merge review R2-S1: a write refused while the queue is full is not applied, so its
+/// over-frame event is neither counted nor warned about; the retry counts it once.
+#[tokio::test]
+async fn a_refused_write_counts_no_dropped_event() {
+    use fireemu_adapter_functions::events::DatabaseReferenceChange;
+    let (runtime, _) = runtime(false).await;
+    let mut held = commit();
+    held.data = user_changes(MAX_ACTIVE_EVENT_RECORDS);
+    let holding = runtime.reserve_database_events(&held).unwrap();
+    let mut change = commit();
+    change.data = DatabaseChangeData::References(vec![
+        DatabaseReferenceChange {
+            reference: "/users/big".to_owned(),
+            before: json!("a".repeat(8 * 1024 * 1024)),
+            after: json!("b".repeat(8 * 1024 * 1024)),
+        },
+        DatabaseReferenceChange {
+            reference: "/users/small".to_owned(),
+            before: serde_json::Value::Null,
+            after: json!(1),
+        },
+    ]);
+    assert!(matches!(
+        runtime.reserve_database_events(&change),
+        Err(SourceEventAdmissionError::Capacity)
+    ));
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    drop(holding);
+    let reservation = runtime.reserve_database_events(&change).unwrap();
+    assert_eq!(dropped_fanouts(&runtime), 1);
+    assert!(
+        !runtime.drop_database_fanout("app-first", "probe"),
+        "the warning was spent once"
+    );
+    drop(reservation);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn only_the_first_dropped_fanout_of_a_session_is_printed() {
+    let (runtime, _) = runtime(false).await;
+    assert!(runtime.drop_database_fanout("app-first", "test"));
+    assert!(!runtime.drop_database_fanout("app-first", "test"));
+    assert_eq!(dropped_fanouts(&runtime), 2);
+    runtime.shutdown().await;
+}
+
+/// A fanout that fits an empty queue but not the current one stays a refusal: the caller
+/// answers 503 and a retry succeeds once deliveries drain.
+#[tokio::test]
+async fn database_fanout_that_fits_an_empty_queue_is_refused_only_while_the_queue_is_full() {
+    let (runtime, _) = runtime(false).await;
+    let mut held = commit();
+    held.data = user_changes(MAX_ACTIVE_EVENT_RECORDS - 1);
+    let holding = runtime.reserve_database_events(&held).unwrap();
+    assert!(matches!(
+        runtime.reserve_database_events(&commit()),
+        Err(SourceEventAdmissionError::Capacity)
+    ));
+    assert_eq!(dropped_fanouts(&runtime), 0);
+    drop(holding);
     let reservation = runtime.reserve_database_events(&commit()).unwrap();
     assert_eq!(
         runtime.source_event_accounting().unwrap().reserved_records,
@@ -272,12 +478,12 @@ async fn database_ipc_capacity_counts_json_escaping_and_the_invoke_envelope() {
             before: json!(character.to_string().repeat(bytes)),
             after: json!("b".repeat(bytes)),
         }]);
+        let dropped = dropped_fanouts(&runtime);
         let result = runtime.reserve_database_events(&change);
-        if accepted {
-            drop(result.expect("a complete 14MiB invocation fits the existing IPC limit"));
-        } else {
-            assert!(matches!(result, Err(SourceEventAdmissionError::Capacity)));
-        }
+        // An event larger than an invocation frame can never be delivered; production does
+        // not deliver an oversized event either, and still accepts the write (review S4).
+        drop(result.expect("a fitting event is reserved and an oversized one dropped"));
+        assert_eq!(dropped_fanouts(&runtime), dropped + u64::from(!accepted));
         assert_eq!(
             runtime.source_event_accounting().unwrap().reserved_records,
             0
@@ -313,10 +519,13 @@ async fn database_ipc_capacity_counts_json_escaping_and_the_invoke_envelope() {
         serde_json::to_vec(&event).unwrap().len(),
         fireemu_adapter_functions::protocol::MAX_FRAME_BYTES
     );
-    assert!(matches!(
-        runtime.reserve_database_events(&change),
-        Err(SourceEventAdmissionError::Capacity)
-    ));
+    let dropped = dropped_fanouts(&runtime);
+    drop(runtime.reserve_database_events(&change).unwrap());
+    assert_eq!(dropped_fanouts(&runtime), dropped + 1);
+    assert_eq!(
+        runtime.source_event_accounting().unwrap().reserved_records,
+        0
+    );
     runtime.shutdown().await;
 }
 

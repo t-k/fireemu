@@ -22,6 +22,15 @@ fireemu exec --only database -- node tools/sdk-smoke-database/run.mjs
 
 `fireemu exec` sets `FIREBASE_DATABASE_EMULATOR_HOST`, which `run.mjs` reads; no configuration file is needed. Each smoke prints `same as the official emulator` or the first difference, and the exit status is 1 when any smoke differs. `--only crud,disconnect` runs a subset and `--host 127.0.0.1:9000` names a server explicitly.
 
+## Tests
+
+```sh
+npm ci --prefix tools/sdk-smoke-database --ignore-scripts
+npm test --prefix tools/sdk-smoke-database
+```
+
+The tests are offline: they run against fakes and committed fixtures, and need no Google endpoint, no credential, no official emulator jar and no fireemu binary. CI runs them (the `sdk-smoke-database` job). Only `rtdb-residual-page.test.mjs` needs headless Chromium (`npx --prefix tools/sdk-smoke-database playwright install chromium`); on a machine without it the file is skipped, and with `FIREEMU_REQUIRE_BROWSER=1` (as in CI) a missing browser fails it instead.
+
 ## Recording the official emulator again
 
 The recordings come only from the pinned jar, `firebase-database-emulator-v4.11.2.jar` with SHA-256 `b70d99344caf17c98b6f910fa8f6edf32a7c016cb1035e8915f70d38901eb97f` (the value `spec/compatibility/contract.json` pins). Fetch it with the pinned firebase-tools, which puts it in `~/.cache/firebase/emulators/`, then record:

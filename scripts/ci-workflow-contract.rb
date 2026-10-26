@@ -286,8 +286,33 @@ runner_steps.each do |step|
   end
 end
 
+# The Realtime Database smoke tests (tools/sdk-smoke-database) are a gate on every trigger. They are offline;
+# the one file that needs Chromium must fail, not skip, when the browser is missing.
+database_smoke = jobs["sdk-smoke-database"]
+assert(database_smoke, "CI must have an sdk-smoke-database job for the Realtime Database smoke tests")
+assert(database_smoke["runs-on"] == "ubuntu-latest", "the database smoke tests run on Linux")
+assert(database_smoke["env"] == { "FIREEMU_REQUIRE_BROWSER" => "1" }, "the database smoke job must require the browser, so the residual page tests cannot skip")
+assert((database_smoke.keys - %w[name runs-on timeout-minutes env steps]).empty?, "the database smoke job may carry only name, runs-on, timeout-minutes, env and steps")
+database_steps = database_smoke.fetch("steps")
+database_runs = database_steps.map { |step| step["run"] }
+database_install = database_runs.index("npm ci --prefix tools/sdk-smoke-database --ignore-scripts")
+database_browser = database_runs.index("npx --prefix tools/sdk-smoke-database playwright install --with-deps chromium")
+database_tests = database_runs.index("npm test --prefix tools/sdk-smoke-database")
+assert(database_install && database_browser && database_tests && database_install < database_browser && database_browser < database_tests, "the database smoke tests run after the install of the pinned SDKs and of Chromium")
+assert(database_steps.any? { |step| step["uses"]&.start_with?("actions/setup-node@") && step.dig("with", "node-version").to_s == "24" }, "the database smoke tests run on Node 24")
+database_steps.each do |step|
+  if step["run"]
+    assert(step.keys.sort == %w[name run], "database smoke run steps carry exactly a name and a run: #{step['name']}")
+  elsif step["uses"]&.start_with?("actions/setup-node@")
+    assert(step.keys.sort == %w[uses with] && step["with"].keys == %w[node-version], "the database smoke setup-node step sets only node-version")
+  else
+    assert(step.keys == %w[uses] && step["uses"].start_with?("actions/checkout@"), "the database smoke job uses only checkout, setup-node and run steps")
+  end
+end
+assert(!YAML.dump(database_smoke).match?(/secrets\.|gcloud|GOOGLE_|firebase-tools/), "the database smoke tests are offline: no secret, no gcloud, no Google credential, no firebase-tools")
+
 # The full suite runs on every trigger: pull requests, pushes to main and manual dispatch.
-%w[lint test verify platforms package ui runner-node].each do |name|
+%w[lint test verify platforms package ui runner-node sdk-smoke-database].each do |name|
   assert(!jobs.fetch(name).key?("if"), "#{name} must run on pull requests and on pushes to main, not only on manual dispatch")
 end
 

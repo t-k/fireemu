@@ -34,7 +34,7 @@ const COMMON_GIT = execFileSync(
   ["rev-parse", "--path-format=absolute", "--git-common-dir"],
   { cwd: ROOT, encoding: "utf8" },
 ).trim();
-const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
+export const PRIVATE_ROOT = join(dirname(COMMON_GIT), "docs.local");
 const LEDGER = join(PRIVATE_ROOT, "runs/sandbox-ledger.jsonl");
 const LOCK = `${LEDGER}.lock`;
 const OWNER_DECISIONS = join(PRIVATE_ROOT, "instructions/owner-decisions.md");
@@ -46,11 +46,12 @@ const KEY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-auth-key-20260925.json",
 );
-const PROJECT_IDENTITY_FILE = join(
+export const PROJECT_IDENTITY_FILE = join(
   PRIVATE_ROOT,
   "oracle-credentials/fireemu-oracle-query-project.json",
 );
-const PROJECT_IDENTITY_SHA = "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108ef4628df8fad58";
+export const PROJECT_IDENTITY_SHA =
+  "e7b988b49c3ca24496b8c030a27b4714a31182950f9e9b7108ef4628df8fad58";
 const SANDBOX_DOC = join(PRIVATE_ROOT, "sandbox-oracles.md");
 const CLI = join(CONFORMANCE, "node_modules/firebase-tools/lib/bin/firebase.js");
 const TASK = "FUNCTIONS-HTTP-SANDBOX";
@@ -377,7 +378,7 @@ export async function writeCliDiagnostic(output, exitCode, kind, attempt, runDir
   return file;
 }
 
-async function requiredSourceDigests() {
+export async function requiredSourceDigests() {
   const checked = [
     ["corpus.json", CORPUS_SHA],
     ["fixtures/index.js", FIXTURE_SHA],
@@ -462,7 +463,7 @@ async function assertPrivateApproval() {
   return gitSha;
 }
 
-async function ownerAdc() {
+export async function ownerAdc() {
   const path = resolve(
     process.env.FIREEMU_OWNER_ADC ||
       join(homedir(), ".config/gcloud/application_default_credentials.json"),
@@ -769,7 +770,7 @@ export async function cli(
     }
   };
   const scanners = [child.stdout, child.stderr].map(() =>
-    createReceiptScanner((event) => deployTrack?.onEvent(event)),
+    createReceiptScanner((event, line) => deployTrack?.onEvent(event, line)),
   );
   [child.stdout, child.stderr].forEach((stream, index) =>
     stream.on("data", (chunk) => {
@@ -1205,9 +1206,16 @@ export async function deployTarget(
   budget,
   runDir,
   run = cli,
+  tap = () => {},
 ) {
   const upload = await uploads.beginDeploy(`${programId}:${target}`);
-  const deployTrack = { onEvent: (event) => upload.observe(event) };
+  // `tap` sees every upload event with its raw line (the stage 1 probe records the line forms).
+  const deployTrack = {
+    onEvent: (event, line) => {
+      tap(event, line);
+      upload.observe(event);
+    },
+  };
   Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
   await run(
     ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
@@ -1217,6 +1225,43 @@ export async function deployTarget(
     runDir,
     deployTrack,
   );
+}
+
+/** The reserved function, service and image package must not exist before a deploy. */
+export async function assertTargetAbsent(control, target) {
+  const absence = await inspectAbsence(control, target, "control");
+  if (
+    !absence.functionAbsent ||
+    !absence.serviceAbsent ||
+    (await inspectOwnedPackage(control, target, "control"))
+  ) {
+    throw new Error("reserved function, service or image package already exists");
+  }
+}
+
+/** Reads the deployed function, its service and its one owned image version into `state`. */
+export async function readDeployedTarget(control, target, state) {
+  const functionRecord = (await control("GET", functionUrl(target), undefined, "control")).value;
+  state.url = validateFunctionRecord(functionRecord, target);
+  const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
+  if (
+    service.name?.toLowerCase() !== serviceName(target).toLowerCase() ||
+    !service.template?.containers?.[0]?.image
+  ) {
+    throw new Error("Cloud Run service does not identify the deployed image");
+  }
+  const ownedImage = assertOwnedImage(service.template.containers[0].image, target);
+  const versions = await listOwnedVersions(control, target, "control");
+  if (versions.length !== 1)
+    throw new Error("deployed function did not create exactly one owned image version");
+  if (
+    ownedImage.digest &&
+    decodeURIComponent(versions[0].name.split("/").at(-1)) !== ownedImage.digest
+  ) {
+    throw new Error("Cloud Run image digest does not match the owned Artifact Registry version");
+  }
+  if (ownedImage.tag) await assertOwnedTag(control, target, ownedImage.tag, versions[0].name);
+  state.versionName = versions[0].name;
 }
 
 export async function observeProgram(
@@ -1248,41 +1293,10 @@ export async function observeProgram(
     }
     for (const target of targets) {
       if (abort.stopped) throw new Error("signal stopped observation before deploy");
-      const absence = await inspectAbsence(control, target, "control");
-      if (
-        !absence.functionAbsent ||
-        !absence.serviceAbsent ||
-        (await inspectOwnedPackage(control, target, "control"))
-      ) {
-        throw new Error("reserved function, service or image package already exists");
-      }
+      await assertTargetAbsent(control, target);
       await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir, run);
       await log("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
-      const functionRecord = (await control("GET", functionUrl(target), undefined, "control"))
-        .value;
-      states[target].url = validateFunctionRecord(functionRecord, target);
-      const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
-      if (
-        service.name?.toLowerCase() !== serviceName(target).toLowerCase() ||
-        !service.template?.containers?.[0]?.image
-      ) {
-        throw new Error("Cloud Run service does not identify the deployed image");
-      }
-      const image = service.template.containers[0].image;
-      const ownedImage = assertOwnedImage(image, target);
-      const versions = await listOwnedVersions(control, target, "control");
-      if (versions.length !== 1)
-        throw new Error("deployed function did not create exactly one owned image version");
-      if (
-        ownedImage.digest &&
-        decodeURIComponent(versions[0].name.split("/").at(-1)) !== ownedImage.digest
-      ) {
-        throw new Error(
-          "Cloud Run image digest does not match the owned Artifact Registry version",
-        );
-      }
-      if (ownedImage.tag) await assertOwnedTag(control, target, ownedImage.tag, versions[0].name);
-      states[target].versionName = versions[0].name;
+      await readDeployedTarget(control, target, states[target]);
       await publicInvoker(control, target, true, "control", log);
       states[target].publicSince = Date.now();
     }

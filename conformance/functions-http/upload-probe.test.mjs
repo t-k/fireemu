@@ -1,0 +1,280 @@
+// Tests of the stage 1 Gen2 upload line probe: a minimal deploy whose only goal is to record the
+// two `--debug` line forms (the generateUploadUrl answer and the upload's PUT status) and clean up.
+
+import assert from "node:assert/strict";
+import { readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { BOUNDS, createBudget } from "./harness.mjs";
+import { FAKE_RECEIPT_SCRIPT, UPLOAD_OBJECT, deployWorld } from "./production.fake.mjs";
+import {
+  PROBE_LIMITS,
+  assertProbeApproval,
+  createFormsCollector,
+  decideAfterDeploy,
+  loggingApiState,
+  maskProbeLine,
+  runUploadProbe,
+} from "./upload-probe.mjs";
+
+const NUMBER = "123456789012";
+const REAL_LOOKING = "987654321098";
+const BUCKET = `gcf-v2-uploads-${NUMBER}.us-central1.cloudfunctions.appspot.com`;
+const A_LINE = `[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions:generateUploadUrl {"uploadUrl":"https://storage.googleapis.com/${BUCKET}/${UPLOAD_OBJECT}?X-Goog-Signature=SECRET-MARKER-9f3a","storageSource":{"bucket":"${BUCKET}","object":"${UPLOAD_OBJECT}"}}`;
+const B_LINE = `[2026-10-26T01:02:04.000Z] <<< [apiv2][status] PUT https://storage.googleapis.com/${BUCKET}/${UPLOAD_OBJECT} 200`;
+
+test("a recorded line is masked: the project number, the signed URL and nothing else", () => {
+  const real = A_LINE.replaceAll(NUMBER, REAL_LOOKING);
+  const masked = maskProbeLine(real, REAL_LOOKING);
+  assert.doesNotMatch(masked, new RegExp(`${REAL_LOOKING}|SECRET-MARKER|X-Goog`));
+  assert.ok(
+    masked.includes(`gcf-v2-uploads-${NUMBER}.us-central1`),
+    "masked with the fixture number",
+  );
+  assert.ok(masked.includes(UPLOAD_OBJECT), "the object name is kept");
+  assert.ok(masked.includes('"uploadUrl":"[REDACTED UPLOAD URL]"'));
+  assert.equal(maskProbeLine(B_LINE.replaceAll(NUMBER, REAL_LOOKING), REAL_LOOKING), B_LINE);
+  // a number of another length is masked with a prefix of the fixture digits, never kept
+  assert.equal(maskProbeLine("x 1234567890 y", "1234567890"), "x 1234567890 y");
+  assert.equal(maskProbeLine("x 4444444444 y", "4444444444"), "x 1234567890 y");
+});
+
+test("the forms collector records only the shapes: seen or not, codes, byte lengths, masked lines", () => {
+  const collector = createFormsCollector(REAL_LOOKING);
+  const aLine = A_LINE.replaceAll(NUMBER, REAL_LOOKING);
+  collector.observe({ type: "receipt", bucket: "b", object: "o" }, aLine);
+  collector.observe({ type: "put-status", bucket: "b", object: "o", status: 503 }, B_LINE);
+  collector.observe({ type: "put-status", bucket: "b", object: "o", status: 200 }, B_LINE);
+  const summary = collector.summary();
+  assert.deepEqual(summary.putStatusCodes, [503, 200]);
+  assert.equal(summary.receiptLineSeen, true);
+  assert.equal(summary.putStatusLineSeen, true);
+  assert.equal(summary.receiptLineBytes, Buffer.byteLength(aLine));
+  assert.equal(collector.maskedLines().length, 3);
+  assert.ok(!JSON.stringify(summary).includes(REAL_LOOKING));
+  assert.ok(!collector.maskedLines().join("\n").includes(REAL_LOOKING));
+  const empty = createFormsCollector(REAL_LOOKING).summary();
+  assert.deepEqual(empty, {
+    receiptLineSeen: false,
+    putStatusLineSeen: false,
+    putStatusCodes: [],
+    receiptLineBytes: 0,
+    putStatusLineBytes: 0,
+  });
+});
+
+test("the stop rule: only seeing no receipt line stops; a missing PUT line is a finding", () => {
+  const forms = (receipt, put) => ({ receiptLineSeen: receipt, putStatusLineSeen: put });
+  assert.deepEqual(decideAfterDeploy(forms(true, true)), {
+    decision: "continue",
+    finding: "both-forms",
+  });
+  assert.deepEqual(decideAfterDeploy(forms(true, false)), {
+    decision: "continue",
+    finding: "put-status-line-missing",
+  });
+  assert.deepEqual(decideAfterDeploy(forms(false, true)), {
+    decision: "stop",
+    finding: "no-receipt-line",
+  });
+  assert.deepEqual(decideAfterDeploy(forms(false, false)), {
+    decision: "stop",
+    finding: "no-receipt-line",
+  });
+});
+
+test("approval binds one decision, the commit and the packet", () => {
+  const ok = "Decision: APPROVE\ngitSha: abc\npacketSha256: def\nNotes\n";
+  assert.doesNotThrow(() => assertProbeApproval(ok, "abc", "def"));
+  for (const [content, sha, packet] of [
+    [ok, "abd", "def"],
+    [ok, "abc", "deg"],
+    ["Decision: CHANGES REQUESTED\ngitSha: abc\npacketSha256: def\n", "abc", "def"],
+    [`${ok}Decision: APPROVE\n`, "abc", "def"],
+    [`${ok}see gitSha: abd\n`, "abc", "def"],
+    ["gitSha: abc\nDecision: APPROVE\npacketSha256: def\n", "abc", "def"],
+  ]) {
+    assert.throws(() => assertProbeApproval(content, sha, packet), /APPROVE must bind/);
+  }
+});
+
+test("the packet's request caps can lower a budget and never raise it", () => {
+  const budget = createBudget(PROBE_LIMITS);
+  budget.take("cliDeploy");
+  assert.throws(() => budget.take("cliDeploy"), /cliDeploy ceiling 1 reached/);
+  assert.throws(() => budget.take("invocation"), /invocation ceiling 0 reached/);
+  assert.throws(() => budget.take("auth"), /auth ceiling 0 reached/);
+  assert.throws(() => createBudget({ cliDeploy: 1.5 }), /invalid request cap/);
+  assert.throws(() => createBudget({ nothing: 1 }), /invalid request cap/);
+  assert.equal(createBudget({ cliDeploy: 1000 }).snapshot().cliDeploy, 0);
+  const wide = createBudget({ cliDeploy: 1000 });
+  for (let n = 0; n < BOUNDS.cliDeploy; n += 1) wide.take("cliDeploy");
+  assert.throws(() => wide.take("cliDeploy"), /ceiling 16 reached/);
+  assert.deepEqual(
+    { ...PROBE_LIMITS },
+    {
+      invocation: 0,
+      auth: 0,
+      control: 12,
+      cleanup: 30,
+      upload: 15,
+      token: 12,
+      cliDeploy: 1,
+      cliDelete: 1,
+    },
+  );
+});
+
+async function probe({ script, deleteStatus, loggingState }) {
+  const world = await deployWorld({ deployScript: script, deleteStatus, caps: PROBE_LIMITS });
+  if (loggingState) world.deployed.loggingState = loggingState;
+  const result = await runUploadProbe({
+    control: world.control,
+    adcPath: "/adc",
+    budget: world.budget,
+    runDir: join(world.dir, "run"),
+    projectNumber: NUMBER,
+    run: world.run,
+  });
+  return { world, result };
+}
+
+const journalOf = (world) => readFile(join(world.dir, "run", "journal.jsonl"), "utf8");
+
+test("both lines seen: the upload is deleted by generation, nothing else is touched, caps hold", async () => {
+  const { world, result } = await probe({ script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200) });
+  try {
+    assert.equal(result.outcome, "recorded");
+    assert.equal(result.decision, "continue");
+    assert.equal(result.finding, "both-forms");
+    assert.deepEqual(result.forms.putStatusCodes, [200]);
+    assert.equal(result.uploadsClosureReady, true);
+    assert.equal(result.a2Required, false);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+    const deletes = world.gcs.requests.filter((r) => r.method === "DELETE");
+    assert.equal(deletes.length, 1);
+    assert.match(deletes[0].url, /ifGenerationMatch=\d+$/);
+    const used = world.budget.snapshot();
+    assert.equal(used.cliDeploy, 1);
+    assert.equal(used.cliDelete, 1);
+    assert.equal(used.invocation, 0);
+    assert.equal(used.auth, 0);
+    assert.equal(result.requests.cliDeploy, 1);
+    assert.equal(result.estimatedUsd, 0.56);
+    assert.equal(result.loggingApiState, "ENABLED");
+    assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"]);
+    assert.doesNotMatch(await journalOf(world), /public-invoker-granted/);
+    assert.deepEqual(world.deployed.bindings, [], "no IAM binding was ever written");
+    assert.match(await journalOf(world), /source-upload-deleted/);
+    // the masked lines are what the lane turns into a replay fixture
+    assert.equal(result.maskedLines.length, 2);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the receipt line without the PUT line is a finding, and the upload is still deleted", async () => {
+  const { world, result } = await probe({ script: FAKE_RECEIPT_SCRIPT("process.exit(0);") });
+  try {
+    assert.equal(result.outcome, "recorded");
+    assert.equal(result.decision, "continue");
+    assert.equal(result.finding, "put-status-line-missing");
+    assert.equal(
+      result.a2Required,
+      true,
+      "an unknown create settled by an own read needs the A2 read-back",
+    );
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("neither line, or only the PUT line: stop, delete nothing in the bucket, still remove the function", async () => {
+  for (const script of [
+    'console.log("i  functions: deploying");\nprocess.exit(0);',
+    `console.log("${B_LINE.replaceAll('"', '\\"')}");\nprocess.exit(0);`,
+  ]) {
+    const { world, result } = await probe({ script });
+    try {
+      assert.equal(result.decision, "stop");
+      assert.equal(result.finding, "no-receipt-line");
+      assert.equal(result.outcome, "stopped-needs-review");
+      assert.equal(result.uploadsClosureReady, false);
+      assert.equal(world.gcs.count("DELETE"), 0, "no DELETE in the uploads bucket");
+      assert.ok(world.gcs.objects.has(UPLOAD_OBJECT), "the zip stays for a recovery packet");
+      assert.deepEqual(world.calls, ["cliDeploy", "cliDelete"], "the function itself is removed");
+      assert.equal(world.deployed.present, false);
+    } finally {
+      await rm(world.dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a deploy that failed after both lines still deletes the upload and asks for review", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT(
+      'console.error("Error: Failed to create function"); process.exit(1);',
+      200,
+    ),
+  });
+  try {
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.decision, "continue");
+    assert.equal(result.uploadsClosureReady, true);
+    assert.ok(!world.gcs.objects.has(UPLOAD_OBJECT));
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("a refused upload DELETE leaves the run needing review with the object in place", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    deleteStatus: 403,
+  });
+  try {
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.uploadsClosureReady, false);
+    assert.ok(world.gcs.objects.has(UPLOAD_OBJECT));
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("Cloud Logging is only read, never enabled, and its state is recorded", async () => {
+  const { world, result } = await probe({
+    script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
+    loggingState: "DISABLED",
+  });
+  try {
+    assert.equal(result.loggingApiState, "DISABLED");
+    assert.equal(result.outcome, "recorded", "the state is information for stage 2, not a stop");
+    assert.ok(
+      world.gcs.requests.every((r) => r.method !== "POST"),
+      "no storage write",
+    );
+    const reply = await loggingApiState(async () => ({ status: 200, value: { state: "ENABLED" } }));
+    assert.equal(reply, "ENABLED");
+    assert.equal(await loggingApiState(async () => ({ status: 200, value: {} })), "UNKNOWN");
+    assert.equal(await loggingApiState(async () => ({ status: 404, value: {} })), "UNKNOWN");
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
+test("the result and the journal name no bucket, object, project number or URL", async () => {
+  const { world, result } = await probe({ script: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200) });
+  try {
+    const serialized = JSON.stringify({ ...result, maskedLines: undefined });
+    assert.doesNotMatch(
+      serialized,
+      new RegExp(`${NUMBER}|gcf-v2-uploads|${UPLOAD_OBJECT}|SECRET-MARKER|https://`),
+    );
+    const journal = await journalOf(world);
+    assert.doesNotMatch(journal, new RegExp(`${NUMBER}|gcf-v2-uploads|SECRET-MARKER`));
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});

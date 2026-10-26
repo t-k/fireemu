@@ -107,7 +107,7 @@ export function createReceiptScanner(onEvent) {
   let tail = "";
   const scan = (line) => {
     const event = uploadEventFromLine(line);
-    if (event) onEvent(event);
+    if (event) onEvent(event, line);
   };
   return {
     feed(chunk) {

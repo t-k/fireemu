@@ -2746,7 +2746,7 @@
     },
     "firestore/rest-error-shapes#runQuery-with-an-unknown-operator": {
       "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; CHANGELOG.md [Unreleased]",
-      "reason": "Production refuses a REST runQuery with an unknown field-filter operator with a 400 INVALID_ARGUMENT whose message is `Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"<name>\"`, a BadRequest detail and the error in a one-element array (recorded 2026-09-07 and 2026-09-24); the official emulator answers `Payload isn't valid for request.`. fireemu follows production in both profiles.",
+      "reason": "Production refuses a REST runQuery with an unknown field-filter operator with a 400 INVALID_ARGUMENT whose message is `Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"<name>\"` (recorded 2026-09-07 and 2026-09-24); the 2026-09-24 recording also shows the BadRequest detail and the error in a one-element array. The official emulator answers `Payload isn't valid for request.`. fireemu follows production in both profiles.",
       "authority": {
         "kind": "production-spec",
         "sourceUrls": [

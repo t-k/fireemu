@@ -7969,3 +7969,23 @@ fn a_partition_query_with_an_unknown_operator_is_worded_like_production_in_both_
         );
     }
 }
+
+#[test]
+fn a_lowercase_operator_name_is_served_by_strict_and_refused_in_fireemus_words_by_the_emulator_profile(
+) {
+    // Production's transcoder reads enum names without regard to case, so strict serves
+    // `equal`. The emulator profile has never read it (the transcoder is not applied there) and
+    // refuses it in fireemu's own words: a split that predates the production-worded refusal of
+    // an unknown name, which the transcoder would not refuse here and so leaves alone.
+    let strict = state_with_profile(true);
+    let (status, body) = run_query_with_operator(&strict, "runQuery", "equal");
+    assert_eq!(status, 200, "{body}");
+    let emulator = state_with_profile(false);
+    let (status, body) = run_query_with_operator(&emulator, "runQuery", "equal");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body[0]["error"]["message"], "unknown field filter operator",
+        "{body}"
+    );
+    assert!(body[0]["error"].get("details").is_none(), "{body}");
+}

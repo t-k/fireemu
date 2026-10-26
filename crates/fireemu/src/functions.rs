@@ -6690,6 +6690,48 @@ while True:
         );
     }
 
+    #[test]
+    fn database_json_lower_bound_counts_the_compact_json_of_keys_strings_and_punctuation() {
+        use fireemu_adapter_database::changes::Path;
+        let tree =
+            database_bridge_tree(&json!({"s":"abc","o":{"a":1,"b":2},"p":{"a":"xx","b":"yy"}}));
+        let node = |key: &str| tree.get(&Path::from_keys([key]));
+        assert_eq!(super::database_json_lower_bound(None, usize::MAX), 4); // null
+        assert_eq!(super::database_json_lower_bound(node("s"), usize::MAX), 5); // "abc"
+        assert_eq!(super::database_json_lower_bound(node("o"), usize::MAX), 13); // {"a":1,"b":2}
+        assert_eq!(super::database_json_lower_bound(node("p"), usize::MAX), 19); // {"a":"xx","b":"yy"}
+                                                                                 // Reaching the limit exactly mid-walk keeps counting; only passing it stops.
+        assert!(super::database_json_lower_bound(node("p"), 15) > 15);
+    }
+
+    #[test]
+    fn database_bridge_frame_bound_adds_the_whole_after_unless_both_sides_are_objects() {
+        use fireemu_adapter_database::changes::Path;
+        use fireemu_core_functions::manifest::DatabasePattern;
+        let root = Path::root();
+        let patterns = [DatabasePattern::parse("/users/{uid}").unwrap()];
+        // An object replaced by a leaf: the event carries {"x":1} (7) and "ssssssssss" (12).
+        let before = database_bridge_tree(&json!({"users":{"a":{"x":1}}}));
+        let after = database_bridge_tree(&json!({"users":{"a":"s".repeat(10)}}));
+        for (limit, drops) in [(19, 0), (18, 1)] {
+            assert_eq!(
+                super::capture_database_references(&patterns, &before, &after, &root, 8, limit)
+                    .unwrap()
+                    .1,
+                drops,
+                "{limit}"
+            );
+        }
+        // Two objects: only `before` is certain to be carried whole.
+        let after = database_bridge_tree(&json!({"users":{"a":{"x":"s".repeat(10)}}}));
+        assert_eq!(
+            super::capture_database_references(&patterns, &before, &after, &root, 8, 7)
+                .unwrap()
+                .1,
+            0
+        );
+    }
+
     #[tokio::test]
     async fn database_bridge_affects_only_writes_that_can_reach_a_trigger_reference() {
         use fireemu_adapter_database::changes::Path;

@@ -265,6 +265,21 @@ pub fn property_path_too_long(field: &str) -> Status {
     )
 }
 
+/// Production's refusal of a nested alias in a stage that assigns top-level fields only
+/// (`aggregate`, `distinct`; FS-ENT-ORACLE O-7 `aggregate-aliases#acc-dotted`): `INVALID_ARGUMENT`
+/// with an `ErrorInfo` naming the field.
+#[must_use]
+pub fn top_level_property_path_only(field: &str, message: &str) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        message,
+        vec![error_info(
+            "TOP_LEVEL_PROPERTY_PATH_ONLY",
+            &[("field", field.to_owned())],
+        )],
+    )
+}
+
 /// Production's refusal of a `select` stage that sets a field and one of its children
 /// (FS-ENT-ORACLE O-1, `fs-ent-pipeline/px0/aliases#overlap`, and the official emulator alike):
 /// `INVALID_ARGUMENT` with an `ErrorInfo` naming the child path.

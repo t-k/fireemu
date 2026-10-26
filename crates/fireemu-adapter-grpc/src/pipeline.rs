@@ -141,6 +141,25 @@ pub fn validate_pipeline(
             }
         }
     }
+    // An input stage after the first: production's text (FS-ENT-ORACLE O-7
+    // `inputs-collection-group#invalid-after-collection`).
+    if pipeline
+        .stages
+        .iter()
+        .skip(1)
+        .any(|stage| matches!(stage.name.as_str(), "collection_group" | "documents"))
+    {
+        return Err(with_code(
+            Status::invalid_argument(
+                "The last stage of a pipeline query must be a transform or output stage.",
+            ),
+            "FS_PIPE_INVALID",
+        ));
+    }
+    // Production's arity text of the stages with a signature comes before the registry's own.
+    if let Some(error) = pipeline.stages.iter().find_map(stage_arity_error) {
+        return Err(with_code(error, "FS_PIPE_INVALID"));
+    }
     canonicalize(&specs).map_err(|e| {
         let (status, code) = match &e {
             PipelineError::UnknownStage(_) => (
@@ -236,10 +255,135 @@ pub fn project_document(
 
 /// The collection input of a locally executable pipeline: its stages, the `RunQuery` parent
 /// and the collection ID. Consistency selectors and pipeline options are refused.
-fn collection_input<'a>(
+/// Where a compiled pipeline reads its rows.
+struct Input<'a> {
+    pipeline: &'a pb::Pipeline,
+    /// The query's parent (the documents root unless a collection of a document is read).
+    query_parent: String,
+    collection_id: String,
+    /// Whether every collection of that id, at any depth, is read (`collection_group`).
+    all_descendants: bool,
+    /// The documents a `documents` input names, as resource names; nothing is scanned then.
+    documents: Option<Vec<String>>,
+}
+
+/// The input of a pipeline: `collection`, `collection_group` or `documents`.
+fn pipeline_input<'a>(
     req: &'a pb::ExecutePipelineRequest,
     parent: &Parent,
-) -> Result<(&'a pb::Pipeline, String, String), Status> {
+) -> Result<Input<'a>, Status> {
+    let root = format!(
+        "projects/{}/databases/{}/documents",
+        parent.project, parent.database
+    );
+    let pipeline = structured_pipeline(req)?;
+    match pipeline.stages.first().map(|stage| stage.name.as_str()) {
+        Some("collection_group") => {
+            let stage = &pipeline.stages[0];
+            // The ancestor is accepted and ignored, whatever document it names (FS-ENT-ORACLE
+            // O-7 `inputs-collection-group#nested-parent`): every collection of the id is read.
+            let (
+                Some(pb::value::ValueType::ReferenceValue(_)),
+                Some(pb::value::ValueType::StringValue(id)),
+            ) = (
+                stage.args.first().and_then(|v| v.value_type.as_ref()),
+                stage.args.get(1).and_then(|v| v.value_type.as_ref()),
+            )
+            else {
+                return Err(Status::unimplemented(
+                    "this collection_group input is unsupported locally",
+                ));
+            };
+            if let Some(text) = collection_group_id_error(id) {
+                return Err(Status::invalid_argument(text));
+            }
+            Ok(Input {
+                pipeline,
+                query_parent: root,
+                collection_id: id.clone(),
+                all_descendants: true,
+                documents: None,
+            })
+        }
+        Some("documents") => {
+            let stage = &pipeline.stages[0];
+            let mut names: Vec<String> = Vec::with_capacity(stage.args.len());
+            for argument in &stage.args {
+                let Some(pb::value::ValueType::ReferenceValue(path)) = argument.value_type.as_ref()
+                else {
+                    return Err(Status::unimplemented(
+                        "this documents input is unsupported locally",
+                    ));
+                };
+                if let Some(text) = documents_path_error(path) {
+                    return Err(Status::invalid_argument(text));
+                }
+                if names.contains(&format!("{root}{path}")) {
+                    return Err(Status::invalid_argument(format!(
+                        "Duplicate path '{path}' specified in document stage."
+                    )));
+                }
+                names.push(format!("{root}{path}"));
+            }
+            Ok(Input {
+                pipeline,
+                query_parent: root,
+                collection_id: String::new(),
+                all_descendants: false,
+                documents: Some(names),
+            })
+        }
+        _ => {
+            let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
+            Ok(Input {
+                pipeline,
+                query_parent,
+                collection_id,
+                all_descendants: false,
+                documents: None,
+            })
+        }
+    }
+}
+
+/// Production's refusals of the collection id of `collection_group` (FS-ENT-ORACLE O-7
+/// `inputs-collection-group#invalid-*`).
+fn collection_group_id_error(id: &str) -> Option<String> {
+    if id.is_empty() {
+        Some("The kind / collection group cannot be empty.".to_owned())
+    } else if id.contains('/') {
+        Some(format!(
+            "Collection id \"{id}\" is invalid because it contains \"/\"."
+        ))
+    } else if is_reserved_name(id) {
+        Some(format!(
+            "Collection id \"{id}\" is invalid because it is reserved."
+        ))
+    } else {
+        None
+    }
+}
+
+/// Production's refusals of a path of `documents` (FS-ENT-ORACLE O-7 `inputs-documents#invalid-*`):
+/// a rooted document path of an even number of segments is none.
+fn documents_path_error(path: &str) -> Option<String> {
+    if path.ends_with('/') {
+        return Some(format!(
+            "Document path name \"{path}\" is invalid: Omit trailing \"/\"."
+        ));
+    }
+    let segments = path.trim_start_matches('/').split('/').count();
+    if !path.starts_with('/') || segments % 2 == 1 || path.contains("//") {
+        return Some(format!(
+            "Document path name \"{path}\" lacks \"/\" at index {}.",
+            path.encode_utf16().count()
+        ));
+    }
+    None
+}
+
+/// The request's structured pipeline, after the refusals of what is unsupported around it.
+fn structured_pipeline(req: &pb::ExecutePipelineRequest) -> Result<&pb::Pipeline, Status> {
     if req.consistency_selector.is_some() || req.auto_commit_transaction {
         return Err(Status::unimplemented(
             "pipeline consistency and auto-commit are unsupported locally",
@@ -258,6 +402,14 @@ fn collection_input<'a>(
     let Some(pipeline) = &structured.pipeline else {
         return Err(Status::invalid_argument("pipeline required"));
     };
+    Ok(pipeline)
+}
+
+fn collection_input<'a>(
+    req: &'a pb::ExecutePipelineRequest,
+    parent: &Parent,
+) -> Result<(&'a pb::Pipeline, String, String), Status> {
+    let pipeline = structured_pipeline(req)?;
     let Some(collection) = pipeline.stages.first().filter(|s| s.name == "collection") else {
         return Err(Status::unimplemented(
             "pipeline input is unsupported locally",
@@ -483,11 +635,11 @@ pub struct CompiledExecution {
     /// read once a select narrows the rows), read through the `RunQuery` stream so that every
     /// page reads the same snapshot.
     pub input: pb::RunQueryRequest,
+    /// The documents a `documents` input names (resource names); the rows are those that exist
+    /// and `input` is not used.
+    pub documents: Option<Vec<String>>,
     /// The stages the executor runs over the input rows.
     pub stages: Vec<Stage>,
-    /// Whether the select kept `__name__` as itself, so that each result carries the document
-    /// name next to the selected fields (see [`selected_result`]).
-    pub select_keeps_name: bool,
     /// A local lexical search before the existing streaming suffix.
     pub search: Option<crate::text_search::SearchPlan>,
 }
@@ -517,7 +669,13 @@ pub fn compile_pipeline_in_order(
     unrecorded: Unrecorded,
     order: Option<&KeyOrder>,
 ) -> Result<CompiledExecution, Status> {
-    let (pipeline, query_parent, collection_id) = collection_input(req, parent)?;
+    let Input {
+        pipeline,
+        query_parent,
+        collection_id,
+        all_descendants,
+        documents,
+    } = pipeline_input(req, parent)?;
     if unrecorded == Unrecorded::Refuse {
         let own = format!(
             "projects/{}/databases/{}/documents",
@@ -537,9 +695,9 @@ pub fn compile_pipeline_in_order(
     let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
     let mut search = None;
-    let mut last_rank = 0u8;
-    let (mut seen_where, mut seen_select, mut seen_offset, mut seen_limit) =
-        (false, false, false, false);
+    // The equality filter of the first `where` is pushed into the scan while only filters have
+    // run before it (a filter commutes with another filter, not with a limit or a sort).
+    let mut only_filters_so_far = true;
     let mut pushdown = None;
     // An empty alias map, which the official emulator answers only after every stage's own
     // argument checks.
@@ -547,16 +705,14 @@ pub fn compile_pipeline_in_order(
     // Whether the pipeline was refused only for a stage fireemu does not run, after every part
     // of it passed a check production made (strict answers the deferred empty map only then).
     let mut validated_unrun = false;
-    let mut select_keeps_name = false;
+    // A reserved alias or a `map(...)` key type, which is answered after a later stage's
+    // argument type and before an empty map.
+    let mut deferred_name: Option<Status> = None;
+    // The stage the walk stopped at.
+    let mut failed_at = 0;
     let compiled = (|| -> Result<(), Status> {
         for (position, stage) in pipeline.stages.iter().enumerate().skip(1) {
-            let rank = stage_rank(&stage.name);
-            if rank < last_rank {
-                return Err(Status::unimplemented(
-                    "pipeline stages are out of supported order",
-                ));
-            }
-            last_rank = rank;
+            failed_at = position;
             match stage.name.as_str() {
                 "search" => {
                     if position != 1 || search.is_some() {
@@ -567,21 +723,14 @@ pub fn compile_pipeline_in_order(
                     search = Some(crate::text_search::decode(stage)?);
                 }
                 "where" => {
-                    if seen_where || seen_select || seen_limit {
-                        return Err(Status::unimplemented("duplicate or misplaced where stage"));
-                    }
-                    seen_where = true;
                     let (condition, filter) = decode_condition(stage, unrecorded)?;
-                    pushdown = filter;
+                    if only_filters_so_far && pushdown.is_none() {
+                        pushdown = filter;
+                    }
                     stages.push(Stage::Where(condition));
                 }
                 "select" => {
-                    if seen_select {
-                        return Err(Status::unimplemented(
-                            "duplicate select stage is unsupported locally",
-                        ));
-                    }
-                    seen_select = true;
+                    only_filters_so_far = false;
                     if stage.args.first().is_some_and(is_empty_map) {
                         deferred.get_or_insert_with(|| {
                             Status::invalid_argument(
@@ -592,9 +741,11 @@ pub fn compile_pipeline_in_order(
                     }
                     let aliases = select_wire_order(order, position);
                     match decode_select(stage, unrecorded, aliases) {
-                        Ok((select, keeps_name)) => {
-                            select_keeps_name = keeps_name;
-                            stages.push(Stage::Select(select));
+                        Ok((aliases, keeps_name)) => {
+                            stages.push(Stage::Select {
+                                aliases,
+                                keeps_name,
+                            });
                         }
                         // A reserved alias and a `map(...)` key type are answered after a
                         // later stage's argument type, as an empty map is (the official
@@ -604,30 +755,48 @@ pub fn compile_pipeline_in_order(
                             if error.message().starts_with("Stage 'select': field name")
                                 || error.message().starts_with("map key must be of type") =>
                         {
-                            deferred.get_or_insert(error);
+                            deferred_name.get_or_insert(error);
                         }
                         Err(error) => return Err(error),
                     }
                 }
                 "offset" => {
-                    if seen_offset {
-                        return Err(Status::unimplemented(
-                            "duplicate offset stage is unsupported locally",
-                        ));
-                    }
-                    seen_offset = true;
+                    only_filters_so_far = false;
                     let offset = count_argument(stage, unrecorded)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
-                    if seen_limit {
-                        return Err(Status::unimplemented(
-                            "duplicate limit stage is unsupported locally",
-                        ));
-                    }
-                    seen_limit = true;
+                    only_filters_so_far = false;
                     let limit = count_argument(stage, unrecorded)?;
                     stages.push(Stage::Limit(limit));
+                }
+                "sort" => {
+                    only_filters_so_far = false;
+                    stages.push(Stage::Sort(decode_sort(stage, unrecorded)?));
+                }
+                "remove_fields" => {
+                    only_filters_so_far = false;
+                    stages.push(Stage::RemoveFields(decode_remove_fields(stage)?));
+                }
+                "add_fields" | "distinct" | "aggregate" => {
+                    only_filters_so_far = false;
+                    // The stage's alias checks and the deferred empty map, as for a stage that
+                    // is not run; then its values.
+                    check_unrun_alias_stage(stage, &mut deferred, unrecorded)?;
+                    if stage.args.iter().take(1).any(is_empty_map) {
+                        continue;
+                    }
+                    stages.push(match stage.name.as_str() {
+                        "add_fields" => Stage::AddFields(decode_add_fields(stage, unrecorded)?),
+                        "distinct" => Stage::Distinct(decode_distinct(stage, unrecorded)?),
+                        _ => {
+                            let (accumulators, groups) = decode_aggregate(stage, unrecorded)?;
+                            Stage::Aggregate {
+                                accumulators,
+                                groups,
+                            }
+                        }
+                    });
                 }
                 other => {
                     // The official emulator checks every stage's arguments before running any.
@@ -643,6 +812,30 @@ pub fn compile_pipeline_in_order(
         }
         Ok(())
     })();
+    // Under the emulator profile a stage fireemu cannot decode (an unsupported function, say) is
+    // refused after the argument checks of the stages behind it, as a stage it does not run is:
+    // the official emulator checks every stage's arguments before running any. Strict answers
+    // the first refusal (no later check answers past a constant that fails; ruling of
+    // 2026-10-21).
+    let compiled = match compiled {
+        Err(error)
+            if error.code() == tonic::Code::Unimplemented
+                && !validated_unrun
+                && failed_at > 0
+                && unrecorded == Unrecorded::OfficialEmulator =>
+        {
+            let mut result = Err(error);
+            for rest in pipeline.stages.iter().skip(failed_at + 1) {
+                if let Err(refusal) = check_unrun_alias_stage(rest, &mut deferred, unrecorded) {
+                    result = Err(refusal);
+                    break;
+                }
+            }
+            result
+        }
+        other => other,
+    };
+    let deferred = deferred_name.or(deferred);
     // An empty map is answered after every other check of every stage (FS-ENT-ORACLE O-4,
     // `o4/stages#select-empty-then-*`, `#add-fields-then-select-empty`): a later stage's
     // refusal comes first. fireemu's own refusal of a stage it does not run is no check
@@ -664,6 +857,13 @@ pub fn compile_pipeline_in_order(
         (Err(error), Some(empty)) if error.message().contains("cannot have a negative value") => {
             Err(empty)
         }
+        // fireemu's own wording of a `where` condition's argument count (the official emulator
+        // answers the deferred refusal first).
+        (Err(error), Some(empty))
+            if error.message().ends_with("requires exactly two arguments") =>
+        {
+            Err(empty)
+        }
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
     }?;
@@ -681,10 +881,22 @@ pub fn compile_pipeline_in_order(
         pushdown = None;
     }
     let projection = if search.is_some() { None } else { projection };
+    let mut input = collection_query(query_parent, collection_id, pushdown, projection, 0, None);
+    if all_descendants {
+        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+            input.query_type.as_mut()
+        {
+            // Every collection of that id, at any depth; the equality filter stays a stage.
+            query.r#where = None;
+            for selector in &mut query.from {
+                selector.all_descendants = true;
+            }
+        }
+    }
     Ok(CompiledExecution {
-        input: collection_query(query_parent, collection_id, pushdown, projection, 0, None),
+        input,
+        documents,
         stages,
-        select_keeps_name,
         search,
     })
 }
@@ -697,7 +909,11 @@ fn expr_status(error: ExprError, unrecorded: Unrecorded) -> Status {
         ExprError::Invalid(message) if unrecorded == Unrecorded::Refuse => {
             Status::unimplemented(format!("{message}; this text is not observed locally"))
         }
-        ExprError::Invalid(message) => Status::invalid_argument(message),
+        // `Arity` is production's wording (the signature); strict's shape gate answers it only
+        // for a recorded request.
+        ExprError::Invalid(message) | ExprError::Arity(message) => {
+            Status::invalid_argument(message)
+        }
     }
 }
 
@@ -773,15 +989,15 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
     if reads_field(expr) {
         return None;
     }
-    let row = pipeline_exec::Row {
-        path: DocumentPath::parse(
+    let row = pipeline_exec::Row::document(
+        DocumentPath::parse(
             &fireemu_core_types::ids::ProjectId::try_new("p").ok()?,
             &fireemu_core_types::ids::DatabaseId::try_new("(default)").ok()?,
             "c/d",
         )
         .ok()?,
-        fields: std::collections::BTreeMap::new(),
-    };
+        std::collections::BTreeMap::new(),
+    );
     match expr.eval_in(&row, Unrecorded::Refuse) {
         pipeline_exec::Eval::Error(error) => Some(eval_status(&error)),
         _ => None,
@@ -897,6 +1113,21 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                     _ => decode_operand_tree(arg, unrecorded),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // `is_type` takes its type name as a literal, checked before any row is read
+            // (FS-ENT-ORACLE O-1 `px1/static-refusals#select-is-type-bogus`, also on an empty
+            // collection).
+            if function.name == "is_type" {
+                let named = function.args.get(1).is_some_and(|name| {
+                    matches!(&name.value_type, Some(V::StringValue(n))
+                        if pipeline_exec::TYPE_NAMES.contains(&n.as_str()))
+                });
+                if !named {
+                    return Err(Status::invalid_argument(format!(
+                        "The argument 'type' for function 'is_type' must be a literal of type string from the following list: [{}]",
+                        pipeline_exec::TYPE_NAMES.join(", ")
+                    )));
+                }
+            }
             let expr = Expr::call(&function.name, args, Placement::Value)
                 .map_err(|e| expr_status(e, unrecorded))?;
             // Under strict a call of constants that fails is refused before any row is read,
@@ -1548,7 +1779,7 @@ fn decode_condition(
             "where expression is unsupported locally",
         ));
     };
-    if !def.returns_boolean {
+    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) || !def.signature.is_empty() {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.
@@ -1713,21 +1944,6 @@ fn decode_select(
     ))
 }
 
-/// A select's result for a source document: the selected fields, and the document name when
-/// the select kept `__name__` as itself.
-#[must_use]
-pub fn selected_result(
-    fields: &std::collections::BTreeMap<String, fireemu_core_firestore::value::Value>,
-    source_name: &str,
-    keeps_name: bool,
-) -> pb::Document {
-    let mut result = result_document(fields);
-    if keeps_name {
-        source_name.clone_into(&mut result.name);
-    }
-    result
-}
-
 /// Whether a strict select may name the document: it holds no `__name__` selected as itself,
 /// or only that, alone and unquoted. Production answered the alone form with the name only
 /// (FS-ENT-ORACLE O5 `appendix#proposed-select-name-field`); beside other aliases or quoted it is
@@ -1836,12 +2052,13 @@ fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result
     let name = stage.name.as_str();
     let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
     // The values production answered: a limit of 1, 2, 2147483648 and 5000000000 and -1, an
-    // offset of 5000000000, a string for both (O-1 `results/metadata#limit`, O-4
-    // `o4/stages#limit-*`, `#offset-*`); zero is a boundary it never answered, and an offset
-    // within 32 bits is another value range.
+    // offset of 1, 2, 5, 7 and 5000000000, a string for both (O-1 `results/metadata#limit`, O-4
+    // `o4/stages#limit-*`, `#offset-*`, O-6 `sort-ties`, `order-writes`); zero is a boundary it
+    // never answered.
     let recorded = match argument {
         Some(V::IntegerValue(n)) if name == "limit" => *n != 0,
-        Some(V::IntegerValue(n)) => *n > i64::from(i32::MAX),
+        // Production answered offsets of 1, 2, 5, 7 and 5000000000 (O-4, O-6).
+        Some(V::IntegerValue(n)) => *n > 0,
         Some(V::StringValue(_)) => true,
         _ => false,
     };
@@ -1860,6 +2077,347 @@ fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result
             value_type_name(other)
         ))),
     }
+}
+
+/// Decodes `sort(ordering, ...)`: each ordering is a map of `direction` (`ascending` or
+/// `descending`) and `expression`, whose checks production answered in this order
+/// (FS-ENT-ORACLE O-6 `sort-wire-errors`): the argument is a map, the expression is present,
+/// the direction is present, a string and one of the two names, and nothing else is in the map.
+/// Any value is an expression: a string literal orders every row alike.
+fn decode_sort(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<Vec<pipeline_exec::SortKey>, Status> {
+    use pb::value::ValueType as V;
+    let mut keys = Vec::with_capacity(stage.args.len());
+    for (index, argument) in stage.args.iter().enumerate() {
+        let Some(V::MapValue(map)) = argument.value_type.as_ref() else {
+            return Err(Status::invalid_argument(format!(
+                "Expected ordering[{index}] to be MAP_VALUE, but was {}.",
+                value_type_name(argument.value_type.as_ref())
+            )));
+        };
+        let Some(expression) = map.fields.get("expression") else {
+            return Err(Status::invalid_argument(
+                "Order is missing 'expression' field.",
+            ));
+        };
+        let Some(direction) = map.fields.get("direction") else {
+            return Err(Status::invalid_argument(
+                "Order is missing 'direction' field.",
+            ));
+        };
+        let descending = match direction.value_type.as_ref() {
+            Some(V::StringValue(name)) if name == "ascending" => false,
+            Some(V::StringValue(name)) if name == "descending" => true,
+            Some(V::StringValue(name)) => {
+                return Err(Status::invalid_argument(format!(
+                    "Unsupported direction '{name}'. Valid options are: [ascending, descending]."
+                )))
+            }
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "Expected Order.direction to be STRING_VALUE, but was {}.",
+                    value_type_name(other)
+                )))
+            }
+        };
+        let mut unexpected: Vec<&str> = map
+            .fields
+            .keys()
+            .map(String::as_str)
+            .filter(|key| !matches!(*key, "expression" | "direction"))
+            .collect();
+        if !unexpected.is_empty() {
+            unexpected.sort_unstable();
+            return Err(Status::invalid_argument(format!(
+                "Order has unexpected fields: [{}].",
+                unexpected.join(", ")
+            )));
+        }
+        keys.push(pipeline_exec::SortKey {
+            expr: decode_operand_tree(expression, unrecorded)?,
+            descending,
+        });
+    }
+    Ok(keys)
+}
+
+/// The type texts production answered for the arguments of a stage with a signature, after its
+/// arity (FS-ENT-ORACLE O-7 `aggregate-args`, `distinct-main`, `fields-main`, `inputs-*`).
+fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
+    use pb::value::ValueType as V;
+    let expected = |what: &str, wanted: &str, got: Option<&V>| {
+        Some(Status::invalid_argument(format!(
+            "Expected {what} to be {wanted}, but was {}.",
+            value_type_name(got)
+        )))
+    };
+    match stage.name.as_str() {
+        "distinct" => match stage.args[0].value_type.as_ref() {
+            Some(V::MapValue(_)) => None,
+            other => expected("fields", "MAP_VALUE", other),
+        },
+        "aggregate" => [("accumulators", &stage.args[0]), ("groups", &stage.args[1])]
+            .into_iter()
+            .find_map(|(what, arg)| match arg.value_type.as_ref() {
+                Some(V::MapValue(_)) => None,
+                other => expected(what, "MAP_VALUE", other),
+            }),
+        "remove_fields" => {
+            stage
+                .args
+                .iter()
+                .enumerate()
+                .find_map(|(i, arg)| match arg.value_type.as_ref() {
+                    Some(V::FieldReferenceValue(_)) => None,
+                    other => expected(&format!("fields[{i}]"), "FIELD_REFERENCE_VALUE", other),
+                })
+        }
+        "documents" => {
+            stage
+                .args
+                .iter()
+                .enumerate()
+                .find_map(|(i, arg)| match arg.value_type.as_ref() {
+                    Some(V::ReferenceValue(_)) => None,
+                    other => expected(&format!("paths[{i}]"), "REFERENCE_VALUE", other),
+                })
+        }
+        "collection_group" => match stage.args[1].value_type.as_ref() {
+            Some(V::StringValue(_)) => None,
+            other => expected("collection_id", "STRING_VALUE", other),
+        },
+        _ => None,
+    }
+}
+
+/// A top-level output name of `distinct` or `aggregate`: an alias of one segment.
+fn top_level_name(alias: &str) -> Result<String, Status> {
+    let path = parse_alias(alias)?;
+    match path.segments() {
+        [name] => Ok(name.clone()),
+        _ => Err(Status::unimplemented(
+            "a nested alias of this stage is not observed locally",
+        )),
+    }
+}
+
+/// The aliases of an alias map with their decoded values, in alias order.
+fn decode_alias_map(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+) -> Result<Vec<(String, Expr)>, Status> {
+    let Some(fields) = map_fields(value) else {
+        return Err(Status::unimplemented("an alias map is expected"));
+    };
+    ordered_keys(fields)
+        .into_iter()
+        .map(|alias| {
+            Ok((
+                top_level_name(alias)?,
+                decode_operand_tree(&fields[alias], unrecorded)?,
+            ))
+        })
+        .collect()
+}
+
+/// Decodes `distinct({alias: expression, ...})`.
+fn decode_distinct(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<Vec<(String, Expr)>, Status> {
+    decode_alias_map(&stage.args[0], unrecorded)
+}
+
+/// Decodes `add_fields({alias: expression, ...})`: an alias is a field path, as in `select`.
+fn decode_add_fields(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<Vec<(FieldPath, Expr)>, Status> {
+    let Some(fields) = stage.args.first().and_then(map_fields) else {
+        return Err(Status::unimplemented("an alias map is expected"));
+    };
+    let mut aliases = Vec::with_capacity(fields.len());
+    for alias in ordered_keys(fields) {
+        let expr = decode_operand_tree(&fields[alias], unrecorded)?;
+        let path = parse_alias(alias)?;
+        // `__name__` assigned itself is no overwrite: the official emulator accepts it.
+        if path.is_document_name()
+            && matches!(&expr, Expr::Field(source) if source.is_document_name())
+        {
+            continue;
+        }
+        aliases.push((path, expr));
+    }
+    // An alias inside another, or the same twice: unrecorded for this stage.
+    for (at, (path, _)) in aliases.iter().enumerate() {
+        if aliases[..at].iter().any(|(earlier, _)| {
+            earlier == path || earlier.is_prefix_of(path) || path.is_prefix_of(earlier)
+        }) {
+            return Err(Status::unimplemented(
+                "add_fields aliases that overlap are not observed locally",
+            ));
+        }
+    }
+    Ok(aliases)
+}
+
+/// Decodes `remove_fields(field, ...)`; the types are checked by [`stage_type_error`].
+fn decode_remove_fields(stage: &pb::pipeline::Stage) -> Result<Vec<FieldPath>, Status> {
+    stage
+        .args
+        .iter()
+        .map(|arg| match &arg.value_type {
+            Some(pb::value::ValueType::FieldReferenceValue(field)) => {
+                FieldPath::parse(field).map_err(|e| Status::invalid_argument(e.to_string()))
+            }
+            _ => Err(Status::unimplemented("a field reference is expected")),
+        })
+        .collect()
+}
+
+/// The accumulators `aggregate` takes, with the signatures production names in its refusals.
+fn accumulator_kind(name: &str) -> Option<(pipeline_exec::AccumulatorKind, &'static str)> {
+    use pipeline_exec::AccumulatorKind as K;
+    Some(match name {
+        "count" => (K::Count, "count(expression: any?): int64"),
+        "count_distinct" => (K::CountDistinct, "count_distinct(expression: any?): int64"),
+        "sum" => (K::Sum, "sum(expression: any?): number?"),
+        "average" => (K::Average, "average(expression: any?): number?"),
+        "minimum" => (K::Minimum, "minimum(expression: any?): any?"),
+        "maximum" => (K::Maximum, "maximum(expression: any?): any?"),
+        _ => return None,
+    })
+}
+
+/// Decodes one accumulator of `aggregate`, with production's refusals (FS-ENT-ORACLE O-7
+/// `aggregate-args`): a field is "only allowed in a scalar expression", a scalar function is
+/// "not an" accumulator (named as its own suggestion), `count` takes none or one argument, the
+/// others exactly one.
+fn decode_accumulator(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+) -> Result<pipeline_exec::Accumulator, Status> {
+    use pb::value::ValueType as V;
+    use pipeline_exec::{Accumulator, AccumulatorKind};
+    let function = match value.value_type.as_ref() {
+        Some(V::FunctionValue(function)) => function,
+        Some(V::FieldReferenceValue(_)) => {
+            return Err(Status::invalid_argument(
+                "Field references are only allowed in a scalar expression.",
+            ))
+        }
+        _ => {
+            return Err(Status::unimplemented(
+                "an accumulator that is no function is not observed locally",
+            ))
+        }
+    };
+    let Some((kind, signature)) = accumulator_kind(&function.name) else {
+        return Err(if pipeline_exec::function(&function.name).is_some() {
+            Status::invalid_argument(format!(
+                "The function '{0}' does not exist, did you mean '{0}'?",
+                function.name
+            ))
+        } else {
+            Status::unimplemented(format!(
+                "function {:?} is unsupported locally",
+                function.name
+            ))
+        });
+    };
+    if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
+        return Err(Status::unimplemented(format!(
+            "function {:?} options are not observed locally",
+            function.name
+        )));
+    }
+    let given = function.args.len();
+    if function.name == "count" {
+        if given > 1 {
+            return Err(Status::invalid_argument(format!(
+                "The function 'count' does not accept {given} argument(s). Valid options are:\n- count(): int64 with [0..0] argument(s).\n- {signature} with [1..1] argument(s)."
+            )));
+        }
+    } else if given != 1 {
+        return Err(Status::invalid_argument(format!(
+            "The function '{signature}' takes [1..1] argument(s), but {given} {} provided.",
+            if given == 1 { "was" } else { "were" }
+        )));
+    }
+    let argument = function
+        .args
+        .first()
+        .map(|arg| decode_operand_tree(arg, unrecorded))
+        .transpose()?;
+    Ok(Accumulator {
+        kind: match (kind, &argument) {
+            (AccumulatorKind::Count, None) => AccumulatorKind::CountAll,
+            (kind, _) => kind,
+        },
+        argument,
+    })
+}
+
+type AggregateParts = (
+    Vec<(String, pipeline_exec::Accumulator)>,
+    Vec<(String, Expr)>,
+);
+
+/// Decodes `aggregate({accumulators}, {groups})`.
+fn decode_aggregate(
+    stage: &pb::pipeline::Stage,
+    unrecorded: Unrecorded,
+) -> Result<AggregateParts, Status> {
+    let Some(accumulators) = map_fields(&stage.args[0]) else {
+        return Err(Status::unimplemented("an alias map is expected"));
+    };
+    let accumulators = ordered_keys(accumulators)
+        .into_iter()
+        .map(|alias| {
+            Ok((
+                top_level_name(alias)?,
+                decode_accumulator(&accumulators[alias], unrecorded)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, Status>>()?;
+    let groups = decode_alias_map(&stage.args[1], unrecorded)?;
+    Ok((accumulators, groups))
+}
+
+/// The arity text production answered for a stage with a signature, before any other check of
+/// the stage (FS-ENT-ORACLE O-6 `sort-wire-errors#no-args`, O-7 `aggregate-args`,
+/// `distinct-main`, `fields-main`, `inputs-*`).
+fn stage_arity_error(stage: &pb::pipeline::Stage) -> Option<Status> {
+    let (signature, min, max) = match stage.name.as_str() {
+        "sort" => ("sort(ordering: Order*)", 1, None),
+        "distinct" => ("distinct(fields: Map[FieldPath, Expr])", 1, Some(1)),
+        "aggregate" => (
+            "aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])",
+            2,
+            Some(2),
+        ),
+        "remove_fields" => ("remove_fields(fields: FieldReference*)", 1, None),
+        "collection_group" => (
+            "collection_group(ancestor: Path, collection_id: String)",
+            2,
+            Some(2),
+        ),
+        "documents" => ("documents(paths: Path*)", 1, None),
+        _ => return None,
+    };
+    let got = stage.args.len();
+    if got >= min && max.is_none_or(|max| got <= max) {
+        return stage_type_error(stage);
+    }
+    let range = max.map_or_else(
+        || format!("[{min}..+\u{221e})"),
+        |max| format!("[{min}..{max}]"),
+    );
+    Some(Status::invalid_argument(format!(
+        "Stage '{signature}' takes {range} argument(s), received {got}."
+    )))
 }
 
 /// The proto name of a wire value's type, as the official emulator's messages give it.
@@ -1882,18 +2440,6 @@ fn value_type_name(value: Option<&pb::value::ValueType>) -> &'static str {
         Some(V::FunctionValue(_)) => "FUNCTION_VALUE",
         Some(V::PipelineValue(_)) => "PIPELINE_VALUE",
         None => "VALUE_TYPE_NOT_SET",
-    }
-}
-
-/// The subset's order of stages after the input: `where` and `select`, then `offset`, then
-/// `limit` (which shares the last rank with the stages fireemu does not run: the checks end
-/// at the first such stage, and a second `limit` is refused as repeated).
-fn stage_rank(name: &str) -> u8 {
-    match name {
-        "search" => 0,
-        "where" | "select" => 1,
-        "offset" => 2,
-        _ => 3,
     }
 }
 
@@ -1938,7 +2484,8 @@ fn check_unrun_alias_stage(
     if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
         return if strict { Err(unvalidated()) } else { Ok(()) };
     }
-    if strict && !unrun_values_validated(stage, unrecorded) {
+    let runs = matches!(name, "aggregate" | "add_fields" | "distinct");
+    if strict && !runs && !unrun_values_validated(stage, unrecorded) {
         return Err(unvalidated());
     }
     // A select after an unrun stage: the official emulator checks its aliases too, with the
@@ -1999,8 +2546,10 @@ fn check_unrun_alias_stage(
                 matches!(&v.value_type, Some(pb::value::ValueType::FieldReferenceValue(f)) if f == "__name__")
             });
         if let Some(text) = reserved_alias(name, alias).filter(|_| !itself) {
-            // Production has not answered a reserved alias of a stage fireemu does not run.
-            return Err(if strict {
+            // Production answered a reserved alias of `aggregate`, `distinct` and `add_fields`
+            // (FS-ENT-ORACLE O-7); the shape gate answers it only for a recorded request. It has
+            // not answered one of a stage fireemu does not run.
+            return Err(if strict && !runs {
                 Status::unimplemented(format!("{text}; this text is not observed locally"))
             } else {
                 Status::invalid_argument(text)
@@ -2010,8 +2559,13 @@ fn check_unrun_alias_stage(
     // The official emulator's checks of the stages that assign top-level fields only, and of an
     // aggregate's names (production has not answered them, so strict refuses them).
     if let Some(text) = unrun_stage_name_error(stage) {
-        return Err(if strict {
+        return Err(if strict && !runs {
             Status::unimplemented(format!("{text}; this text is not observed locally"))
+        } else if let Some(field) = text
+            .strip_prefix("The nested field reference '")
+            .and_then(|rest| rest.split('\'').next())
+        {
+            crate::production_status::top_level_property_path_only(field, &text)
         } else {
             Status::invalid_argument(text)
         });
@@ -2342,6 +2896,38 @@ pub(crate) fn pack_results(
     responses
 }
 
+/// The rows of a `documents` input: the named documents that exist, in name order, as the
+/// responses of a query over one snapshot (production answered them in name order, not the order
+/// of the paths; FS-ENT-ORACLE O-7 `inputs-documents#argument-order`).
+pub fn documents_input(
+    local: &crate::local::LocalBackend,
+    database: &str,
+    names: &[String],
+    guard: crate::rules::ReadGuard<'_>,
+) -> Result<Vec<pb::RunQueryResponse>, Status> {
+    let outcome = local.batch_get_documents(
+        &pb::BatchGetDocumentsRequest {
+            database: database.to_owned(),
+            documents: names.to_vec(),
+            ..Default::default()
+        },
+        guard,
+    )?;
+    let read_time = Some(crate::encode::encode_instant(outcome.read_time));
+    Ok(outcome
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            crate::local::BatchGetItem::Found(document) => Some(pb::RunQueryResponse {
+                document: Some(crate::encode::encode_document(document)),
+                read_time,
+                ..Default::default()
+            }),
+            crate::local::BatchGetItem::Missing(_) => None,
+        })
+        .collect())
+}
+
 /// A `RunQuery` result document as an executor row.
 pub fn document_row(document: &pb::Document) -> Result<pipeline_exec::Row, Status> {
     let path = DocumentPath::from_resource_name(&document.name).ok_or_else(|| {
@@ -2359,7 +2945,45 @@ pub fn document_row(document: &pb::Document) -> Result<pipeline_exec::Row, Statu
                 .map_err(|e| Status::internal(format!("pipeline input field {k:?}: {e}")))
         })
         .collect::<Result<_, _>>()?;
-    Ok(pipeline_exec::Row { path, fields })
+    let time = |time: &Option<prost_types::Timestamp>| {
+        time.as_ref().and_then(|t| {
+            fireemu_core_firestore::value::Timestamp::new(t.seconds, u32::try_from(t.nanos).ok()?)
+                .ok()
+        })
+    };
+    let times = time(&document.create_time)
+        .zip(time(&document.update_time))
+        .map(|(created, updated)| pipeline_exec::RowTimes { created, updated });
+    Ok(pipeline_exec::Row {
+        path: Some(path),
+        times,
+        fields,
+    })
+}
+
+/// A result row as a response document: its name and times where the stages left them, and its
+/// fields. A pipeline without a select answers the source documents, name and times included;
+/// after a select only the fields (and the name when the select kept `__name__`).
+#[must_use]
+pub fn row_document(row: &pipeline_exec::Row) -> pb::Document {
+    let time = |time: fireemu_core_firestore::value::Timestamp| prost_types::Timestamp {
+        seconds: time.seconds(),
+        nanos: i32::try_from(time.nanos()).unwrap_or(0),
+    };
+    pb::Document {
+        name: row
+            .path
+            .as_ref()
+            .map(DocumentPath::resource_name)
+            .unwrap_or_default(),
+        fields: row
+            .fields
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::encode::encode_value(v)))
+            .collect(),
+        create_time: row.times.map(|t| time(t.created)),
+        update_time: row.times.map(|t| time(t.updated)),
+    }
 }
 
 fn decode_equal_filter(

@@ -15,13 +15,13 @@ fn path(relative: &str) -> DocumentPath {
 }
 
 fn row(relative: &str, fields: &[(&str, Value)]) -> Row {
-    Row {
-        path: path(relative),
-        fields: fields
+    Row::document(
+        path(relative),
+        fields
             .iter()
             .map(|(k, v)| ((*k).to_owned(), v.clone()))
             .collect(),
-    }
+    )
 }
 
 fn field(p: &str) -> Expr {
@@ -49,7 +49,7 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
-fn table_lists_exactly_the_px1a_functions() {
+fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
     assert_eq!(
         names,
@@ -64,14 +64,29 @@ fn table_lists_exactly_the_px1a_functions() {
             "map",
             "document_id",
             "collection_id",
-            "parent"
+            "parent",
+            "and",
+            "or",
+            "not",
+            "xor",
+            "nor",
+            "exists",
+            "is_absent",
+            "is_error",
+            "type",
+            "is_type",
+            "array_contains",
+            "array_contains_all",
+            "array_contains_any",
+            "equal_any",
+            "not_equal_any",
         ]
     );
     assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
     }
-    for name in ["eq", "between", "abs", "and", "", "Equal"] {
+    for name in ["eq", "between", "abs", "AND", "", "Equal"] {
         assert!(function(name).is_none(), "{name}");
     }
 }
@@ -512,7 +527,7 @@ fn select_projects_aliases_and_omits_absent_values() {
         ],
     )];
     let out = execute(
-        vec![Stage::Select(vec![
+        vec![Stage::select(vec![
             (alias("nested"), field("a.b")),
             (alias("gone"), field("a.zzz")),
             (alias("id"), call("document_id", vec![field("__name__")])),
@@ -539,7 +554,7 @@ fn select_projects_aliases_and_omits_absent_values() {
     // The parent of a top-level document is the documents root (FS-ENT-ORACLE O-1).
     assert_eq!(
         execute(
-            vec![Stage::Select(vec![(
+            vec![Stage::select(vec![(
                 alias("up"),
                 call("parent", vec![field("__name__")])
             )])],
@@ -573,17 +588,17 @@ fn cursor_reports_exhaustion_only_when_a_limit_is_used_up() {
     let mut cursor = Cursor::new(vec![Stage::Offset(1), Stage::Limit(1)]);
     assert!(!cursor.is_exhausted());
     let mut input = rows(3).into_iter();
-    assert_eq!(cursor.push(input.next().unwrap()).unwrap(), None);
+    assert!(cursor.push(input.next().unwrap()).unwrap().is_empty());
     assert!(!cursor.is_exhausted());
-    assert!(cursor.push(input.next().unwrap()).unwrap().is_some());
+    assert_eq!(cursor.push(input.next().unwrap()).unwrap().len(), 1);
     assert!(cursor.is_exhausted());
-    assert_eq!(cursor.push(input.next().unwrap()).unwrap(), None);
+    assert!(cursor.push(input.next().unwrap()).unwrap().is_empty());
     assert!(Cursor::new(vec![Stage::Limit(0)]).is_exhausted());
     assert!(!Cursor::new(vec![Stage::Offset(0)]).is_exhausted());
     assert!(!Cursor::new(vec![]).is_exhausted());
     // Without stages a row comes out unchanged.
     let r = row("c/x", &[("k", s("v"))]);
-    assert_eq!(Cursor::new(vec![]).push(r.clone()).unwrap(), Some(r.fields));
+    assert_eq!(Cursor::new(vec![]).push(r.clone()).unwrap(), vec![r]);
 }
 
 #[test]
@@ -685,7 +700,7 @@ proptest! {
             .collect();
         let cond = Expr::call("equal", vec![field("f"), Expr::Constant(literal.clone())], Placement::Condition).unwrap();
         let out = execute(
-            vec![Stage::Where(cond), Stage::Select(vec![(alias("copy"), field("f")), (alias("id"), call("document_id", vec![field("__name__")]))])],
+            vec![Stage::Where(cond), Stage::select(vec![(alias("copy"), field("f")), (alias("id"), call("document_id", vec![field("__name__")]))])],
             input.clone(),
         )
         .unwrap();
@@ -695,7 +710,7 @@ proptest! {
             .map(|r| {
                 [
                     ("copy".to_owned(), r.fields["f"].clone()),
-                    ("id".to_owned(), Value::String(r.path.document_id().as_str().to_owned())),
+                    ("id".to_owned(), Value::String(r.path.as_ref().unwrap().document_id().as_str().to_owned())),
                 ]
                 .into()
             })
@@ -735,7 +750,7 @@ fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
             "equal",
             vec![field("w.x"), Expr::Constant(Value::Integer(1))],
         )),
-        Stage::Select(vec![
+        Stage::select(vec![
             (alias("one"), field("a.b")),
             (alias("two"), field("a")),
             (alias("three"), field("w.x")),
@@ -749,12 +764,12 @@ fn referenced_fields_cover_every_stage_once_a_select_narrows_the_row() {
         Some(paths(&["__name__", "a", "r", "w.x"]))
     );
     // Only document functions: the scan needs no field, so it reads names only.
-    let names_only = [Stage::Select(vec![(
+    let names_only = [Stage::select(vec![(
         alias("id"),
         call("document_id", vec![field("__name__")]),
     )])];
     assert_eq!(referenced_fields(&names_only), Some(paths(&["__name__"])));
-    let constant = [Stage::Select(vec![(
+    let constant = [Stage::select(vec![(
         alias("c"),
         call("document_id", vec![Expr::Constant(Value::Null)]),
     )])];
@@ -920,7 +935,7 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
                 Expr::Constant(Value::Null),
             ],
         )),
-        Stage::Select(vec![(
+        Stage::select(vec![(
             alias("id"),
             call("document_id", vec![field("missing")]),
         )]),
@@ -959,7 +974,7 @@ fn select_aliases_are_field_paths() {
         ],
     )];
     let out = execute(
-        vec![Stage::Select(vec![
+        vec![Stage::select(vec![
             (alias("x.y"), field("top")),
             (alias("m.s"), field("profile.score")),
             (alias("m.r"), field("profile.rank")),
@@ -1014,7 +1029,7 @@ fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profil
     for (aliases, expected) in cases {
         let nested = aliases.iter().any(|(a, _)| a.segments().len() > 1);
         let out = execute_in(
-            vec![Stage::Select(aliases.clone())],
+            vec![Stage::select(aliases.clone())],
             input.clone(),
             Unrecorded::OfficialEmulator,
         )
@@ -1025,7 +1040,7 @@ fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profil
             .collect();
         assert_eq!(out, vec![expected], "{aliases:?}");
         let strict = execute_in(
-            vec![Stage::Select(aliases.clone())],
+            vec![Stage::select(aliases.clone())],
             input.clone(),
             Unrecorded::Refuse,
         );
@@ -1169,8 +1184,8 @@ proptest! {
             .collect();
         let input = vec![row("c/x", &[("top", Value::Integer(1))])];
         let count = failing.iter().filter(|f| **f).count();
-        let strict = execute_in(vec![Stage::Select(aliases.clone())], input.clone(), Unrecorded::Refuse);
-        let emulator = execute_in(vec![Stage::Select(aliases)], input, Unrecorded::OfficialEmulator);
+        let strict = execute_in(vec![Stage::select(aliases.clone())], input.clone(), Unrecorded::Refuse);
+        let emulator = execute_in(vec![Stage::select(aliases)], input, Unrecorded::OfficialEmulator);
         match count {
             0 => {
                 prop_assert!(strict.is_ok(), "{strict:?}");

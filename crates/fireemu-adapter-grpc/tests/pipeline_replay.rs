@@ -21,378 +21,322 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
-/// Programs recorded in O-6 and O-7 (2026-10-26: sort, relaxed stage order, logical and recorded
-/// functions in a `where`, result order without a sort; aggregate, distinct, `add_fields`,
-/// `remove_fields`, `collection_group`, documents) that fireemu does not answer like
-/// production yet. They are replayed and compared like the rest, but a difference in them is
-/// not an unexpected one; each program must still differ in at least one row, so remove a
-/// program from this list when the work that makes it match lands. The comparison summary is in
-/// the lane's `o6-comparison.md`; none of these rows is a compatibility claim.
-const PENDING_PROGRAMS: &[&str] = &[
-    "fs-ent-pipeline/o6/sort-kinds-cross",
-    "fs-ent-pipeline/o6/sort-kinds-within",
-    "fs-ent-pipeline/o6/sort-missing-null",
-    "fs-ent-pipeline/o6/sort-ties",
-    "fs-ent-pipeline/o6/sort-multi-key",
-    "fs-ent-pipeline/o6/sort-expr-keys",
-    "fs-ent-pipeline/o6/sort-wire-errors",
-    "fs-ent-pipeline/o6/sort-combos",
-    "fs-ent-pipeline/o6/stage-order-relaxed",
-    "fs-ent-pipeline/o6/where-functions-truth",
-    "fs-ent-pipeline/o6/where-functions-non-boolean",
-    "fs-ent-pipeline/o6/where-functions-kinds",
-    "fs-ent-pipeline/o6/where-functions-arrays",
-    "fs-ent-pipeline/o6/where-functions-equal-any",
-    "fs-ent-pipeline/o6/order-writes",
-    "fs-ent-pipeline/o6/order-batch",
-    "fs-ent-pipeline/o7/aggregate-empty",
-    "fs-ent-pipeline/o7/aggregate-basic",
-    "fs-ent-pipeline/o7/aggregate-numbers",
-    "fs-ent-pipeline/o7/aggregate-kinds",
-    "fs-ent-pipeline/o7/aggregate-group-keys",
-    "fs-ent-pipeline/o7/aggregate-aliases",
-    "fs-ent-pipeline/o7/aggregate-args",
-    "fs-ent-pipeline/o7/distinct-main",
-    "fs-ent-pipeline/o7/fields-main",
-    "fs-ent-pipeline/o7/inputs-collection-group",
-    "fs-ent-pipeline/o7/inputs-documents",
-];
+/// Programs that fireemu does not answer like production yet. They are replayed and compared
+/// like the rest, but a difference in them is not an unexpected one; each program must still
+/// differ in at least one row, so remove a program from this list when the work that makes it
+/// match lands. (O-6 and O-7 were listed here until their stages ran; the rows that still
+/// differ are named in the lists below, each with its reason.)
+const PENDING_PROGRAMS: &[&str] = &[];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "fs-ent-pipeline/px1/select#and-false-null",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-false-x",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-null-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-true-i",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-true-x",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-arr-empty",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-arr-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-x-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-arr-empty",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-arr-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-i-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-1-0",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-null",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-x",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-i-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-x-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-empty",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-field",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-list",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-s",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-n-null",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-nan-nan",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-x-list",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-i",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-n",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-x",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-absent-n",
-        "is_absent is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-absent-x",
-        "is_absent is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-error-less-than-i-s",
-        "is_error is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/px1/select#is-error-sqrt-s",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-error-x",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-d5-float64",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-bogus",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-int64",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-number",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-n-null",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-x-null",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#nor-false-false",
-        "nor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-b",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-i-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-n-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-x-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-x",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-i",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-n",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-x",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-false-i",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-false-x",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-null-true",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-true-x",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-arr",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-b",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-d5",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-i",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-m",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-n",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-nan",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-r",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-s",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-ts",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-x",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-b-b",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-b-x",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-null-true",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-and-1-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-array-contains-1-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-equal-any-1-1",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-is-type-bogus",
-        "is_type is outside the subset",
+        "sqrt is outside the subset",
     ),
     (
         "fs-ent-pipeline/px1/static-refusals#select-sqrt-a",
         "sqrt is outside the subset",
     ),
     (
-        "fs-ent-pipeline/px1/static-refusals#where-and-1-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-array-contains-1-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-equal-any-1-1",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-is-type-bogus",
-        "is_type is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/px1/static-refusals#where-sqrt-a",
         "sqrt is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/where#is-error-less-than-i-s",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/where#not-equal-x",
-        "not is outside the subset",
     ),
     (
         "fs-ent-pipeline/px1/where#sqrt-s-positive",
         "sqrt is outside the subset",
     ),
     (
-        "fs-ent-pipeline/results/metadata#add-fields",
-        "add_fields is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/results/metadata#distinct",
-        "distinct is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/results/metadata#limit",
         "without a sort production returns another order than document names, so limit keeps other documents (PX2)",
     ),
     (
-        "fs-ent-pipeline/results/metadata#remove-fields",
-        "remove_fields is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
         "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
+        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#accumulator-unknown",
+        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#nested-aggregate",
+        "a nested aggregate evaluates `sum` as the array function `array_sum` in production; not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#sum-of-add",
+        "add is outside the subset (math functions are not run)",
+    ),
+];
+
+/// Rows whose answer is a sort whose ties come out in production's scan order: compared as a
+/// multiset, since only the order inside a tie group differs.
+const TIE_ORDER_ROWS: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/o6/sort-kinds-cross#v-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-kinds-within#sn-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-kinds-within#sn-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#v-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#v-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#wx-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#wx-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#through-scalar-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-missing-null#v-asc-limit2",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#ab-asc-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#ab-asc-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#ab-desc-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#ab-desc-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#same-key-twice",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-multi-key#b-asc-a-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-expr-keys#equal-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-expr-keys#equal-desc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-expr-keys#constant-asc",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-wire-errors#expression-string",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#select-drop-desc-tied-none",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort",
+        "rows tied on every sort key come out in production's scan order, which is not reproduced (production orders a tie group differently for different limits)",
+    ),
+];
+
+/// Rows whose 200 answer holds other rows than production's, because the cut depends on
+/// production's unsorted scan order (see the reason); both profiles answer 200.
+const SCAN_ORDER_ROWS: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-asc-limit4",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-asc-offset2-limit2",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-desc-limit3",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#none-asc-tied-offset-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#select-alias-desc-tied-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#select-alias-desc-name-offset-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#select-drop-asc-unique-offset-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-combos#select-drop-desc-unique-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#limit-sort",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#limit-where",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#offset-where",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#limit-offset",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#limit-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#offset-offset",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#offset-select-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#where-limit-where",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/stage-order-relaxed#limit-select-offset",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/order-writes#limit3",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/order-writes#limit3-offset2",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/order-writes#offset5",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o6/order-batch#limit5",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-limit-two-none",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-limit-none-sort",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-where",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h-n",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/distinct-main#distinct-then-limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/distinct-main#distinct-then-offset",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/distinct-main#limit-then-distinct",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/inputs-collection-group#limit",
+        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+    ),
+];
+
+/// Rows that only the strict profile answers differently: the emulator profile matches.
+const STRICT_ONLY_DIFFERENCES: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/px1/static-refusals#select-and-1-true",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
+    ),
+    (
+        "fs-ent-pipeline/px1/static-refusals#select-array-contains-1-1",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
+    ),
+    (
+        "fs-ent-pipeline/px1/static-refusals#select-equal-any-1-1",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
+    ),
+    (
+        "fs-ent-pipeline/px1/static-refusals#where-and-1-true",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
+    ),
+    (
+        "fs-ent-pipeline/px1/static-refusals#where-array-contains-1-1",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
+    ),
+    (
+        "fs-ent-pipeline/px1/static-refusals#where-equal-any-1-1",
+        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
     ),
 ];
 
@@ -571,7 +515,10 @@ fn normalize(value: &Value) -> Value {
 
 /// The comparable answer of an executePipeline step: the status, and the result documents as
 /// a sorted list or the error body.
-fn answer(status: u16, body: &Value) -> Value {
+/// The comparable form of an answer: the status and the error body, or the results as a multiset
+/// (production's order without a sort is its own), or in order when `ordered` (the pipeline has
+/// a `sort` stage).
+fn answer_in(status: u16, body: &Value, ordered: bool) -> Value {
     if status != 200 {
         return json!({"status": status, "body": normalize(body)});
     }
@@ -582,7 +529,9 @@ fn answer(status: u16, body: &Value) -> Value {
         .flat_map(|element| element["results"].as_array().cloned().unwrap_or_default())
         .map(|result| normalize(&result).to_string())
         .collect();
-    results.sort();
+    if !ordered {
+        results.sort();
+    }
     json!({"status": 200, "results": results})
 }
 
@@ -703,15 +652,21 @@ fn o5_debt_schema_rejects_missing_unknown_duplicate_and_wrong_types() {
     }
 }
 
+fn o5_difference_rows() -> Vec<O5Difference> {
+    parse_o5_differences(include_str!("pipeline_o5_known_differences.json"))
+}
+
 fn o5_differences() -> BTreeMap<String, O5Difference> {
-    let rows = parse_o5_differences(include_str!("pipeline_o5_known_differences.json"));
-    assert_eq!(rows.len(), 271, "finite O5 debt inventory");
-    assert_eq!(
-        rows.iter().filter(|row| row.emulator.is_some()).count(),
-        198,
-        "finite emulator debt inventory"
-    );
-    assert_eq!(KNOWN_DIFFERENCES.len(), 83, "original debt inventory");
+    let rows = o5_difference_rows();
+    // (A run that regenerates the debt file counts what is there.)
+    if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
+        assert_eq!(rows.len(), 247, "finite O5 debt inventory");
+        assert_eq!(
+            rows.iter().filter(|row| row.emulator.is_some()).count(),
+            180,
+            "finite emulator debt inventory"
+        );
+    }
     let mut table = BTreeMap::new();
     let mut unknown = 0;
     for row in rows {
@@ -783,6 +738,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     );
     let debts = o5_differences();
     let mut failures = Vec::new();
+    // What each profile answers for a debt row, kept to regenerate the debt file
+    // (`REGENERATE_O5_DEBT=<path>`; review the result before it replaces the committed file).
+    let mut answers: BTreeMap<(bool, String), Value> = BTreeMap::new();
     for strict in [true, false] {
         let s = state(strict);
         let mut differing = Vec::new();
@@ -817,6 +775,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     )
                 };
                 let expected = &recorded[step_id];
+                // Only a pipeline with a sort has an order to compare.
+                let ordered = rpc == "executePipeline"
+                    && step["body"]["structuredPipeline"]["pipeline"]["stages"]
+                        .as_array()
+                        .is_some_and(|stages| stages.iter().any(|stage| stage["name"] == "sort"))
+                    && !TIE_ORDER_ROWS.iter().any(|(tied, _)| *tied == row);
                 assert!(!expected.is_null(), "{row} has no production row");
                 let matches = if rpc == "commit" {
                     u64::from(status) == expected["status"].as_u64().unwrap()
@@ -825,10 +789,11 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     json!({"status": status, "body": normalize(&body)})
                         == json!({"status": expected["status"], "body": normalize(&expected["body"])})
                 } else {
-                    answer(status, &body)
-                        == answer(
+                    answer_in(status, &body, ordered)
+                        == answer_in(
                             u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
                             &expected["body"],
+                            ordered,
                         )
                 };
                 compared += 1;
@@ -845,11 +810,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         ));
                     }
                 }
-                let got = answer(status, &body);
-                let want = answer(
+                let got = answer_in(status, &body, ordered);
+                let want = answer_in(
                     u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
                     &expected["body"],
+                    ordered,
                 );
+                if debts.contains_key(&row) {
+                    answers.insert((strict, row.clone()), got.clone());
+                }
                 if let Some(debt) = debts.get(&row) {
                     if debt.production != want {
                         failures.push(format!(
@@ -881,17 +850,36 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 if !matches {
                     differing.push((
                         row,
-                        answer(status, &body),
-                        answer(
+                        answer_in(status, &body, ordered),
+                        answer_in(
                             u16::try_from(expected["status"].as_u64().unwrap_or(0)).unwrap(),
                             &expected["body"],
+                            ordered,
                         ),
                     ));
                 }
             }
         }
+        if let Ok(path) = std::env::var("DUMP_REPLAY_DIFFS") {
+            let rows: Vec<Value> = differing
+                .iter()
+                .map(|(row, got, want)| json!({"row": row, "got": got, "want": want}))
+                .collect();
+            std::fs::write(
+                format!("{path}.{}", if strict { "strict" } else { "emulator" }),
+                serde_json::to_string_pretty(&rows).unwrap(),
+            )
+            .unwrap();
+        }
         assert!(compared > 200, "{compared}");
-        let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
+        let known = |row: &str| {
+            KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
+                || SCAN_ORDER_ROWS.iter().any(|(known, _)| row == *known)
+                || (strict
+                    && STRICT_ONLY_DIFFERENCES
+                        .iter()
+                        .any(|(known, _)| row == *known))
+        };
         let pending = |row: &str| {
             let program = row.split('#').next().unwrap_or(row);
             PENDING_PROGRAMS.contains(&program)
@@ -943,6 +931,38 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }
         }
+        // A scan-order row must still answer 200 and differ; a strict-only row must differ under
+        // strict (pinned 501) and match under the emulator profile; a tie-order row must match as
+        // a multiset.
+        for (known, reason) in SCAN_ORDER_ROWS {
+            match differing.iter().find(|(row, _, _)| row == known) {
+                Some((_, got, _)) if got["status"] == 200 => {}
+                Some((_, got, _)) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                None => stale.push(json!({"row": known, "reason": reason})),
+            }
+        }
+        for (known, reason) in STRICT_ONLY_DIFFERENCES {
+            let differs = differing.iter().find(|(row, _, _)| row == known);
+            match (strict, differs) {
+                (true, Some((_, got, _)))
+                    if got["status"] == 501
+                        && got["body"][0]["error"]["status"] == "UNIMPLEMENTED" => {}
+                (_, Some((_, got, _))) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                (true, None) => stale.push(json!({"row": known, "reason": reason})),
+                (false, None) => {}
+            }
+        }
+        for (known, _) in TIE_ORDER_ROWS {
+            if differing.iter().any(|(row, _, _)| row == known) {
+                failures.push(format!(
+                    "strict={strict} {known}: differs as a multiset, so it is no tie-order row"
+                ));
+            }
+        }
         if !unexpected.is_empty() || !stale.is_empty() || !changed_known.is_empty() {
             failures.push(format!(
                 "strict={strict}: unexpected={}, stale={}, changedKnown={}",
@@ -951,6 +971,34 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 changed_known.len()
             ));
         }
+    }
+    if let Ok(path) = std::env::var("REGENERATE_O5_DEBT") {
+        let rows: Vec<Value> = o5_difference_rows()
+            .into_iter()
+            .filter_map(|debt| {
+                let strict = answers.get(&(true, debt.row.clone()))?;
+                let emulator = answers.get(&(false, debt.row.clone()))?;
+                if *strict == debt.production && *emulator == debt.production {
+                    return None;
+                }
+                let mut row = serde_json::Map::new();
+                row.insert("row".into(), json!(debt.row));
+                row.insert("category".into(), json!(debt.category));
+                row.insert("reason".into(), json!(debt.reason));
+                row.insert("production".into(), debt.production.clone());
+                row.insert("strict".into(), strict.clone());
+                row.insert(
+                    "emulator".into(),
+                    if *emulator == debt.production {
+                        Value::Null
+                    } else {
+                        emulator.clone()
+                    },
+                );
+                Some(Value::Object(row))
+            })
+            .collect();
+        std::fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

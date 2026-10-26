@@ -7066,17 +7066,13 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
             {"name": "offset", "args": [{"integerValue": "1"}]},
             {"name": "limit", "args": [{"integerValue": "5"}]},
         ]));
-        if strict {
-            // Production recorded no offset of 1; strict does not infer its acceptance.
-            assert_eq!(status, 501, "{body}");
-        } else {
-            assert_eq!(status, 200, "strict={strict} {body}");
-            assert_eq!(
-                body,
-                json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
-                "strict={strict}"
-            );
-        }
+        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`).
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(
+            body,
+            json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
+            "strict={strict}"
+        );
         let (status, body) = run(json!([
             {"name": "collection", "args": [{"referenceValue": "/nest/a/sub"}]},
             {"name": "select", "args": [{"mapValue": {"fields": {
@@ -7798,11 +7794,9 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
                 {"name": "offset", "args": [{"integerValue": "1"}]},
             ])),
         );
-        // Production recorded no offset of 1; strict does not infer its acceptance.
-        assert_eq!(status, if strict { 501 } else { 200 }, "{body}");
-        if !strict {
-            assert_eq!(body[0]["results"], json!([empty]));
-        }
+        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`).
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body[0]["results"], json!([empty]));
         assert!(empty.get("fields").is_none(), "{empty}");
     }
 }

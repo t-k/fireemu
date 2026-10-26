@@ -707,16 +707,28 @@ impl Firestore for GatewayService {
                     responses.into_iter().map(Ok),
                 ))));
             }
-            let response = self
-                .run_query_with_caller(caller, compiled.input.clone())
-                .await
-                .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+            let input: BoxStream<pb::RunQueryResponse> =
+                if let Some(names) = compiled.documents.clone() {
+                    let local = self
+                        .local_backend()
+                        .cloned()
+                        .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                    let database = request.get_ref().database.clone();
+                    let responses =
+                        blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                            crate::pipeline::documents_input(local, &database, &names, guard)
+                        })
+                        .await
+                        .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                    Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
+                } else {
+                    self.run_query_with_caller(caller, compiled.input.clone())
+                        .await
+                        .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
+                        .into_inner()
+                };
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
-                response.into_inner(),
-                compiled,
-                unrecorded,
-                canonical,
-                gate,
+                input, compiled, unrecorded, canonical, gate,
             ))));
         }
         let mut status = Status::unimplemented(format!(
@@ -1083,26 +1095,15 @@ pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     error
 }
 
-/// What a pipeline result holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResultShape {
-    /// No select: the source document itself, name and times included.
-    Whole,
-    /// A select: the selected fields, and the document name when the select kept `__name__` as
-    /// itself.
-    Selected { keeps_name: bool },
-}
-
 // Own the inner receiver directly: reaching the limit or dropping the public stream
 // releases backpressure/transaction ownership without draining the remaining query. The
 // inner stream is the input scan; the cursor runs the pipeline's stages over its rows, and
 // the results are packed into responses the way production frames them (a small answer is one
-// response).
+// response). A blocking stage (`sort`, `distinct`, `aggregate`) holds its rows until the input
+// ends.
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
     cursor: fireemu_core_firestore::pipeline_exec::Cursor,
-    /// What a result holds.
-    shape: ResultShape,
     /// The input snapshot's read time, sent as every response's execution time.
     read_time: Option<prost_types::Timestamp>,
     canonical: String,
@@ -1111,8 +1112,8 @@ struct PipelineResponseStream {
     emitted: bool,
     /// Results not yet sent.
     batcher: crate::pipeline::ResultBatcher,
-    /// A refusal to answer once the results before it have been sent.
-    failure: Option<Status>,
+    /// Answers ready to be sent: finished batches, then a refusal or the empty answer.
+    ready: std::collections::VecDeque<Result<pb::ExecutePipelineResponse, Status>>,
     done: bool,
 }
 
@@ -1125,13 +1126,12 @@ impl PipelineResponseStream {
         Self {
             inner: Some(inner),
             cursor,
-            shape: ResultShape::Selected { keeps_name: false },
             read_time: None,
             canonical: "collection(items)".to_owned(),
             gate: crate::pipeline_shape::RefusalGate::Open,
             emitted: false,
             batcher: crate::pipeline::ResultBatcher::default(),
-            failure: None,
+            ready: std::collections::VecDeque::new(),
             done: false,
         }
     }
@@ -1144,28 +1144,18 @@ impl PipelineResponseStream {
         canonical: String,
         gate: crate::pipeline_shape::RefusalGate,
     ) -> Self {
-        let shape = if fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages)
-            .is_none()
-        {
-            ResultShape::Whole
-        } else {
-            ResultShape::Selected {
-                keeps_name: compiled.select_keeps_name,
-            }
-        };
         Self {
             inner: Some(inner),
             cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
                 compiled.stages,
                 unrecorded,
             ),
-            shape,
             read_time: None,
             canonical,
             gate,
             emitted: false,
             batcher: crate::pipeline::ResultBatcher::default(),
-            failure: None,
+            ready: std::collections::VecDeque::new(),
             done: false,
         }
     }
@@ -1178,33 +1168,58 @@ impl PipelineResponseStream {
         }
     }
 
-    /// Ends the input and answers what is left: the held results, then the refusal that stopped
-    /// the stream, or, for a pipeline with no result, one response with only the execution time.
-    fn end(&mut self) -> Option<Result<pb::ExecutePipelineResponse, Status>> {
-        self.inner = None;
-        if self.done {
-            return None;
+    /// Queues what the stages let through, a response each time the batch is full.
+    fn absorb(&mut self, rows: &[fireemu_core_firestore::pipeline_exec::Row]) {
+        for row in rows {
+            if let Some(results) = self.batcher.push(crate::pipeline::row_document(row)) {
+                self.emitted = true;
+                let response = self.response(results);
+                self.ready.push_back(Ok(response));
+            }
         }
+    }
+
+    /// Queues the held results, or for a pipeline with no result one response with only the
+    /// execution time.
+    fn flush(&mut self) {
         if !self.batcher.is_empty() {
-            self.emitted = true;
-            self.done = self.failure.is_none();
             let results = self.batcher.take();
-            return Some(Ok(self.response(results)));
+            let response = self.response(results);
+            self.ready.push_back(Ok(response));
+        } else if !self.emitted {
+            let response = self.response(Vec::new());
+            self.ready.push_back(Ok(response));
         }
+        self.emitted = true;
+    }
+
+    /// The input is over: the blocking stages release their rows, and the answer ends.
+    fn close(&mut self) {
+        self.inner = None;
         self.done = true;
-        if let Some(error) = self.failure.take() {
-            return Some(Err(error));
+        match self.cursor.finish() {
+            Ok(rows) => {
+                self.absorb(&rows);
+                self.flush();
+            }
+            Err(error) => self.refuse(crate::pipeline::eval_status(&error)),
         }
-        (!self.emitted).then(|| {
-            self.emitted = true;
-            Ok(self.response(Vec::new()))
-        })
     }
 
     /// Stops the stream with `error`, sent after the results already held.
-    fn fail(&mut self, error: Status) -> Option<Result<pb::ExecutePipelineResponse, Status>> {
-        self.failure = Some(pipeline_status(self.gate.answer(error), &self.canonical));
-        self.end()
+    fn refuse(&mut self, error: Status) {
+        self.inner = None;
+        self.done = true;
+        if !self.batcher.is_empty() {
+            let results = self.batcher.take();
+            let response = self.response(results);
+            self.ready.push_back(Ok(response));
+        }
+        self.emitted = true;
+        self.ready.push_back(Err(pipeline_status(
+            self.gate.answer(error),
+            &self.canonical,
+        )));
     }
 }
 
@@ -1218,14 +1233,21 @@ impl tokio_stream::Stream for PipelineResponseStream {
         use std::task::Poll;
         let this = self.get_mut();
         loop {
-            let next = match this.inner.as_mut() {
-                Some(inner) => inner.as_mut().poll_next(cx),
-                None => return Poll::Ready(this.end()),
+            if let Some(item) = this.ready.pop_front() {
+                return Poll::Ready(Some(item));
+            }
+            if this.done {
+                return Poll::Ready(None);
+            }
+            let Some(inner) = this.inner.as_mut() else {
+                this.close();
+                continue;
             };
+            let next = inner.as_mut().poll_next(cx);
             match next {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Err(error))) => return Poll::Ready(this.fail(error)),
-                Poll::Ready(None) => return Poll::Ready(this.end()),
+                Poll::Ready(Some(Err(error))) => this.refuse(error),
+                Poll::Ready(None) => this.inner = None,
                 Poll::Ready(Some(Ok(response))) => {
                     if response.read_time.is_some() {
                         this.read_time = response.read_time;
@@ -1234,35 +1256,21 @@ impl tokio_stream::Stream for PipelineResponseStream {
                         continue;
                     };
                     if this.cursor.is_exhausted() {
-                        return Poll::Ready(this.end());
+                        this.inner = None;
+                        continue;
                     }
-                    let output = crate::pipeline::document_row(&document).and_then(|row| {
+                    let pushed = crate::pipeline::document_row(&document).and_then(|row| {
                         this.cursor
                             .push(row)
                             .map_err(|error| crate::pipeline::eval_status(&error))
                     });
-                    let fields = match output {
-                        Ok(Some(fields)) => fields,
-                        Ok(None) => continue,
-                        Err(error) => return Poll::Ready(this.fail(error)),
-                    };
-                    let result = match this.shape {
-                        ResultShape::Whole => document,
-                        ResultShape::Selected { keeps_name } => {
-                            crate::pipeline::selected_result(&fields, &document.name, keeps_name)
-                        }
-                    };
-                    let finished = this.batcher.push(result);
+                    match pushed {
+                        Ok(rows) => this.absorb(&rows),
+                        Err(error) => this.refuse(error),
+                    }
+                    // The limit is used up: the input is not polled again.
                     if this.cursor.is_exhausted() {
-                        // The limit is used up: the input is not polled again.
                         this.inner = None;
-                    }
-                    if let Some(results) = finished {
-                        this.emitted = true;
-                        return Poll::Ready(Some(Ok(this.response(results))));
-                    }
-                    if this.cursor.is_exhausted() {
-                        return Poll::Ready(this.end());
                     }
                 }
             }
@@ -1967,7 +1975,6 @@ mod tests {
             Box::pin(tokio_stream::iter(input)),
             Cursor::new(Vec::new()),
         );
-        stream.shape = ResultShape::Whole;
         let mut out = Vec::new();
         // A stream that never ends is a failure here, not a hang.
         while let Some(item) = stream.next().await {

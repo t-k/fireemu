@@ -20,6 +20,7 @@ import { url as inspectorUrl } from "node:inspector";
 
 import { createRuntimeClock } from "./clock.mjs";
 import { instrumentCallables } from "./callable-app-check.mjs";
+import { createAdminChannel, instrumentAdminAppCheck } from "./admin-app-check.mjs";
 import { removeAppCheckToken, withholdsAppCheckToken } from "./app-check-token.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
@@ -1637,14 +1638,23 @@ async function main() {
   let functions;
   let manifest;
   let runnerReady = false;
+  // The Admin SDK App Check instrumentation (installed before any user code loads) asks the
+  // daemon through this channel; the daemon's answers arrive on the stdin reader below.
+  const adminChannel = createAdminChannel(send);
+  let adminAppCheck = null;
   const activeInvocations = new InvocationBudget();
   // Read before loading user code, which may await indefinitely after spawning children.
   startupTrace('stdin frame reader start');
   readFrames(
     process.stdin,
     (msg, payloadBytes) => {
+      if (msg.type === "appCheck:verdict") {
+        adminChannel.deliver(msg);
+        return;
+      }
       if (msg.type === "shutdown") {
         explicitShutdown = true;
+        adminChannel.dispose();
         // Volta must observe Node exit before its shim is killed, or the daemon
         // can finish shutdown while Node still owns an inspector listener.
         deferCleanShutdownGroupCleanup();
@@ -1697,6 +1707,7 @@ async function main() {
         .finally(release);
     },
     () => {
+      adminChannel.dispose();
       cleanupProcessGroupOnInputClose();
       finishOutput();
     },
@@ -1713,6 +1724,9 @@ async function main() {
   startupTrace('callable instrumentation start');
   const instrumentation = instrumentCallables(sourceDir);
   startupTrace('callable instrumentation complete');
+  startupTrace('admin app check instrumentation start');
+  adminAppCheck = await instrumentAdminAppCheck(sourceDir, adminChannel);
+  startupTrace('admin app check instrumentation complete');
   startupTrace('parameter initialization start');
   resolveWhenDeclared(declaredParamsOfCodebase(), process.env);
   startupTrace('parameter initialization complete');
@@ -1834,6 +1848,7 @@ async function main() {
       authHeaders: instrumentation.authHeaders,
       graphs: instrumentation.graphs,
     },
+    adminAppCheck: adminAppCheck.report,
   });
   startupTrace('hello written');
   runnerReady = true;

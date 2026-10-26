@@ -417,7 +417,22 @@ fn an_enterprise_index_file_the_deploy_accepts_starts_by_default() {
                 }
             }
         }
+        // The stdout banner can arrive before the stderr reader forwards the earlier notes:
+        // stop the daemon and drain both pipes before counting them.
         drop(child);
+        let drain_until = Instant::now() + Duration::from_secs(5);
+        loop {
+            match rx.recv_timeout(drain_until.saturating_duration_since(Instant::now())) {
+                Ok(Line::Err(line)) if line.contains("skipped") => skipped.push(line),
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!(
+                        "{profile}: the daemon output readers did not finish; skipped: {skipped:?}"
+                    )
+                }
+            }
+        }
         assert_eq!(skipped.len(), 2, "{profile}: {skipped:?}");
         assert!(
             skipped.iter().any(|line| line.contains("indexes[1]")),

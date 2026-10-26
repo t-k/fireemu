@@ -1606,3 +1606,69 @@ test("the recorder accepts the fixtures that are committed and refuses a changed
     );
   }
 });
+
+test("handoff rehearsal: 6 MB of --debug on both streams, receipt and PUT lines split across writes, through the real cli() (S7)", async () => {
+  const seen = [];
+  const track = { onEvent: (event) => seen.push(event) };
+  const run = await runFakeCli(
+    `const bucket = "gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com";
+const object = "${UPLOAD_OBJECT}";
+const receipt = "[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions:generateUploadUrl " + JSON.stringify({ uploadUrl: "https://storage.googleapis.com/" + bucket + "/" + object + "?X-Goog-Signature=SECRET-MARKER-9f3a", storageSource: { bucket, object } }) + "\\n";
+const put = "[2026-10-26T01:02:04.000Z] <<< [apiv2][status] PUT https://storage.googleapis.com/" + bucket + "/" + object + " 200\\n";
+const noise = (n) => ("[2026-10-26T01:02:03.456Z] >>> [apiv2][query] GET https://x/y " + "z".repeat(60) + "\\n").repeat(n);
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+for (let i = 0; i < 20; i += 1) {
+  process.stdout.write(noise(1500));
+  process.stderr.write(noise(1500));
+}
+process.stdout.write(receipt.slice(0, 200));
+await pause(30);
+process.stdout.write(receipt.slice(200));
+process.stdout.write("[2026-10-26T01:02:03.999Z] >>> [apiv2][query] PUT https://storage.googleapis.com/b/o?X-Goog-Signature=SECRET-MARKER-9f3a\\n");
+process.stderr.write(put.slice(0, 90));
+await pause(30);
+process.stderr.write(put.slice(90));
+for (let i = 0; i < 20; i += 1) process.stderr.write(noise(1500));
+process.exitCode = 0;`,
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.equal(run.error, undefined);
+    assert.deepEqual(
+      seen.map((event) => event.type),
+      ["receipt", "put-status"],
+    );
+    assert.equal(seen[1].status, 200);
+    assert.equal(track.exited, true);
+    assert.equal(track.exitCode, 0);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});
+
+test("handoff rehearsal: past 16,000,000 characters the deploy CLI is stopped, and what was read before is kept", async () => {
+  const seen = [];
+  const track = { onEvent: (event) => seen.push(event) };
+  const run = await runFakeCli(
+    `process.on("SIGTERM", () => process.exit(9));
+const object = "${UPLOAD_OBJECT}";
+const bucket = "gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com";
+process.stdout.write("[2026-10-26T01:02:03.456Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/p/functions:generateUploadUrl " + JSON.stringify({ storageSource: { bucket, object } }) + "\\n");
+for (let i = 0; i < 17000; i += 1) process.stdout.write("[2026-10-26T01:02:03.456Z] >>> debug " + "y".repeat(960) + "\\n");
+setInterval(() => {}, 1000);`,
+    "cliDeploy",
+    track,
+  );
+  try {
+    assert.ok(run.error);
+    assert.deepEqual(
+      seen.map((event) => event.type),
+      ["receipt"],
+    );
+    assert.equal(track.exited, false);
+    assert.equal(track.exitCode, null);
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+});

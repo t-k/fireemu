@@ -1,0 +1,6 @@
+{
+  "name": "fireemu-smoke-functions-admin-app-check",
+  "private": true,
+  "main": "index.js",
+  "description": "An HTTP function that verifies the X-Firebase-AppCheck header with firebase-admin's getAppCheck().verifyToken()."
+}

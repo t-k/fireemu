@@ -68,6 +68,233 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o8d/stages-main",
 ];
 
+/// The rows of a pending program that match production today, per profile (strict, emulator):
+/// the commits that seed or write, the refusals the validators already answer, and the select
+/// `__name__` forms. Every other row of a pending program must differ. A row that stops
+/// matching, or starts to, fails the replay until this table is updated, so the work that
+/// implements a stage cannot drop or gain a match unnoticed.
+const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
+    (
+        "fs-ent-pipeline/o6/sort-kinds-cross",
+        &["seed-vector"],
+        &["seed-vector"],
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-kinds-within",
+        &["seed-sv"],
+        &["seed-sv"],
+    ),
+    (
+        "fs-ent-pipeline/o6/order-writes",
+        &[
+            "write-1-d10",
+            "write-2-d2",
+            "write-3-d1",
+            "write-4-d1",
+            "write-5-a",
+            "write-6-z",
+            "write-7-b9",
+            "write-8-x-y",
+            "bare",
+            "bare-again",
+            "select",
+            "where",
+            "rewrite-d10",
+            "bare-after-rewrite",
+            "delete-d2",
+            "recreate-d2",
+            "bare-after-recreate",
+        ],
+        &[
+            "write-1-d10",
+            "write-2-d2",
+            "write-3-d1",
+            "write-4-d1",
+            "write-5-a",
+            "write-6-z",
+            "write-7-b9",
+            "write-8-x-y",
+            "bare",
+            "bare-again",
+            "select",
+            "where",
+            "rewrite-d10",
+            "bare-after-rewrite",
+            "delete-d2",
+            "recreate-d2",
+            "bare-after-recreate",
+        ],
+    ),
+    (
+        "fs-ent-pipeline/o6/order-batch",
+        &["bare", "bare-again"],
+        &["bare", "bare-again"],
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-aliases",
+        &[
+            "acc-hyphen",
+            "acc-leading-digit",
+            "acc-non-ascii",
+            "acc-long-1500",
+        ],
+        &[
+            "acc-hyphen",
+            "acc-leading-digit",
+            "acc-non-ascii",
+            "acc-reserved",
+            "acc-document-name",
+            "acc-long-1500",
+            "group-reserved",
+        ],
+    ),
+    (
+        "fs-ent-pipeline/o8a/names-main",
+        &["alone-rest", "then-limit-rest", "from-field"],
+        &[
+            "alone-rest",
+            "beside-alias-rest",
+            "quoted-alias",
+            "quoted-value",
+            "second-alias-rest",
+            "then-limit-rest",
+            "from-field",
+        ],
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main",
+        &["dotted", "quoted-alone", "plain-pair"],
+        &["dotted", "quoted-alone", "plain-pair"],
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main",
+        &["well-formed"],
+        &["well-formed"],
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main",
+        &[
+            "write-control",
+            "get-control",
+            "write-urlsafe",
+            "get-urlsafe",
+            "write-unpadded",
+            "get-unpadded",
+            "cursor-control",
+        ],
+        &[
+            "write-control",
+            "get-control",
+            "write-urlsafe",
+            "get-urlsafe",
+            "write-unpadded",
+            "get-unpadded",
+            "cursor-control",
+        ],
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-group-keys",
+        &[],
+        &["alias-overlap"],
+    ),
+    ("fs-ent-pipeline/o7/distinct-main", &[], &["alias-reserved"]),
+    ("fs-ent-pipeline/o7/fields-main", &[], &["add-name"]),
+];
+
+/// The sample set a random draw may return: the members of the input and how many to expect.
+struct SampleOf {
+    count: usize,
+    members: &'static [&'static str],
+}
+
+/// Rows whose production answer differs between two recordings of the same request. They are
+/// judged by rule, never against one recording: a `sample` returns that many distinct members of
+/// its input in any order, and a difference of two timestamps taken from the request clock is an
+/// integer whatever its value.
+enum Nondeterministic {
+    Sample(SampleOf),
+    ClockSeconds,
+}
+
+const SU: &[&str] = &[
+    "{docs}/su/a",
+    "{docs}/su/b",
+    "{docs}/su/c",
+    "{docs}/su/d",
+    "{docs}/su/e",
+];
+const SU_AFTER_N_1: &[&str] = &["{docs}/su/b", "{docs}/su/c", "{docs}/su/d", "{docs}/su/e"];
+
+fn nondeterministic(row: &str) -> Option<Nondeterministic> {
+    Some(match row {
+        "fs-ent-pipeline/o8d/stages-main#sample-documents-2" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 2,
+                members: SU,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-documents-10" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 5,
+                members: SU,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-percent-50" => Nondeterministic::Sample(SampleOf {
+            count: 2,
+            members: SU,
+        }),
+        "fs-ent-pipeline/o8d/stages-main#sample-after-where" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 2,
+                members: SU_AFTER_N_1,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-then-limit" => Nondeterministic::Sample(SampleOf {
+            count: 1,
+            members: SU,
+        }),
+        "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now" => Nondeterministic::ClockSeconds,
+        _ => return None,
+    })
+}
+
+/// Whether an answer satisfies the rule of its row.
+fn satisfies(rule: &Nondeterministic, status: u16, body: &Value) -> bool {
+    if status != 200 {
+        return false;
+    }
+    let results: Vec<&Value> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|element| element["results"].as_array().into_iter().flatten())
+        .collect();
+    match rule {
+        Nondeterministic::Sample(SampleOf { count, members }) => {
+            let names: Vec<String> = results
+                .iter()
+                .map(|result| relative(result["name"].as_str().unwrap_or("")))
+                .collect();
+            let distinct: HashSet<&String> = names.iter().collect();
+            names.len() == *count
+                && distinct.len() == names.len()
+                && names.iter().all(|name| members.contains(&name.as_str()))
+        }
+        Nondeterministic::ClockSeconds => {
+            let [result] = results.as_slice() else {
+                return false;
+            };
+            let fields = result["fields"].as_object();
+            fields.is_some_and(|fields| {
+                fields.len() == 1
+                    && fields["v"]["integerValue"]
+                        .as_str()
+                        .is_some_and(|text| text.parse::<i64>().is_ok_and(|seconds| seconds >= 0))
+            })
+        }
+    }
+}
+
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
@@ -812,6 +1039,10 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         let mut not_replayable = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
+        let pending = |row: &str| {
+            let program = row.split('#').next().unwrap_or(row);
+            PENDING_PROGRAMS.contains(&program)
+        };
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
             for seed in program["seed"].as_array().unwrap() {
@@ -871,8 +1102,29 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                             &expected["body"],
                         )
                 };
+                let matches = match nondeterministic(&row) {
+                    Some(rule) => satisfies(&rule, status, &body),
+                    None => matches,
+                };
                 compared += 1;
                 seen.insert(row.clone());
+                if pending(&row) {
+                    let program = row.split('#').next().unwrap_or(&row);
+                    let pinned = PENDING_MATCHES
+                        .iter()
+                        .any(|(id, strict_rows, emulator_rows)| {
+                            *id == program
+                                && (if strict { strict_rows } else { emulator_rows })
+                                    .contains(&step_id)
+                        });
+                    if matches != pinned {
+                        failures.push(format!(
+                            "strict={strict} {row}: pending row {} production, pinned {}",
+                            if matches { "matches" } else { "differs from" },
+                            if pinned { "matching" } else { "differing" },
+                        ));
+                    }
+                }
                 if rpc == "executePipeline" && matches && status == 200 {
                     // Production packs a small answer into one response (FS-ENT-ORACLE O-1,
                     // results/metadata): the number of array elements and the results each
@@ -949,10 +1201,6 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             "strict={strict}"
         );
         let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
-        let pending = |row: &str| {
-            let program = row.split('#').next().unwrap_or(row);
-            PENDING_PROGRAMS.contains(&program)
-        };
         for program in PENDING_PROGRAMS {
             if !differing
                 .iter()
@@ -1010,4 +1258,78 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The six rows judged by rule accept both recordings of production and refuse the near misses.
+#[test]
+fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
+    let production = read("fs-ent-pipeline-production.json");
+    let mut checked = 0;
+    for (id, program) in production["programs"].as_object().unwrap() {
+        let Some(second) = program["second"].as_object() else {
+            continue;
+        };
+        for (step, again) in second {
+            let row = format!("{id}#{step}");
+            let rule = nondeterministic(&row).unwrap_or_else(|| panic!("no rule for {row}"));
+            for recording in [&program["steps"][step], again] {
+                let status = u16::try_from(recording["status"].as_u64().unwrap()).unwrap();
+                assert!(satisfies(&rule, status, &recording["body"]), "{row}");
+            }
+            // A refusal is no answer to a request production accepted.
+            assert!(!satisfies(&rule, 400, &json!([])), "{row}");
+            assert!(!satisfies(&rule, 200, &json!([])), "{row}");
+            checked += 1;
+        }
+    }
+    // Five `sample` rows and the clock row: the fixture lists no other row that differs.
+    assert_eq!(checked, 6);
+
+    let named = |names: &[&str]| {
+        json!([{
+            "results": names
+                .iter()
+                .map(|name| json!({"name": format!("projects/p/databases/d/documents/su/{name}"), "fields": {}}))
+                .collect::<Vec<_>>()
+        }])
+    };
+    let two = Nondeterministic::Sample(SampleOf {
+        count: 2,
+        members: SU,
+    });
+    assert!(satisfies(&two, 200, &named(&["e", "a"])));
+    assert!(!satisfies(&two, 200, &named(&["a"])), "too few");
+    assert!(!satisfies(&two, 200, &named(&["a", "b", "c"])), "too many");
+    assert!(!satisfies(&two, 200, &named(&["a", "a"])), "a repeat");
+    assert!(!satisfies(&two, 200, &named(&["a", "z"])), "not a member");
+    let filtered = Nondeterministic::Sample(SampleOf {
+        count: 2,
+        members: SU_AFTER_N_1,
+    });
+    assert!(
+        !satisfies(&filtered, 200, &named(&["a", "b"])),
+        "filtered out"
+    );
+
+    let clock = |value: &Value| json!([{"results": [{"fields": {"v": value}}]}]);
+    assert!(satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &clock(&json!({"integerValue": "1793029330"}))
+    ));
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &clock(&json!({"stringValue": "1793029330"}))
+    ));
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &clock(&json!({"doubleValue": 1.5}))
+    ));
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &clock(&json!({"integerValue": "-1"}))
+    ));
 }

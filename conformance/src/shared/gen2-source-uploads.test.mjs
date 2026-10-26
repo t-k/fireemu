@@ -613,6 +613,10 @@ describe("delete and read-back answers (T4)", () => {
       const result = await deploy.finish({ cliExited: true });
       assert.equal(result.clean, false, String(index));
       assert.equal(world.count("DELETE"), 0, String(index));
+      assert.ok(
+        result.reasons.some((r) => r.startsWith("object-unreadable:")),
+        `${index}: ${result.reasons}`,
+      );
       const reasons = uploads.report().reasons;
       assert.ok(
         reasons.some((r) => r.startsWith(`unsettled-create:${FAKE_BUCKET}/${OBJECT}`)),
@@ -656,6 +660,22 @@ describe("delete and read-back answers (T4)", () => {
         );
       assert.equal(uploads.report().closureReady, clean, label);
       assert.equal(world.count("DELETE"), 0, "no DELETE for an object that is not there");
+      const report = uploads.report();
+      if (reason === "confirmed-upload-absent") {
+        // a confirmed create that reads 404 is owned and unsettled in the run
+        assert.ok(
+          report.reasons.some((r) => r.startsWith("confirmed-create-reads-404:")),
+          label,
+        );
+      }
+      if (reason === "receipt-unconfirmed") {
+        // an unknown create whose only evidence is absence: the coordinator must accept it
+        assert.ok(
+          report.reasons.some((r) => r.startsWith("unknown-create-absent-unconfirmed:")),
+          label,
+        );
+        assert.ok(report.coordinatorNote, label);
+      }
     }
   });
 
@@ -717,11 +737,33 @@ describe("delete and read-back answers (T4)", () => {
     const { uploads } = open(world);
     const deploy = await uploads.beginDeploy("program-1:http");
     deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object: OTHER, status: 200 });
-    deploy.observe({ type: "put-status", bucket: "elsewhere", object: OBJECT, status: 200 });
     deploy.observe(null);
     deploy.observe({ type: "other" });
     const result = await deploy.finish({ cliExited: true, exitCode: 1 });
     assert.equal(result.clean, true);
+  });
+
+  it("a refusal logged for the same object name in another bucket does not settle the receipt", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    deploy.receipt(receiptOf());
+    deploy.observe({ type: "put-status", bucket: "elsewhere", object: OBJECT, status: 403 });
+    const result = await deploy.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(result.clean, false);
+    assert.ok(result.reasons.some((r) => r.startsWith("receipt-unconfirmed:")));
+  });
+
+  it("opens nothing for events that arrive after the deploy finished", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:http");
+    const result = await deploy.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(result.clean, true);
+    deploy.observe({ type: "receipt", ...receiptOf(OTHER) });
+    deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object: OTHER, status: 403 });
+    assert.equal(uploads.report().closureReady, true);
+    assert.deepEqual(uploads.report().owned, []);
   });
 });
 

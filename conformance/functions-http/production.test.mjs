@@ -967,6 +967,56 @@ test("a recorded Gen2 function record, which names the sources bucket, owns noth
   }
 });
 
+test("cleanup tells the helper whether the CLI exited and with what code (S1)", async () => {
+  for (const [track, reason] of [
+    [{ exited: false, exitCode: null }, "killed-without-receipt"],
+    [{ exited: true, exitCode: 0 }, "no-receipt"],
+    [{}, "killed-without-receipt"],
+  ]) {
+    const world = await uploadWorld();
+    try {
+      const upload = await world.uploads.beginDeploy("program:http");
+      const state = { started: true, cleaned: false, upload, deployTrack: track };
+      await production.cleanupTarget(
+        world.control,
+        "http",
+        "/adc",
+        world.budget,
+        world.dir,
+        state,
+        world.deps,
+      );
+      assert.equal(state.cleaned, false, JSON.stringify(track));
+      assert.ok(state.cleanupError.includes(reason), state.cleanupError);
+    } finally {
+      await rm(world.dir, { recursive: true, force: true });
+    }
+  }
+  // a deploy that failed on its own before any upload leaves nothing to clean
+  const world = await uploadWorld();
+  try {
+    const upload = await world.uploads.beginDeploy("program:http");
+    const state = {
+      started: true,
+      cleaned: false,
+      upload,
+      deployTrack: { exited: true, exitCode: 1 },
+    };
+    await production.cleanupTarget(
+      world.control,
+      "http",
+      "/adc",
+      world.budget,
+      world.dir,
+      state,
+      world.deps,
+    );
+    assert.equal(state.cleaned, true);
+  } finally {
+    await rm(world.dir, { recursive: true, force: true });
+  }
+});
+
 test("a refused upload DELETE leaves the target uncleaned and the ledger open", async () => {
   const world = await uploadWorld();
   try {
@@ -1543,6 +1593,7 @@ setInterval(() => {}, 1000);`,
   try {
     assert.ok(run.error);
     assert.equal(track.exited, false);
+    assert.equal(track.exitCode, null, "a stopped CLI has no exit code of its own");
   } finally {
     await rm(run.dir, { recursive: true, force: true });
   }
@@ -1679,4 +1730,43 @@ test("a token refresh never costs the last upload request its place (S4)", async
     assert.equal(budget.snapshot().upload, BOUNDS.upload);
     assert.equal(budget.snapshot().token, 1);
   });
+});
+
+test("the REST control counts response bytes, not characters", async () => {
+  const { createBudget } = await import("./harness.mjs");
+  const adc = { refresh_token: "r", client_id: "c", client_secret: "s" };
+  const handler = (url) =>
+    url.startsWith("https://oauth2.googleapis.com/")
+      ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
+      : new Response('{"e":"é"}', { status: 200 });
+  await withStubbedFetch(handler, async () => {
+    const control = production.createControl(adc, createBudget());
+    const reply = await control(
+      "GET",
+      "https://storage.googleapis.com/storage/v1/b/b/o/x",
+      undefined,
+      "upload",
+      "any",
+    );
+    assert.equal(reply.bytes, 10, "nine characters, ten bytes");
+  });
+});
+
+test("a stale CLI debug log is gone before the deploy child starts (S2)", async () => {
+  const stale = new URL("firebase-debug.2.log", import.meta.url);
+  await writeFile(stale, "signed upload URL from an earlier run");
+  const run = await runFakeCli(
+    `import { existsSync } from "node:fs";
+console.error(existsSync("firebase-debug.2.log") ? "STALE-LOG-PRESENT" : "STALE-LOG-ABSENT");
+process.exitCode = 1;`,
+    "cliDeploy",
+    { onEvent() {} },
+  );
+  try {
+    const stored = await readFile(join(run.runDir, run.diagnostics[0]), "utf8");
+    assert.match(stored, /STALE-LOG-ABSENT/);
+  } finally {
+    await rm(stale, { force: true });
+    await rm(run.dir, { recursive: true, force: true });
+  }
 });

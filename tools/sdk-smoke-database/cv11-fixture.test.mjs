@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { comparison, FIXTURE, fixtureFromJournal, sanitizeProfiles } from './cv11-fixture.mjs';
+import { comparison, compareRecorded, FIXTURE, fixtureFromJournal, RACING_STEPS, sanitizeProfiles } from './cv11-fixture.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL(FIXTURE, import.meta.url), 'utf8'));
 const local = JSON.parse(readFileSync(new URL('./fixtures/local-cv11-genuine-auth.json', import.meta.url), 'utf8'));
@@ -64,4 +64,25 @@ test('sanitizeProfiles drops timings and unknown fields, and the fixture refuses
   assert.deepEqual(profile, { name: 'r1-ws', journal: [{ step: 's', type: 'ok' }] });
   assert.throws(() => fixtureFromJournal({ mode: 'local', profiles: local.profiles }), /production journal/);
   assert.throws(() => fixtureFromJournal({ mode: 'production', profiles: [{ name: 'r1-ws', journal: [{ step: 'x', type: 'ok', code: 'a@example.com' }] }, ...local.profiles.slice(1)] }), /secret/);
+});
+
+test('only the write-after-delete step is judged unordered; every other multi-event step keeps its order', () => {
+  assert.deepEqual([...RACING_STEPS], ['write-after-delete']);
+  for (const [step, profile] of [['signin-a', 0], ['signout', 1], ['resignin-a', 2], ['refresh-after-delete', 3], ['write-after-delete', 0]]) {
+    const copy = clone(local);
+    const journal = copy.profiles[profile].journal;
+    const i = journal.findIndex((e) => e.step === step);
+    assert.equal(journal[i + 1].step, step, step);
+    [journal[i], journal[i + 1]] = [journal[i + 1], journal[i]];
+    assert.equal(comparison(fixture, copy).match, step === 'write-after-delete', step);
+  }
+  assert.deepEqual(compareRecorded(fixture.profiles, clone(local).profiles), { match: true, differences: [] });
+});
+
+test('compareRecorded refuses an extra trailing event and an extra profile', () => {
+  const longer = clone(local).profiles;
+  longer[2].journal.push({ step: 'runner', type: 'transport', code: 'ws' });
+  assert.equal(compareRecorded(fixture.profiles, longer).match, false);
+  const more = [...clone(local).profiles, { name: 'r3-ws', journal: [] }];
+  assert.equal(compareRecorded(fixture.profiles, more).match, false);
 });

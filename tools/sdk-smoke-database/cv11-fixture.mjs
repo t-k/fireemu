@@ -6,15 +6,33 @@
 //
 // The fixture keeps, per profile, the ordered journal without the millisecond timings. `compare`
 // judges a local journal (from `cv11-genuine-auth.mjs local`) against the fixture with
-// `compareJournals`: step order must match, and within one step the events are compared sorted
-// (the write-after-delete admin acknowledgement and the listener value race).
+// `compareRecorded`: every event must be in the recorded order, except within the steps in
+// RACING_STEPS (the write-after-delete admin acknowledgement and the listener value, which
+// production itself delivered in both orders), whose events are compared sorted.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { assertNoSecrets, compareJournals, PROFILES } from './cv11-genuine-auth.mjs';
+import { assertNoSecrets, PROFILES } from './cv11-genuine-auth.mjs';
 
 export const FIXTURE = './fixtures/production-cv11-genuine-auth.json';
 const KEPT = ['step', 'type', 'epoch', 'code', 'shape', 'present'];
+export const RACING_STEPS = new Set(['write-after-delete']);
+
+/** Profile by profile: strict event order, sorted only inside RACING_STEPS. Timings are not kept. */
+export function compareRecorded(a, b) {
+  const key = (e) => JSON.stringify(KEPT.map((k) => e[k] ?? null));
+  const canonical = (journal = []) => {
+    const out = [];
+    for (const e of journal) (out.at(-1)?.step === e.step ? out.at(-1).keys : (out.push({ step: e.step, keys: [] }), out.at(-1).keys)).push(key(e));
+    return out.flatMap((s) => (RACING_STEPS.has(s.step) ? s.keys.toSorted() : s.keys));
+  };
+  const differences = [];
+  for (const [i, p] of a.entries()) {
+    const x = canonical(p.journal), y = canonical(b[i]?.journal), n = x.findIndex((k, j) => k !== y[j]);
+    if (n >= 0 || x.length !== y.length) differences.push({ profile: p.name, index: n >= 0 ? n : x.length, left: x[n >= 0 ? n : x.length] ?? null, right: y[n >= 0 ? n : x.length] ?? null });
+  }
+  return { match: differences.length === 0 && a.length === b.length, differences };
+}
 
 /** One journal without timings: the fields compareJournals reads, in the recorded order. */
 export function sanitizeProfiles(profiles) {
@@ -39,12 +57,12 @@ export function fixtureFromJournal(journal) {
 /** The comparison kept as evidence: the verdict and per-profile event counts, no timings. */
 export function comparison(fixture, local) {
   const profiles = sanitizeProfiles(local.profiles);
-  const verdict = compareJournals(fixture.profiles, profiles);
+  const verdict = compareRecorded(fixture.profiles, profiles);
   return {
     match: verdict.match,
     differences: verdict.differences,
     profiles: profiles.map((p, i) => ({ name: p.name, productionEvents: fixture.profiles[i].journal.length, localEvents: p.journal.length })),
-    unorderedWithinStep: true,
+    unorderedSteps: [...RACING_STEPS],
   };
 }
 

@@ -285,26 +285,36 @@ async fn lowering(service: &GatewayService, request: &pb::ExecutePipelineRequest
     let parent = crate::decode::parse_parent(PARENT).unwrap();
     let compiled = crate::pipeline::compile_supported(request, &parent).unwrap();
     let mut query = compiled.query;
-    if compiled.limit.is_some_and(|limit| limit > i32::MAX as u32) {
-        if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
-            query.query_type.as_mut()
-        {
-            query.limit = None;
-        }
+    // The lowering reads in name order and cuts there; the executor reads in production's scan
+    // order (CRC-32 of the document ID), so the baseline reads everything, puts it in that order
+    // and applies the offset and the limit itself.
+    let mut offset = 0;
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        query.query_type.as_mut()
+    {
+        offset = usize::try_from(query.offset).unwrap();
+        query.offset = 0;
+        query.limit = None;
     }
     let mut stream = Firestore::run_query(service, Request::new(query))
         .await
         .unwrap()
         .into_inner();
-    let mut out = Vec::new();
+    let mut responses = Vec::new();
     while let Some(response) = stream.next().await {
-        if let Some(document) = response.unwrap().document {
-            out.push(comparable(&crate::pipeline::project_document(
+        responses.push(response.unwrap());
+    }
+    let mut out: Vec<Fields> = crate::pipeline::in_scan_order(responses)
+        .into_iter()
+        .filter_map(|response| response.document)
+        .map(|document| {
+            comparable(&crate::pipeline::project_document(
                 document,
                 &compiled.projection,
-            )));
-        }
-    }
+            ))
+        })
+        .skip(offset)
+        .collect();
     if let Some(limit) = compiled.limit {
         out.truncate(limit as usize);
     }
@@ -612,14 +622,15 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
         .commit(&pb::CommitRequest {
             database: "projects/demo-app/databases/(default)".to_owned(),
             writes: [
+                // (The scan reads "b" before "a": ascending CRC-32 of the document ID.)
                 (
-                    "a",
+                    "b",
                     pb::value::ValueType::ReferenceValue(format!("{PARENT}/o/z/s/y")),
                 ),
                 // The parent of a top-level document is the documents root, whose ID production
                 // refuses at run time (FS-ENT-ORACLE O-1).
                 (
-                    "b",
+                    "a",
                     pb::value::ValueType::ReferenceValue(format!("{PARENT}/o/z")),
                 ),
             ]

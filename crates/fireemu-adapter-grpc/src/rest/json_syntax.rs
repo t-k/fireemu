@@ -440,8 +440,10 @@ impl Parser<'_> {
         let mut i = start + 1;
         loop {
             let Some(&byte) = self.body.get(i) else {
-                self.stop_first_pass(start);
-                return Err(self.fail("Closing quote expected in string.", start));
+                // Reported at the end of the body with no context, as recorded for a short
+                // string (O-8A `precedence-main#truncated`); the same for a long one is assumed.
+                self.stop_first_pass(self.body.len());
+                return Err(self.fail("Closing quote expected in string.", self.body.len()));
             };
             if byte == quote {
                 self.at = i + 1;
@@ -453,8 +455,8 @@ impl Parser<'_> {
                 continue;
             }
             let Some(&escaped) = self.body.get(i + 1) else {
-                self.stop_first_pass(start);
-                return Err(self.fail("Closing quote expected in string.", start));
+                self.stop_first_pass(self.body.len());
+                return Err(self.fail("Closing quote expected in string.", self.body.len()));
             };
             if escaped == b'u' {
                 let (code, consumed) = self.unicode_escape(i, start)?;
@@ -850,13 +852,18 @@ mod tests {
             refusal("[1"),
             "Invalid JSON payload received. Unexpected end of string. Expected , or ] after array value.\n1\n ^"
         );
+        // An unterminated string is reported at the end of the body with no context
+        // (FS-ENT-ORACLE O-8A `precedence-main#truncated`, recorded for one short string). That
+        // a long string is read alike is an assumption, not a recording; strict answers this
+        // text only for the exact recorded body.
+        assert_eq!(
+            refusal("{\"structuredPipeline\":{\"pipeline\":{\"stag"),
+            "Invalid JSON payload received. Closing quote expected in string.\n\n^"
+        );
         let long = format!("{{\"a\": \"{}", "x".repeat(10_000));
         assert_eq!(
             refusal(&long),
-            format!(
-                "Invalid JSON payload received. Closing quote expected in string.\n\"{}\n^",
-                "x".repeat(19)
-            )
+            "Invalid JSON payload received. Closing quote expected in string.\n\n^"
         );
     }
 

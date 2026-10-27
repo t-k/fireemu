@@ -762,7 +762,7 @@ fn request_body(
 
 /// An `:executePipeline` body (`PX1d` r7 review M3, S3). Strict reads it with production's
 /// grammar and keeps its key order; a body that grammar refuses has no shape, so the refusal
-/// goes through the shape gate (501), as the transcoder's do (ruling (c)). The emulator profile
+/// goes through the shape gate (501 unless the exact body was recorded, O-8A), as the transcoder's do (ruling (c)). The emulator profile
 /// reads it as the official emulator 1.22.0 does (`json_syntax::parse_official_with_key_order`:
 /// bare keys and single quotes, no trailing comma or unknown escape, trailing input ignored),
 /// and refuses any other body with `Payload isn't valid for request.`
@@ -779,11 +779,13 @@ fn pipeline_body(
         let (value, order) =
             crate::rest::json_syntax::parse_with_key_order(bytes).map_err(|error| {
                 refuse(
-                    crate::pipeline_shape::RefusalGate::Recorded(None, String::new()).answer(
-                        Status::invalid_argument(crate::rest::transcode::syntax_error_message(
-                            bytes, &error,
-                        )),
-                    ),
+                    crate::pipeline_shape::RefusalGate::Recorded(
+                        Some(crate::pipeline_shape::raw_shape(bytes)),
+                        String::new(),
+                    )
+                    .answer(Status::invalid_argument(
+                        crate::rest::transcode::syntax_error_message(bytes, &error),
+                    )),
                 )
             })?;
         // What only production's grammar admits (a trailing comma, a bare key, an unknown
@@ -1158,6 +1160,58 @@ mod tests {
             "Invalid JSON payload received. Unexpected token.\nnot json\n^"
         );
     }
+    /// FS-ENT-ORACLE O-8A `precedence-main`: the executePipeline bodies production refused as
+    /// text (not JSON, truncated) are answered in production's words under strict, for those
+    /// exact bodies; any other body that grammar refuses keeps no recorded answer (501). The
+    /// emulator profile keeps the official emulator's one text.
+    #[test]
+    fn recorded_unparsable_pipeline_bodies_are_refused_in_production_words_by_strict() {
+        let requests: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-requests.json"
+        ))
+        .unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let pipeline = "/v1/projects/p/databases/(default)/documents:executePipeline";
+        let program = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "fs-ent-pipeline/o8a/precedence-main")
+            .unwrap();
+        let mut checked = Vec::new();
+        for step in program["steps"].as_array().unwrap() {
+            let raw = step["rawBody"].as_str().unwrap();
+            if raw.is_empty() || serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+                continue;
+            }
+            let id = step["id"].as_str().unwrap();
+            let want = &production["programs"]["fs-ent-pipeline/o8a/precedence-main"]["steps"][id];
+            let strict = super::request_body(raw.as_bytes(), pipeline, true).unwrap_err();
+            assert_eq!(strict.status, 400, "{id}: {}", strict.body);
+            assert_eq!(strict.body[0]["error"], want["body"][0]["error"], "{id}");
+            // The same text with one more byte is a body production was not given.
+            let other = format!("{raw} ");
+            let other = super::request_body(other.as_bytes(), pipeline, true).unwrap_err();
+            assert_eq!(other.status, 501, "{id}");
+            let emulator = super::request_body(raw.as_bytes(), pipeline, false).unwrap_err();
+            assert_eq!(emulator.status, 400, "{id}");
+            assert_eq!(
+                emulator.body[0]["error"]["message"], "Payload isn't valid for request.",
+                "{id}"
+            );
+            checked.push(id);
+        }
+        assert_eq!(checked, ["not-json", "truncated"]);
+        // An empty body is the empty message, which the pipeline check answers.
+        assert_eq!(
+            super::request_body(b"", pipeline, true).unwrap().0,
+            serde_json::json!({})
+        );
+    }
+
     use std::sync::Arc;
 
     #[tokio::test]

@@ -1,0 +1,1786 @@
+{
+  "version": 1,
+  "source": "FS-ENT-ORACLE O-8A framing",
+  "programs": {
+    "fs-ent-pipeline/o8a/framing-small": {
+      "corpusDigest": "585b16eed5cd08d756b25d445be5481256726e73bb7b0b23d4e7de5d53b7090f",
+      "steps": {
+        "f5-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 5,
+          "units": [
+            {
+              "results": 5,
+              "jsonBytes": 926
+            }
+          ]
+        },
+        "f5-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 5,
+          "units": [
+            {
+              "results": 5,
+              "jsonBytes": 926
+            }
+          ]
+        },
+        "f50-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 50,
+          "units": [
+            {
+              "results": 50,
+              "jsonBytes": 9027
+            }
+          ]
+        },
+        "f50-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 50,
+          "units": [
+            {
+              "results": 50,
+              "jsonBytes": 9027
+            }
+          ]
+        },
+        "f500-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 500,
+          "units": [
+            {
+              "results": 173,
+              "jsonBytes": 31485
+            },
+            {
+              "results": 173,
+              "jsonBytes": 31485
+            },
+            {
+              "results": 154,
+              "jsonBytes": 28030
+            }
+          ],
+          "second": {
+            "transport": "rest",
+            "status": 200,
+            "results": 500,
+            "units": [
+              {
+                "results": 152,
+                "jsonBytes": 27667
+              },
+              {
+                "results": 152,
+                "jsonBytes": 27667
+              },
+              {
+                "results": 152,
+                "jsonBytes": 27670
+              },
+              {
+                "results": 44,
+                "jsonBytes": 8032
+              }
+            ]
+          }
+        },
+        "f500-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 500,
+          "units": [
+            {
+              "results": 62,
+              "jsonBytes": 11306
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11307
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11308
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11304
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11308
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11308
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11307
+            },
+            {
+              "results": 62,
+              "jsonBytes": 11306
+            },
+            {
+              "results": 4,
+              "jsonBytes": 762
+            }
+          ],
+          "second": {
+            "transport": "grpc",
+            "code": 0,
+            "results": 500,
+            "units": [
+              {
+                "results": 184,
+                "jsonBytes": 33485
+              },
+              {
+                "results": 184,
+                "jsonBytes": 33485
+              },
+              {
+                "results": 132,
+                "jsonBytes": 24030
+              }
+            ]
+          }
+        },
+        "f5000-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 5000,
+          "units": [
+            {
+              "results": 126,
+              "jsonBytes": 23246
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23254
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23263
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23252
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23244
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23257
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23234
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23243
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23240
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23245
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23241
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23245
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23247
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23253
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23235
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23256
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23249
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23239
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23254
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23257
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23247
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23249
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23255
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23252
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23243
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23239
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23231
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23237
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23237
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23244
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23233
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23242
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23242
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23242
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23227
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23257
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23249
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23236
+            },
+            {
+              "results": 126,
+              "jsonBytes": 23245
+            },
+            {
+              "results": 86,
+              "jsonBytes": 15882
+            }
+          ],
+          "second": {
+            "transport": "rest",
+            "status": 200,
+            "results": 5000,
+            "units": [
+              {
+                "results": 199,
+                "jsonBytes": 36695
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36721
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36698
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36701
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36675
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36685
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36686
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36698
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36696
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36689
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36707
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36691
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36701
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36696
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36707
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36689
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36680
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36668
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36693
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36674
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36691
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36671
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36696
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36692
+              },
+              {
+                "results": 199,
+                "jsonBytes": 36698
+              },
+              {
+                "results": 25,
+                "jsonBytes": 4641
+              }
+            ]
+          }
+        },
+        "f5000-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 5000,
+          "units": [
+            {
+              "results": 150,
+              "jsonBytes": 27666
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27688
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27686
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27662
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27672
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27658
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27657
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27663
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27666
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27665
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27667
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27672
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27655
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27683
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27666
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27665
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27686
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27659
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27680
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27674
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27666
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27664
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27645
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27653
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27661
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27657
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27660
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27669
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27647
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27668
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27675
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27653
+            },
+            {
+              "results": 150,
+              "jsonBytes": 27671
+            },
+            {
+              "results": 50,
+              "jsonBytes": 9248
+            }
+          ],
+          "second": {
+            "transport": "grpc",
+            "code": 0,
+            "results": 5000,
+            "units": [
+              {
+                "results": 185,
+                "jsonBytes": 34119
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34136
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34125
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34116
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34101
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34105
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34113
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34112
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34120
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34110
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34118
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34125
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34102
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34129
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34118
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34128
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34115
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34107
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34092
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34100
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34102
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34106
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34111
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34100
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34118
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34106
+              },
+              {
+                "results": 185,
+                "jsonBytes": 34120
+              },
+              {
+                "results": 5,
+                "jsonBytes": 957
+              }
+            ]
+          }
+        },
+        "f5000-select-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 5000,
+          "units": [
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4040
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4040
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4029
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4035
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4033
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4036
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4028
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4031
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4033
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4034
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4031
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4027
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4029
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4036
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4040
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4038
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4040
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4039
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4034
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4033
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4030
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4034
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4025
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4022
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4031
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4031
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4022
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4026
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4030
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4023
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4021
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4022
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4026
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4033
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4033
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4030
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 98,
+              "jsonBytes": 4032
+            },
+            {
+              "results": 2,
+              "jsonBytes": 118
+            }
+          ],
+          "second": {
+            "transport": "rest",
+            "status": 200,
+            "results": 5000,
+            "units": [
+              {
+                "results": 172,
+                "jsonBytes": 7063
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7063
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7061
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7052
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7051
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7053
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7047
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7051
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7050
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7044
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7048
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7060
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7059
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7064
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7061
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7050
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7049
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7052
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7038
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7041
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7049
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7033
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7044
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7031
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7039
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7047
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7051
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7048
+              },
+              {
+                "results": 172,
+                "jsonBytes": 7048
+              },
+              {
+                "results": 12,
+                "jsonBytes": 526
+              }
+            ]
+          }
+        },
+        "f5000-select-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 5000,
+          "units": [
+            {
+              "results": 135,
+              "jsonBytes": 5552
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5551
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5551
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5549
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5541
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5544
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5546
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5537
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5539
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5544
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5537
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5537
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5541
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5548
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5551
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5551
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5550
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5549
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5544
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5541
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5543
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5532
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5529
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5542
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5536
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5527
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5528
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5526
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5532
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5542
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5541
+            },
+            {
+              "results": 135,
+              "jsonBytes": 5540
+            },
+            {
+              "results": 5,
+              "jsonBytes": 240
+            }
+          ]
+        },
+        "f5000-limit-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 1500,
+          "units": [
+            {
+              "results": 101,
+              "jsonBytes": 18637
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18646
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18659
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18653
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18641
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18645
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18640
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18647
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18628
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18638
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18632
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18640
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18642
+            },
+            {
+              "results": 101,
+              "jsonBytes": 18634
+            },
+            {
+              "results": 86,
+              "jsonBytes": 15881
+            }
+          ],
+          "second": {
+            "transport": "rest",
+            "status": 200,
+            "results": 1500,
+            "units": [
+              {
+                "results": 176,
+                "jsonBytes": 32457
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32481
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32461
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32461
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32450
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32448
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32453
+              },
+              {
+                "results": 176,
+                "jsonBytes": 32448
+              },
+              {
+                "results": 92,
+                "jsonBytes": 16988
+              }
+            ]
+          }
+        },
+        "f5000-limit-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 1500,
+          "units": [
+            {
+              "results": 160,
+              "jsonBytes": 29510
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29531
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29517
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29510
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29519
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29493
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29503
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29509
+            },
+            {
+              "results": 160,
+              "jsonBytes": 29501
+            },
+            {
+              "results": 60,
+              "jsonBytes": 11090
+            }
+          ],
+          "second": {
+            "transport": "grpc",
+            "code": 0,
+            "results": 1500,
+            "units": [
+              {
+                "results": 187,
+                "jsonBytes": 34489
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34502
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34493
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34485
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34473
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34474
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34481
+              },
+              {
+                "results": 187,
+                "jsonBytes": 34476
+              },
+              {
+                "results": 4,
+                "jsonBytes": 774
+              }
+            ]
+          }
+        }
+      }
+    },
+    "fs-ent-pipeline/o8a/framing-large": {
+      "corpusDigest": "e5ba4b23322279cb979ce514a3d7a63aff7f5ba1b26601fcb9843179cc6191f8",
+      "steps": {
+        "seed-l12-1": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 126
+            }
+          ]
+        },
+        "seed-l12-2": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 126
+            }
+          ]
+        },
+        "seed-l12-3": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 126
+            }
+          ]
+        },
+        "seed-l3-1": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 60
+            }
+          ]
+        },
+        "seed-l3-2": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 60
+            }
+          ]
+        },
+        "seed-l3-3": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 60
+            }
+          ]
+        },
+        "seed-m30-1": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 258
+            }
+          ]
+        },
+        "seed-m30-2": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 258
+            }
+          ]
+        },
+        "seed-m30-3": {
+          "transport": "rest",
+          "status": 200,
+          "results": 0,
+          "units": [
+            {
+              "results": 0,
+              "jsonBytes": 258
+            }
+          ]
+        },
+        "l12-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 12,
+          "units": [
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            }
+          ]
+        },
+        "l12-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 12,
+          "units": [
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            },
+            {
+              "results": 1,
+              "jsonBytes": 400219
+            }
+          ]
+        },
+        "l3-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 3,
+          "units": [
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            },
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            },
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            }
+          ]
+        },
+        "l3-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 3,
+          "units": [
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            },
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            },
+            {
+              "results": 1,
+              "jsonBytes": 950218
+            }
+          ]
+        },
+        "m30-rest": {
+          "transport": "rest",
+          "status": 200,
+          "results": 30,
+          "units": [
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            }
+          ]
+        },
+        "m30-grpc": {
+          "transport": "grpc",
+          "code": 0,
+          "results": 30,
+          "units": [
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            },
+            {
+              "results": 2,
+              "jsonBytes": 200402
+            }
+          ]
+        }
+      }
+    }
+  }
+}

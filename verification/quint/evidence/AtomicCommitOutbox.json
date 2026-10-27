@@ -264,7 +264,7 @@
     "crates/fireemu-adapter-functions/src/eventarc_channels.rs": "0b4a20b12250406bcf00ea335be59cce7f973577ef215973191c32754c79a27c",
     "crates/fireemu-adapter-functions/src/eventarc_strict.rs": "acd04d55f74eb09c488d5c14cbc240c8cc06e896ffa679b194806b559a39bb57",
     "crates/fireemu-adapter-functions/src/events.rs": "ea753f6c4b73cf7f2ca3dbedbb44fd4934250715b98d3406df61b3c4953e21d1",
-    "crates/fireemu-adapter-functions/src/http.rs": "29d1ab8d1ca49e78f8662c53470311a7037e7ca7bbeec376752f3c2bea5f572a",
+    "crates/fireemu-adapter-functions/src/http.rs": "73a338b770520071b0d3bb725876b1a806dc88d1387cff2d2f51a3f715b4acfa",
     "crates/fireemu-adapter-functions/src/invoker.rs": "f03c663c974adc5418c7bd100aca159f8d44c7f89a32670fdbf451762a04372f",
     "crates/fireemu-adapter-functions/src/lib.rs": "cfb34f8c2d3fbd63f674cb62279baa221afcf1194418c430cac27e1efbc0240b",
     "crates/fireemu-adapter-functions/src/manifest_json.rs": "13957cf85943923fa39243ef64fa579bdc79640c72c12c4b865171f7092bacd9",

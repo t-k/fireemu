@@ -178,3 +178,19 @@ test("a refusal that looks like propagation is not waited out during the cleanup
   assert.equal(closed.closed, false);
   assert.deepEqual(slept, [], "no retry wait in the cleanup");
 });
+
+test("a log row that cannot be written for an admin write leaves the RTDB not closed", async () => {
+  const w = fakeWorld();
+  const rtdb = make(w, {
+    log: (row) => {
+      if (row.step === "s1") throw new Error("disk full");
+    },
+  });
+  await rtdb.setup();
+  assert.equal((await rtdb.write(STEPS[0])).outcome, "unknown");
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.counts.admin.logFailures, 1);
+  assert.equal(closed.counts.anonymous.logFailures, 0);
+  assert.equal(closed.state.rules, "baseline");
+  assert.equal(closed.closed, false);
+});

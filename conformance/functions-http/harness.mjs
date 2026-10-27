@@ -10,10 +10,16 @@ export const FUNCTION_NAMES = Object.freeze({
   http: "fireemuHttpProbe",
   callable: "fireemuCallableProbe",
 });
+// Worst cases of one deployment, counted from the code: a 2nd gen target given as a spec adds the
+// complete function list of its region (at most 5 pages) to the control reads and the exact delete with
+// its polls to the cleanup. Cleanup: absence 2, IAM removal 3, exact delete 1 + 10 polls, absence 2,
+// package 1, versions 1, image delete 1 + 10 polls, read-back 1, residue 2 packages + 2 version lists.
+const CONTROL_PER_DEPLOYMENT = 17;
+const CLEANUP_PER_DEPLOYMENT = 36;
 export const BOUNDS = Object.freeze({
   invocations: 136,
-  control: 192,
-  cleanup: 480,
+  control: 16 * CONTROL_PER_DEPLOYMENT,
+  cleanup: 16 * CLEANUP_PER_DEPLOYMENT,
   auth: 12,
   cliDeploy: 16,
   cliDelete: 16,
@@ -59,10 +65,121 @@ const SECRET_KEYS = new Set([
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 export function expectedFunctionName(target) {
-  const name = FUNCTION_NAMES[target];
-  if (!name) throw new Error(`unreviewed target ${target}`);
+  const name =
+    typeof target === "string" && Object.hasOwn(FUNCTION_NAMES, target)
+      ? FUNCTION_NAMES[target]
+      : undefined;
+  if (!name) throw new Error(`unreviewed target ${String(target)}`);
   return name;
 }
+
+const SPEC_KEYS = new Set([
+  "functionName",
+  "region",
+  "codebase",
+  "generation",
+  "project",
+  "runtime",
+  "entryPoint",
+]);
+
+/** Codebase names a spec's function name may never equal: firebase-tools' own default and this recorder's. */
+const RESERVED_CODEBASES = new Set(["default", "functions-http-oracle"]);
+
+/** The frozen results of `resolveTarget`: resolving one again returns it unchanged. */
+const RESOLVED = new WeakSet();
+
+function ownData(target, field) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, field);
+  if (descriptor === undefined) return undefined;
+  if (!("value" in descriptor))
+    throw new Error(`invalid target spec: ${field} is not a data field`);
+  return descriptor.value;
+}
+
+/**
+ * A target is a named fixture function (`http`, `callable`) or a spec object for another reviewed 2nd gen
+ * function of this project: a plain object with own data fields `{ functionName, region, codebase,
+ * generation: "gcfv2" }` and optional `project` (this project only), `runtime` (default nodejs22) and
+ * `entryPoint` (default the function name). The result is frozen, complete and read exactly once: resolving
+ * it again returns it. `named` tells the CLI-deleted fixture functions from specs (which are deleted by
+ * their exact resource, never by a selector); `resourceId` is the identity of the function itself.
+ */
+export function resolveTarget(target) {
+  if (RESOLVED.has(target)) return target;
+  if (typeof target === "string" || typeof target !== "object") {
+    const functionName = expectedFunctionName(target);
+    const resolved = Object.freeze({
+      key: target,
+      resourceId: `${REGION}/${functionName}`,
+      named: true,
+      project: PROJECT,
+      region: REGION,
+      codebase: "functions-http-oracle",
+      generation: "gcfv2",
+      functionName,
+      entryPoint: functionName,
+      runtime: "nodejs22",
+    });
+    RESOLVED.add(resolved);
+    return resolved;
+  }
+  if (target === null || Array.isArray(target)) throw new Error("invalid target spec");
+  if (Object.getPrototypeOf(target) !== Object.prototype) {
+    throw new Error("invalid target spec: a plain object is required");
+  }
+  for (const key of Reflect.ownKeys(target)) {
+    if (!SPEC_KEYS.has(key)) {
+      throw new Error(`invalid target spec: unknown field ${String(key)}`);
+    }
+  }
+  const field = (name) => ownData(target, name);
+  const generation = field("generation");
+  if (generation === "gcfv1") throw new Error("1st gen targets are not supported by this recorder");
+  if (generation !== "gcfv2") throw new Error("invalid target spec: generation");
+  const functionName = field("functionName");
+  const region = field("region");
+  const codebase = field("codebase");
+  const project = field("project") ?? PROJECT;
+  const runtime = field("runtime") ?? "nodejs22";
+  const entryPoint = field("entryPoint") ?? functionName;
+  const bad = (name) => new Error(`invalid target spec: ${name}`);
+  if (project !== PROJECT) throw new Error("unreviewed target project");
+  if (typeof functionName !== "string" || !/^[A-Za-z][A-Za-z0-9_-]{0,62}$/u.test(functionName))
+    throw bad("functionName");
+  if (typeof region !== "string" || !/^[a-z]+-[a-z]+\d+$/u.test(region)) throw bad("region");
+  if (typeof codebase !== "string" || !/^[a-z][a-z0-9-]{0,62}$/u.test(codebase))
+    throw bad("codebase");
+  if (typeof runtime !== "string" || !/^[a-z]+\d+$/u.test(runtime)) throw bad("runtime");
+  if (typeof entryPoint !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,126}$/u.test(entryPoint))
+    throw bad("entryPoint");
+  if (functionName === codebase || RESERVED_CODEBASES.has(functionName)) {
+    throw bad("functionName equals a codebase name");
+  }
+  // The named targets are deleted by the CLI, whose `functions:delete <name>` also removes every
+  // `<name>-*` function of the region: a spec named like that would be deleted with them.
+  for (const named of Object.values(FUNCTION_NAMES)) {
+    if (functionName.startsWith(`${named}-`))
+      throw bad("functionName extends a named target's name");
+  }
+  const resolved = Object.freeze({
+    key: functionName,
+    resourceId: `${region}/${functionName}`,
+    named: false,
+    project,
+    region,
+    codebase,
+    generation: "gcfv2",
+    functionName,
+    entryPoint,
+    runtime,
+  });
+  RESOLVED.add(resolved);
+  return resolved;
+}
+
+/** The canonical key of a target, as used for states, endpoints and ledger keys. */
+export const targetKey = (target) => resolveTarget(target).key;
 
 export function validateCorpus(corpus) {
   if (corpus.project !== PROJECT) throw new Error("corpus project changed");
@@ -170,15 +287,15 @@ export function createBudget(caps = {}) {
 }
 
 export function validateFunctionRecord(record, target) {
-  const name = expectedFunctionName(target);
-  const resource = `projects/${PROJECT}/locations/${REGION}/functions/${name}`;
+  const { functionName: name, project, region, runtime, entryPoint } = resolveTarget(target);
+  const resource = `projects/${project}/locations/${region}/functions/${name}`;
   if (record?.name !== resource)
     throw new Error("function name differs from the reviewed resource");
   if (record.environment !== "GEN_2") throw new Error("function generation is not GEN_2");
-  if (record.buildConfig?.runtime !== "nodejs22" || record.buildConfig?.entryPoint !== name) {
+  if (record.buildConfig?.runtime !== runtime || record.buildConfig?.entryPoint !== entryPoint) {
     throw new Error("function runtime or entry point differs from the fixture");
   }
-  const service = `projects/${PROJECT}/locations/${REGION}/services/${name.toLowerCase()}`;
+  const service = `projects/${project}/locations/${region}/services/${name.toLowerCase()}`;
   if (record.serviceConfig?.service?.toLowerCase() !== service.toLowerCase()) {
     throw new Error("Cloud Run service differs from the reviewed resource");
   }
@@ -191,7 +308,7 @@ export function validateFunctionRecord(record, target) {
   const host = uri.hostname.toLowerCase();
   const runHost = host.startsWith(`${name.toLowerCase()}-`) && host.endsWith(".run.app");
   const functionsHost =
-    host === `${REGION}-${PROJECT}.cloudfunctions.net` && uri.pathname === `/${name}`;
+    host === `${region}-${project}.cloudfunctions.net` && uri.pathname === `/${name}`;
   if (
     uri.protocol !== "https:" ||
     uri.username ||

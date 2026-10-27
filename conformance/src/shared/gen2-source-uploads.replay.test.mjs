@@ -123,3 +123,28 @@ test("replayed through the helper, the recorded forms give a confirmed create th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the recorded fixture checks its own privacy: the fixture number is its only long digit run and no credential marker is in it", () => {
+  const longRuns = RECORDED.match(/\d{9,}/gu) ?? [];
+  assert.ok(longRuns.length > 0);
+  assert.ok(
+    longRuns.every((run) => run === FAKE_PROJECT_NUMBER),
+    `digit runs: ${longRuns.join(", ")}`,
+  );
+  for (const marker of [
+    "X-Goog-",
+    "Signature=",
+    "GoogleAccessId",
+    "ya29.",
+    "AIza",
+    "eyJ",
+    "Bearer",
+    "@",
+  ]) {
+    assert.ok(!RECORDED.includes(marker), marker);
+  }
+  const body = JSON.parse(RECEIPT_LINE.slice(RECEIPT_LINE.indexOf("{")));
+  assert.equal(body.uploadUrl, "[REDACTED UPLOAD URL]");
+  assert.deepEqual(Object.keys(body).toSorted(), ["storageSource", "uploadUrl"]);
+  assert.deepEqual(Object.keys(body.storageSource).toSorted(), ["bucket", "object"]);
+});

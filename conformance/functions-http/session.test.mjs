@@ -56,3 +56,30 @@ test("a streaming abort records only the first line and cancels the response", a
   assert.deepEqual(result[step.id].body, { firstLine: "first" });
   assert.equal(cancelled, true);
 });
+
+test("a case whose target is a spec finds its endpoint by the canonical key", async () => {
+  const target = {
+    functionName: "cv14DbCreatedV2",
+    region: "us-central1",
+    codebase: "rtdb-functions-oracle",
+    generation: "gcfv2",
+  };
+  const program = {
+    id: "functions-http/x/y",
+    cases: [{ ...corpus.programs[0].cases[0], target }],
+  };
+  const sent = [];
+  const fetchImpl = async (url) => {
+    sent.push(url);
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  await runCases(program, { cv14DbCreatedV2: "http://127.0.0.1:1/x" }, {}, createBudget(), {
+    fetchImpl,
+  });
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].startsWith("http://127.0.0.1:1/x"));
+  await assert.rejects(
+    () => runCases(program, { other: "http://127.0.0.1:1/x" }, {}, createBudget(), { fetchImpl }),
+    /no reviewed endpoint/,
+  );
+});

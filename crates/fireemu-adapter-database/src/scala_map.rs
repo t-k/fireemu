@@ -103,8 +103,14 @@ fn walk(node: &Node, out: &mut Vec<usize>) {
     }
 }
 
+// The recorded fixtures are shared with the tests of other modules through this re-export, so that the
+// test module stays a plain `#[cfg(test)] mod` (the guard that keeps test-only trees out of the binary
+// inputs reads the gate right before the `mod`).
 #[cfg(test)]
-pub(crate) mod tests {
+pub(crate) use tests::{cases, fixture, strings};
+
+#[cfg(test)]
+mod tests {
     use super::{improve, java_hash, scala_order, write_order};
     use proptest::prelude::*;
 

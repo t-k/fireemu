@@ -2068,14 +2068,13 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
     host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
     {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ email: "ada@example.com", password: "secret-123", returnSecureToken: true }}) }},
   );
-  const {{ localId }} = await signUp.json();
+  const {{ localId, idToken }} = await signUp.json();
   if (!localId) throw new Error("sign-up failed");
-  const now = Math.floor(Date.now() / 1000);
-  const token = (iat) =>
-    b64url({{ alg: "none", typ: "JWT" }}) + "." +
-    b64url({{ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: {{ identities: {{}}, sign_in_provider: "password" }} }}) + ".";
+  // The claims the daemon itself issued, re-issued unsigned (see the task test).
+  const claims = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString());
+  const token = (iat) => b64url({{ alg: "none", typ: "JWT" }}) + "." + b64url({{ ...claims, iat }}) + ".";
   const lines = [];
-  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(now)], ["future", "Bearer " + token(now + 600)], ["malformed", "Bearer malformed"]]) {{
+  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(claims.iat)], ["future", "Bearer " + token(claims.iat + 600)], ["malformed", "Bearer malformed"]]) {{
     const headers = {{ "content-type": "application/json" }};
     if (authorization) headers.authorization = authorization;
     const response = await fetch(host(process.env.FIREEMU_FUNCTIONS_HOST) + "/" + project + "/us-central1/guarded", {{

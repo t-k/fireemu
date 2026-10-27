@@ -69,6 +69,19 @@ node tools/sdk-smoke-database/rtdb-residual.mjs compare <production journal.json
 
 `compare` judges the second journal against the first with `rtdb-residual-judge.mjs`: a step is compared in the recorded order where the first journal's two rounds of one transport agree, sorted where they hold the same events in another order, and not judged (needs-review) where they differ or where a `timeout` or `error` row was recorded. The order between the writer's and the observer's rows is a race of two connections and is not compared. `production` needs a packet, like the CV11 recorder. `rtdb-residual-page.test.mjs` runs the scenarios in Chromium against a stub SDK that delivers nothing, to exercise the bounded waits (`timeout` rows), rejections, the Rules probe and the masks; it is skipped when Chromium cannot be launched. `adc-preflight.mjs` checks the ADC token before a production run (one tokeninfo POST, token in the body; stops unless it has `userinfo.email`, `firebase.database` or `cloud-platform`, and an email): the residual recorder and the CV11 recorder (`cv11-genuine-auth.mjs`, whose production branch is otherwise unchanged) call it first, and `node adc-preflight.mjs --gcloud <path>` can be run before any other recorder. The RTDB administration (instance, Rules, disabled-state handling) lives in `rtdb-admin.mjs`. `SOURCES` in `rtdb-residual.mjs` does not cover it, so any residual or later packet that depends on it must pin `rtdb-admin.mjs` and `adc-preflight.mjs` explicitly. `local --official` runs the same scenarios against the pinned official emulator jar as a reference.
 
+
+## S5 recorder (an onDisconnect value with a priority, then a cancel of one of its children)
+
+`rtdb-s5.mjs` runs one scenario (`rtdb-s5-page.js`) in two WebSocket rounds. Three cases, each on its own writer connection: the question (`setWithPriority({b, 10, 9}, 1)` at `s`, a cancel at `s/b`, `set(1)` at `t`) and two controls (the same without the priority, which must split; a cancel of a missing key, which must leave the value whole with its priority). The observer reads `s` and `t` after the writer goes offline. `rtdb-s5-judge.mjs` classifies a round as A (nothing fires: the official emulator's answer), B (the remaining children fire: fireemu), C (the value fires whole) or D (only the unrelated write fires), and anything else, a control that misbehaves, a missing or duplicated row, a timeout, an error or a rejection as `unclassified`; two rounds must agree.
+
+```sh
+node tools/sdk-smoke-database/rtdb-s5.mjs local --fireemu <fireemu binary> --out <new dir> [--profile strict|emulator]
+node tools/sdk-smoke-database/rtdb-s5.mjs local --official --out <new dir>
+node tools/sdk-smoke-database/rtdb-s5.mjs judge <journal.json>
+```
+
+`production` needs a packet that pins `SOURCES` (the recorder, its page and judge, `rtdb-admin.mjs`, `rtdb-residual.mjs`, `adc-preflight.mjs` and `cv11-genuine-auth.mjs`). The recorder imports from `rtdb-residual.mjs` and changes none of the residual files. Recorded offline: the official emulator gives A, fireemu (both profiles) gives B.
+
 ## Production comparisons
 
 Three tools compare a local `fireemu` (strict profile, `fireemu up --only auth,database` on free loopback ports, stopped afterwards) with production recordings committed under `fixtures/`. None of them sends anything to production.

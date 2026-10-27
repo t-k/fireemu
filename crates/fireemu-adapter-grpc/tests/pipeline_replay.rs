@@ -1260,6 +1260,7 @@ fn the_pending_pins_fail_in_both_directions_and_check_themselves() {
 
 /// The six rows judged by rule accept both recordings of production and refuse the near misses.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
     let production = read("fs-ent-pipeline-production.json");
     let mut checked = 0;

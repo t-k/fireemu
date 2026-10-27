@@ -26,7 +26,7 @@
  "tool": [
   {
    "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
-   "sha256": "989ce1e9081083692257fb3741feb3095938aa4f9a1ab8c96b6c143b19277f66"
+   "sha256": "d11f99646d940533627c643834314dfa18c96f87293f0e98a3c34ca413b4b002"
   },
   {
    "path": "tools/sdk-smoke-database/cv11-genuine-auth-page.js",
@@ -94,5 +94,6 @@
   "unorderedSteps": [
    "write-after-delete"
   ]
- }
+ },
+ "lineage": "cv11-genuine-auth.mjs was edited after the production-2 recording (RTDB-CV11-LEAN-20261025-02) only to call adc-preflight.mjs before the first request of its production branch (2026-10-27); its local mode is unchanged and the CV11 local comparison still matches with 0 differences on the order-fixed binary (review 2026-10-27, check 9). The pin above is the current file."
 }

@@ -32657,7 +32657,8 @@
           "transport": "grpc",
           "code": 13,
           "message": "Request message serialization failure: maximum nesting depth exceeded",
-          "messages": []
+          "messages": [],
+          "unknown": "recorder client failed to serialize the request; not a production answer"
         },
         "chain-100": {
           "status": 400,
@@ -32675,7 +32676,8 @@
           "transport": "grpc",
           "code": 13,
           "message": "Request message serialization failure: maximum nesting depth exceeded",
-          "messages": []
+          "messages": [],
+          "unknown": "recorder client failed to serialize the request; not a production answer"
         },
         "array-20": {
           "status": 200,

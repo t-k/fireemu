@@ -414,7 +414,7 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "2e641886ee0d832f95e570f33eead54964a6151bf14c2fc54d5fe10cb8d4cc53",
-    "conformance/fs-ent-pipeline-production.json": "a87729c644677fc2893d7793e48558d372e13976d325643b650f1efeef89b091",
+    "conformance/fs-ent-pipeline-production.json": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
     "conformance/fs-ent-pipeline-requests.json": "bc4188176c75a22caddc2712011b6ac2acc2974e06d8f0d262bc547987ca9323",
     "crates/fireemu-adapter-database/Cargo.toml": "a379c8d87d4a55e039d995ced021744ac9133b32a5ab9eb7e28ede1dc1c0f5d8",
     "crates/fireemu-adapter-database/src/access.rs": "2fcdfef5c9ff5a72cab169e6c6a4e61bc140ed7959aaba05d6030a382c315f8d",
@@ -757,7 +757,7 @@
     "crates/fireemu-proto-pubsub/src/generated/google.pubsub.v1.rs": "bb7a474efec00d8add5c42dbe2a5891fc4d2c3ae11d6a3b23f6d9ee4d06c540e",
     "crates/fireemu-proto-pubsub/src/lib.rs": "f3467825539e57349814f47b8cedeacaa5a4b11dfe40d5756492caa089603cb3",
     "crates/fireemu/Cargo.toml": "1e9c5e7b71042199ab82418d7718dc2d97c94b39086ef3458cef96d1b21d47ae",
-    "crates/fireemu/src/capabilities.json": "ec870643cc8459fb4bf3223b242a8f8beae155fb9ab80338a53302c6223c4909",
+    "crates/fireemu/src/capabilities.json": "5bd3386ab182353597b7dd3d417f25ac79f6daa05de91e7c4c601a7d59623193",
     "crates/fireemu/src/config.rs": "0cb68f2e96677491dcce73a3affe6f6dc439f4cbb83d7c4dc78a6ea05ecf6463",
     "crates/fireemu/src/config_discovery.rs": "4f54ec4d99b5014142982a4d16f7ef38b8ce716463445e7da5c4040c96d580d2",
     "crates/fireemu/src/config_shape.rs": "3f3a82db6e9bb4c17af7692be242bb2e2900672f1762cabb817a5a47c1a53512",

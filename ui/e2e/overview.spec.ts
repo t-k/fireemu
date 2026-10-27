@@ -19,15 +19,14 @@ test.describe("Overview", () => {
     await expect(page.getByRole("heading", { name: "Rules", exact: true })).toBeVisible();
   });
 
-  test("states the product scope honestly", async ({ page }) => {
+  test("shows no product scope table and no compatibility label", async ({ page }) => {
     await gotoApp(page, "/");
-    const scope = page.getByTestId("product-scope");
-    await expect(scope.getByTestId("scope-rtdb")).toContainText("deferred");
-    await expect(scope.getByTestId("scope-extensions")).toContainText("not planned");
-    await expect(scope.getByTestId("scope-requests")).toContainText("supported");
-    await expect(scope.getByTestId("scope-coverage")).toContainText("supported");
-    await expect(scope.getByTestId("scope-alerts")).toContainText("supported");
-    await expect(scope.getByTestId("scope-logging")).toContainText("supported");
+    await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+    await expect(page.getByTestId("product-scope")).toHaveCount(0);
+    await expect(page.locator("[data-testid^='scope-']")).toHaveCount(0);
+    await expect(page.getByText("Product scope")).toHaveCount(0);
+    await expect(page.getByText("not planned")).toHaveCount(0);
+    await expect(page.getByTestId("env-dotenv")).toBeVisible();
   });
 
   test("labels the deterministic controls as fireemu-only and groups them apart", async ({

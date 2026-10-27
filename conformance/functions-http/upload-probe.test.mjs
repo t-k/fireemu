@@ -484,15 +484,12 @@ test("a version left in the target's /cache package after the delete is a residu
   }
 });
 
-test("the image residue check looks at the target's two package names exactly", async () => {
+test("the image residue check reads the target's two package names exactly, never the repository (S2)", async () => {
   const world = await deployWorld({
     deployScript: FAKE_RECEIPT_SCRIPT("process.exit(0);", 200),
     caps: PROBE_LIMITS,
   });
   try {
-    // another function whose package id merely starts with ours is not ours
-    world.deployed.otherPackage = true;
-    await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
     // an empty package is no residue
     world.deployed.packageRemains = true;
     await assert.doesNotReject(() => assertNoImageResidue(world.control, "http", "cleanup"));
@@ -511,30 +508,45 @@ test("the image residue check looks at the target's two package names exactly", 
     );
     // an incomplete version list is not an empty one
     world.deployed.versionExists = false;
-    world.deployed.cacheVersion = false;
+    world.deployed.packageRemains = false;
     world.deployed.cacheVersionsNext = true;
     await assert.rejects(
       () => assertNoImageResidue(world.control, "http", "cleanup"),
       /owned image version remains in .*%2Fcache/,
     );
     world.deployed.cacheVersionsNext = false;
-    // the checks are counted in the cleanup budget, not the control budget
-    const kinds = [];
+    // the checks are counted in the cleanup budget; the requests are the two package reads, with a
+    // field mask on any version list, and no listing of the repository
+    const seen = [];
+    world.deployed.packageRemains = true;
+    world.deployed.cacheVersionsNext = false;
     await assertNoImageResidue(
       async (method, url, body, kind, allowed) => {
-        kinds.push(kind);
+        seen.push([kind, url]);
         return world.control(method, url, body, kind, allowed);
       },
       "http",
       "cleanup",
     );
-    assert.ok(kinds.length >= 1 && kinds.every((kind) => kind === "cleanup"));
-    // an incomplete package list is not an empty one
-    world.deployed.versionExists = false;
-    world.deployed.packagesNextPage = true;
+    assert.ok(seen.length >= 2 && seen.every(([kind]) => kind === "cleanup"));
+    assert.ok(
+      seen.every(([, url]) => !url.includes("/packages?")),
+      "the repository is not listed",
+    );
+    assert.ok(
+      seen
+        .filter(([, url]) => url.includes("/versions"))
+        .every(([, url]) => url.endsWith("&fields=versions.name,nextPageToken")),
+    );
+    // a package that answers with another name is refused
     await assert.rejects(
-      () => assertNoImageResidue(world.control, "http", "cleanup"),
-      /package list is incomplete/,
+      () =>
+        assertNoImageResidue(
+          async (_m, url) => ({ status: 200, value: { name: `${url}-other` } }),
+          "http",
+          "cleanup",
+        ),
+      /package name changed/,
     );
   } finally {
     await rm(world.dir, { recursive: true, force: true });
@@ -559,9 +571,9 @@ test("the image residue check runs in cleanup and is counted in the cleanup budg
       projectNumber: NUMBER,
       run: world.run,
     });
-    const listing = seen.filter(([, url]) => url.endsWith("/gcf-artifacts/packages?pageSize=1000"));
-    assert.equal(listing.length, 1);
-    assert.equal(listing[0][0], "cleanup");
+    const reads = seen.filter(([, url]) => url.endsWith("%2Fcache"));
+    assert.equal(reads.length, 1);
+    assert.equal(reads[0][0], "cleanup");
   } finally {
     await rm(world.dir, { recursive: true, force: true });
   }

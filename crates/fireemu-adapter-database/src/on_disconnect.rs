@@ -706,17 +706,17 @@ mod tests {
 
     #[test]
     fn the_fire_order_is_the_recorded_one_for_nested_registrations() {
-        let fixture = crate::scala_map::tests::fixture();
+        let fixture = crate::scala_map::fixture();
         let cases = fixture["nested"].as_array().unwrap();
         assert!(cases.len() >= 40);
         for case in cases {
-            let ops: Vec<(String, String)> = crate::scala_map::tests::strings(&case["registered"])
+            let ops: Vec<(String, String)> = crate::scala_map::strings(&case["registered"])
                 .into_iter()
                 .map(|path| ("o".to_owned(), path))
                 .collect();
             assert_eq!(
                 fired(&ops),
-                crate::scala_map::tests::strings(&case["order"]),
+                crate::scala_map::strings(&case["order"]),
                 "{case}"
             );
         }
@@ -724,21 +724,18 @@ mod tests {
 
     #[test]
     fn production_five_registered_e2_to_marker_fire_e6_e5_marker_e4_e3_e2() {
-        let fixture = crate::scala_map::tests::fixture();
+        let fixture = crate::scala_map::fixture();
         let case = &fixture["production5"];
-        let ops: Vec<(String, String)> = crate::scala_map::tests::strings(&case["registered"])
+        let ops: Vec<(String, String)> = crate::scala_map::strings(&case["registered"])
             .into_iter()
             .map(|path| ("o".to_owned(), path))
             .collect();
-        assert_eq!(
-            fired(&ops),
-            crate::scala_map::tests::strings(&case["order"])
-        );
+        assert_eq!(fired(&ops), crate::scala_map::strings(&case["order"]));
     }
 
     #[test]
     fn registering_cancelling_and_registering_again_follow_the_recorded_probes() {
-        let fixture = crate::scala_map::tests::fixture();
+        let fixture = crate::scala_map::fixture();
         let probes = fixture["probes"].as_array().unwrap();
         assert!(probes.len() >= 6);
         for probe in probes {
@@ -755,7 +752,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 fired(&ops),
-                crate::scala_map::tests::strings(&probe["order"]),
+                crate::scala_map::strings(&probe["order"]),
                 "{probe}"
             );
         }
@@ -765,7 +762,7 @@ mod tests {
     fn a_split_by_a_cancel_inserts_only_the_children_that_remain_in_key_order() {
         // Raw frames on the jar, with the order review's rows (M2): the cancelled child is not inserted, the
         // others go in Firebase key order (integers first by number), and the map turns hashed only at five.
-        let cases = crate::scala_map::tests::cases();
+        let cases = crate::scala_map::cases();
         let splits = cases["splits"].as_array().unwrap();
         assert!(splits.len() >= 8);
         // The S4 and S6 cases hear the whole value on a listen above its children; the integration
@@ -788,7 +785,7 @@ mod tests {
                 .into_iter()
                 .map(|(k, _)| k.join("/"))
                 .collect();
-            let want: Vec<String> = crate::scala_map::tests::strings(&case["order"])
+            let want: Vec<String> = crate::scala_map::strings(&case["order"])
                 .into_iter()
                 .map(|frame| match frame.strip_prefix("m:") {
                     // `m:s/e2{y}`: the entry below the listen's path.

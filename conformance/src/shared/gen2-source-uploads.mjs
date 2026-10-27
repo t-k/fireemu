@@ -410,6 +410,9 @@ export function openSourceUploads({
   }
 
   return {
+    // One helper serves the uploads bucket of one region: callers refuse a target elsewhere.
+    region,
+    bucket,
     beginDeploy,
     report: () => closureReport(state),
     close: () => closeOwnership(state),

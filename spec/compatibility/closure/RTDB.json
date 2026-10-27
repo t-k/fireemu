@@ -798,14 +798,14 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
-    "sha256": "d962d9c1b61bb77825fe71c7de8a9a80eae2496dd0b93bc8bf26ad27d0cafea1",
+    "sha256": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
     "rows": 2,
     "summary": {
      "match": true,
      "production": "A",
      "local": "A"
     },
-    "binding": "the release binary e881ae85 built from 389777c3a231a4366c006009b6461dd16306b0a3 with RUSTC_WRAPPER empty (build path .worktree/rtdb-s5-drop; sha256 in the evidence file)"
+    "binding": "the release binary a18a612eed72139bb4bd052d2f5e741dfec9695892b7e8fc990a007a9900eff4 built with runtime Rust sources at ebf18e152ddd2100596ebbcc0a5e1b07c902fbb6 and RUSTC_WRAPPER empty (build path .worktree/rtdb-s5-drop; sha256 in the evidence file)"
    }
   ],
   "productionRequests": 0,

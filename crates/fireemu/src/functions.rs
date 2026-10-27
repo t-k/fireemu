@@ -7389,13 +7389,12 @@ root	unchanged	small	firstGen";
             crate::config::CompatibilityProfile::Strict,
         ] {
             for trusted in [false, true] {
-                let skips = super::runner_debug_features(profile, trusted)
-                    .map(|features| {
+                let skips =
+                    super::runner_debug_features(profile, trusted).is_some_and(|features| {
                         serde_json::from_str::<serde_json::Value>(features).unwrap()
                             ["skipTokenVerification"]
                             == json!(true)
-                    })
-                    .unwrap_or(false);
+                    });
                 assert_eq!(skips, trusted, "{profile:?}, trusted: {trusted}");
             }
         }

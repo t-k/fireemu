@@ -12,6 +12,7 @@ import {
   cleanupGen1,
   deployGen1,
   gen1FunctionUrl,
+  gen1PackageName,
   readDeployedGen1,
   resolveGen1Target,
   validateGen1Record,
@@ -26,6 +27,8 @@ const spec = (extra = {}) => ({
 });
 const RESOURCE = `projects/${PROJECT}/locations/us-central1/functions/rtdbCreatedV1`;
 const OPERATION = "operations/b3BlcmF0aW9uLTE";
+// Gen1 image packages are named by the function's snake_case name alone (FE stage 2: `fs_created_v1`).
+const PACKAGE = `projects/${PROJECT}/locations/us-central1/repositories/gcf-artifacts/packages/rtdb_created_v1`;
 
 const record = (over = {}) => ({
   name: RESOURCE,
@@ -170,6 +173,7 @@ function world({
   polls = 2,
   failDelete = false,
   stays = false,
+  packages = {},
 } = {}) {
   const calls = [];
   let remaining = polls;
@@ -181,6 +185,18 @@ function world({
       if (failDelete) throw new Error("socket hang up");
       exists = stays;
       answer = { status: 200, value: operation };
+    } else if (url.includes("artifactregistry.googleapis.com")) {
+      const [path, query] = url.split("/v1/")[1].split("?");
+      const hit = packages[path.replace(/\/versions$/u, "")];
+      if (query !== undefined) {
+        answer = {
+          status: 200,
+          value: hit?.versions ? { versions: hit.versions.map((name) => ({ name })) } : {},
+        };
+      } else
+        answer = hit
+          ? { status: 200, value: { name: hit.name ?? path } }
+          : { status: 404, value: {} };
     } else if (url.includes("/v1/operations/")) {
       remaining -= 1;
       answer = { status: 200, value: { name: OPERATION, done: remaining <= 0 } };
@@ -210,13 +226,15 @@ test("a function is deleted once by its exact resource, the operation is polled,
   });
   assert.equal(state.cleaned, true, state.cleanupError);
   assert.deepEqual(
-    w.calls.map((c) => `${c.method} ${c.url.replace("https://cloudfunctions.googleapis.com", "")}`),
+    w.calls.map((c) => `${c.method} ${c.url.replace(/^https:\/\/[^/]+/u, "")}`),
     [
       `GET /v1/${RESOURCE}`,
       `DELETE /v1/${RESOURCE}`,
       `GET /v1/${OPERATION}`,
       `GET /v1/${OPERATION}`,
       `GET /v1/${RESOURCE}`,
+      `GET /v1/${PACKAGE}`,
+      `GET /v1/${PACKAGE}%2Fcache`,
     ],
   );
   assert.ok(w.calls.every((c) => c.kind === "cleanup"));
@@ -287,4 +305,46 @@ test("a function that is still there after the delete operation ended leaves the
   await cleanupGen1(w.control, target, state, { log: async () => {}, sleep: noSleep });
   assert.equal(state.cleaned, false);
   assert.match(state.cleanupError, /function remains after delete/);
+});
+
+test("the image packages of a 1st gen function are read by their exact names after the delete", async () => {
+  const target = resolveGen1Target(spec());
+  const clean = world();
+  const state = { started: true, cleaned: false, target };
+  await cleanupGen1(clean.control, target, state, { log: async () => {}, sleep: noSleep });
+  assert.equal(state.cleaned, true, state.cleanupError);
+  const reads = clean.calls.filter((c) => c.url.includes("artifactregistry"));
+  assert.deepEqual(
+    reads.map((c) => c.url),
+    [
+      `https://artifactregistry.googleapis.com/v1/${PACKAGE}`,
+      `https://artifactregistry.googleapis.com/v1/${PACKAGE}%2Fcache`,
+    ],
+  );
+  assert.ok(reads.every((c) => c.kind === "cleanup" && c.method === "GET"));
+
+  // an empty package is no residue, a version left in either is
+  const empty = world({ packages: { [PACKAGE]: { versions: [] } } });
+  const emptyState = { started: true, cleaned: false, target };
+  await cleanupGen1(empty.control, target, emptyState, { log: async () => {}, sleep: noSleep });
+  assert.equal(emptyState.cleaned, true, emptyState.cleanupError);
+  for (const name of [PACKAGE, `${PACKAGE}%2Fcache`]) {
+    const left = world({ packages: { [name]: { versions: [`${name}/versions/sha256:x`] } } });
+    const leftState = { started: true, cleaned: false, target };
+    await cleanupGen1(left.control, target, leftState, { log: async () => {}, sleep: noSleep });
+    assert.equal(leftState.cleaned, false, name);
+    assert.match(leftState.cleanupError, /owned image version remains in rtdb_created_v1/);
+  }
+  // a package that answers with another name is not read as ours
+  const renamed = world({ packages: { [PACKAGE]: { name: `${PACKAGE}x`, versions: [] } } });
+  const renamedState = { started: true, cleaned: false, target };
+  await cleanupGen1(renamed.control, target, renamedState, { log: async () => {}, sleep: noSleep });
+  assert.match(renamedState.cleanupError, /package name changed/);
+  // the name is the snake_case of the function's name
+  assert.equal(
+    gen1PackageName(resolveGen1Target(spec({ functionName: "rtdbDeletedV1" })))
+      .split("/")
+      .at(-1),
+    "rtdb_deleted_v1",
+  );
 });

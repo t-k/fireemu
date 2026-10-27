@@ -23,7 +23,7 @@ import {
 } from "../../functions-http/production.mjs";
 import { assembleStage2 } from "./assemble.mjs";
 import { runStage2 } from "./flow.mjs";
-import { requiredStage2Sources } from "./pins.mjs";
+import { requiredInstalledDependencies, requiredStage2Sources } from "./pins.mjs";
 import { STAGE2_HOSTS, bearerFetch, createStage2Budget } from "./wiring.mjs";
 
 const STAGE_DIR = fileURLToPath(new URL("./", import.meta.url));
@@ -68,10 +68,17 @@ export function parsePacketPins(markdown) {
 }
 
 /** A token for the RTDB data plane, refreshed after it expired; every refresh is counted as a `token` request. */
-export function createTokenProvider(adc, budget, { acquire = acquireToken, now = Date.now } = {}) {
+export function createTokenProvider(
+  adc,
+  budget,
+  { acquire = acquireToken, now = Date.now, onToken = () => {} } = {},
+) {
   let token;
   return async () => {
-    if (!token || now() >= token.expiresAt) token = await acquire(adc, budget, "token");
+    if (!token || now() >= token.expiresAt) {
+      token = await acquire(adc, budget, "token");
+      onToken(token.value);
+    }
     return token.value;
   };
 }
@@ -175,6 +182,7 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
       outcome: summary.outcome,
       reasons: result.reasons,
       residual: result.residual,
+      nonce: result.nonce ?? null,
       deployed: result.deployed,
       cleanup: result.cleanup,
       logs: result.logs,
@@ -215,6 +223,23 @@ export async function admitRun({ env, privateRoot, root, deps }) {
     root,
   );
   if (dirty) throw new Error("CV14 needs a clean reviewed commit");
+  // The CLI uploads everything in fixtures/ except node_modules and .git and reads its .env files; an
+  // ignored file there would be deployed without showing in the status above.
+  const ignored = (
+    await deps.git(
+      ["status", "--porcelain", "--ignored", "--", "conformance/src/rtdb-functions/fixtures"],
+      root,
+    )
+  )
+    .split("\n")
+    .filter(
+      (line) => line !== "" && line !== "!! conformance/src/rtdb-functions/fixtures/node_modules/",
+    );
+  if (ignored.length > 0) {
+    throw new Error(
+      `the fixture directory holds files git does not track: ${ignored.length} entry(ies)`,
+    );
+  }
   const packet = await deps.readFile(packetPath);
   assertApproval(await deps.readFile(reviewPath, "utf8"), gitSha, sha256(packet));
   const packetPins = parsePacketPins(packet.toString("utf8"));
@@ -229,7 +254,11 @@ export async function recordStage2() {
   const root = fileURLToPath(new URL("../../..", import.meta.url));
   const adc = await ownerAdc();
   const budget = createStage2Budget();
-  const getToken = createTokenProvider(adc.file, budget);
+  // every access token this process holds is a secret a stored file must not contain
+  const secrets = [];
+  const getToken = createTokenProvider(adc.file, budget, {
+    onToken: (value) => secrets.push(value),
+  });
   const { packetPins } = await admitRun({
     env: process.env,
     privateRoot: PRIVATE_ROOT,
@@ -237,7 +266,10 @@ export async function recordStage2() {
     deps: {
       git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
       readFile,
-      requiredSources: requiredStage2Sources,
+      requiredSources: async () => {
+        await requiredStage2Sources();
+        await requiredInstalledDependencies();
+      },
       adcVerdict: async () => adcPreflight(fetch, await getToken()),
     },
   });
@@ -272,7 +304,7 @@ export async function recordStage2() {
       },
       abort,
       stop,
-      secrets: [],
+      secrets,
     };
     const summary = await executeRun({ environment, runDir, packetPins });
     console.log(JSON.stringify({ outcome: summary.outcome, residual: summary.residual, runDir }));

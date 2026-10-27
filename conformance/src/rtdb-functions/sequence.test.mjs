@@ -10,6 +10,7 @@ import { FIXTURE_HANDLERS, PREFIX } from "./frames.mjs";
 import {
   STEPS,
   applyWrite,
+  buildSteps,
   documentedFires,
   itemTransitions,
   matchFrame,
@@ -325,4 +326,54 @@ test("a frame whose generation is not the handler's, or whose snapshot is not on
   const noId = frameFor("rtdbCreatedV2", "a", null, { n: 1, tag: "one" });
   noId.event.params = {};
   assert.equal(matchFrame(noId).reason, "shape");
+});
+
+// ---- a per-run nonce in every value written ----
+
+const NONCE = "0123456789abcdef";
+
+test("every body that creates data carries the run's nonce, so a stranger's write cannot pose as ours", () => {
+  const steps = buildSteps(NONCE);
+  assert.deepEqual(
+    steps.map((s) => s.id),
+    STEPS.map((s) => s.id),
+  );
+  for (const step of steps) {
+    if (step.method === "PUT") assert.equal(step.body.run, NONCE, step.id);
+  }
+  // the changes of item values are those of the plain sequence, plus the nonce
+  const plain = itemTransitions(STEPS);
+  const marked = itemTransitions(steps);
+  for (const [index, t] of marked.entries()) {
+    assert.equal(t.step, plain[index].step);
+    assert.equal(t.id, plain[index].id);
+    for (const side of ["before", "after"]) {
+      assert.equal(t[side] === null, plain[index][side] === null, `${t.step} ${side}`);
+      if (t[side] !== null) assert.equal(t[side].run, NONCE, `${t.step} ${side}`);
+    }
+    for (const kind of ["create", "update", "delete", "write"]) {
+      assert.equal(
+        documentedFires(kind, t.before, t.after),
+        documentedFires(kind, plain[index].before, plain[index].after),
+        `${t.step} ${kind}`,
+      );
+    }
+  }
+  assert.throws(() => buildSteps("short"), /nonce/);
+  assert.throws(() => buildSteps("ZZZZZZZZZZZZZZZZ"), /nonce/);
+  assert.deepEqual(buildSteps(), STEPS);
+});
+
+test("a frame of a write without the nonce is not attributed to any write of the run", () => {
+  const steps = buildSteps(NONCE);
+  const mine = itemTransitions(steps)[7];
+  const stranger = frameFor("rtdbCreatedV2", "c", null, { n: 1 });
+  assert.deepEqual(matchFrame(stranger, steps), { step: null, candidates: [], reason: "no-match" });
+  assert.equal(matchFrame(frameFor("rtdbCreatedV2", "c", null, mine.after), steps).step, "s8");
+  // with another run's nonce
+  const other = itemTransitions(buildSteps("fedcba9876543210"))[7];
+  assert.equal(
+    matchFrame(frameFor("rtdbCreatedV2", "c", null, other.after), steps).reason,
+    "no-match",
+  );
 });

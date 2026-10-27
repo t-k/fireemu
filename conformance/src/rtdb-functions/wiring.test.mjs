@@ -14,6 +14,7 @@ import {
   STAGE2_HOSTS,
   STAGE2_KINDS,
   STAGE2_LIMITS,
+  STAGE2_WORST,
   bearerFetch,
   bindOps,
   createFormsCollector,
@@ -266,9 +267,9 @@ test("the ceilings are fixed numbers, the Gen2 and cleanup ones below the global
     upload: 120,
     token: 12,
     control: 120,
-    cleanup: 200,
+    cleanup: 260,
   });
-  assert.deepEqual(STAGE2_KINDS, { logs: 250, inventory: 100 });
+  assert.deepEqual(STAGE2_KINDS, { logs: 320, inventory: 100 });
   const budget = createStage2Budget();
   const snapshot = budget.snapshot();
   assert.deepEqual(
@@ -284,4 +285,16 @@ test("the ceilings are fixed numbers, the Gen2 and cleanup ones below the global
     "https://eventarc.googleapis.com",
     "https://pubsub.googleapis.com",
   ]);
+});
+
+test("every ceiling is the worst case counted from the code plus at least a fifth, except the upload one, which is exact", () => {
+  const ceilings = { ...STAGE2_LIMITS, ...STAGE2_KINDS };
+  for (const [kind, worst] of Object.entries(STAGE2_WORST)) {
+    if (kind === "upload") assert.equal(ceilings.upload, worst);
+    else assert.ok(ceilings[kind] >= worst * 1.2, `${kind}: ${ceilings[kind]} for ${worst}`);
+  }
+  // the arithmetic of the comment in wiring.mjs
+  assert.equal(88, 6 + 4 * 6 + 4 * 8 + 4 * 6 + 2);
+  assert.equal(212, 4 * 36 + 4 * 17);
+  assert.equal(243, (7 * 9 + 2 * 3 + 12) * 3);
 });

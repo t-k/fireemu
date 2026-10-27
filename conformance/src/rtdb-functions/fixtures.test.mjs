@@ -7,7 +7,15 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
 
-import { FIXTURE_HANDLERS, FRAME_MARKER, INSTANCE, ITEM_PATH, LOCATION } from "./frames.mjs";
+import {
+  FIXTURE_HANDLERS,
+  FRAME_MARKER,
+  INSTANCE,
+  ITEM_PATH,
+  LOCATION,
+  NAMED_CONTEXT_MEMBERS,
+  NAMED_EVENT_MEMBERS,
+} from "./frames.mjs";
 
 const require = createRequire(import.meta.url);
 const fixtureDir = new URL("./fixtures/", import.meta.url).pathname;
@@ -151,4 +159,10 @@ test("a 1st gen handler prints the context and the snapshot or change", async ()
   assert.equal(frames[0].event.context.extras.auth.type, "object");
   assert.deepEqual(frames[1].event.data.after.value, { n: 2 });
   assert.equal(frames[1].seq > frames[0].seq, true);
+});
+
+test("the member sets the judge knows are the ones the fixture names", () => {
+  const frames = require(`${fixtureDir}frames.js`);
+  assert.deepEqual([...frames.CONTEXT_MEMBERS].toSorted(), [...NAMED_CONTEXT_MEMBERS].toSorted());
+  assert.deepEqual([...frames.EVENT_MEMBERS].toSorted(), [...NAMED_EVENT_MEMBERS].toSorted());
 });

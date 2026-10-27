@@ -875,6 +875,33 @@ describe("delete and read-back answers (T4)", () => {
     assert.ok(b.reasons.includes("no-receipt"));
   });
 
+  it("a sibling's receipt whose PUT was refused does not explain an object that is nevertheless there", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(OTHER);
+    second.receipt(receiptOf(OTHER));
+    putStatus(second, OTHER, 403);
+    const a = await first.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(a.clean, false);
+    assert.ok(a.reasons.includes(`unexplained-object:${OTHER}`), a.reasons.join(","));
+    const b = await second.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(b.clean, false);
+    assert.ok(b.reasons.includes(`unexplained-object:${OTHER}`), b.reasons.join(","));
+    assert.equal(world.count("DELETE"), 0, "an object nobody may delete is left alone");
+    // the same sibling with a PUT that is not yet known explains it: the sibling settles its own receipt
+    const world2 = createFakeGcs();
+    const { uploads: uploads2 } = open(world2, { ledgerPath: join(dir, "second.jsonl") });
+    const c = await uploads2.beginDeploy("program-1:first");
+    const d = await uploads2.beginDeploy("program-1:second");
+    world2.put(OTHER);
+    d.receipt(receiptOf(OTHER));
+    putStatus(d, OTHER, 200);
+    assert.equal((await c.finish({ cliExited: true, exitCode: 1 })).clean, true);
+    assert.equal((await d.finish({ cliExited: true, exitCode: 0 })).clean, true);
+  });
+
   it("a PUT line for an object with no receipt, or in another bucket, owns nothing", async () => {
     const world = createFakeGcs();
     const { uploads } = open(world);

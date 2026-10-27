@@ -9,6 +9,7 @@
 // that was not. A request whose answer is unknown is never sent again.
 
 import { FIXTURE_HANDLERS } from "./frames.mjs";
+import { judgeRun } from "./judge.mjs";
 import { STEPS, documentedFires, itemTransitions, observe } from "./sequence.mjs";
 
 /** How long the run waits: for a step with a documented delivery, for one without, after the last write. */
@@ -22,15 +23,18 @@ export const STAGE2_WINDOWS = Object.freeze({
   propagationMs: 300_000,
 });
 
-const TRANSITIONS = new Map(itemTransitions(STEPS).map((t) => [t.step, t]));
-
-const expectedHandlers = (step) => {
-  const { before, after } = TRANSITIONS.get(step.id);
+const expectedHandlersOf = (transitions) => (step) => {
+  const { before, after } = transitions.get(step.id);
   return FIXTURE_HANDLERS.filter((h) => documentedFires(h.event, before, after)).map((h) => h.name);
 };
 
 export async function runStage2(deps) {
   const { targets, ops, clock, windows, abort, log } = deps;
+  // the writes of this run (with its nonce); the plain sequence when none is given
+  const steps = deps.steps ?? STEPS;
+  const expectedHandlers = expectedHandlersOf(
+    new Map(itemTransitions(steps).map((t) => [t.step, t])),
+  );
   const states = new Map(targets.map((t) => [t.key, { started: false, cleaned: false }]));
   const reasons = [];
   const result = {
@@ -39,9 +43,10 @@ export async function runStage2(deps) {
     residual: false,
     deployed: 0,
     report: null,
+    nonce: deps.nonce ?? null,
     records: {},
     frames: [],
-    logs: { reads: 0, entries: 0, incomplete: false },
+    logs: { reads: 0, entries: 0, incomplete: false, ignored: {} },
     cleanup: { targets: {}, inventory: null, rtdb: null },
   };
   const phase = (name) => log("phase", name);
@@ -58,6 +63,10 @@ export async function runStage2(deps) {
     });
     result.logs.reads += 1;
     result.logs.entries += reply.entries ?? 0;
+    // every read returns the whole window again, so a class is the largest count any read saw
+    for (const [klass, count] of Object.entries(reply.ignored ?? {})) {
+      result.logs.ignored[klass] = Math.max(result.logs.ignored[klass] ?? 0, count);
+    }
     if (!reply.complete && !result.logs.incomplete) {
       result.logs.incomplete = true;
       reasons.push("a Cloud Logging read was incomplete, so the observation is not reliable");
@@ -66,7 +75,9 @@ export async function runStage2(deps) {
   };
 
   const delivered = (step, handlers) => {
-    const reported = observe({ writes, frames: result.frames }).steps.find((s) => s.id === step.id);
+    const reported = observe({ writes, frames: result.frames, steps }).steps.find(
+      (s) => s.id === step.id,
+    );
     return handlers.every((name) => reported.handlers[name].frames >= 1);
   };
 
@@ -112,7 +123,7 @@ export async function runStage2(deps) {
       await clock.sleep(Math.min(3 * windows.pollMs, until - clock.now()));
     }
     let sent = 0;
-    for (const step of STEPS) {
+    for (const step of steps) {
       if (abort.stopped) {
         reasons.push("a signal stopped the sequence");
         break;
@@ -145,7 +156,15 @@ export async function runStage2(deps) {
     reasons.push(error.message);
   }
   if (Object.keys(writes).length > 0 || result.frames.length > 0) {
-    result.report = observe({ writes, frames: result.frames });
+    result.report = observe({ writes, frames: result.frames, steps });
+    reasons.push(
+      ...judgeRun({
+        report: result.report,
+        frames: result.frames,
+        writes,
+        ignored: result.logs.ignored,
+      }),
+    );
   }
 
   // ---- cleanup: only what was started, each part on its own ----

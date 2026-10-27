@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { PROJECT } from "../../functions-http/harness.mjs";
-import { FIXTURE_HANDLERS } from "./frames.mjs";
+import { FIXTURE_HANDLERS, PREFIX } from "./frames.mjs";
 import { runStage2 } from "./flow.mjs";
 import { assembleStage2 } from "./assemble.mjs";
 import { STAGE2_KINDS, STAGE2_LIMITS } from "./wiring.mjs";
@@ -102,7 +102,13 @@ test("a delivery production would not make shows up as such: a dropped event and
   });
   try {
     const result = await run(env);
-    assert.equal(result.outcome, "recorded", result.reasons.join("; "));
+    // production is the oracle, but a delivery that did not come is read by a person before it is recorded
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.residual, false, result.reasons.join("; "));
+    assert.match(
+      result.reasons.join(";"),
+      /documented delivery received no frame: s1 rtdbCreatedV2/,
+    );
     const s1 = result.report.steps.find((s) => s.id === "s1");
     assert.equal(s1.handlers.rtdbCreatedV2.frames, 0);
     assert.equal(s1.handlers.rtdbCreatedV2.matchesDocumented, false);
@@ -245,6 +251,33 @@ test("the 1st gen upload bucket outside the project is never listed, read or del
     assert.ok(env.gcp.gcs.requests.every((request) => !request.url.includes(outside)));
     // the deploy lines were seen (the form is recorded), only nothing was done about them
     assert.equal(env.assembled.forms.summary().rtdbCreatedV1.externalUpload, true);
+  } finally {
+    await finish(env);
+  }
+});
+
+test("a stranger's write to the public item is not taken for the run's own: its frames stay unattributed and the run needs review", async () => {
+  const env = await setup();
+  const original = env.assembled.deps.rtdb.write;
+  env.assembled.deps.rtdb.write = async (step) => {
+    if (step.id === "s8") {
+      // somebody else writes the same path with a value that has no nonce, just before the run does
+      await env.rtdbWorld.fetch(`https://x.test/${PREFIX}/items/c.json`, {
+        method: "PUT",
+        body: JSON.stringify({ n: 1 }),
+        headers: {},
+      });
+    }
+    return original(step);
+  };
+  try {
+    const result = await run(env);
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.match(result.reasons.join(";"), /could not be attributed to a write \(no-match: \d+\)/);
+    assert.ok(result.report.totals.unattributed > 0);
+    assert.equal(result.residual, false, result.reasons.join("; "));
+    // the nonce is in every value of the run
+    assert.match(result.nonce, /^[0-9a-f]{16}$/u);
   } finally {
     await finish(env);
   }

@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 
 import { runStage2 } from "./flow.mjs";
 import { makeWorld, targets } from "./flow.fake.mjs";
-import { STEPS } from "./sequence.mjs";
+import { FIXTURE_HANDLERS } from "./frames.mjs";
+import { STEPS, documentedFires, itemTransitions } from "./sequence.mjs";
 
 /** What the flow must do in that world, written from the specification, not from the code. */
 export function reference({ fault, abortAt, abortIndex }) {
@@ -146,7 +147,20 @@ export async function checkWorld(world, label) {
     (model.rtdbAttempted && world.fault.rtdb?.closed === false) ||
     world.fault.uploadsOpen === true;
   assert.equal(result.residual, residual, `residual: ${label}`);
+  // a documented delivery that a silent handler never made, for a write that was answered ok
+  const transitions = Object.fromEntries(itemTransitions(STEPS).map((t) => [t.step, t]));
+  const silent = world.fault.silent ?? new Set();
+  const missingDelivery = model.written
+    .filter((id) => (world.fault.answers?.[id]?.outcome ?? "ok") === "ok")
+    .some((id) =>
+      FIXTURE_HANDLERS.some(
+        (h) =>
+          silent.has(h.name) &&
+          documentedFires(h.event, transitions[id].before, transitions[id].after),
+      ),
+    );
   const mustReview =
+    missingDelivery ||
     model.reasons ||
     residual ||
     (world.fault.logsIncomplete === true && events.length > 0 && w.events.includes("logs"));

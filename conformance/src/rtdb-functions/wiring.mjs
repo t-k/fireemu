@@ -18,7 +18,23 @@ import { assertGen1Absent, cleanupGen1, deployGen1, readDeployedGen1 } from "./g
 import { INVENTORY_HOSTS } from "./inventory.mjs";
 import { LOGGING_HOST, listRequest, parseEntries } from "./logs.mjs";
 
-/** The request ceilings of one run, counted from the code (see wiring.test.mjs and the integration test). */
+/**
+ * What one run can use at most, counted from the code: control (preflight 6, 1st gen absence and
+ * collision reads 4 x 6, 2nd gen absence 4 x 8, record reads 4 x 6, grants and IAM after 2) = 88;
+ * cleanup (2nd gen 4 x 36, 1st gen 4 x 17: absence 1, delete 1, 10 polls, read-back 1, two packages and
+ * two version lists 4) = 212; logs (7 documented steps x 9 polls, 2 quiet steps x 3, 12 in the final
+ * window = 81 reads of at most 3 pages) = 243; inventory (3 takes of 15, 4 trigger deletes of up to 6,
+ * 4 topic deletes) = 73; upload (8 x 15) = 120.
+ */
+export const STAGE2_WORST = Object.freeze({
+  control: 88,
+  cleanup: 212,
+  logs: 243,
+  inventory: 73,
+  upload: 120,
+});
+
+/** The request ceilings of one run: the worst case with at least a fifth to spare (upload is exact). */
 export const STAGE2_LIMITS = Object.freeze({
   invocation: 0,
   auth: 0,
@@ -27,9 +43,9 @@ export const STAGE2_LIMITS = Object.freeze({
   upload: 120,
   token: 12,
   control: 120,
-  cleanup: 200,
+  cleanup: 260,
 });
-export const STAGE2_KINDS = Object.freeze({ logs: 250, inventory: 100 });
+export const STAGE2_KINDS = Object.freeze({ logs: 320, inventory: 100 });
 export const STAGE2_HOSTS = Object.freeze([LOGGING_HOST, ...INVENTORY_HOSTS]);
 
 export const createStage2Budget = () => createBudget({ ...STAGE2_LIMITS }, { ...STAGE2_KINDS });

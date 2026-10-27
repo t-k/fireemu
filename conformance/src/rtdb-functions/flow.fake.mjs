@@ -154,9 +154,26 @@ export function makeWorld(options = {}) {
           const [handler, step] = key.split(":");
           if (seenFrames.includes(key)) continue;
           seenFrames.push(key);
-          fresh.push(frameFor(handler, step));
+          const frame = frameFor(handler, step);
+          if (options.unnamedMember) {
+            if (frame.generation === 1) frame.event.context.contextKeys = ["eventId", "auth"];
+            else frame.event.eventKeys = ["id", "location"];
+          }
+          fresh.push(frame);
         }
-        return { frames: fresh, entries: fresh.length, ignored: {}, complete: true };
+        if (options.strangerFrame && !seenFrames.includes("stranger")) {
+          seenFrames.push("stranger");
+          // the same path and kind of change as a real one, with a value no write of the run made
+          const stranger = frameFor("rtdbWrittenV2", "s1");
+          stranger.event.data.after.value = { n: 99 };
+          fresh.push(stranger);
+        }
+        return {
+          frames: fresh,
+          entries: fresh.length,
+          ignored: options.ignoredCounts ?? {},
+          complete: true,
+        };
       },
     },
     uploads: {

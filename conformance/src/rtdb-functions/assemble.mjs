@@ -4,6 +4,7 @@
 // test builds it from fakes. Everything between is this module, so the entry cannot differ from what the
 // test ran.
 
+import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
 
 import { LOCATION } from "./frames.mjs";
@@ -17,6 +18,7 @@ import { STAGE2_WINDOWS } from "./flow.mjs";
 import { diffPairs, readProjectIam } from "./iam.mjs";
 import { ownedEventarcNames, removeLeftovers, takeInventory } from "./inventory.mjs";
 import { createRtdb } from "./rtdb.mjs";
+import { buildSteps } from "./sequence.mjs";
 import { TARGETS } from "./targets.mjs";
 import {
   STAGE2_LIMITS,
@@ -42,6 +44,7 @@ export function assembleStage2({
   secrets = [],
   stop = {},
   programId = "cv14",
+  nonce = randomBytes(8).toString("hex"),
 }) {
   const uploads = openSourceUploads({
     ledgerPath: join(runDir, "owned-uploads.jsonl"),
@@ -73,6 +76,7 @@ export function assembleStage2({
     stop,
     sleep: clock.sleep,
     now: clock.now,
+    nonce,
   });
   const grants = {
     before: null,
@@ -82,6 +86,8 @@ export function assembleStage2({
   };
   const deps = {
     targets: TARGETS,
+    steps: buildSteps(nonce),
+    nonce,
     ops,
     // only a 2nd gen record names an Eventarc trigger and topic
     ownedNames: (record, spec) =>

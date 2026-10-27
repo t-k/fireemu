@@ -175,9 +175,11 @@ export function openSourceUploads({
   }
   const state = openOwnership({ path: ledgerPath, runId });
   const started = new Set();
-  // The objects any deploy of this run holds a receipt for: a deploy that finishes later than its siblings
-  // started finds their objects in the bucket, and they are not unexplained.
-  const claimed = new Set();
+  // The receipts of every deploy of this run, by the exact object each one named: a deploy that finishes
+  // later than its siblings started finds their objects in the bucket. Such an object is explained only
+  // while the sibling's own PUT is not a definite refusal (a refused create made nothing, so an object
+  // that is there anyway belongs to nobody). Deleting stays with the deploy whose receipt named it.
+  const claimed = new Map();
 
   async function dispatch(method, url) {
     let reply;
@@ -292,12 +294,13 @@ export function openSourceUploads({
       }
       const name = `${bucket}/${candidate.object}`;
       try {
-        claimed.add(candidate.object);
-        receipts.set(candidate.object, {
+        const entry = {
           name,
           statuses: [],
           ticket: beginCreate(state, { name, transport: "rest" }),
-        });
+        };
+        receipts.set(candidate.object, entry);
+        claimed.set(candidate.object, entry);
       } catch {
         faults.add("receipt-not-journaled");
       }
@@ -424,8 +427,8 @@ export function openSourceUploads({
         }
         for (const name of [...after.names].toSorted()) {
           const entry = receipts.get(name);
-          const explained =
-            entry === undefined ? claimed.has(name) : putClass(entry.statuses) !== "refused";
+          const holder = entry ?? claimed.get(name);
+          const explained = holder !== undefined && putClass(holder.statuses) !== "refused";
           if (!baseline.has(name) && !explained) reasons.push(`unexplained-object:${name}`);
         }
         // Bookkeeping only: this name is no resource, so the answer is not a production status.

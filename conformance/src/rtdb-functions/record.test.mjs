@@ -75,6 +75,19 @@ test("the token provider refreshes after the token expired and counts every refr
   nowMs += 20_000;
   assert.equal(await provider(), "tok-2");
   assert.deepEqual(seen, ["token", "token"]);
+  // every token the provider gets is handed to the caller, which keeps it out of stored files
+  const known = [];
+  const watched = createTokenProvider({ file: 1 }, budget, {
+    acquire,
+    now: () => nowMs,
+    onToken: (v) => known.push(v),
+  });
+  await watched();
+  await watched();
+  assert.equal(known.length, 1);
+  nowMs += 20_000;
+  await watched();
+  assert.deepEqual(known, ["tok-3", "tok-4"]);
 });
 
 test("the cost is the FUNCTIONS-HTTP constant per deploy, and the exit code tells recorded, review and residue apart", () => {
@@ -216,13 +229,19 @@ const PINS = JSON.stringify({ baselineRulesSha256: SHA });
 const PACKET = Buffer.from(`# Packet\n\n\`\`\`json cv14-pins\n${PINS}\n\`\`\`\n`);
 const packetSha = createHash("sha256").update(PACKET).digest("hex");
 
+const gitWithIgnored = (ignored) => async (args) =>
+  args[0] === "rev-parse" ? `${GIT}\n` : args.includes("--ignored") ? ignored : "";
+
 /** An admission whose outside effects are all fakes; `over` replaces one of them. */
 function admission(over = {}) {
   const calls = [];
   const deps = {
     git: async (args) => {
-      calls.push(`git ${args[0]}`);
-      return args[0] === "rev-parse" ? `${GIT}\n` : "";
+      calls.push(`git ${args.includes("--ignored") ? "ignored" : args[0]}`);
+      if (args[0] === "rev-parse") return `${GIT}\n`;
+      return args.includes("--ignored")
+        ? "!! conformance/src/rtdb-functions/fixtures/node_modules/\n"
+        : "";
     },
     readFile: async (path) => {
       calls.push(`read ${path.split("/").at(-1)}`);
@@ -248,6 +267,7 @@ test("an admission needs private paths, a clean tree, the approval, the pins, th
   assert.deepEqual(ok.calls, [
     "git rev-parse",
     "git status",
+    "git ignored",
     "read packet.md",
     "read review.md",
     "sources",
@@ -265,6 +285,28 @@ test("an admission needs private paths, a clean tree, the approval, the pins, th
         },
       },
       /clean reviewed commit/,
+    ],
+    [
+      { deps: { git: gitWithIgnored("!! conformance/src/rtdb-functions/fixtures/.env.local\n") } },
+      /files git does not track: 1 entry/,
+    ],
+    [
+      {
+        deps: {
+          git: gitWithIgnored(
+            "!! conformance/src/rtdb-functions/fixtures/node_modules/\n!! conformance/src/rtdb-functions/fixtures/.env\n",
+          ),
+        },
+      },
+      /files git does not track: 1 entry/,
+    ],
+    [
+      {
+        deps: {
+          git: gitWithIgnored("!! conformance/src/rtdb-functions/fixtures/node_modules/x/\n"),
+        },
+      },
+      /files git does not track/,
     ],
     [
       {

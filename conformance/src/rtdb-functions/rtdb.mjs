@@ -16,11 +16,15 @@ export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation
 export const ANON_CAPS = { observe: 2, cleanup: 0, mutations: 2 };
 const PROPAGATION_MS = 120_000;
 
-/** Nothing is readable or writable, except the one item the unauthenticated writes go to. */
-export function rulesFor(prefix) {
-  return {
-    rules: { ".read": false, ".write": false, [prefix]: { items: { c: { ".write": true } } } },
-  };
+/**
+ * Nothing is readable or writable, except the one item the unauthenticated writes go to, and that one
+ * only with a value that carries the run's nonce (a stranger who writes there cannot pose as the run).
+ */
+export function rulesFor(prefix, nonce) {
+  const item = nonce
+    ? { ".write": true, ".validate": `newData.child('run').val() === '${nonce}'` }
+    : { ".write": true };
+  return { rules: { ".read": false, ".write": false, [prefix]: { items: { c: item } } } };
 }
 
 /**
@@ -38,6 +42,7 @@ export function createRtdb({
   secrets = [],
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
+  nonce,
 }) {
   const admin = adminClient({ fetchImpl: adminFetch, headers, log, stop, secrets, caps: CAPS });
   const anonymous = adminClient({ fetchImpl, headers: {}, log, stop, secrets, caps: ANON_CAPS });
@@ -47,7 +52,7 @@ export function createRtdb({
     caps: CAPS,
     propagationMs: PROPAGATION_MS,
     fireGraceMs: 0,
-    rulesFor,
+    rulesFor: (prefix) => rulesFor(prefix, nonce),
   });
   const options = { mode: "production", packet, prefix: PREFIX };
   const run = {

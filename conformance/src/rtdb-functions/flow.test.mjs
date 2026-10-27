@@ -144,10 +144,12 @@ test("a refused write is an observation: the sequence goes on", async () => {
   assert.equal(result.outcome, "recorded", result.reasons.join(";"));
 });
 
-test("a missing delivery is a finding, not a reason: the run is recorded and the report says what was not delivered", async () => {
+test("a missing delivery is kept in the report and makes the run need review, not call it recorded", async () => {
   const w = makeWorld({ silent: new Set(["rtdbCreatedV2"]) });
   const result = await runStage2(w.deps);
-  assert.equal(result.outcome, "recorded", result.reasons.join(";"));
+  assert.equal(result.outcome, "stopped-needs-review");
+  assert.equal(result.residual, false);
+  assert.match(result.reasons.join(";"), /documented delivery received no frame: s1 rtdbCreatedV2/);
   const s1 = result.report.steps.find((s) => s.id === "s1");
   assert.equal(s1.handlers.rtdbCreatedV2.frames, 0);
   assert.equal(s1.handlers.rtdbCreatedV2.matchesDocumented, false);
@@ -155,6 +157,42 @@ test("a missing delivery is a finding, not a reason: the run is recorded and the
     w.events.filter((e) => e === "logs").length > 10,
     "it kept reading for the missing frames",
   );
+});
+
+test("the judge's findings each end the run needing review: unattributed frames, dropped log entries, no frame, unnamed members", async () => {
+  const cases = [
+    [{ strangerFrame: true }, /1 frame\(s\) could not be attributed to a write \(no-match: 1\)/],
+    [{ ignoredCounts: { unparsed: 2 } }, /dropped by the parser: unparsed 2/],
+    [{ ignoredCounts: { unknownHandler: 1 } }, /unknownHandler 1/],
+    [{ ignoredCounts: { foreignOrigin: 4 } }, /foreignOrigin 4/],
+    [{ silent: new Set(FIXTURE_HANDLERS.map((h) => h.name)) }, /no frame was read/],
+    [{ unnamedMember: true }, /members the fixture did not name: auth, location/],
+  ];
+  for (const [options, pattern] of cases) {
+    const result = await runStage2(makeWorld(options).deps);
+    assert.equal(
+      result.outcome,
+      "stopped-needs-review",
+      JSON.stringify(options, (_k, v) => (v instanceof Set ? [...v] : v)),
+    );
+    assert.match(result.reasons.join(";"), pattern);
+    assert.equal(result.residual, false);
+  }
+  // a note the parser dropped that is harmless does not count
+  const harmless = await runStage2(makeWorld({ ignoredCounts: { notFrame: 3, notTyped: 1 } }).deps);
+  assert.equal(harmless.outcome, "recorded", harmless.reasons.join(";"));
+});
+
+test("the ignored counts of the log reads are kept in the result, the largest of any read", async () => {
+  const w = makeWorld({ ignoredCounts: { unparsed: 3, notFrame: 2 } });
+  const result = await runStage2(w.deps);
+  assert.deepEqual(result.logs.ignored, { unparsed: 3, notFrame: 2 });
+});
+
+test("nothing is judged when no write was answered ok", async () => {
+  const w = makeWorld({ failDeploy: "rtdbCreatedV1" });
+  const result = await runStage2(w.deps);
+  assert.ok(!result.reasons.join(";").includes("no frame was read"));
 });
 
 test("the wait for a step is bounded and the run waits a final window after the last write", async () => {

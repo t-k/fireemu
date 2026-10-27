@@ -77,4 +77,4 @@ function report(frame) {
   return Promise.resolve();
 }
 
-module.exports = { MARKER, data, report, v1Context, v2Event };
+module.exports = { MARKER, CONTEXT_MEMBERS, EVENT_MEMBERS, data, report, v1Context, v2Event };

@@ -8,29 +8,50 @@ import { isDeepStrictEqual } from "node:util";
 
 import { FIXTURE_HANDLERS, PREFIX } from "./frames.mjs";
 
-/** Nine writes under the run prefix; the last two carry no token (the UNAUTHENTICATED context). */
-export const STEPS = Object.freeze(
-  [
-    ["s1", "create item a", "PUT", "items/a", { n: 1, tag: "one" }, "admin"],
-    ["s2", "update a child of a", "PATCH", "items/a", { n: 2 }, "admin"],
-    ["s3", "write the same value again (no-op)", "PUT", "items/a", { n: 2, tag: "one" }, "admin"],
-    ["s4", "delete item a", "DELETE", "items/a", undefined, "admin"],
+const NONCE = /^[0-9a-f]{16}$/u;
+
+/**
+ * Nine writes under the run prefix; the last two carry no token (the UNAUTHENTICATED context). With a
+ * nonce, every body that creates data holds it as `run`: the item `c` is writable by anybody for the
+ * length of the run, and a frame of a stranger's write must not pose as ours.
+ */
+export function buildSteps(nonce) {
+  if (nonce !== undefined && !NONCE.test(nonce)) throw new Error("the nonce is 16 hex characters");
+  const mark = (body) =>
+    nonce === undefined || body === undefined ? body : { ...body, run: nonce };
+  return Object.freeze(
     [
-      "s5",
-      "create item b with a nested object",
-      "PUT",
-      "items/b",
-      { n: 1, nested: { x: 1, y: { z: 1 } } },
-      "admin",
-    ],
-    ["s6", "update a nested child of b", "PATCH", "items/b/nested", { x: 2 }, "admin"],
-    ["s7", "write a sibling path with no handler", "PUT", "other/x", { n: 1 }, "admin"],
-    ["s8", "create item c without a token", "PUT", "items/c", { n: 1 }, "anonymous"],
-    ["s9", "delete item c without a token", "DELETE", "items/c", undefined, "anonymous"],
-  ].map(([id, label, method, path, body, context]) =>
-    Object.freeze({ id, label, method, path: `${PREFIX}/${path}`, body, context }),
-  ),
-);
+      ["s1", "create item a", "PUT", "items/a", mark({ n: 1, tag: "one" }), "admin"],
+      ["s2", "update a child of a", "PATCH", "items/a", { n: 2 }, "admin"],
+      [
+        "s3",
+        "write the same value again (no-op)",
+        "PUT",
+        "items/a",
+        mark({ n: 2, tag: "one" }),
+        "admin",
+      ],
+      ["s4", "delete item a", "DELETE", "items/a", undefined, "admin"],
+      [
+        "s5",
+        "create item b with a nested object",
+        "PUT",
+        "items/b",
+        mark({ n: 1, nested: { x: 1, y: { z: 1 } } }),
+        "admin",
+      ],
+      ["s6", "update a nested child of b", "PATCH", "items/b/nested", { x: 2 }, "admin"],
+      ["s7", "write a sibling path with no handler", "PUT", "other/x", mark({ n: 1 }), "admin"],
+      ["s8", "create item c without a token", "PUT", "items/c", mark({ n: 1 }), "anonymous"],
+      ["s9", "delete item c without a token", "DELETE", "items/c", undefined, "anonymous"],
+    ].map(([id, label, method, path, body, context]) =>
+      Object.freeze({ id, label, method, path: `${PREFIX}/${path}`, body, context }),
+    ),
+  );
+}
+
+/** The sequence without a nonce (the pure functions and their tests); a run builds its own with `buildSteps`. */
+export const STEPS = buildSteps();
 
 const HANDLERS = new Map(FIXTURE_HANDLERS.map((handler) => [handler.name, handler]));
 

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { FIXTURE_PINS, requiredStage2Sources } from "./pins.mjs";
+import { FIXTURE_PINS, requiredInstalledDependencies, requiredStage2Sources } from "./pins.mjs";
 
 const here = (file) => new URL(`./${file}`, import.meta.url);
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -41,4 +41,56 @@ test("a changed file, or another Firebase CLI version, is refused", async () => 
       new RegExp(`reviewed source changed: ${file.replace(/[./]/gu, "\\$&")}`),
     );
   }
+});
+
+test("the installed fixture dependencies are the pinned versions, and a missing or other one is refused", async () => {
+  const installed =
+    (overrides = {}) =>
+    async (file) => {
+      const packages = {
+        "fixtures/node_modules/firebase-functions/package.json": {
+          name: "firebase-functions",
+          version: "7.3.2",
+        },
+        "fixtures/node_modules/firebase-admin/package.json": {
+          name: "firebase-admin",
+          version: "14.3.0",
+        },
+        ...overrides,
+      };
+      if (!(file in packages) || packages[file] === null) throw new Error("ENOENT");
+      return Buffer.from(JSON.stringify(packages[file]));
+    };
+  await assert.doesNotReject(() => requiredInstalledDependencies(installed()));
+  await assert.rejects(
+    () =>
+      requiredInstalledDependencies(
+        installed({ "fixtures/node_modules/firebase-functions/package.json": null }),
+      ),
+    /firebase-functions is not installed/,
+  );
+  await assert.rejects(
+    () =>
+      requiredInstalledDependencies(
+        installed({
+          "fixtures/node_modules/firebase-admin/package.json": {
+            name: "firebase-admin",
+            version: "14.3.1",
+          },
+        }),
+      ),
+    /firebase-admin 14\.3\.0 is required/,
+  );
+  await assert.rejects(
+    () =>
+      requiredInstalledDependencies(
+        installed({
+          "fixtures/node_modules/firebase-functions/package.json": {
+            name: "other",
+            version: "7.3.2",
+          },
+        }),
+      ),
+    /firebase-functions 7\.3\.2 is required/,
+  );
 });

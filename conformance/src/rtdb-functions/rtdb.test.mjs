@@ -194,3 +194,23 @@ test("a log row that cannot be written for an admin write leaves the RTDB not cl
   assert.equal(closed.state.rules, "baseline");
   assert.equal(closed.closed, false);
 });
+
+test("with a nonce the Rules accept only a value that carries it, at the one item, and the nonce is in the Rules the RTDB gets", async () => {
+  const nonce = "0123456789abcdef";
+  assert.deepEqual(rulesFor(PREFIX, nonce), {
+    rules: {
+      ".read": false,
+      ".write": false,
+      [PREFIX]: {
+        items: {
+          c: { ".write": true, ".validate": "newData.child('run').val() === '0123456789abcdef'" },
+        },
+      },
+    },
+  });
+  const w = fakeWorld();
+  const rtdb = make(w, { nonce });
+  await rtdb.setup();
+  assert.deepEqual(JSON.parse(w.rules), rulesFor(PREFIX, nonce));
+  await rtdb.cleanup();
+});

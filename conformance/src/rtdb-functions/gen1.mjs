@@ -9,6 +9,7 @@
 import { resolveTarget } from "../../functions-http/harness.mjs";
 
 const FUNCTION_HOST = "https://cloudfunctions.googleapis.com";
+const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const sleepFor = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 const RESOLVED = new WeakSet();
 const OPERATION_NAME = /^operations\/[A-Za-z0-9_-]{1,256}$/u;
@@ -40,6 +41,39 @@ const resourceOf = ({ project, region, functionName }) =>
 
 export const gen1FunctionUrl = (target) =>
   `${FUNCTION_HOST}/v1/${resourceOf(resolveGen1Target(target))}`;
+
+/**
+ * The Artifact Registry package of a 1st gen function's image: the snake_case of its name alone (FE
+ * stage 2 recorded `fs_created_v1` and `fs_created_v1%2Fcache` for fsCreatedV1), unlike a 2nd gen
+ * package, which carries the project and the region.
+ */
+export function gen1PackageName(target) {
+  const { project, region, functionName } = resolveGen1Target(target);
+  const id = functionName.replace(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`);
+  return `projects/${project}/locations/${region}/repositories/gcf-artifacts/packages/${id}`;
+}
+
+/**
+ * After the function delete the service removes its image; both packages are read by their exact names
+ * (a readable 404 is absent, the repository is never listed) and a version left in either is a residue.
+ */
+export async function assertNoGen1ImageResidue(control, target, kind) {
+  const base = gen1PackageName(target);
+  for (const name of [base, `${base}%2Fcache`]) {
+    const found = await control("GET", `${ARTIFACT_HOST}/v1/${name}`, undefined, kind, [200, 404]);
+    if (found.status === 404) continue;
+    if (found.value?.name !== name) throw new Error("Artifact Registry package name changed");
+    const versions = await control(
+      "GET",
+      `${ARTIFACT_HOST}/v1/${name}/versions?pageSize=1000&fields=versions.name,nextPageToken`,
+      undefined,
+      kind,
+    );
+    if (versions.value?.nextPageToken || (versions.value?.versions ?? []).length > 0) {
+      throw new Error(`owned image version remains in ${name.split("/packages/")[1]}`);
+    }
+  }
+}
 
 /** The function must not exist before the deploy. */
 export async function assertGen1Absent(control, target, kind = "control") {
@@ -157,6 +191,7 @@ export async function cleanupGen1(
     }
     const after = await control("GET", url, undefined, "cleanup", [200, 404]);
     if (after.status !== 404) throw new Error("function remains after delete");
+    await assertNoGen1ImageResidue(control, spec, "cleanup");
     if (state.upload) {
       const uploads = await state.upload.finish({
         cliExited: state.deployTrack?.exited === true,

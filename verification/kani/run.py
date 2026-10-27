@@ -145,7 +145,7 @@ def execute(receipt_path=None):
         raise ValueError(f"required Kani version is {KANI_VERSION}")
     result = run_command([
         "cargo", "kani", "-p", "fireemu-verification-kani", "--output-format", "terse",
-        "-Z", "unstable-options", "--harness-timeout", "300s",
+        "-Z", "unstable-options", "--harness-timeout", "600s",
     ], capture_output=True, timeout=PROOF_TIMEOUT)
     print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)

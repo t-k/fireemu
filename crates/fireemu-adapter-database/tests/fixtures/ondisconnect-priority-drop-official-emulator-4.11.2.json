@@ -1,0 +1,1145 @@
+{
+ "provenance": "Recorded against firebase-database-emulator v4.11.2 (the jar firebase-tools 15.28.2 runs) with raw realtime frames by docs.local/runs/rtdb-s5/probes/record-priority-drop.mjs, 2026-10-27. Review E4 and F1–F8 were recorded separately against the pinned jar. Production (RTDB-S5-20261027-01, two rounds) confirmed the first case only: the whole onDisconnect update is dropped.",
+ "cases": [
+  {
+   "name": "production shape: value with a priority, cancel of a child, another write",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "the write registered before the split is dropped too",
+   "connections": [
+    [
+     [
+      "o",
+      "t",
+      1
+     ],
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "an unrelated registration after the split is dropped",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "u",
+      2
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "another connection still fires",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ],
+    [
+     [
+      "o",
+      "v",
+      3
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:v"
+   ]
+  },
+  {
+   "name": "a second cancel of the same child changes nothing",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a cancel of the other child leaves the update suppressed while priority remains",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/c"
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a later child write stays suppressed while the retained priority remains",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "s/n",
+      5
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a cancel below a leaf child splits too",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b/x"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a string priority",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": "p",
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a priority on a nested value",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       "a": {
+        ".priority": 1,
+        "x": 1,
+        "y": 2
+       },
+       "k": 1
+      }
+     ],
+     [
+      "oc",
+      "s/a/x"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a nested value with a priority whose cancel would empty it",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       "a": {
+        ".priority": 1,
+        "x": 1
+       },
+       "k": 1
+      }
+     ],
+     [
+      "oc",
+      "s/a/x"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a priority and one child, the child cancelled",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "five children and a priority",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "a": 1,
+       "b": 1,
+       "c": 1,
+       "d": 1,
+       "e": 1
+      }
+     ],
+     [
+      "oc",
+      "s/a"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "a cancel of the value heals it: the rest fires",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "a cancel at the root heals it: the rest fires",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      ""
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "registering the value again heals it",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "s",
+      {
+       "z": 1
+      }
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "a healed value splits normally the next time",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "s",
+      {
+       "b": 1,
+       "c": 2,
+       "d": 3
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "m:s{c,d}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "control: a cancel of a missing key leaves the value whole",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/zz"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "control: a cancel of the priority itself splits and drops the priority",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "m:s{b,c}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "control: a leaf with a priority is not split",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".value": 1,
+       ".priority": 2
+      }
+     ],
+     [
+      "oc",
+      "s/q"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "control: a value without a priority splits",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "m:s{c}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "control: a cancel of the whole prioritized value",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "review E4: cancel priority after split",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t"
+   ],
+   "order": [
+    "m:s{c}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F1",
+   "connections": [
+    [
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F2",
+   "connections": [
+    [
+     [
+      "o",
+      "x",
+      {
+       "a": 1
+      }
+     ],
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F3",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/c"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F4",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "s/n",
+      5
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "m:s{c,n}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F5",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority/x"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F6",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "s/.priority",
+      2
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F7",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       "a": {
+        ".priority": 1,
+        "x": 1,
+        "y": 2
+       },
+       "k": 1
+      }
+     ],
+     [
+      "oc",
+      "s/a/x"
+     ],
+     [
+      "oc",
+      "s/a/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "m:s{a/y,k}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F8",
+   "connections": [
+    [
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "x/a",
+      2
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  }
+ ]
+}

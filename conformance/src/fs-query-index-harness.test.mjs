@@ -416,6 +416,17 @@ test("transient answers are indeterminate; a repeated production 5xx is behavior
   assert.equal(classify({ production: { status: 429 }, fireemu: ok }), "INDETERMINATE");
   assert.equal(classify({ production: { status: 500 }, fireemu: { status: 500 } }), "MATCH");
   assert.equal(classify({ production: { status: 500 }, fireemu: { status: 200 } }), "MISMATCH");
+  // A row marked `unknown` (the recorder's own client failed) is neither: whatever fireemu
+  // answered, equal or not, and also when fireemu has no answer.
+  const client = { transport: "grpc", code: 13, unknown: "client failure" };
+  assert.equal(classify({ production: client, fireemu: { ...client } }), "UNKNOWN");
+  assert.equal(
+    classify({ production: client, fireemu: { transport: "grpc", code: 3 } }),
+    "UNKNOWN",
+  );
+  assert.equal(classify({ production: client, fireemu: undefined }), "UNKNOWN");
+  assert.equal(classify({ stale: true, production: client, fireemu: ok }), "STALE_FIXTURE");
+  assert.equal(classify({ production: undefined, fireemu: client }), "MISSING_FIXTURE");
 });
 
 test("index keys ignore an implied trailing __name__ only", () => {

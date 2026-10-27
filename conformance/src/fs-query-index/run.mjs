@@ -913,6 +913,9 @@ async function runLocal(programs) {
 export function classify({ stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
+  // A row the recorder marked `unknown` (its own client failed before the request left, so
+  // production never answered) is neither a match nor a mismatch, whatever fireemu answered.
+  if (production.unknown !== undefined) return "UNKNOWN";
   if (fireemu === undefined) return "MISSING";
   // A server error production returned identically in both recordings (no `second` row) is
   // behavior, not noise: compare it, and fireemu's own 5xx with it.

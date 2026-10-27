@@ -2405,13 +2405,20 @@ for(let i=0;i<boundaries.length-1;i++) {
 /// hears first, in registration order. When a connection has one, its other listens follow in
 /// path order, by the path's text (`q10` before `q9`, as the jar does, not in key order).
 /// Otherwise each listen hears when its first entry comes up in the write's order, a listen above
-/// an entry before the one at it. Other changes keep the registration order. This is one sort
+/// an entry before the one at it, and listens of one entry in path order by text. A single written path is heard in path order by text. This is one sort
 /// over the listens of all connections, so the listens at or above the base of every connection
 /// come before the others of any; each connection has its own queue of frames, so only the order
 /// among one connection's frames can be seen, and that is the order above.
 fn in_hearing_order<'a>(mut listens: Vec<&'a mut Listen>, change: &Change) -> Vec<&'a mut Listen> {
-    let Change::Patch { base, entries } = change else {
-        return listens;
+    let (base, entries) = match change {
+        Change::Patch { base, entries } => (base, entries),
+        Change::Put { .. } => {
+            // One written path: the listens at, above and below it hear in path order by text, so a listen
+            // above another comes first (probed with raw frames on the official emulator for a REST PUT, a
+            // realtime put and an onDisconnect value; production has not observed it).
+            listens.sort_by_cached_key(|listen| listen.path.keys().to_vec());
+            return listens;
+        }
     };
     let written: Vec<Path> = entries
         .iter()
@@ -2434,7 +2441,7 @@ fn in_hearing_order<'a>(mut listens: Vec<&'a mut Listen>, change: &Change) -> Ve
                 .iter()
                 .position(|path| listen.path.contains(path) || path.contains(&listen.path))
                 .unwrap_or(usize::MAX);
-            (2, rank, Vec::new(), listen.path.depth())
+            (2, rank, listen.path.keys().to_vec(), 0)
         }
     });
     listens

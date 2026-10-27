@@ -1,0 +1,2358 @@
+{
+ "provenance": "Recorded against firebase-database-emulator v4.11.2 (the jar firebase-tools 15.28.2 runs) with raw realtime frames by docs.local/runs/rtdb-root-order/record-root-order-cases.mjs, 2026-10-27. Production has not observed these shapes.",
+ "cases": [
+  {
+   "name": "rest-put at the root, listens flat, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens flat, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens nested, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens nested, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens text, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens text, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens childFirst, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens childFirst, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens withBase, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens withBase, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens numeric, body empty",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "rest-put at the root, listens numeric, body full",
+   "write": {
+    "kind": "rest-put",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens flat, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens flat, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens nested, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens nested, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens text, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens text, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens childFirst, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens childFirst, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens withBase, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens withBase, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens numeric, body empty",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "realtime-p at the root, listens numeric, body full",
+   "write": {
+    "kind": "realtime-p",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens flat, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens flat, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens nested, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens nested, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens text, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens text, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:q9",
+    "d:qb"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens childFirst, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens childFirst, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens withBase, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens withBase, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "d:",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens numeric, body empty",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "ondisconnect at the root, listens numeric, body full",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:10",
+    "d:10/x",
+    "d:9",
+    "d:a"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens flat, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "rest-patch at the root, listens flat, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens nested, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": []
+  },
+  {
+   "name": "rest-patch at the root, listens nested, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens text, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": []
+  },
+  {
+   "name": "rest-patch at the root, listens text, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:qb",
+    "d:q9"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens childFirst, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": []
+  },
+  {
+   "name": "rest-patch at the root, listens childFirst, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens withBase, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "m:{z}"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens withBase, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "m:{s,9,t,u,a,10,v,b,c,q10,qb,q9}",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "rest-patch at the root, listens numeric, body empty",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": []
+  },
+  {
+   "name": "rest-patch at the root, listens numeric, body full",
+   "write": {
+    "kind": "rest-patch",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:9",
+    "d:a",
+    "d:10",
+    "d:10/x"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens flat, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": []
+  },
+  {
+   "name": "realtime-m at the root, listens flat, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s",
+    "t",
+    "u",
+    "v",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t",
+    "d:u",
+    "d:v"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens nested, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": []
+  },
+  {
+   "name": "realtime-m at the root, listens nested, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "b",
+    "a/x",
+    "a",
+    "c/d/e",
+    "c",
+    "c/d"
+   ],
+   "order": [
+    "d:a",
+    "d:a/x",
+    "d:b",
+    "d:c",
+    "d:c/d",
+    "d:c/d/e"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens text, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": []
+  },
+  {
+   "name": "realtime-m at the root, listens text, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "q10",
+    "q9",
+    "qb",
+    "q10/x"
+   ],
+   "order": [
+    "d:q10",
+    "d:q10/x",
+    "d:qb",
+    "d:q9"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens childFirst, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": []
+  },
+  {
+   "name": "realtime-m at the root, listens childFirst, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens withBase, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "m:{z}"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens withBase, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "t",
+    "s/n"
+   ],
+   "order": [
+    "m:{s,9,t,u,a,10,v,b,c,q10,qb,q9}",
+    "d:s",
+    "d:s/n",
+    "d:t"
+   ]
+  },
+  {
+   "name": "realtime-m at the root, listens numeric, body empty",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "z": 1
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": []
+  },
+  {
+   "name": "realtime-m at the root, listens numeric, body full",
+   "write": {
+    "kind": "realtime-m",
+    "path": "",
+    "data": {
+     "9": 1,
+     "10": {
+      "x": 1
+     },
+     "s": {
+      "n": 1,
+      "m": 2
+     },
+     "t": 2,
+     "u": 3,
+     "v": 4,
+     "a": {
+      "x": 1,
+      "y": 2
+     },
+     "b": 5,
+     "c": {
+      "d": {
+       "e": 1
+      },
+      "f": 2
+     },
+     "q10": {
+      "x": 1
+     },
+     "q9": 1,
+     "qb": 2
+    }
+   },
+   "listens": [
+    "10",
+    "9",
+    "10/x",
+    "a"
+   ],
+   "order": [
+    "d:9",
+    "d:a",
+    "d:10",
+    "d:10/x"
+   ]
+  },
+  {
+   "name": "rest-put at s, nested listens below it",
+   "write": {
+    "kind": "rest-put",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": {
+      "x": 1
+     }
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "s/m/x",
+    "s/m",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/m",
+    "d:s/m/x",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "realtime-p at s, nested listens below it",
+   "write": {
+    "kind": "realtime-p",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": {
+      "x": 1
+     }
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "s/m/x",
+    "s/m",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/m",
+    "d:s/m/x",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "ondisconnect at s, nested listens below it",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": {
+      "x": 1
+     }
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "s/m/x",
+    "s/m",
+    "t"
+   ],
+   "order": [
+    "d:s",
+    "d:s/m",
+    "d:s/m/x",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "rest-put at s, listens at and above it, below first",
+   "write": {
+    "kind": "rest-put",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    ""
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "rest-put at s, listens at and above it, above first",
+   "write": {
+    "kind": "rest-put",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "rest-put at s, listens at and above it, mixed",
+   "write": {
+    "kind": "rest-put",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "",
+    "s/m"
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/m",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "realtime-p at s, listens at and above it, below first",
+   "write": {
+    "kind": "realtime-p",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    ""
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "realtime-p at s, listens at and above it, above first",
+   "write": {
+    "kind": "realtime-p",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "s/n"
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "realtime-p at s, listens at and above it, mixed",
+   "write": {
+    "kind": "realtime-p",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "",
+    "s/m"
+   ],
+   "order": [
+    "d:s",
+    "d:s",
+    "d:s/m",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "ondisconnect at s, listens at and above it, below first",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s/n",
+    "s",
+    ""
+   ],
+   "order": [
+    "m:{s}",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "ondisconnect at s, listens at and above it, above first",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "",
+    "s",
+    "s/n"
+   ],
+   "order": [
+    "m:{s}",
+    "d:s",
+    "d:s/n"
+   ]
+  },
+  {
+   "name": "ondisconnect at s, listens at and above it, mixed",
+   "write": {
+    "kind": "ondisconnect",
+    "path": "s",
+    "data": {
+     "n": 1,
+     "m": 2
+    }
+   },
+   "listens": [
+    "s",
+    "s/n",
+    "",
+    "s/m"
+   ],
+   "order": [
+    "m:{s}",
+    "d:s",
+    "d:s/m",
+    "d:s/n"
+   ]
+  }
+ ]
+}

@@ -8,6 +8,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Realtime Database: production-5 (2026-10-27) now covers the web SDK's reconnect and event order (`goOffline`/`goOnline` with queued writes, the child and value events of two `orderByChild` windows with query-scoped unsubscribe and cancellation) and `onDisconnect` set, remove, update, cancel and re-register with server values and a Rules change before firing, so these recorded cases are part of the production comparison (`COMPAT_VERIFIED` for the recorded cases only). Everything beyond them stays unverified: other SDK child events and queries, `update`/`push` and multi-location updates beyond the recorded merge and the `onDisconnect` update, SDK server values beyond the `onDisconnect` update, and RTDB-triggered Functions delivery.
+- Realtime Database, scope of the 0.31.0 write-order entry: the order of a multi-path write is the official emulator's; production-5 confirmed it for one six-key `onDisconnect` set (`e6`, `e5`, `marker`, `e4`, `e3`, `e2`), not for other key sets.
+- Realtime Database, known difference: a long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, after 104.3 s to about 105 s in fireemu and 99.3 s to 104.0 s in the four production recordings.
+
 ### Fixed
 
 - `strict` with App Check off: a task sent to a queue that a `functions.manifest` serves for an export the codebase declares callable now passes the Bearer check a callable request passes. A Bearer that is not one of the project's users is answered 401 before the code runs, which for a task is a failed dispatch that is retried under the queue's retry policy until it gives up (a stderr line names the function each time), where before only the Admin SDK's Auth-emulator verification, which does not check signatures, stood in the way. Startup prints a warning naming the function; the `emulator` profile and a queue the code exports with `onTaskDispatched` are unchanged.

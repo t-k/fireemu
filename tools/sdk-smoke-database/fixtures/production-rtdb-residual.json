@@ -1,0 +1,3080 @@
+{
+ "recording": "production-5",
+ "envelope": "RTDB-RESIDUAL-20261026-05",
+ "recordedOn": "2026-10-27",
+ "project": "fireemu-oracle-query",
+ "instance": "fireemu-q-rtdb2",
+ "sdk": "firebase 12.18.0 (web, headless Chromium)",
+ "rows": [
+  52,
+  52,
+  52,
+  52,
+  59,
+  59,
+  59,
+  59
+ ],
+ "profiles": [
+  {
+   "scenario": "cv08",
+   "name": "r1-ws",
+   "journal": [
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-items"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gate"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gated"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-other"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":1},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "prev": null,
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "prev": "a",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"a\",{\"score\":1}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "c",
+     "prev": null,
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "d",
+     "prev": "c",
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "top-v",
+     "shape": "[[\"c\",{\"score\":3}],[\"d\",{\"score\":4}]]"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "gated",
+     "shape": "{\"v\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "b",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"b\",{\"score\":2}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "top-off",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-a-score"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "e",
+     "prev": null,
+     "shape": "{\"score\":0}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "e",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":2}"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-f"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gate"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5}}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "prev": "e",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"f\",{\"score\":0.5}]]"
+    },
+    {
+     "step": "reconnect",
+     "type": "cancel",
+     "actor": "o",
+     "label": "gated",
+     "shape": "permission_denied at /<base>/gated: client doesn't have permission to access the desired data.",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-1"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-2"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-3"
+    },
+    {
+     "step": "top-reattach",
+     "type": "value",
+     "actor": "o",
+     "label": "top2-v",
+     "shape": "[[\"d\",{\"score\":4}],[\"a\",{\"score\":10}]]"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "d",
+     "prev": null,
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "a",
+     "prev": "d",
+     "shape": "{\"score\":10}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5},\"g\":{\"score\":0.25}}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "g",
+     "prev": "e",
+     "shape": "{\"score\":0.25}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gated"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other-2"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":9}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "absent",
+     "actor": "o",
+     "label": "gated"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "scenario": "cv08",
+   "name": "r1-lp",
+   "journal": [
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-items"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gate"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gated"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-other"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":1},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "prev": null,
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "prev": "a",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"a\",{\"score\":1}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "c",
+     "prev": null,
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "d",
+     "prev": "c",
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "top-v",
+     "shape": "[[\"c\",{\"score\":3}],[\"d\",{\"score\":4}]]"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "gated",
+     "shape": "{\"v\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "b",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"b\",{\"score\":2}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "top-off",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-a-score"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "e",
+     "prev": null,
+     "shape": "{\"score\":0}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "e",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":2}"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-f"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gate"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5}}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "prev": "e",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"f\",{\"score\":0.5}]]"
+    },
+    {
+     "step": "reconnect",
+     "type": "cancel",
+     "actor": "o",
+     "label": "gated",
+     "shape": "permission_denied at /<base>/gated: client doesn't have permission to access the desired data.",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-1"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-2"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-3"
+    },
+    {
+     "step": "top-reattach",
+     "type": "value",
+     "actor": "o",
+     "label": "top2-v",
+     "shape": "[[\"d\",{\"score\":4}],[\"a\",{\"score\":10}]]"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "d",
+     "prev": null,
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "a",
+     "prev": "d",
+     "shape": "{\"score\":10}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5},\"g\":{\"score\":0.25}}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "g",
+     "prev": "e",
+     "shape": "{\"score\":0.25}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gated"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":9}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other-2"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "absent",
+     "actor": "o",
+     "label": "gated"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  },
+  {
+   "scenario": "cv08",
+   "name": "r2-ws",
+   "journal": [
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-items"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gate"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gated"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-other"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":1},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "prev": null,
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "prev": "a",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"a\",{\"score\":1}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "c",
+     "prev": null,
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "d",
+     "prev": "c",
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "top-v",
+     "shape": "[[\"c\",{\"score\":3}],[\"d\",{\"score\":4}]]"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "gated",
+     "shape": "{\"v\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-a-score"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "b",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"b\",{\"score\":2}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "e",
+     "prev": null,
+     "shape": "{\"score\":0}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "e",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":2}"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-f"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gate"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5}}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "prev": "e",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"f\",{\"score\":0.5}]]"
+    },
+    {
+     "step": "reconnect",
+     "type": "cancel",
+     "actor": "o",
+     "label": "gated",
+     "shape": "permission_denied at /<base>/gated: client doesn't have permission to access the desired data.",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-1"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-2"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-3"
+    },
+    {
+     "step": "top-reattach",
+     "type": "value",
+     "actor": "o",
+     "label": "top2-v",
+     "shape": "[[\"d\",{\"score\":4}],[\"a\",{\"score\":10}]]"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "d",
+     "prev": null,
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "a",
+     "prev": "d",
+     "shape": "{\"score\":10}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5},\"g\":{\"score\":0.25}}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "g",
+     "prev": "e",
+     "shape": "{\"score\":0.25}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gated"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other-2"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":9}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "absent",
+     "actor": "o",
+     "label": "gated"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "scenario": "cv08",
+   "name": "r2-lp",
+   "journal": [
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-items"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gate"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-gated"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-other"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":1},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "prev": null,
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "prev": "a",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"a\",{\"score\":1}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "c",
+     "prev": null,
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "attach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top",
+     "key": "d",
+     "prev": "c",
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "top-v",
+     "shape": "[[\"c\",{\"score\":3}],[\"d\",{\"score\":4}]]"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "gated",
+     "shape": "{\"v\":1}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-a-score"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4}}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "a",
+     "shape": "{\"score\":1}"
+    },
+    {
+     "step": "top-off",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "b",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "top-off",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"b\",{\"score\":2}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"b\":{\"score\":2},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "e",
+     "prev": null,
+     "shape": "{\"score\":0}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"b\",{\"score\":2}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0}}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "b",
+     "shape": "{\"score\":2}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "prev": "e",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "offline-writes",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":2}"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-f"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gate"
+    },
+    {
+     "step": "server-changes",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5}}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "c",
+     "shape": "{\"score\":3}"
+    },
+    {
+     "step": "reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "prev": "e",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"f\",{\"score\":0.5}]]"
+    },
+    {
+     "step": "reconnect",
+     "type": "cancel",
+     "actor": "o",
+     "label": "gated",
+     "shape": "permission_denied at /<base>/gated: client doesn't have permission to access the desired data.",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-1"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-2"
+    },
+    {
+     "step": "reconnect",
+     "type": "ack",
+     "actor": "o",
+     "label": "queued-3"
+    },
+    {
+     "step": "top-reattach",
+     "type": "value",
+     "actor": "o",
+     "label": "top2-v",
+     "shape": "[[\"d\",{\"score\":4}],[\"a\",{\"score\":10}]]"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "d",
+     "prev": null,
+     "shape": "{\"score\":4}"
+    },
+    {
+     "step": "top-reattach",
+     "type": "child_added",
+     "actor": "o",
+     "label": "top2",
+     "key": "a",
+     "prev": "d",
+     "shape": "{\"score\":10}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "items",
+     "shape": "{\"a\":{\"score\":10},\"c\":{\"score\":3},\"d\":{\"score\":4},\"e\":{\"score\":0},\"f\":{\"score\":0.5},\"g\":{\"score\":0.25}}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_removed",
+     "actor": "o",
+     "label": "win",
+     "key": "f",
+     "shape": "{\"score\":0.5}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "child_added",
+     "actor": "o",
+     "label": "win",
+     "key": "g",
+     "prev": "e",
+     "shape": "{\"score\":0.25}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "win-v",
+     "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-gated"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-other-2"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "other",
+     "shape": "{\"n\":9}"
+    },
+    {
+     "step": "after-reconnect",
+     "type": "absent",
+     "actor": "o",
+     "label": "gated"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  },
+  {
+   "scenario": "cv10",
+   "name": "r1-ws",
+   "journal": [
+    {
+     "step": "rules-open",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-open",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e1"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e2"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e3"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e4"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e5"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e6"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e7"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e8"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e9"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-marker"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"gone\":true,\"keep\":true,\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"n\":41}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "false"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e4-remove"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e5-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e6-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e7-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9a-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9b-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9-cancel"
+    },
+    {
+     "step": "rules-deny",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-deny",
+     "type": "rules",
+     "actor": "o",
+     "code": "denied"
+    },
+    {
+     "step": "register-denied",
+     "type": "rejected",
+     "actor": "w",
+     "label": "e8-set",
+     "shape": "permission_denied: permission denied",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "register-denied",
+     "type": "ack",
+     "actor": "w",
+     "label": "marker-set"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "fire",
+     "type": "timing",
+     "actor": "host",
+     "seconds": 0.2
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "scenario": "cv10",
+   "name": "r1-lp",
+   "journal": [
+    {
+     "step": "rules-open",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-open",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e1"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e2"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e3"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e4"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e5"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e6"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e7"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e8"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e9"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-marker"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"gone\":true,\"keep\":true,\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"n\":41}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "false"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e4-remove"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e5-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e6-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e7-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9a-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9b-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9-cancel"
+    },
+    {
+     "step": "rules-deny",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-deny",
+     "type": "rules",
+     "actor": "o",
+     "code": "denied"
+    },
+    {
+     "step": "register-denied",
+     "type": "rejected",
+     "actor": "w",
+     "label": "e8-set",
+     "shape": "permission_denied: permission denied",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "register-denied",
+     "type": "ack",
+     "actor": "w",
+     "label": "marker-set"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "fire",
+     "type": "timing",
+     "actor": "host",
+     "seconds": 99.3
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  },
+  {
+   "scenario": "cv10",
+   "name": "r2-ws",
+   "journal": [
+    {
+     "step": "rules-open",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-open",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e1"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e2"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e3"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e4"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e5"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e6"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e7"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e8"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e9"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-marker"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"gone\":true,\"keep\":true,\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"n\":41}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "false"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e4-remove"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e5-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e6-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e7-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9a-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9b-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9-cancel"
+    },
+    {
+     "step": "rules-deny",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-deny",
+     "type": "rules",
+     "actor": "o",
+     "code": "denied"
+    },
+    {
+     "step": "register-denied",
+     "type": "rejected",
+     "actor": "w",
+     "label": "e8-set",
+     "shape": "permission_denied: permission denied",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "register-denied",
+     "type": "ack",
+     "actor": "w",
+     "label": "marker-set"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "fire",
+     "type": "timing",
+     "actor": "host",
+     "seconds": 0.2
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "scenario": "cv10",
+   "name": "r2-lp",
+   "journal": [
+    {
+     "step": "rules-open",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-open",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e1"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e2"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e3"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e4"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e5"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e6"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e7"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e8"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-e9"
+    },
+    {
+     "step": "seed",
+     "type": "ack",
+     "actor": "w",
+     "label": "seed-marker"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"gone\":true,\"keep\":true,\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"n\":41}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "attach",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "false"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e1-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-cancel"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e2-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e3-set-again"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e4-remove"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e5-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e6-update"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e7-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9a-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9b-set"
+    },
+    {
+     "step": "register",
+     "type": "ack",
+     "actor": "w",
+     "label": "e9-cancel"
+    },
+    {
+     "step": "rules-deny",
+     "type": "admin",
+     "actor": "host",
+     "code": "ok"
+    },
+    {
+     "step": "rules-deny",
+     "type": "rules",
+     "actor": "o",
+     "code": "denied"
+    },
+    {
+     "step": "register-denied",
+     "type": "rejected",
+     "actor": "w",
+     "label": "e8-set",
+     "shape": "permission_denied: permission denied",
+     "code": "PERMISSION_DENIED"
+    },
+    {
+     "step": "register-denied",
+     "type": "ack",
+     "actor": "w",
+     "label": "marker-set"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "disconnect",
+     "type": "value",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "fire",
+     "type": "timing",
+     "actor": "host",
+     "seconds": 103.2
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e1",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e2",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e3",
+     "shape": "{\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e4",
+     "shape": "null"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e5",
+     "shape": "{\"extra\":1,\"keep\":true,\"state\":\"offline\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e6",
+     "shape": "{\"at\":\"<TS>\",\"n\":42}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e7",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e8",
+     "shape": "{\"state\":\"online\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "e9",
+     "shape": "{\"a\":\"on\",\"b\":\"on\"}"
+    },
+    {
+     "step": "final",
+     "type": "get",
+     "actor": "o",
+     "label": "marker",
+     "shape": "true"
+    },
+    {
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "step": "runner",
+     "type": "transport",
+     "code": "lp"
+    }
+   ]
+  }
+ ]
+}

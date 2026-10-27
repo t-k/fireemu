@@ -246,6 +246,7 @@ fn parse_platform_options(
         network_interfaces,
         labels,
         secrets: string_array("secrets")?,
+        strict_callable_ingress: false,
     })
 }
 

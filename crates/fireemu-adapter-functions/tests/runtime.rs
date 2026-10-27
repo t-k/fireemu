@@ -741,6 +741,56 @@ async fn task_queue_concurrency_is_isolated_per_queue() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The daemon strips the emulator-internal auth override fields from every request it forwards,
+/// and a task's own headers (which win over the emulator's) are no exception. This is the layer
+/// that keeps a task enqueued for a callable from carrying a forged `context.auth`, whatever
+/// `skipTokenVerification` says.
+#[tokio::test]
+async fn a_task_cannot_carry_the_auth_override_fields_or_the_runner_secret_to_the_runner() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-functions-task-override-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = dir.join("entries");
+    let runtime = start_task_runtime(&probe, |_| TaskRateLimits {
+        max_concurrent_dispatches: 1,
+        max_dispatches_per_second: 500.0,
+    })
+    .await;
+
+    let body = json!({"task": {
+        "name": "projects/demo-app/locations/us-central1/queues/task/tasks/forged-1",
+        "httpRequest": {
+            "url": "",
+            "body": "eyJkYXRhIjp7fX0=",
+            "headers": {
+                "X-Callable-Context-Auth": "%7B%22uid%22%3A%22admin%22%7D",
+                "x-original-auth": "Bearer forged",
+                "X-Fireemu-Runner-Secret": "guessed",
+            },
+        },
+    }});
+    runtime
+        .enqueue_task("demo-app", "us-central1", "taskA", &body)
+        .unwrap();
+    let entries = wait_for_task_entries(&probe, 1).await;
+    // Neither override field arrived, and the secret is the daemon's own.
+    assert_eq!(entries, vec!["taskA:None:None:s".to_owned()]);
+
+    std::fs::write(format!("{}.taskA.release", probe.display()), b"").unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        while !runtime.is_idle() {
+            runtime.idle_notify().notified().await;
+        }
+    })
+    .await
+    .expect("the task queue became idle");
+    runtime.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test]
 async fn reset_task_completion_cannot_release_a_new_generation_task() {
     let dir = std::env::temp_dir().join(format!(

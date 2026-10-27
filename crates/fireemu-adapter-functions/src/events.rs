@@ -161,6 +161,46 @@ pub fn event_id_uuid(seed: &str) -> String {
     )
 }
 
+/// How a Realtime Database trigger event is shaped, by profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DatabaseEventShape {
+    /// Production's shape (the strict profile), recorded for the CV14 fixture on 2026-10-27 (28 frames,
+    /// 8 handlers, 9 writes, both generations): `source` names the project `_`; `time` has exactly three
+    /// fraction digits; there is no `datacontenttype`; the id is the base64 of twenty bytes; a 2nd gen
+    /// event names no `authtype` or `authid` for an admin or an unauthenticated write, so the SDK reports
+    /// `unknown`, while a 1st gen event keeps `authtype` (its context is `ADMIN` or `UNAUTHENTICATED`).
+    /// An end user's write was not recorded, so its event is not changed.
+    #[default]
+    Production,
+    /// What the emulator profile always delivered: the session's project in `source`, the full-precision
+    /// time, `datacontenttype: application/json`, a UUID id, and the principal in `authtype`.
+    Official,
+}
+
+/// The id of a Realtime Database trigger event in production's form: the base64 of twenty bytes (28
+/// characters ending in `=`), derived from `seed` like [`event_id_uuid`] so a recorded local run replays
+/// with the same ids.
+#[must_use]
+pub fn database_event_id(seed: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut next = seeded_stream(seed);
+    let bytes: Vec<u8> = (0..3).flat_map(|_| next().to_be_bytes()).take(20).collect();
+    let mut out = String::with_capacity(28);
+    for chunk in bytes.chunks(3) {
+        let mut padded = [0u8; 4];
+        padded[1..=chunk.len()].copy_from_slice(chunk);
+        let group = u32::from_be_bytes(padded);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((group >> (18 - 6 * i)) & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// The kind of change between `before` and `after`.
 #[must_use]
 pub fn change_kind(before: Option<&Document>, after: Option<&Document>) -> Option<DocumentEvent> {
@@ -1878,14 +1918,24 @@ pub struct DatabaseReferenceChange {
     pub after: Value,
 }
 
-/// Projects changed concrete references for one declared RTDB trigger.
+/// Projects changed concrete references for one declared RTDB trigger, in the official emulator's shape.
 #[must_use]
 pub fn database_event_payloads(
     commit: &DatabaseCommit,
     function: &FunctionSpec,
 ) -> Vec<(String, Value)> {
+    database_event_payloads_for(commit, function, DatabaseEventShape::Official)
+}
+
+/// Projects changed concrete references for one declared RTDB trigger, in the given shape.
+#[must_use]
+pub fn database_event_payloads_for(
+    commit: &DatabaseCommit,
+    function: &FunctionSpec,
+    shape: DatabaseEventShape,
+) -> Vec<(String, Value)> {
     let mut result = Vec::new();
-    visit_database_event_payloads(commit, function, |reference, payload| {
+    visit_database_event_payloads(commit, function, shape, |reference, payload| {
         result.push((reference, payload));
         Ok::<_, std::convert::Infallible>(())
     })
@@ -1893,10 +1943,58 @@ pub fn database_event_payloads(
     result
 }
 
+/// One RTDB trigger event for a changed reference, in the given shape.
+fn database_event_payload(
+    commit: &DatabaseCommit,
+    function: &FunctionSpec,
+    shape: DatabaseEventShape,
+    reported: &str,
+    (path, before, after): (&str, &Value, &Value),
+) -> Value {
+    let auth_type = match commit.auth_type.as_str() {
+        "USER" => "app_user",
+        "ADMIN" => "admin",
+        "UNAUTHENTICATED" => "unauthenticated",
+        _ => "unknown",
+    };
+    let production = shape == DatabaseEventShape::Production;
+    let mut payload = json!({
+        "specversion":"1.0", "id":"", "type":reported,
+        "source":format!("//firebasedatabase.googleapis.com/projects/{}/locations/{}/instances/{}", if production { "_" } else { commit.project.as_str() }, commit.location, commit.instance),
+        "subject":format!("refs{}", path), "time":if production { object_time(commit.time) } else { rfc3339(commit.time) },
+        "datacontenttype":"application/json",
+        "firebasedatabasehost":commit.host, "instance":commit.instance,
+        "location":commit.location, "ref":path.trim_start_matches('/'), "authtype":auth_type,
+        "data":{"@type":"type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData", "data":before, "delta":database_delta(before, after)},
+    });
+    // Recorded: production sends no `datacontenttype`, and a 2nd gen event no auth for an admin or an
+    // unauthenticated write; the SDK reports the type `unknown` and the context carries none.
+    let names_no_auth = production
+        && function.generation == FunctionGeneration::Second
+        && matches!(commit.auth_type.as_str(), "ADMIN" | "UNAUTHENTICATED");
+    let members = payload.as_object_mut().expect("an object");
+    if production {
+        members.remove("datacontenttype");
+    }
+    if names_no_auth {
+        members.remove("authtype");
+    }
+    if let Some(id) = commit.auth_id.as_ref().filter(|_| !names_no_auth) {
+        payload["authid"] = json!(id);
+    }
+    if function.generation == FunctionGeneration::First && commit.auth_type == "USER" {
+        if let Some(auth) = &commit.auth {
+            payload["auth"] = auth.clone();
+        }
+    }
+    payload
+}
+
 /// Streams matching payloads so admission can stop before retaining excessive fanout.
 pub fn visit_database_event_payloads<E>(
     commit: &DatabaseCommit,
     function: &FunctionSpec,
+    shape: DatabaseEventShape,
     mut visit: impl FnMut(String, Value) -> Result<(), E>,
 ) -> Result<(), E> {
     use fireemu_core_functions::manifest::database_glob_matches;
@@ -1934,12 +2032,6 @@ pub fn visit_database_event_payloads<E>(
         }
         DatabaseChangeData::References(references) => references,
     };
-    let auth_type = match commit.auth_type.as_str() {
-        "USER" => "app_user",
-        "ADMIN" => "admin",
-        "UNAUTHENTICATED" => "unauthenticated",
-        _ => "unknown",
-    };
     for change in references {
         let path = &change.reference;
         let Some(_params) = reference.matches(path) else {
@@ -1959,24 +2051,13 @@ pub fn visit_database_event_payloads<E>(
         if !event.accepts(actual) {
             continue;
         }
-        let reported = event.database_event_type();
-        let mut payload = json!({
-            "specversion":"1.0", "id":"", "type":reported,
-            "source":format!("//firebasedatabase.googleapis.com/projects/{}/locations/{}/instances/{}", commit.project, commit.location, commit.instance),
-            "subject":format!("refs{}", path), "time":rfc3339(commit.time),
-            "datacontenttype":"application/json",
-            "firebasedatabasehost":commit.host, "instance":commit.instance,
-            "location":commit.location, "ref":path.trim_start_matches('/'), "authtype":auth_type,
-            "data":{"@type":"type.googleapis.com/google.events.firebase.database.v1.ReferenceEventData", "data":before, "delta":database_delta(before, after)},
-        });
-        if let Some(id) = &commit.auth_id {
-            payload["authid"] = json!(id);
-        }
-        if function.generation == FunctionGeneration::First && commit.auth_type == "USER" {
-            if let Some(auth) = &commit.auth {
-                payload["auth"] = auth.clone();
-            }
-        }
+        let payload = database_event_payload(
+            commit,
+            function,
+            shape,
+            event.database_event_type(),
+            (path, before, after),
+        );
         visit(
             if path.is_empty() {
                 "/".to_owned()

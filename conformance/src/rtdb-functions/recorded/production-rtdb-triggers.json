@@ -1,0 +1,1876 @@
+{
+  "kind": "rtdb-trigger-recording-v1",
+  "recording": {
+    "envelope": "CV14-RTDB-TRIGGERS-20261027-02",
+    "recordedOn": "2026-10-27",
+    "instance": "fireemu-q-rtdb2",
+    "region": "us-central1",
+    "fixture": {
+      "firebase-functions": "7.3.2",
+      "firebase-admin": "14.3.0"
+    },
+    "nonce": "a1b2c3d4e5f60718",
+    "frames": 28,
+    "outcomeOfTheRun": "stopped-needs-review (the only reason: frames carry members the fixture did not name)"
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbCreatedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbCreatedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s2",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbUpdatedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbUpdatedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s3",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {}
+    },
+    {
+      "id": "s4",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbDeletedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbDeletedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s5",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbCreatedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbCreatedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s6",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbUpdatedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbUpdatedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s7",
+      "context": "admin",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {}
+    },
+    {
+      "id": "s8",
+      "context": "anonymous",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbCreatedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbCreatedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    },
+    {
+      "id": "s9",
+      "context": "anonymous",
+      "outcome": "ok",
+      "status": 200,
+      "delivered": {
+        "rtdbDeletedV1": 1,
+        "rtdbWrittenV1": 1,
+        "rtdbDeletedV2": 1,
+        "rtdbWrittenV2": 1
+      }
+    }
+  ],
+  "frames": [
+    {
+      "n": 1,
+      "step": "s1",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "c3Z9sjVyryIB8xWn9p+AnnaNVKs=",
+        "time": "2026-10-27T12:12:10.146Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "a",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-01"
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:11.181Z"
+    },
+    {
+      "n": 2,
+      "step": "s1",
+      "handler": "rtdbCreatedV2",
+      "generation": 2,
+      "event": {
+        "id": "E9sKfQiynlFtDkdR9LngCZfwZqQ=",
+        "time": "2026-10-27T12:12:10.146Z",
+        "type": "google.firebase.database.ref.v1.created",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "exists": true,
+          "key": "a",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718",
+            "tag": "one"
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "snapshot": {
+            "type": "object",
+            "keys": ["_data", "_path", "app", "instance"]
+          },
+          "traceparent": "00-8aa2042ad0f5e7bb28e4288983414ffd-bafc78ef445939e1-01"
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:11.271Z"
+    },
+    {
+      "n": 3,
+      "step": "s1",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "n3vP3XAgxCuu2AtCwV7JZ3zNHWQ=",
+          "timestamp": "2026-10-27T12:12:10.146Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "a",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:12.474Z"
+    },
+    {
+      "n": 4,
+      "step": "s1",
+      "handler": "rtdbCreatedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "3upnVgRYwhsuR8/+fnQaKPZyD40=",
+          "timestamp": "2026-10-27T12:12:10.146Z",
+          "eventType": "google.firebase.database.ref.create",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "exists": true,
+          "key": "a",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718",
+            "tag": "one"
+          }
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:13.107Z"
+    },
+    {
+      "n": 5,
+      "step": "s2",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "QBCuIgaQCPllFhwlLmNnivJdAMM=",
+          "timestamp": "2026-10-27T12:12:31.788Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:12:32.480Z"
+    },
+    {
+      "n": 6,
+      "step": "s2",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "4KU5LbwBT2xEhweqWBYzu8BZ27A=",
+        "time": "2026-10-27T12:12:31.788Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-297b40eaa3cd489f1a5cfff251bc0298-07d3979d94835d5a-01"
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:12:32.547Z"
+    },
+    {
+      "n": 7,
+      "step": "s2",
+      "handler": "rtdbUpdatedV2",
+      "generation": 2,
+      "event": {
+        "id": "BUdanMmxDtpgmQHgLgekLkGN3qw=",
+        "time": "2026-10-27T12:12:31.788Z",
+        "type": "google.firebase.database.ref.v1.updated",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-5a170cb346b97b6fa86a01401ac65654-45eceddb6a166d18-01"
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:34.748Z"
+    },
+    {
+      "n": 8,
+      "step": "s2",
+      "handler": "rtdbUpdatedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "qIJ1+LcRsyeqV9rDU5sJhWIosx0=",
+          "timestamp": "2026-10-27T12:12:31.788Z",
+          "eventType": "google.firebase.database.ref.update",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          }
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:12:34.342Z"
+    },
+    {
+      "n": 9,
+      "step": "s4",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "4OuYhKlwl0NUC/O1twTMzNchZo8=",
+        "time": "2026-10-27T12:13:26.677Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": false,
+            "key": "a",
+            "value": null
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-eaaccd98cfec4d64a94b49def77bc567-c359939e4c4f9d5f-01"
+        }
+      },
+      "seq": 3,
+      "receivedAt": "2026-10-27T12:13:27.487Z"
+    },
+    {
+      "n": 10,
+      "step": "s4",
+      "handler": "rtdbDeletedV2",
+      "generation": 2,
+      "event": {
+        "id": "xjjSoIO1X36PQHeXlEq7lCJN7Vo=",
+        "time": "2026-10-27T12:13:26.677Z",
+        "type": "google.firebase.database.ref.v1.deleted",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/a",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "a"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "exists": true,
+          "key": "a",
+          "value": {
+            "n": 2,
+            "run": "a1b2c3d4e5f60718",
+            "tag": "one"
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/a",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "snapshot": {
+            "type": "object",
+            "keys": ["_data", "_path", "app", "instance"]
+          },
+          "traceparent": "00-1b5ae955ff24009fe7d81abc44f9ffb0-78975d88bdeee0fc-01"
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:13:27.503Z"
+    },
+    {
+      "n": 11,
+      "step": "s4",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "NhYHwuwy67UKkvd0jX+BbGPc7pI=",
+          "timestamp": "2026-10-27T12:13:26.677Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "a",
+            "value": {
+              "n": 2,
+              "run": "a1b2c3d4e5f60718",
+              "tag": "one"
+            }
+          },
+          "after": {
+            "exists": false,
+            "key": "a",
+            "value": null
+          }
+        }
+      },
+      "seq": 3,
+      "receivedAt": "2026-10-27T12:13:26.794Z"
+    },
+    {
+      "n": 12,
+      "step": "s4",
+      "handler": "rtdbDeletedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "oA2NoD67Yi5aGK5MKLT9foNEMUI=",
+          "timestamp": "2026-10-27T12:13:26.677Z",
+          "eventType": "google.firebase.database.ref.delete",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/a"
+          },
+          "params": {
+            "id": "a"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "exists": true,
+          "key": "a",
+          "value": {
+            "n": 2,
+            "run": "a1b2c3d4e5f60718",
+            "tag": "one"
+          }
+        }
+      },
+      "seq": 1,
+      "receivedAt": "2026-10-27T12:13:29.452Z"
+    },
+    {
+      "n": 13,
+      "step": "s5",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "KjtPLm+XDEqZWMOKb/QbfdPmz1I=",
+        "time": "2026-10-27T12:13:48.548Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/b",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "b"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "b",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/b",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-7e71720daf68764d18db49494f8750fd-a9a47565f1924263-01"
+        }
+      },
+      "seq": 4,
+      "receivedAt": "2026-10-27T12:13:48.706Z"
+    },
+    {
+      "n": 14,
+      "step": "s5",
+      "handler": "rtdbCreatedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "ESfhQS+HQ0FQTljr1u5u30IXH0A=",
+          "timestamp": "2026-10-27T12:13:48.548Z",
+          "eventType": "google.firebase.database.ref.create",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/b"
+          },
+          "params": {
+            "id": "b"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "exists": true,
+          "key": "b",
+          "value": {
+            "n": 1,
+            "nested": {
+              "x": 1,
+              "y": {
+                "z": 1
+              }
+            },
+            "run": "a1b2c3d4e5f60718"
+          }
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:13:49.187Z"
+    },
+    {
+      "n": 15,
+      "step": "s5",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "N/VPDKkmWYllSp3dfuoXXiRq5do=",
+          "timestamp": "2026-10-27T12:13:48.548Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/b"
+          },
+          "params": {
+            "id": "b"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "b",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        }
+      },
+      "seq": 4,
+      "receivedAt": "2026-10-27T12:13:49.206Z"
+    },
+    {
+      "n": 16,
+      "step": "s5",
+      "handler": "rtdbCreatedV2",
+      "generation": 2,
+      "event": {
+        "id": "ziW3N1nzU8TotUxtLREFfNG+TU0=",
+        "time": "2026-10-27T12:13:48.548Z",
+        "type": "google.firebase.database.ref.v1.created",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/b",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "b"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "exists": true,
+          "key": "b",
+          "value": {
+            "n": 1,
+            "nested": {
+              "x": 1,
+              "y": {
+                "z": 1
+              }
+            },
+            "run": "a1b2c3d4e5f60718"
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/b",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "snapshot": {
+            "type": "object",
+            "keys": ["_data", "_path", "app", "instance"]
+          },
+          "traceparent": "00-781bf951353a7666e43ca08946cd767c-7c9726a1f9e23041-01"
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:13:49.313Z"
+    },
+    {
+      "n": 17,
+      "step": "s6",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "A8yNvFHvpC2eG1LSQRFHLkmS9YQ=",
+          "timestamp": "2026-10-27T12:13:59.687Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/b"
+          },
+          "params": {
+            "id": "b"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 2,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        }
+      },
+      "seq": 5,
+      "receivedAt": "2026-10-27T12:13:59.787Z"
+    },
+    {
+      "n": 18,
+      "step": "s6",
+      "handler": "rtdbUpdatedV2",
+      "generation": 2,
+      "event": {
+        "id": "i06zDwx+oDfYz+Uf3y4NDIxEkJo=",
+        "time": "2026-10-27T12:13:59.687Z",
+        "type": "google.firebase.database.ref.v1.updated",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/b",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "b"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 2,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/b",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-62b964b209a9b365193aa30e0beb1e8a-80188704a557debb-01"
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:13:59.847Z"
+    },
+    {
+      "n": 19,
+      "step": "s6",
+      "handler": "rtdbUpdatedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "iqtMBIBTFBb9qnqmSieShLRurr8=",
+          "timestamp": "2026-10-27T12:13:59.687Z",
+          "eventType": "google.firebase.database.ref.update",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/b"
+          },
+          "params": {
+            "id": "b"
+          },
+          "authType": "ADMIN",
+          "authId": null,
+          "contextKeys": [
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 2,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:14:00.398Z"
+    },
+    {
+      "n": 20,
+      "step": "s6",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "lMPpFQNvLWrdj81FNC1EdSKZZxY=",
+        "time": "2026-10-27T12:13:59.687Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/b",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "b"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 1,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": true,
+            "key": "b",
+            "value": {
+              "n": 1,
+              "nested": {
+                "x": 2,
+                "y": {
+                  "z": 1
+                }
+              },
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/b",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-26443574f125782fbfa5073e53f3c5da-35a2a42370067433-01"
+        }
+      },
+      "seq": 5,
+      "receivedAt": "2026-10-27T12:13:59.875Z"
+    },
+    {
+      "n": 21,
+      "step": "s8",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "cJ7MnQ6LA5TgKXzBQLhqeyWlRIc=",
+        "time": "2026-10-27T12:14:53.982Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/c",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "c"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "c",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "c",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/c",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-348bd54d75bd2c7c73d191a98245afca-040c33b931eead4a-01"
+        }
+      },
+      "seq": 6,
+      "receivedAt": "2026-10-27T12:14:54.126Z"
+    },
+    {
+      "n": 22,
+      "step": "s8",
+      "handler": "rtdbCreatedV2",
+      "generation": 2,
+      "event": {
+        "id": "MCTu2GCdpHL/bdN7y3QdhaDO0BI=",
+        "time": "2026-10-27T12:14:53.982Z",
+        "type": "google.firebase.database.ref.v1.created",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/c",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "c"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "exists": true,
+          "key": "c",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718"
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/c",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "snapshot": {
+            "type": "object",
+            "keys": ["_data", "_path", "app", "instance"]
+          },
+          "traceparent": "00-f103dee41831a84e3a26850df5436d5d-4b238743849edcad-01"
+        }
+      },
+      "seq": 3,
+      "receivedAt": "2026-10-27T12:14:54.155Z"
+    },
+    {
+      "n": 23,
+      "step": "s8",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "JI2UvaLy7/e18T+m1Rv7Ls6aEMk=",
+          "timestamp": "2026-10-27T12:14:53.982Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/c"
+          },
+          "params": {
+            "id": "c"
+          },
+          "authType": "UNAUTHENTICATED",
+          "authId": null,
+          "auth": null,
+          "contextKeys": [
+            "auth",
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": false,
+            "key": "c",
+            "value": null
+          },
+          "after": {
+            "exists": true,
+            "key": "c",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718"
+            }
+          }
+        }
+      },
+      "seq": 6,
+      "receivedAt": "2026-10-27T12:14:54.627Z"
+    },
+    {
+      "n": 24,
+      "step": "s8",
+      "handler": "rtdbCreatedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "JUxrtEGqWsh3DJhbUQx6xa0PYp0=",
+          "timestamp": "2026-10-27T12:14:53.982Z",
+          "eventType": "google.firebase.database.ref.create",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/c"
+          },
+          "params": {
+            "id": "c"
+          },
+          "authType": "UNAUTHENTICATED",
+          "authId": null,
+          "auth": null,
+          "contextKeys": [
+            "auth",
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "exists": true,
+          "key": "c",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718"
+          }
+        }
+      },
+      "seq": 3,
+      "receivedAt": "2026-10-27T12:14:54.678Z"
+    },
+    {
+      "n": 25,
+      "step": "s9",
+      "handler": "rtdbWrittenV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "TRLCKUcONgAoDEnEzJjneK9V/bE=",
+          "timestamp": "2026-10-27T12:15:05.083Z",
+          "eventType": "google.firebase.database.ref.write",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/c"
+          },
+          "params": {
+            "id": "c"
+          },
+          "authType": "UNAUTHENTICATED",
+          "authId": null,
+          "auth": null,
+          "contextKeys": [
+            "auth",
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "c",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": false,
+            "key": "c",
+            "value": null
+          }
+        }
+      },
+      "seq": 7,
+      "receivedAt": "2026-10-27T12:15:05.143Z"
+    },
+    {
+      "n": 26,
+      "step": "s9",
+      "handler": "rtdbWrittenV2",
+      "generation": 2,
+      "event": {
+        "id": "PxsCsL6PY+iFuEYqOlBgfRiJVhk=",
+        "time": "2026-10-27T12:15:05.083Z",
+        "type": "google.firebase.database.ref.v1.written",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/c",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "c"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "before": {
+            "exists": true,
+            "key": "c",
+            "value": {
+              "n": 1,
+              "run": "a1b2c3d4e5f60718"
+            }
+          },
+          "after": {
+            "exists": false,
+            "key": "c",
+            "value": null
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/c",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "change": {
+            "type": "object",
+            "keys": ["after", "before"]
+          },
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "traceparent": "00-95ac111be8ec5150459730c6cb0c31cd-02193a4e09df7430-01"
+        }
+      },
+      "seq": 7,
+      "receivedAt": "2026-10-27T12:15:05.194Z"
+    },
+    {
+      "n": 27,
+      "step": "s9",
+      "handler": "rtdbDeletedV1",
+      "generation": 1,
+      "event": {
+        "context": {
+          "eventId": "GPNH7gMBTkmBMWOSyCpQaWqPzz8=",
+          "timestamp": "2026-10-27T12:15:05.083Z",
+          "eventType": "google.firebase.database.ref.delete",
+          "resource": {
+            "service": "firebaseio.com",
+            "name": "projects/_/instances/fireemu-q-rtdb2/refs/cv14-rtdb/items/c"
+          },
+          "params": {
+            "id": "c"
+          },
+          "authType": "UNAUTHENTICATED",
+          "authId": null,
+          "auth": null,
+          "contextKeys": [
+            "auth",
+            "authType",
+            "domain",
+            "eventId",
+            "eventType",
+            "params",
+            "resource",
+            "timestamp"
+          ],
+          "extras": {
+            "domain": "firebaseio.com"
+          }
+        },
+        "data": {
+          "exists": true,
+          "key": "c",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718"
+          }
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:15:05.765Z"
+    },
+    {
+      "n": 28,
+      "step": "s9",
+      "handler": "rtdbDeletedV2",
+      "generation": 2,
+      "event": {
+        "id": "5Th/w/FuEmPq3nM9qNc7zC4Mb3w=",
+        "time": "2026-10-27T12:15:05.083Z",
+        "type": "google.firebase.database.ref.v1.deleted",
+        "source": "//firebasedatabase.googleapis.com/projects/_/locations/us-central1/instances/fireemu-q-rtdb2",
+        "subject": "refs/cv14-rtdb/items/c",
+        "specversion": "1.0",
+        "datacontenttype": null,
+        "params": {
+          "id": "c"
+        },
+        "authType": "unknown",
+        "authId": null,
+        "data": {
+          "exists": true,
+          "key": "c",
+          "value": {
+            "n": 1,
+            "run": "a1b2c3d4e5f60718"
+          }
+        },
+        "firebaseDatabaseHost": "firebaseio.com",
+        "instance": "fireemu-q-rtdb2",
+        "ref": "cv14-rtdb/items/c",
+        "location": "us-central1",
+        "eventKeys": [
+          "authId",
+          "authType",
+          "context",
+          "data",
+          "firebaseDatabaseHost",
+          "id",
+          "instance",
+          "location",
+          "params",
+          "ref",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "extras": {
+          "context": {
+            "type": "object",
+            "keys": ["eventId", "eventType", "params", "resource", "timestamp"]
+          },
+          "snapshot": {
+            "type": "object",
+            "keys": ["_data", "_path", "app", "instance"]
+          },
+          "traceparent": "00-72cfbd952d3a50f0f81c2431a66ed1e3-4a6febd44d26ee28-01"
+        }
+      },
+      "seq": 2,
+      "receivedAt": "2026-10-27T12:15:05.769Z"
+    }
+  ]
+}

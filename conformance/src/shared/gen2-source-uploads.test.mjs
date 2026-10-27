@@ -57,6 +57,37 @@ const receiptOf = (object = OBJECT, bucket = FAKE_BUCKET) => ({ bucket, object }
 const putStatus = (deploy, object, status) =>
   deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object, status });
 
+describe("the 1st gen upload line", () => {
+  it("is an external upload: a bucket and an object from the signed URL, never the signature", () => {
+    const line =
+      '[2026-10-04T18:30:15.601Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v1/projects/p/locations/us-central1/functions:generateUploadUrl {"uploadUrl":"https://storage.googleapis.com/uploads-100000000001.us-central1.cloudfunctions.appspot.com/8109e84a-21ac-442f-be69-989b93b9d16a.zip?GoogleAccessId=sa%40example.iam.gserviceaccount.com&Expires=1&Signature=SECRETSIG"}';
+    const [event] = uploadEventsFromCliOutput(line);
+    assert.deepEqual(event, {
+      type: "external-upload",
+      bucket: "uploads-100000000001.us-central1.cloudfunctions.appspot.com",
+      object: "8109e84a-21ac-442f-be69-989b93b9d16a.zip",
+    });
+    assert.ok(!JSON.stringify(event).includes("SECRETSIG"));
+  });
+
+  it("is ignored when it names no bucket, a bad object or something that is not a storage URL", () => {
+    const body = (uploadUrl) =>
+      `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v1/projects/p/locations/r/functions:generateUploadUrl ${JSON.stringify({ uploadUrl })}`;
+    for (const url of [
+      "https://example.com/b/o.zip?x=1",
+      "https://storage.googleapis.com/onlybucket",
+      "https://storage.googleapis.com/b/../o.zip",
+      "not a url",
+      42,
+    ]) {
+      assert.deepEqual(uploadEventsFromCliOutput(body(url)), [], String(url));
+    }
+    // a 2nd gen body keeps naming its receipt, even if it also carries an uploadUrl
+    const second = `<<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/r/functions:generateUploadUrl ${JSON.stringify({ uploadUrl: "https://storage.googleapis.com/b/o.zip?s=1", storageSource: { bucket: FAKE_BUCKET, object: OBJECT } })}`;
+    assert.deepEqual(uploadEventsFromCliOutput(second), [{ type: "receipt", ...receiptOf() }]);
+  });
+});
+
 describe("the helper's region", () => {
   it("is exposed with its bucket, so a caller can refuse a target of another region", () => {
     const { uploads } = open(createFakeGcs(), { ledgerPath: join(dir, "region.jsonl") });
@@ -745,6 +776,130 @@ describe("delete and read-back answers (T4)", () => {
       const result = await deploy.finish({ cliExited: true, exitCode });
       assert.equal(result.clean, true, `exit ${exitCode} before any upload leaves nothing`);
     }
+  });
+
+  it("a 1st gen deploy uploads to a bucket outside the project: no receipt is expected and nothing of ours is deleted", async () => {
+    for (const [cliExited, exitCode] of [
+      [true, 0],
+      [true, 1],
+      [false, null],
+    ]) {
+      const world = createFakeGcs();
+      const { uploads } = open(world, { ledgerPath: join(dir, `gen1-${exitCode}.jsonl`) });
+      const deploy = await uploads.beginDeploy("program-1:gen1", { generation: 1 });
+      deploy.observe({
+        type: "external-upload",
+        bucket: "uploads-100000000001.us-central1.cloudfunctions.appspot.com",
+        object: OTHER,
+      });
+      deploy.observe({
+        type: "put-status",
+        bucket: "uploads-100000000001.us-central1.cloudfunctions.appspot.com",
+        object: OTHER,
+        status: 200,
+      });
+      const result = await deploy.finish({ cliExited, exitCode });
+      assert.equal(result.clean, true, `${exitCode}: ${result.reasons.join(",")}`);
+      assert.equal(world.count("DELETE"), 0);
+    }
+  });
+
+  it("a 1st gen deploy still flags a new object in the project's own uploads bucket", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:gen1", { generation: 1 });
+    world.put(FOREIGN);
+    const result = await deploy.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(result.clean, false);
+    assert.ok(result.reasons.includes(`unexplained-object:${FOREIGN}`));
+    assert.equal(world.count("DELETE"), 0);
+  });
+
+  it("a receipt in the project's own bucket is owned whatever the generation said, and the generation is checked", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const deploy = await uploads.beginDeploy("program-1:gen1", { generation: 1 });
+    world.put(OBJECT);
+    deploy.receipt(receiptOf());
+    putStatus(deploy, OBJECT, 200);
+    const result = await deploy.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(result.clean, true);
+    assert.equal(world.count("DELETE"), 1);
+    for (const generation of [0, 3, "1", null, 1.5]) {
+      await assert.rejects(
+        () => uploads.beginDeploy(`program-1:bad-${generation}`, { generation }),
+        /generation/,
+      );
+    }
+    // the default is the 2nd gen behaviour of every earlier test
+    const second = await uploads.beginDeploy("program-1:default", {});
+    assert.equal(
+      (await second.finish({ cliExited: true, exitCode: 0 })).reasons.includes("no-receipt"),
+      true,
+    );
+  });
+
+  it("deploys of one run explain each other's objects, so they can finish in any order", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    world.put(OBJECT);
+    first.receipt(receiptOf(OBJECT));
+    putStatus(first, OBJECT, 200);
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(OTHER);
+    second.receipt(receiptOf(OTHER));
+    putStatus(second, OTHER, 200);
+    // the first finishes while the second's object is in the bucket, and its baseline did not hold it
+    const a = await first.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(a.clean, true, a.reasons.join(","));
+    const b = await second.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(b.clean, true, b.reasons.join(","));
+    assert.equal(world.objects.size, 0);
+    assert.equal(uploads.report().closureReady, true);
+  });
+
+  it("an object no deploy of the run claims is still unexplained, also when another deploy has receipts", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    world.put(OBJECT);
+    first.receipt(receiptOf(OBJECT));
+    putStatus(first, OBJECT, 200);
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(FOREIGN);
+    const a = await first.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(a.clean, false);
+    assert.ok(a.reasons.includes(`unexplained-object:${FOREIGN}`));
+    const b = await second.finish({ cliExited: true, exitCode: 0 });
+    assert.ok(b.reasons.includes("no-receipt"));
+  });
+
+  it("a sibling's receipt whose PUT was refused does not explain an object that is nevertheless there", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(OTHER);
+    second.receipt(receiptOf(OTHER));
+    putStatus(second, OTHER, 403);
+    const a = await first.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(a.clean, false);
+    assert.ok(a.reasons.includes(`unexplained-object:${OTHER}`), a.reasons.join(","));
+    const b = await second.finish({ cliExited: true, exitCode: 1 });
+    assert.equal(b.clean, false);
+    assert.ok(b.reasons.includes(`unexplained-object:${OTHER}`), b.reasons.join(","));
+    assert.equal(world.count("DELETE"), 0, "an object nobody may delete is left alone");
+    // the same sibling with a PUT that is not yet known explains it: the sibling settles its own receipt
+    const world2 = createFakeGcs();
+    const { uploads: uploads2 } = open(world2, { ledgerPath: join(dir, "second.jsonl") });
+    const c = await uploads2.beginDeploy("program-1:first");
+    const d = await uploads2.beginDeploy("program-1:second");
+    world2.put(OTHER);
+    d.receipt(receiptOf(OTHER));
+    putStatus(d, OTHER, 200);
+    assert.equal((await c.finish({ cliExited: true, exitCode: 1 })).clean, true);
+    assert.equal((await d.finish({ cliExited: true, exitCode: 0 })).clean, true);
   });
 
   it("a PUT line for an object with no receipt, or in another bucket, owns nothing", async () => {

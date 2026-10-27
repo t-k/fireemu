@@ -125,3 +125,109 @@ test("only this project, this region, this generation's URL form and this functi
   assert.equal(one(url1.replace(PROJECT, "someone-else")), "unknown");
   assert.equal(one(url1.replace("us-central1", "europe-west1")), "unknown");
 });
+
+// Pairwise rows of docs.local/coverage-ledger/pict/cv14-deploy-class.pict (end, own status, extra lines, success
+// line, generation), judged against a reference written from the specification, not from the implementation.
+const CLASS_ROWS = [
+  ["exit2", "s400", "none", "no", "v2"],
+  ["exit2", "s400", "none", "no", "v1"],
+  ["exit2", "s403", "otherfn503", "no", "v2"],
+  ["exit2", "s503", "none", "no", "v2"],
+  ["exit2", "none", "none", "no", "v2"],
+  ["exit0", "s400", "none", "no", "v2"],
+  ["killed", "s400", "none", "no", "v2"],
+  ["exit2", "s400", "own503too", "no", "v2"],
+  ["exit2", "s400", "none", "yes", "v2"],
+  ["exit0", "s409", "own503too", "yes", "v1"],
+  ["exit2", "s409", "none", "no", "v2"],
+  ["killed", "s409", "otherfn503", "yes", "v1"],
+  ["exit0", "s302", "otherfn503", "yes", "v2"],
+  ["killed", "s408", "otherfn503", "no", "v1"],
+  ["killed", "s400", "otherfn503", "no", "v2"],
+  ["exit0", "s429", "otherfn400", "yes", "v1"],
+  ["exit0", "s408", "own503too", "yes", "v2"],
+  ["killed", "none", "otherfn503", "yes", "v1"],
+  ["killed", "s400", "otherfn400", "no", "v2"],
+  ["exit2", "s499", "otherfn503", "yes", "v2"],
+  ["exit2", "none", "otherfn400", "yes", "v2"],
+  ["killed", "s403", "own503too", "yes", "v1"],
+  ["exit0", "s503", "own503too", "yes", "v1"],
+  ["exit2", "s302", "none", "no", "v1"],
+  ["exit0", "s403", "none", "no", "v2"],
+  ["killed", "s429", "otherfn503", "no", "v2"],
+  ["killed", "s503", "otherfn503", "no", "v1"],
+  ["exit2", "s429", "none", "no", "v1"],
+  ["exit2", "s408", "none", "yes", "v2"],
+  ["exit0", "s408", "otherfn400", "no", "v1"],
+  ["exit0", "none", "own503too", "no", "v1"],
+  ["killed", "s302", "own503too", "yes", "v2"],
+  ["exit0", "s499", "none", "no", "v1"],
+  ["exit2", "s503", "otherfn400", "yes", "v2"],
+  ["exit2", "s409", "otherfn400", "yes", "v1"],
+  ["killed", "s499", "otherfn400", "yes", "v2"],
+  ["killed", "s499", "own503too", "yes", "v1"],
+  ["killed", "s302", "otherfn400", "yes", "v2"],
+  ["killed", "s403", "otherfn400", "no", "v2"],
+  ["exit0", "s429", "own503too", "yes", "v2"],
+];
+
+const OWN_STATUS = {
+  s400: 400,
+  s403: 403,
+  s409: 409,
+  s408: 408,
+  s429: 429,
+  s499: 499,
+  s503: 503,
+  s302: 302,
+};
+const DEFINITE_4XX = new Set([400, 403, 409]);
+
+function classRowOutput([, own, extra, success, gen]) {
+  const url = gen === "v1" ? url1 : url2();
+  const other = url2("rtdbUpdatedV2");
+  const out = ["i  functions: creating function... "];
+  if (own !== "none") out.push(line(url, OWN_STATUS[own]));
+  if (extra === "otherfn400") out.push(line(other, 400));
+  if (extra === "otherfn503") out.push(line(other, 503));
+  if (extra === "own503too") out.push(line(url, 503));
+  if (success === "yes")
+    out.push("✔  functions[rtdbCreatedV2(us-central1)] Successful create operation. ");
+  out.push("Deploys failed. ");
+  return out.join("\n");
+}
+
+function referenceClass([end, own, extra, success]) {
+  const refused =
+    end === "exit2" &&
+    success === "no" &&
+    own !== "none" &&
+    DEFINITE_4XX.has(OWN_STATUS[own]) &&
+    extra !== "own503too";
+  return refused ? "refused" : "unknown";
+}
+
+test("pairwise rows of end, own status, extra lines, success line and generation agree with the reference", () => {
+  assert.ok(CLASS_ROWS.length >= 40);
+  for (const row of CLASS_ROWS) {
+    const [end, , , , gen] = row;
+    const track =
+      end === "exit2"
+        ? ended
+        : end === "exit0"
+          ? { exited: true, exitCode: 0 }
+          : { exited: false, exitCode: null };
+    const result = classifyDeployFailure({
+      output: classRowOutput(row),
+      ...track,
+      spec: gen === "v1" ? v1 : v2,
+    });
+    assert.equal(result.class, referenceClass(row), row.join(" "));
+    if (result.class === "refused")
+      assert.deepEqual(
+        result.evidence.map((e) => e.status),
+        [OWN_STATUS[row[1]]],
+        row.join(" "),
+      );
+  }
+});

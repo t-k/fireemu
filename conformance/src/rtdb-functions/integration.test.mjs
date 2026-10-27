@@ -220,3 +220,17 @@ test("a stop request after the second write ends the run quickly and cleans up",
     await finish(env);
   }
 });
+
+test("the upload ceiling is wired into the helper: a run short of requests stops before a deploy it could not account for", async () => {
+  const env = await setup();
+  try {
+    // leave fewer than the fifteen requests one deploy reserves
+    for (let n = 0; n < STAGE2_LIMITS.upload - 14; n += 1) env.budget.take("upload");
+    const result = await run(env);
+    assert.match(result.reasons.join(";"), /upload request budget is short/);
+    assert.equal(env.gcp.deploys.length, 0);
+    assert.equal(env.rtdbWorld.baseline(), true);
+  } finally {
+    await finish(env);
+  }
+});

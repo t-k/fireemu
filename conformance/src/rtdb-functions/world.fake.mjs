@@ -4,11 +4,7 @@
 // integration test runs the real flow, operations and judge against it. Shapes follow the FE v4 records
 // (function records, Eventarc trigger and topic names) and the stage 1 and FE debug lines.
 
-import {
-  FAKE_BUCKET,
-  FAKE_PROJECT_NUMBER,
-  createFakeGcs,
-} from "../shared/gen2-source-uploads.fake.mjs";
+import { FAKE_PROJECT_NUMBER, createFakeGcs } from "../shared/gen2-source-uploads.fake.mjs";
 import { uploadEventFromLine } from "../shared/gen2-source-uploads.mjs";
 import { PROJECT } from "../../functions-http/harness.mjs";
 import { targetResources } from "../../functions-http/production.mjs";
@@ -57,7 +53,9 @@ const lowerOf = (name) => name.toLowerCase();
  * duplicateEvents (Sets of handler names), foreignFunctions (names present before the run), clock.
  */
 export function createGcpWorld({ budget, clock, options = {} }) {
-  const gcs = createFakeGcs();
+  const projectNumber = options.projectNumber ?? FAKE_PROJECT_NUMBER;
+  const uploadsBucket = `gcf-v2-uploads-${projectNumber}.${LOCATION}.cloudfunctions.appspot.com`;
+  const gcs = createFakeGcs({ bucket: uploadsBucket });
   const w = {
     gcs,
     functions: new Map(),
@@ -95,6 +93,9 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       },
       labels: { "deployment-tool": "cli-firebase", "firebase-functions-codebase": CODEBASE },
       ...(options.secretInRecord ? { annotations: { leak: options.secretInRecord } } : {}),
+      ...(options.numberInRecord
+        ? { buildName: `projects/${projectNumber}/locations/${LOCATION}/builds/b-1` }
+        : {}),
       eventTrigger: {
         trigger: triggerOf(name),
         triggerRegion: LOCATION,
@@ -338,8 +339,8 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       const object = `${String(++w.uploadN).padStart(8, "0")}-1111-4222-8333-444444444444.zip`;
       gcs.put(object);
       lines.push(
-        `[2026-10-27T00:00:01.000Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/${REGION_PATH}/functions:generateUploadUrl ${JSON.stringify({ uploadUrl: `https://storage.googleapis.com/${FAKE_BUCKET}/${object}?X-Goog-Signature=SECRET-MARKER`, storageSource: { bucket: FAKE_BUCKET, object } })}`,
-        `[2026-10-27T00:00:02.000Z] <<< [apiv2][status] PUT https://storage.googleapis.com/${FAKE_BUCKET}/${object} 200`,
+        `[2026-10-27T00:00:01.000Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/${REGION_PATH}/functions:generateUploadUrl ${JSON.stringify({ uploadUrl: `https://storage.googleapis.com/${uploadsBucket}/${object}?X-Goog-Signature=SECRET-MARKER`, storageSource: { bucket: uploadsBucket, object } })}`,
+        `[2026-10-27T00:00:02.000Z] <<< [apiv2][status] PUT https://storage.googleapis.com/${uploadsBucket}/${object} 200`,
       );
     } else {
       const object = `${String(++w.uploadN).padStart(8, "0")}-5555-4666-8777-888888888888.zip`;
@@ -371,7 +372,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       ) {
         w.iamBindings.push({
           role: "roles/eventarc.eventReceiver",
-          members: [`serviceAccount:${FAKE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com`],
+          members: [`serviceAccount:${projectNumber}-compute@developer.gserviceaccount.com`],
         });
       }
       w.packages.set(name, true);
@@ -411,7 +412,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     }
   };
 
-  w.projectNumber = FAKE_PROJECT_NUMBER;
+  w.projectNumber = projectNumber;
   return w;
 }
 

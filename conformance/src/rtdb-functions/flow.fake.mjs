@@ -50,6 +50,7 @@ export function makeWorld(options = {}) {
   const delivered = new Set(); // step ids whose frames the fake log has
   const seenFrames = [];
   const world = {
+    reads: [],
     events,
     log,
     written,
@@ -102,7 +103,7 @@ export function makeWorld(options = {}) {
     inventory: {
       take: async () => {
         events.push("inventory-take");
-        return { complete: true, items: {} };
+        return { complete: options.inventoryIncomplete !== true, items: {} };
       },
       removeLeftovers: async (before, owned) => {
         events.push(`inventory-clean ${owned.length}`);
@@ -124,6 +125,7 @@ export function makeWorld(options = {}) {
       },
       write: async (step) => {
         events.push(`write ${step.id}`);
+        if (options.writeThrows === step.id) throw new Error("cap reached before the write");
         written.push(step.id);
         const answer = options.answers?.[step.id] ?? { outcome: "ok", status: 200 };
         if (answer.outcome === "ok") {
@@ -142,8 +144,10 @@ export function makeWorld(options = {}) {
       },
     },
     logs: {
-      read: async () => {
+      read: async (range) => {
         events.push("logs");
+        world.reads.push(range);
+        options.onRead?.(world.reads.length);
         if (options.logsIncomplete) return { frames: [], entries: 0, ignored: {}, complete: false };
         const fresh = [];
         for (const key of delivered) {

@@ -80,12 +80,17 @@ test("the log reader asks for the window, reads each frame once across reads, an
   const second = await reader.read({ start: "a", end: "b" });
   assert.equal(second.frames.length, 0, "the same insert ids are not returned twice");
 
+  let endlessCalls = 0;
   const endless = createLogReader({
-    control: async () => ({ status: 200, value: { entries: [], nextPageToken: "more" } }),
+    control: async () => {
+      endlessCalls += 1;
+      return { status: 200, value: { entries: [], nextPageToken: "more" } };
+    },
     now: () => "t",
   });
   const bounded = await endless.read({ start: "a", end: "b" });
   assert.equal(bounded.complete, false);
+  assert.equal(endlessCalls, 3, "three pages and no more");
 });
 
 test("a log read that fails is an incomplete read, not an exception", async () => {

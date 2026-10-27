@@ -77,7 +77,7 @@ export function fakeWorld(faults = [], { onItemChange } = {}) {
     w.sent.push(`${init.method} ${u.host}${u.pathname}`);
     w.auth.push([init.method, u.pathname, init.headers.authorization ?? null]);
     const fault = faults.find(
-      (f) => !f.used && f.method === init.method && f.path.test(u.pathname),
+      (f) => !f.used && f.method === init.method && f.path.test(u.pathname) && !(f.skip-- > 0),
     );
     if (!fault) return apply(init.method, u, body);
     fault.used = true;

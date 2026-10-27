@@ -169,6 +169,7 @@ function world({
   operation = { name: OPERATION, metadata: { target: RESOURCE }, done: false },
   polls = 2,
   failDelete = false,
+  stays = false,
 } = {}) {
   const calls = [];
   let remaining = polls;
@@ -178,7 +179,7 @@ function world({
     let answer;
     if (method === "DELETE") {
       if (failDelete) throw new Error("socket hang up");
-      exists = false;
+      exists = stays;
       answer = { status: 200, value: operation };
     } else if (url.includes("/v1/operations/")) {
       remaining -= 1;
@@ -277,4 +278,13 @@ test("an upload that is not accounted for keeps the target from being clean even
   await cleanupGen1(w.control, target, state, { log: async () => {}, sleep: noSleep });
   assert.equal(state.cleaned, false);
   assert.match(state.cleanupError, /source upload not cleaned: unexplained-object:x/);
+});
+
+test("a function that is still there after the delete operation ended leaves the target residual", async () => {
+  const target = resolveGen1Target(spec());
+  const w = world({ stays: true });
+  const state = { started: true, cleaned: false, target };
+  await cleanupGen1(w.control, target, state, { log: async () => {}, sleep: noSleep });
+  assert.equal(state.cleaned, false);
+  assert.match(state.cleanupError, /function remains after delete/);
 });

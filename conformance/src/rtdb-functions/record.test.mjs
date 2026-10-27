@@ -2,13 +2,16 @@
 // packet, the token provider, and a run's private output. A run itself is exercised on the fakes.
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { assembleStage2 } from "./assemble.mjs";
 import { FIXTURE_HANDLERS } from "./frames.mjs";
 import {
+  admitRun,
   assertApproval,
   createTokenProvider,
   estimatedUsd,
@@ -203,5 +206,189 @@ test("a run that leaves residue says so in the summary and the exit code", async
     assert.match(result.reasons.join(";"), /rtdbDeletedV2 was not cleaned/);
   } finally {
     await rm(w.runDir, { recursive: true, force: true });
+  }
+});
+
+// ---- admission and the output of a run ----
+
+const PRIVATE = "/private/docs.local";
+const PINS = JSON.stringify({ baselineRulesSha256: SHA });
+const PACKET = Buffer.from(`# Packet\n\n\`\`\`json cv14-pins\n${PINS}\n\`\`\`\n`);
+const packetSha = createHash("sha256").update(PACKET).digest("hex");
+
+/** An admission whose outside effects are all fakes; `over` replaces one of them. */
+function admission(over = {}) {
+  const calls = [];
+  const deps = {
+    git: async (args) => {
+      calls.push(`git ${args[0]}`);
+      return args[0] === "rev-parse" ? `${GIT}\n` : "";
+    },
+    readFile: async (path) => {
+      calls.push(`read ${path.split("/").at(-1)}`);
+      return path.endsWith("review.md")
+        ? `Decision: APPROVE\ngitSha: ${GIT}\npacketSha256: ${packetSha}\n`
+        : PACKET;
+    },
+    requiredSources: async () => calls.push("sources"),
+    adcVerdict: async () => (calls.push("adc"), { ok: true }),
+    ...over.deps,
+  };
+  const env = {
+    FIREEMU_CV14_REVIEW: `${PRIVATE}/review.md`,
+    FIREEMU_CV14_PACKET: `${PRIVATE}/packet.md`,
+    ...over.env,
+  };
+  return { run: () => admitRun({ env, privateRoot: PRIVATE, root: "/repo", deps }), calls };
+}
+
+test("an admission needs private paths, a clean tree, the approval, the pins, the sources and a usable ADC token, in that order", async () => {
+  const ok = admission();
+  assert.deepEqual(await ok.run(), { gitSha: GIT, packetPins: { baselineRulesSha256: SHA } });
+  assert.deepEqual(ok.calls, [
+    "git rev-parse",
+    "git status",
+    "read packet.md",
+    "read review.md",
+    "sources",
+    "adc",
+  ]);
+  const refusals = [
+    [{ env: { FIREEMU_CV14_REVIEW: undefined } }, /private review and packet paths/],
+    [{ env: { FIREEMU_CV14_PACKET: "/elsewhere/packet.md" } }, /private review and packet paths/],
+    [{ env: { FIREEMU_CV14_REVIEW: `${PRIVATE}-x/review.md` } }, /private review and packet paths/],
+    [
+      {
+        deps: {
+          git: async (args) =>
+            args[0] === "rev-parse" ? `${GIT}\n` : " M conformance/src/rtdb-functions/flow.mjs\n",
+        },
+      },
+      /clean reviewed commit/,
+    ],
+    [
+      {
+        deps: {
+          readFile: async (path) => (path.endsWith("review.md") ? "Decision: APPROVE\n" : PACKET),
+        },
+      },
+      /APPROVE must bind/,
+    ],
+    [
+      {
+        deps: {
+          readFile: async (path) =>
+            path.endsWith("review.md")
+              ? `Decision: APPROVE\ngitSha: ${GIT}\npacketSha256: ${SHA}\n`
+              : PACKET,
+        },
+      },
+      /APPROVE must bind/,
+    ],
+    [
+      {
+        deps: {
+          readFile: async (path) =>
+            path.endsWith("review.md")
+              ? `Decision: APPROVE\ngitSha: ${GIT}\npacketSha256: ${createHash("sha256").update("# no pins").digest("hex")}\n`
+              : Buffer.from("# no pins"),
+        },
+      },
+      /packet pins/,
+    ],
+    [
+      {
+        deps: {
+          requiredSources: async () => {
+            throw new Error("reviewed source changed: x");
+          },
+        },
+      },
+      /reviewed source changed/,
+    ],
+    [
+      { deps: { adcVerdict: async () => ({ ok: false, reason: "adc-scopes-missing" }) } },
+      /ADC token is not usable \(adc-scopes-missing\)/,
+    ],
+  ];
+  for (const [over, message] of refusals) {
+    await assert.rejects(() => admission(over).run(), message, JSON.stringify(Object.keys(over)));
+  }
+  // nothing after the failing step is asked: no ADC token is minted for a tree that is not clean
+  const dirty = admission({ deps: { git: async (args) => (args[0] === "rev-parse" ? GIT : "M") } });
+  await assert.rejects(() => dirty.run(), /clean reviewed commit/);
+  assert.deepEqual(dirty.calls, []);
+});
+
+async function rehearseWith(arg, extra = {}) {
+  const runDir = await mkdtemp(join(tmpdir(), "cv14-record-"));
+  const rehearsal = createRehearsalEnvironment(arg);
+  const assembled = [];
+  const summary = await executeRun({
+    environment: rehearsal.environment,
+    runDir,
+    packetPins: { baselineRulesSha256: rehearsal.environment.rtdbPacket.baselineRulesSha256 },
+    assemble: (options) => {
+      const made = assembleStage2(options);
+      assembled.push(made);
+      return made;
+    },
+    ...extra,
+  });
+  return { runDir, summary, assembled, ...rehearsal };
+}
+
+test("the project number is masked in every stored file, and a secret-shaped text is refused whatever the list says", async () => {
+  const number = "424242424242";
+  const w = await rehearseWith({ options: { projectNumber: number, numberInRecord: true } });
+  try {
+    assert.equal(w.summary.outcome, "recorded", JSON.stringify(w.summary));
+    for (const file of await readdir(w.runDir)) {
+      if (file === "owned-uploads.jsonl" || file === "journal.jsonl") continue;
+      const text = await readFile(join(w.runDir, file), "utf8");
+      assert.ok(!text.includes(number), `${file} holds the number`);
+    }
+    const records = await readFile(join(w.runDir, "records.json"), "utf8");
+    assert.ok(records.includes("projects/123456789012/locations"), "the masked number stands in");
+  } finally {
+    await rm(w.runDir, { recursive: true, force: true });
+  }
+  for (const leak of [
+    "ya29.a0AbCdEfGhIjKlMnOp",
+    "AIzaSyA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "eyJhbGciOiJSUzI1NiIs",
+    "Bearer abcdefghijklmnop",
+  ]) {
+    const refused = await rehearseWith({ options: { secretInRecord: leak } });
+    try {
+      assert.match(
+        JSON.parse(await readFile(join(refused.runDir, "result.json"), "utf8")).reasons.join(";"),
+        /output was refused/,
+        leak,
+      );
+    } finally {
+      await rm(refused.runDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("after a deploy the grants are read again, and the upload ledger is closed at the end", async () => {
+  const w = await rehearseWith({});
+  try {
+    const grants = JSON.parse(await readFile(join(w.runDir, "grants.json"), "utf8"));
+    assert.notEqual(grants.after, null);
+    assert.notEqual(grants.iam.after, null);
+    assert.equal(w.assembled.length, 1);
+    // a closed ledger takes no further deploy
+    await assert.rejects(() => w.assembled[0].uploads.beginDeploy("after-close"), /./u);
+  } finally {
+    await rm(w.runDir, { recursive: true, force: true });
+  }
+  const none = await rehearseWith({ options: { loggingState: "DISABLED" } });
+  try {
+    const grants = JSON.parse(await readFile(join(none.runDir, "grants.json"), "utf8"));
+    assert.equal(grants.after, null, "no deploy, no grants read after the run");
+  } finally {
+    await rm(none.runDir, { recursive: true, force: true });
   }
 });

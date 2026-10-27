@@ -84,7 +84,7 @@ export const exitCodeOf = ({ outcome, residual }) =>
 const maskNumber = (text, projectNumber) => text.replaceAll(projectNumber, MASK);
 
 /** Runs one CV14 observation in `environment`, writes its private output and returns counts only. */
-export async function executeRun({ environment, runDir, packetPins }) {
+export async function executeRun({ environment, runDir, packetPins, assemble = assembleStage2 }) {
   const journalPath = join(runDir, "journal.jsonl");
   const log = (action, detail) =>
     appendFile(
@@ -101,7 +101,7 @@ export async function executeRun({ environment, runDir, packetPins }) {
     }),
     baselineRulesSha256: packetPins.baselineRulesSha256,
   };
-  const assembled = assembleStage2({ ...environment, packet, runDir, log });
+  const assembled = assemble({ ...environment, packet, runDir, log });
   let result;
   try {
     result = await runStage2(assembled.deps);
@@ -185,22 +185,24 @@ export async function executeRun({ environment, runDir, packetPins }) {
   return summary;
 }
 
-/** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
-export async function recordStage2() {
-  const reviewPath = process.env.FIREEMU_CV14_REVIEW;
-  const packetPath = process.env.FIREEMU_CV14_PACKET;
+/**
+ * Admission: the private paths, a clean reviewed tree, the approval that binds this commit and packet,
+ * the packet's pins, the reviewed sources, and an ADC token with the scopes the RTDB hosts need. Every
+ * outside effect comes in through `deps`, so each refusal is tested.
+ */
+export async function admitRun({ env, privateRoot, root, deps }) {
+  const reviewPath = env.FIREEMU_CV14_REVIEW;
+  const packetPath = env.FIREEMU_CV14_PACKET;
   if (
     !reviewPath ||
     !packetPath ||
-    !reviewPath.startsWith(`${PRIVATE_ROOT}/`) ||
-    !packetPath.startsWith(`${PRIVATE_ROOT}/`)
+    !reviewPath.startsWith(`${privateRoot}/`) ||
+    !packetPath.startsWith(`${privateRoot}/`)
   ) {
     throw new Error("private review and packet paths are required");
   }
-  const root = fileURLToPath(new URL("../../..", import.meta.url));
-  const gitSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
-  const dirty = execFileSync(
-    "git",
+  const gitSha = (await deps.git(["rev-parse", "HEAD"], root)).trim();
+  const dirty = await deps.git(
     [
       "status",
       "--porcelain",
@@ -210,23 +212,39 @@ export async function recordStage2() {
       "conformance/src/rtdb-functions",
       "tools/sdk-smoke-database",
     ],
-    { cwd: root, encoding: "utf8" },
+    root,
   );
   if (dirty) throw new Error("CV14 needs a clean reviewed commit");
-  const packet = await readFile(packetPath);
-  assertApproval(await readFile(reviewPath, "utf8"), gitSha, sha256(packet));
+  const packet = await deps.readFile(packetPath);
+  assertApproval(await deps.readFile(reviewPath, "utf8"), gitSha, sha256(packet));
   const packetPins = parsePacketPins(packet.toString("utf8"));
-  await requiredStage2Sources();
+  await deps.requiredSources();
+  const verdict = await deps.adcVerdict();
+  if (!verdict.ok) throw new Error(`the ADC token is not usable (${verdict.reason})`);
+  return { gitSha, packetPins };
+}
+
+/** The command-line entry: admission by approval file, pins and the ADC scope check, then the run. */
+export async function recordStage2() {
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
   const adc = await ownerAdc();
+  const budget = createStage2Budget();
+  const getToken = createTokenProvider(adc.file, budget);
+  const { packetPins } = await admitRun({
+    env: process.env,
+    privateRoot: PRIVATE_ROOT,
+    root,
+    deps: {
+      git: async (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
+      readFile,
+      requiredSources: requiredStage2Sources,
+      adcVerdict: async () => adcPreflight(fetch, await getToken()),
+    },
+  });
   const projectNumber = await readPrivateProjectIdentity(
     PROJECT_IDENTITY_FILE,
     PROJECT_IDENTITY_SHA,
   );
-
-  const budget = createStage2Budget();
-  const getToken = createTokenProvider(adc.file, budget);
-  const verdict = await adcPreflight(fetch, await getToken());
-  if (!verdict.ok) throw new Error(`the ADC token is not usable (${verdict.reason})`);
 
   const runDir = join(PRIVATE_ROOT, "runs", `cv14-${new Date().toISOString().replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });

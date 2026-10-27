@@ -61,7 +61,7 @@ function setAt(root, segments, value) {
 /** The tree after one REST write: PUT replaces, PATCH merges children, DELETE and null remove. The input is not changed. */
 export function applyWrite(tree, method, segments, body) {
   let next = clone(tree);
-  if (method === "PUT") next = setAt(next, segments, body === undefined ? null : body);
+  if (method === "PUT") next = setAt(next, segments, body);
   else if (method === "DELETE") next = setAt(next, segments, null);
   else if (method === "PATCH") {
     for (const [key, value] of Object.entries(body ?? {}))

@@ -241,3 +241,103 @@ test("the journal names every phase, in order", async () => {
     "closed",
   ]);
 });
+
+// ---- the waits, the window and the bounds of the sequence ----
+
+const between = (events, from, to) => {
+  const start = events.indexOf(from);
+  const end = to === undefined ? events.length : events.indexOf(to);
+  return events.slice(start + 1, end).filter((e) => e === "logs").length;
+};
+
+test("a wait ends as soon as every documented frame is in, and a step with nothing documented waits the short window", async () => {
+  const w = makeWorld();
+  await runStage2(w.deps);
+  const poll = STAGE2_WINDOWS.pollMs;
+  assert.equal(
+    between(w.events, "write s1", "write s2"),
+    1,
+    "the frames were there at the first read",
+  );
+  assert.equal(
+    between(w.events, "write s3", "write s4"),
+    STAGE2_WINDOWS.quietMs / poll,
+    "a no-op waits the short window",
+  );
+  assert.equal(between(w.events, "write s7", "write s8"), STAGE2_WINDOWS.quietMs / poll);
+  assert.equal(
+    between(w.events, "write s9"),
+    STAGE2_WINDOWS.finalMs / poll + 1,
+    "the last write's own wait, then the final window",
+  );
+});
+
+test("when a documented frame never comes the wait runs to the end of its window", async () => {
+  const w = makeWorld({ silent: new Set(FIXTURE_HANDLERS.map((h) => h.name)) });
+  await runStage2(w.deps);
+  assert.equal(
+    between(w.events, "write s1", "write s2"),
+    STAGE2_WINDOWS.stepMs / STAGE2_WINDOWS.pollMs,
+  );
+});
+
+test("a refused write expects no frame, so it waits only the short window", async () => {
+  const w = makeWorld({ answers: { s2: { outcome: "refused", status: 401 } } });
+  await runStage2(w.deps);
+  assert.equal(
+    between(w.events, "write s2", "write s3"),
+    STAGE2_WINDOWS.quietMs / STAGE2_WINDOWS.pollMs,
+  );
+});
+
+test("the log window starts before the first deploy and ends after now", async () => {
+  const w = makeWorld();
+  const startedAt = w.clock.now();
+  await runStage2(w.deps);
+  assert.ok(w.reads.length > 0);
+  for (const range of w.reads) {
+    assert.ok(Date.parse(range.start) < startedAt, "the window opens before the run");
+    assert.ok(Date.parse(range.end) > Date.parse(range.start));
+  }
+  assert.ok(Date.parse(w.reads.at(-1).end) > w.clock.now());
+});
+
+test("an incomplete inventory before the run stops it before any absence check", async () => {
+  const w = makeWorld({ inventoryIncomplete: true });
+  const result = await runStage2(w.deps);
+  assert.match(result.reasons.join(";"), /inventory before the run is incomplete/);
+  assert.equal(names(w.events, "absent").length, 0);
+  assert.equal(names(w.events, "rtdb-").length, 0);
+});
+
+test("a write that could not be sent ends the sequence; with no write sent there is no final window", async () => {
+  const second = makeWorld({ writeThrows: "s2" });
+  const result = await runStage2(second.deps);
+  assert.match(result.reasons.join(";"), /write s2 was not completed/);
+  assert.deepEqual(names(second.events, "write "), ["write s1", "write s2"]);
+  const first = makeWorld({ writeThrows: "s1" });
+  await runStage2(first.deps);
+  assert.deepEqual(names(first.events, "write "), ["write s1"]);
+  assert.equal(
+    first.events.filter((e) => e === "logs").length,
+    0,
+    "nothing was written, so nothing is waited for",
+  );
+});
+
+test("a signal during the final window ends it at once", async () => {
+  const abort = { stopped: false };
+  const w = makeWorld({
+    abort,
+    onRead: (count) => {
+      // the first reads belong to the steps; stop at the second read after the last write
+      if (w.events.includes("write s9") && between(w.events, "write s9") >= 2) abort.stopped = true;
+      void count;
+    },
+  });
+  await runStage2(w.deps);
+  assert.ok(
+    between(w.events, "write s9", "cleanup rtdbCreatedV1") <= 3,
+    "the final window did not run on",
+  );
+});

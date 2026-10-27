@@ -1716,7 +1716,7 @@ writeFileSync("ran-here.txt", "yes");`,
 
 test("a CLI directory must be absolute and exist as a directory", async () => {
   const { createBudget } = await import("./harness.mjs");
-  for (const cwd of ["relative/dir", "", 7, null]) {
+  for (const cwd of ["relative/dir", "", 7, null, ".", "functions-http", "../functions-http"]) {
     await assert.rejects(
       () =>
         production.cli(
@@ -1777,5 +1777,37 @@ test("the REST control reaches an extra host only when the caller names it exact
       /extra host/,
       JSON.stringify(extraHosts),
     );
+  }
+});
+
+test("a debug log left in the CLI directory by an earlier run is gone before the CLI starts", async () => {
+  const { mkdir } = await import("node:fs/promises");
+  const { createBudget } = await import("./harness.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "functions-http-stale-"));
+  const work = join(dir, "work");
+  const runDir = join(dir, "run");
+  await mkdir(work);
+  await mkdir(runDir);
+  await writeFile(join(work, "firebase-debug.log"), "a signed URL of an earlier run");
+  const script = join(dir, "fake-cli.mjs");
+  await writeFile(
+    script,
+    `import { existsSync, writeFileSync } from "node:fs";
+writeFileSync("saw-stale.txt", String(existsSync("firebase-debug.log")));`,
+  );
+  try {
+    await production.cli(
+      ["deploy"],
+      "/adc",
+      createBudget(),
+      "cliDeploy",
+      runDir,
+      { onEvent() {} },
+      [process.execPath, script],
+      { cwd: work },
+    );
+    assert.equal(await readFile(join(work, "saw-stale.txt"), "utf8"), "false");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

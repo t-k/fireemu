@@ -305,3 +305,87 @@ test("generated worlds: a delete is only ever sent to an owned, new trigger or t
     assert.equal(result.ok, strangers.length === 0 && w.sets.services.size === 0);
   }
 });
+
+test("a trigger delete whose operation is not in the reviewed form or never ends is an error, not retried", async () => {
+  for (const [operation, message] of [
+    [`projects/${PROJECT}/locations/europe-west1/operations/op-1`, /unreviewed delete operation/],
+    [`projects/other/locations/${REGION}/operations/op-1`, /unreviewed delete operation/],
+    [`projects/${PROJECT}/locations/${REGION}/operations/`, /unreviewed delete operation/],
+    [`projects/${PROJECT}/locations/${REGION}/operations/a/b`, /unreviewed delete operation/],
+    [undefined, /unreviewed delete operation/],
+  ]) {
+    const w = world();
+    const before = await takeInventory(w.control, "inventory");
+    w.sets.triggers.add(TRIGGER);
+    const control = async (method, url, body, kind, allowed) =>
+      method === "DELETE" && url.includes("/triggers/")
+        ? { status: 200, value: { name: operation, done: false } }
+        : w.control(method, url, body, kind, allowed);
+    const result = await removeLeftovers(
+      control,
+      before,
+      { trigger: TRIGGER, topic: TOPIC },
+      { sleep: noSleep },
+    );
+    assert.equal(result.ok, false);
+    assert.match(result.error, message);
+  }
+  // an operation that never ends is polled five times and then given up
+  const w = world();
+  const before = await takeInventory(w.control, "inventory");
+  w.sets.triggers.add(TRIGGER);
+  let polls = 0;
+  const slow = async (method, url, body, kind, allowed) => {
+    if (method === "DELETE" && url.includes("/triggers/")) {
+      return {
+        status: 200,
+        value: { name: `projects/${PROJECT}/locations/${REGION}/operations/op-1`, done: false },
+      };
+    }
+    if (url.includes("/operations/")) {
+      polls += 1;
+      return { status: 200, value: { name: "x", done: false } };
+    }
+    return w.control(method, url, body, kind, allowed);
+  };
+  const result = await removeLeftovers(
+    slow,
+    before,
+    { trigger: TRIGGER, topic: TOPIC },
+    { sleep: noSleep },
+  );
+  assert.equal(polls, 5);
+  assert.match(result.error, /did not complete/);
+});
+
+test("a trigger or topic name with a suffix outside the reviewed form is refused", () => {
+  const withTrigger = (trigger) => record({ eventTrigger: { trigger, pubsubTopic: TOPIC } });
+  for (const suffix of ["49-49", "12345678901234567", "", "A1"]) {
+    assert.throws(
+      () =>
+        ownedEventarcNames(
+          withTrigger(`projects/${PROJECT}/locations/${REGION}/triggers/rtdbwrittenv2-${suffix}`),
+          target,
+        ),
+      /unreviewed Eventarc/,
+      suffix,
+    );
+  }
+  for (const topic of [
+    `${TOPIC}0000000000`,
+    TOPIC.replace("-679", "-x"),
+    TOPIC.replace("-679", ""),
+  ]) {
+    assert.throws(
+      () =>
+        ownedEventarcNames(
+          record({ eventTrigger: { trigger: TRIGGER, pubsubTopic: topic } }),
+          target,
+        ),
+      /unreviewed Eventarc/,
+      topic,
+    );
+  }
+  // the function name is compared in lower case: a record of another case is another function's
+  assert.deepEqual(ownedEventarcNames(record(), target), { trigger: TRIGGER, topic: TOPIC });
+});

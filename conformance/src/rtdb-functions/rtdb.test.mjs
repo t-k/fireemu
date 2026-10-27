@@ -117,3 +117,33 @@ test("no row the client logs holds the token", async () => {
   assert.ok(rows.length > 20);
   assert.ok(rows.every((row) => !row.includes("test-token") && !/Bearer/u.test(row)));
 });
+
+test("Rules that cannot be restored leave the RTDB not closed, whatever else was cleaned", async () => {
+  // the second Rules PUT is the restore: the answer is a lie that never touched the Rules
+  const w = fakeWorld([{ method: "PUT", path: /\.settings\/rules/u, kind: "lie", skip: 1 }]);
+  const rtdb = make(w);
+  await rtdb.setup();
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.closed, false);
+  assert.equal(closed.state.rules, "ours");
+  assert.deepEqual(
+    closed.unresolved,
+    [],
+    "nothing unknown was sent: the state alone says it is not closed",
+  );
+});
+
+test("a row that cannot be logged means a sent request may be unaccounted for: not closed", async () => {
+  const w = fakeWorld();
+  let calls = 0;
+  const rtdb = make(w, {
+    log: () => {
+      calls += 1;
+      if (calls > 3) throw new Error("disk full");
+    },
+  });
+  await rtdb.setup().catch(() => {});
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.closed, false);
+  assert.ok(closed.counts.admin.logFailures > 0);
+});

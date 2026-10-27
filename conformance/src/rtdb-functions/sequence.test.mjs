@@ -258,3 +258,71 @@ test("generated frames: every documented delivery of the sequence is attributed 
     assert.equal(match.step, step.step, JSON.stringify({ handler: handler.name, step: step.step }));
   }
 });
+
+// ---- near misses of the attribution and the observations ----
+
+test("the same transition on two items is told apart by the item id", () => {
+  const steps = ["a", "b"].map((id, index) => ({
+    id: `t${index + 1}`,
+    method: "PUT",
+    path: `${PREFIX}/items/${id}`,
+    body: { n: 1 },
+    context: "admin",
+  }));
+  assert.equal(matchFrame(frameFor("rtdbCreatedV2", "b", null, { n: 1 }), steps).step, "t2");
+  assert.equal(matchFrame(frameFor("rtdbCreatedV2", "a", null, { n: 1 }), steps).step, "t1");
+  assert.equal(
+    matchFrame(frameFor("rtdbCreatedV2", "c", null, { n: 1 }), steps).reason,
+    "no-match",
+  );
+});
+
+test("frames without an event id are not taken for repeats of one another", () => {
+  const t = itemTransitions(STEPS)[0];
+  const bare = (seq) => {
+    const frame = frameFor("rtdbCreatedV2", "a", null, t.after, { seq });
+    delete frame.event.id;
+    return frame;
+  };
+  const report = observe({ writes: { s1: ok() }, frames: [bare(1), bare(2)] });
+  const created = report.steps[0].handlers.rtdbCreatedV2;
+  assert.equal(created.frames, 2);
+  assert.equal(created.distinctEventIds, 2);
+  assert.equal(created.duplicateFrames, 0);
+});
+
+test("the latency is that of the earliest delivery, not of a later repeat", () => {
+  const t = itemTransitions(STEPS)[0];
+  const frames = [
+    frameFor("rtdbCreatedV2", "a", null, t.after, {
+      eventId: "e",
+      receivedAt: "2026-10-27T00:00:30.000Z",
+    }),
+    frameFor("rtdbCreatedV2", "a", null, t.after, {
+      eventId: "e",
+      receivedAt: "2026-10-27T00:00:04.000Z",
+      seq: 2,
+    }),
+  ];
+  const report = observe({ writes: { s1: ok() }, frames });
+  assert.equal(report.steps[0].handlers.rtdbCreatedV2.firstLatencyMs, 4000);
+  const none = observe({
+    writes: { s1: { outcome: "ok", status: 200, answeredAtMs: null } },
+    frames,
+  });
+  assert.equal(none.steps[0].handlers.rtdbCreatedV2.firstLatencyMs, null);
+});
+
+test("a frame whose generation is not the handler's, or whose snapshot is not one, is not attributed", () => {
+  const wrongGeneration = { ...frameFor("rtdbCreatedV1", "a", null, { n: 1 }), generation: 2 };
+  assert.deepEqual(matchFrame(wrongGeneration), { step: null, candidates: [], reason: "handler" });
+  const odd = frameFor("rtdbCreatedV2", "a", null, { n: 1, tag: "one" });
+  odd.event.data = { exists: "yes", key: "a", value: { n: 1, tag: "one" } };
+  assert.deepEqual(matchFrame(odd), { step: null, candidates: [], reason: "shape" });
+  const missingValue = frameFor("rtdbCreatedV2", "a", null, { n: 1, tag: "one" });
+  delete missingValue.event.data.value;
+  assert.equal(matchFrame(missingValue).reason, "shape");
+  const noId = frameFor("rtdbCreatedV2", "a", null, { n: 1, tag: "one" });
+  noId.event.params = {};
+  assert.equal(matchFrame(noId).reason, "shape");
+});

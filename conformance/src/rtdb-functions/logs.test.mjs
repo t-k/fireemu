@@ -201,3 +201,17 @@ test("generated entries: the parser never throws, every entry is counted once, a
     assert.ok(counted + result.frames.length <= entries.length);
   }
 });
+
+test("an entry of the right labels but another log name, or another resource type, is foreign", () => {
+  const wrongLog = entryFor("rtdbCreatedV1", { insertId: "w1", logName: "projects/p/logs/other" });
+  const wrongType = entryFor("rtdbCreatedV1", { insertId: "w2" });
+  wrongType.resource = { ...wrongType.resource, type: "gce_instance" };
+  const wrongLabel = entryFor("rtdbCreatedV1", { insertId: "w3" });
+  wrongLabel.resource = {
+    ...wrongLabel.resource,
+    labels: { ...wrongLabel.resource.labels, region: "europe-west1" },
+  };
+  const result = parseEntries({ entries: [wrongLog, wrongType, wrongLabel] }, { readAt: "r" });
+  assert.equal(result.frames.length, 0);
+  assert.equal(result.ignored.foreignOrigin, 3);
+});

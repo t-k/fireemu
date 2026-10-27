@@ -389,3 +389,29 @@ test("a trigger or topic name with a suffix outside the reviewed form is refused
   // the function name is compared in lower case: a record of another case is another function's
   assert.deepEqual(ownedEventarcNames(record(), target), { trigger: TRIGGER, topic: TOPIC });
 });
+
+test("a trigger name that breaks the reviewed form is refused even when its topic is made to match", () => {
+  for (const suffix of ["49-49", "12345678901234567", "ab-cd-ef"]) {
+    const trigger = `projects/${PROJECT}/locations/${REGION}/triggers/rtdbwrittenv2-${suffix}`;
+    const topic = `projects/${PROJECT}/topics/eventarc-${REGION}-rtdbwrittenv2-${suffix}-679`;
+    assert.throws(
+      () => ownedEventarcNames(record({ eventTrigger: { trigger, pubsubTopic: topic } }), target),
+      /unreviewed Eventarc/,
+      suffix,
+    );
+  }
+  // a topic number that is not digits, or too long, is refused with a matching trigger
+  for (const n of ["x", "123456789"]) {
+    assert.throws(
+      () =>
+        ownedEventarcNames(
+          record({
+            eventTrigger: { trigger: TRIGGER, pubsubTopic: TOPIC.replace("-679", `-${n}`) },
+          }),
+          target,
+        ),
+      /unreviewed Eventarc/,
+      n,
+    );
+  }
+});

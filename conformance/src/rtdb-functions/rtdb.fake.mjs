@@ -76,6 +76,9 @@ export function fakeWorld(faults = [], { onItemChange } = {}) {
           : JSON.parse(init.body);
     w.sent.push(`${init.method} ${u.host}${u.pathname}`);
     w.auth.push([init.method, u.pathname, init.headers.authorization ?? null]);
+    if (init.method === "GET" && w.forbid?.path.test(u.pathname) && w.forbid.remaining-- > 0) {
+      return json(w.forbid.status ?? 403, { error: { code: 403, status: "PERMISSION_DENIED" } });
+    }
     const fault = faults.find(
       (f) => !f.used && f.method === init.method && f.path.test(u.pathname) && !(f.skip-- > 0),
     );

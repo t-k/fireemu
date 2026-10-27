@@ -147,3 +147,34 @@ test("a row that cannot be logged means a sent request may be unaccounted for: n
   assert.equal(closed.closed, false);
   assert.ok(closed.counts.admin.logFailures > 0);
 });
+
+test("a log row that cannot be written for an unauthenticated write leaves the RTDB not closed", async () => {
+  const w = fakeWorld();
+  const rtdb = make(w, {
+    log: (row) => {
+      if (row.step === "s8") throw new Error("disk full");
+    },
+  });
+  await rtdb.setup();
+  const answer = await rtdb.write(STEPS[7]);
+  assert.equal(answer.outcome, "unknown", "an answer that could not be logged is unknown");
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.counts.anonymous.logFailures, 1);
+  assert.deepEqual(closed.unresolved, []);
+  assert.equal(closed.state.rules, "baseline");
+  assert.equal(closed.closed, false);
+});
+
+test("a refusal that looks like propagation is not waited out during the cleanup of a setup that failed", async () => {
+  // the Rules PUT of the install is a lie, so the setup stops while propagation retries are still on
+  const w = fakeWorld([{ method: "PUT", path: /\.settings\/rules/u, kind: "lie" }]);
+  const slept = [];
+  const rtdb = make(w, { sleep: async (ms) => slept.push(ms) });
+  await assert.rejects(() => rtdb.setup(), /./u);
+  slept.length = 0;
+  // from now on every read of the Rules is refused with a 403
+  w.forbid = { path: /\.settings\/rules/u, remaining: 1000 };
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.closed, false);
+  assert.deepEqual(slept, [], "no retry wait in the cleanup");
+});

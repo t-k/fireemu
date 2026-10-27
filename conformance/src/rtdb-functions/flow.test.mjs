@@ -313,7 +313,7 @@ test("an incomplete inventory before the run stops it before any absence check",
 test("a write that could not be sent ends the sequence; with no write sent there is no final window", async () => {
   const second = makeWorld({ writeThrows: "s2" });
   const result = await runStage2(second.deps);
-  assert.match(result.reasons.join(";"), /write s2 was not completed/);
+  assert.deepEqual(result.reasons, ["write s2 was not completed: cap reached before the write"]);
   assert.deepEqual(names(second.events, "write "), ["write s1", "write s2"]);
   const first = makeWorld({ writeThrows: "s1" });
   await runStage2(first.deps);

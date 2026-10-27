@@ -12729,6 +12729,13 @@ exports.add = onCall({{}}, observe("add"));
             assert_eq!(config.project, cfg.auth_project);
             assert_eq!(config.functions_host.as_deref(), Some("127.0.0.1:5001"));
             assert_eq!(config.runner_secret, "secret");
+            assert!(!config.debug_mode, "{profile}");
+            let mut inspected = cfg.clone();
+            inspected.functions_inspect_dynamic = true;
+            assert!(super::functions_config(&inspected, None, "s").debug_mode);
+            let mut inspected = cfg.clone();
+            inspected.functions_inspect_port = Some(9229);
+            assert!(super::functions_config(&inspected, None, "s").debug_mode);
         }
     }
 

@@ -1913,7 +1913,10 @@ exports.worker = onTaskDispatched(() => {{ hit("worker"); }});
 curl -s --max-time 10 -o /dev/null -X POST -H 'content-type: application/json' \
   -d '{{"task":{{"name":"projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks/t1","httpRequest":{{"url":"","body":"eyJkYXRhIjp7fX0="{headers}}}}}}}' \
   "$H/projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks"
-sleep 3"#
+i=0; while [ $i -lt 80 ] && [ "{wait}" = yes ] && ! grep -q '^{queue}$' "{hits}" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+sleep 1.5"#,
+            wait = if delivered { "yes" } else { "no" },
+            hits = hits.display()
         );
         let out = fireemu_exec(&dir, "demo-manifest-task-bearer")
             .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
@@ -1976,6 +1979,8 @@ exports.guarded = onCall((request) => {{
         r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}}]}"#,
     );
     let script = r#"
+const fs = require("fs");
+const HITS = process.env.HITS_FILE;
 const project = "demo-manifest-task-mark";
 const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1999,7 +2004,13 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ task: { name: "projects/" + project + "/locations/us-central1/queues/guarded/tasks/t" + (n++), httpRequest: { url: "", body, headers: { Authorization: "Bearer " + token(iat) } } } }),
     });
-    await sleep(2500);
+    // A delivered task is waited for (a loaded machine can be slow); a refused one is given
+    // time to show up.
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      if (kind === "now" && fs.existsSync(HITS) && fs.readFileSync(HITS, "utf8").includes("guarded:now:")) break;
+    }
+    await sleep(kind === "future" ? 1000 : 0);
   }
 })().catch((error) => { console.error(String(error)); process.exit(1); });
 "#;
@@ -2016,6 +2027,7 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
         let out = fireemu_exec(&dir, "demo-manifest-task-mark")
             .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
             .args(["--", "node", "-e", script])
+            .env("HITS_FILE", &hits)
             .stdin(Stdio::null())
             .output()
             .unwrap();

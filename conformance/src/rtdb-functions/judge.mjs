@@ -4,7 +4,7 @@
 // else is kept in full in the report and adds a reason, so the coordinator reads the observation before
 // it is called recorded. It never rejects an observation: it only refuses to call it clean.
 
-import { NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS } from "./frames.mjs";
+import { NAMED_CONTEXT_MEMBERS, NAMED_EVENT_MEMBERS, isRecordedMember } from "./frames.mjs";
 
 const DROPPED_CLASSES = ["unparsed", "unknownHandler", "foreignOrigin"];
 const LIST_LIMIT = 8;
@@ -21,7 +21,12 @@ function unnamedMembers(frame) {
   const keys = frame.generation === 1 ? holder?.contextKeys : holder?.eventKeys;
   for (const key of Array.isArray(keys) ? keys : []) if (!named.includes(key)) found.add(key);
   for (const key of Object.keys(holder?.extras ?? {})) found.add(key);
-  return [...found];
+  // a member the production recording showed is named for its generation, event type and shape only
+  const extras = holder?.extras ?? {};
+  return [...found].filter(
+    (key) =>
+      !(key in extras && isRecordedMember(frame.handler, frame.generation, key, extras[key])),
+  );
 }
 
 /**

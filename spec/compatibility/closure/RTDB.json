@@ -727,7 +727,7 @@
      },
      "timingWithinTolerance": true
     },
-    "binding": "the release binary 7df56bd9 built from built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version (RUSTC_WRAPPER empty, build path .worktree/rtdb-residual; sha256 in the evidence file)",
+    "binding": "the release binary 7df56bd9 built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version (RUSTC_WRAPPER empty, build path .worktree/rtdb-residual; sha256 in the evidence file)",
     "buildPath": ".worktree/rtdb-residual"
    }
   ],

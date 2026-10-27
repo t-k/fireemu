@@ -2,10 +2,10 @@
 // three phases against a fake database service. Nothing here sends a request.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 import {
   DB,
@@ -348,7 +348,16 @@ const ctxFor = (service, dirs, clock) => ({
   },
   ...dirs,
 });
-const scratch = () => mkdtempSync(join(tmpdir(), "retire-"));
+const scratchDirs = [];
+const scratch = () => {
+  const dir = mkdtempSync(join(tmpdir(), "retire-"));
+  scratchDirs.push(dir);
+  return dir;
+};
+// The selftest runs with a private TMPDIR and fails a run that leaves anything in it.
+after(() => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
+});
 const filesOf = (dir) => readdirSync(dir).toSorted();
 
 test("S0 sends the five reads, journals each twice, writes a verdict and no token", async () => {

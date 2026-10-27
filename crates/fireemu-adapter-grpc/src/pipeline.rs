@@ -1112,7 +1112,18 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
             Expr::Call { args, .. } => args.iter().any(reads_field),
         }
     }
-    if reads_field(expr) {
+    // A call of a string or math function fails per row, like the logic functions below: its
+    // failures were recorded with a row (O-8B), and the empty collection answers no row.
+    fn calls_scalar(expr: &Expr) -> bool {
+        match expr {
+            Expr::Call { function, args } => {
+                pipeline_exec::scalar::NAMES.contains(&function.name)
+                    || args.iter().any(calls_scalar)
+            }
+            _ => false,
+        }
+    }
+    if reads_field(expr) || calls_scalar(expr) {
         return None;
     }
     let row = pipeline_exec::Row::document(

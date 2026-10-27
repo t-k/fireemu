@@ -25,12 +25,21 @@ const EMPTY_ALIAS: &str = "Invalid empty property path string.";
 const DB: &str = "projects/demo-app/databases/(default)";
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn every_recorded_refusal_has_a_shape() {
     let (requests, order) = json_syntax::parse_with_key_order(REQUESTS.as_bytes()).unwrap();
     let production: Value = serde_json::from_str(PRODUCTION).unwrap();
     let table = recorded();
     let mut original = 0;
     let mut o5 = 0;
+    let mut o6 = 0;
+    let mut o7 = 0;
+    let mut o8a = 0;
+    let mut o8b = 0;
+    let mut o8c = 0;
+    let mut o8d = 0;
+    let mut o9 = 0;
+    let mut raw = 0;
     let mut eligible = 0;
     let mut excluded_500 = 0;
     for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
@@ -44,9 +53,11 @@ fn every_recorded_refusal_has_a_shape() {
             let answer = &production["programs"][id]["steps"][step_id];
             if answer["status"] == 500 {
                 excluded_500 += 1;
-                assert_eq!(
-                    row,
-                    "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
+                assert!(
+                    row == "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
+                        || row.starts_with("fs-ent-pipeline/o8a/dupquote-main#")
+                        || row == "fs-ent-pipeline/o8c/collections-main#array-reverse-none",
+                    "{row}"
                 );
                 assert_eq!(answer["body"][0]["error"]["status"], "INTERNAL", "{row}");
                 let message = answer["body"][0]["error"]["message"].as_str().unwrap();
@@ -61,8 +72,44 @@ fn every_recorded_refusal_has_a_shape() {
             if answer["status"] != 400 {
                 continue;
             }
+            // A body sent as written (O-8A malformed bodies) has the shape of its parsed JSON, or
+            // its own text when it is no JSON: only that exact body was refused with that text.
+            if let Some(text) = step.get("rawBody").and_then(Value::as_str) {
+                raw += 1;
+                let element = answer["body"]
+                    .as_array()
+                    .and_then(|a| a.first())
+                    .unwrap_or(&answer["body"]);
+                let message = element["error"]["message"].as_str().unwrap();
+                let shape = match json_syntax::parse_with_key_order(text.as_bytes()) {
+                    Ok((body, order)) => shape_of_json(&body, &order)
+                        .unwrap_or_else(|| panic!("recorded refusal has no shape: {row}")),
+                    Err(_) => raw_shape(text.as_bytes()),
+                };
+                assert!(
+                    table
+                        .get(&shape)
+                        .is_some_and(|texts| texts.contains(&normalized_text(message))),
+                    "recorded shape/text missing: {row}"
+                );
+                continue;
+            }
             if id.starts_with("fs-ent-pipeline/o5/") {
                 o5 += 1;
+            } else if id.starts_with("fs-ent-pipeline/o6/") {
+                o6 += 1;
+            } else if id.starts_with("fs-ent-pipeline/o7/") {
+                o7 += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8a/") {
+                o8a += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8b/") {
+                o8b += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8c/") {
+                o8c += 1;
+            } else if id.starts_with("fs-ent-pipeline/o8d/") {
+                o8d += 1;
+            } else if id.starts_with("fs-ent-pipeline/o9/") {
+                o9 += 1;
             } else {
                 original += 1;
             }
@@ -88,14 +135,17 @@ fn every_recorded_refusal_has_a_shape() {
             );
         }
     }
-    assert_eq!((original, o5), (98, 291));
-    let refused = original + o5;
-    assert_eq!(refused, 389);
-    assert_eq!(eligible, 389);
-    assert_eq!(excluded_500, 1);
+    assert_eq!(
+        (original, o5, o6, o7, o8a, o8b, o8c, o8d, o9, raw),
+        (98, 291, 21, 54, 3, 80, 84, 18, 46, 18)
+    );
+    let refused = original + o5 + o6 + o7 + o8a + o8b + o8c + o8d + o9;
+    assert_eq!(refused, 695);
+    assert_eq!(eligible, 695);
+    assert_eq!(excluded_500, 7);
     let texts: usize = table.values().map(HashSet::len).sum();
     // Rows of one shape and one text share an entry.
-    assert!(texts <= refused && texts > 80, "{texts}");
+    assert!(texts <= refused + raw && texts > 80, "{texts}");
     assert!(table.values().flatten().any(|t| t == EMPTY_ALIAS));
 }
 

@@ -309,10 +309,8 @@ fn execute_at_snapshot(
     if !config.warned.swap(true, Ordering::Relaxed) {
         eprintln!("[firestore] text search uses fireemu-lexical-v1: approximate BM25, language-neutral tokenization; no stemming, synonyms, typo correction or language autodetection");
     }
-    let whole = pipeline_exec::referenced_fields(&compiled.stages).is_none();
-    let keeps_name = compiled.select_keeps_name;
     let mut cursor = pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
-    let mut results = Vec::new();
+    let mut rows = Vec::new();
     for hit in hits {
         if cursor.is_exhausted() {
             break;
@@ -327,23 +325,18 @@ fn execute_at_snapshot(
                 fireemu_core_firestore::value::Value::Double(hit.score),
             );
         }
-        if let Some(fields) = cursor
-            .push(row)
-            .map_err(|error| crate::pipeline::eval_status(&error))?
-        {
-            let result = if whole {
-                let mut result = document.clone();
-                result.fields = fields
-                    .iter()
-                    .map(|(name, value)| (name.clone(), crate::encode::encode_value(value)))
-                    .collect();
-                result
-            } else {
-                crate::pipeline::selected_result(&fields, &document.name, keeps_name)
-            };
-            results.push(result);
-        }
+        rows.extend(
+            cursor
+                .push(row)
+                .map_err(|error| crate::pipeline::eval_status(&error))?,
+        );
     }
+    rows.extend(
+        cursor
+            .finish()
+            .map_err(|error| crate::pipeline::eval_status(&error))?,
+    );
+    let results = rows.iter().map(crate::pipeline::row_document).collect();
     let responses = crate::pipeline::pack_results(results, execution_time);
     if barrier.epoch() != epoch {
         return Err(Status::unavailable("session reset during text search"));
@@ -369,15 +362,19 @@ fn search_snapshot(
         .filter_map(|response| response.document.as_ref())
     {
         let row = crate::pipeline::document_row(document)?;
+        let path = row
+            .path
+            .clone()
+            .ok_or_else(|| Status::internal("search input without a document name"))?;
         documents.push(SearchDocument {
-            path: row.path.clone(),
+            path: path.clone(),
             fields: row.fields,
             created_at: document.create_time.as_ref().map_or(
                 fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
                 crate::encode::decode_instant,
             ),
         });
-        originals.insert(row.path, document.clone());
+        originals.insert(path, document.clone());
     }
     let mut chosen = None;
     let mut last_error = None;

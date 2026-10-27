@@ -21,341 +21,277 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
+/// (Notes on what the replay assumes: a collection group's order by parent document, string
+/// order of the parent path, is generalized from the few parents of O-9 `cg-main` and O-9b
+/// `cg-parent`; CRC-32 ties and non-ASCII IDs are not observed.)
+///
+/// Programs that fireemu does not answer like production yet. They are replayed and compared
+/// like the rest, but a difference in them is not an unexpected one; each program must still
+/// differ in at least one row, so remove a program from this list when the work that makes it
+/// match lands. (O-6 and O-7 were listed here until their stages ran; the rows that still
+/// differ are named in the lists below, each with its reason. `nesting-main` is not listed:
+/// every nesting probe this surface can take matches production.)
+const PENDING_PROGRAMS: &[&str] = &[
+    "fs-ent-pipeline/o8b/strings-main",
+    "fs-ent-pipeline/o8b/math-main",
+    "fs-ent-pipeline/o8c/timestamps-main",
+    "fs-ent-pipeline/o8c/collections-main",
+    "fs-ent-pipeline/o8d/stages-main",
+];
+
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "fs-ent-pipeline/px1/select#and-false-null",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-false-x",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-null-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-true-i",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#and-true-x",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-arr-empty",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-arr-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-all-x-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-arr-empty",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-arr-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-any-i-list",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-1-0",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-null",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-arr-x",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-i-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#array-contains-x-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-empty",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-field",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-list",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-i-s",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-n-null",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-nan-nan",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#equal-any-x-list",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-i",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-n",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#exists-x",
-        "exists is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-absent-n",
-        "is_absent is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-absent-x",
-        "is_absent is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-error-less-than-i-s",
-        "is_error is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/px1/select#is-error-sqrt-s",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-error-x",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-d5-float64",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-bogus",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-int64",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-i-number",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-n-null",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#is-type-x-null",
-        "is_type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#nor-false-false",
-        "nor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-b",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-i-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-n-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-any-x-list",
-        "not_equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-equal-x",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-i",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-n",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#not-x",
-        "not is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-false-i",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-false-x",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-null-true",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#or-true-x",
-        "or is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-arr",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-b",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-d5",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-i",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-m",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-n",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-nan",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-r",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-s",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-ts",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#type-x",
-        "type is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-b-b",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-b-x",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/select#xor-null-true",
-        "xor is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-and-1-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-array-contains-1-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-equal-any-1-1",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-is-type-bogus",
-        "is_type is outside the subset",
+        "sqrt is outside the subset",
     ),
     (
         "fs-ent-pipeline/px1/static-refusals#select-sqrt-a",
         "sqrt is outside the subset",
     ),
     (
-        "fs-ent-pipeline/px1/static-refusals#where-and-1-true",
-        "and is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-array-contains-1-1",
-        "array_contains* is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-equal-any-1-1",
-        "equal_any is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-is-type-bogus",
-        "is_type is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/px1/static-refusals#where-sqrt-a",
         "sqrt is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/where#is-error-less-than-i-s",
-        "is_error is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/where#not-equal-x",
-        "not is outside the subset",
     ),
     (
         "fs-ent-pipeline/px1/where#sqrt-s-positive",
         "sqrt is outside the subset",
     ),
     (
-        "fs-ent-pipeline/results/metadata#add-fields",
-        "add_fields is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/results/metadata#distinct",
-        "distinct is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/results/metadata#limit",
-        "without a sort production returns another order than document names, so limit keeps other documents (PX2)",
-    ),
-    (
-        "fs-ent-pipeline/results/metadata#remove-fields",
-        "remove_fields is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
         "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
+        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#accumulator-unknown",
+        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#nested-aggregate",
+        "a nested aggregate evaluates `sum` as the array function `array_sum` in production; not reproduced",
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-args#sum-of-add",
+        "add is outside the subset (math functions are not run)",
+    ),
+];
+
+/// Rows whose 200 answer holds other rows or another order than production's because the cut or
+/// the order depends on what production has not shown (see the reason); both profiles answer 200
+/// with the number of results pinned in the third member.
+const UNOBSERVED_ORDER_ROWS: &[(&str, &str, usize)] = &[
+    (
+        "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+        "a descending sort of 16 documents puts a null before a missing key where the scan order puts the missing one first, as 6- and 8-document sorts did not; the rule for the order of tied keys beyond the scan order is not observed",
+        16,
+    ),
+    (
+        "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+        "a limit after a sort cuts a group of rows tied on every sort key in an order other than the scan order (production orders a tie group differently for different limits)",
+        2,
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort",
+        "the order of an aggregate's groups is production's own and unobserved, so a sort whose keys tie between groups differs",
+        4,
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit",
+        "the order of an aggregate's groups is production's own and unobserved, so a limit after the groups keeps other groups",
+        2,
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit",
+        "the order of an aggregate's groups is production's own and unobserved, so a limit after the groups keeps other groups",
+        2,
+    ),
+    (
+        "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
+        "the order of an aggregate's groups is production's own and unobserved, so an offset after the groups skips other groups",
+        2,
+    ),
+];
+
+/// Rows of recorded programs whose production answer fireemu does not give, each pinned by the
+/// status it answers now under strict and under the emulator profile (so a change in either
+/// shows): the HTTP 500 faults of `dupquote-main` and the base64 forms production refuses in
+/// `base64-main`.
+const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-1",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-2",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-3",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#different-values",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#swapped-order",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-cr",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-cr",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mime-76",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mime-76",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mime-76-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mixed-plus-underscore",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mixed-minus-slash",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-proto-name",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        400,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-proto-name",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        404,
+        404,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#cursor-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#cursor-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+];
+
+/// Rows that only the emulator profile answers differently: strict matches. The profile keeps the
+/// official emulator's text (status 400), as it never refuses more than the official emulator.
+const EMULATOR_ONLY_DIFFERENCES: &[(&str, &str)] = &[
+    (
+        "fs-ent-pipeline/o8a/precedence-main#top-level-unknown",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#stage-unknown-member",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#bad-integer",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#string-number",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#unknown-value-type",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#malformed-and-unknown-stage",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
+    ),
+    (
+        "fs-ent-pipeline/o8a/precedence-main#malformed-and-unknown-function",
+        "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
     ),
 ];
 
@@ -486,6 +422,18 @@ fn message(text: &str) -> String {
                 .strip_suffix('.')
                 .is_some_and(|n| n.parse::<usize>().is_ok())
         });
+    // A full resource name in a path refusal (O-9 `cg-main#anc-full-name`) names the project and
+    // database of the run.
+    let path = text
+        .strip_prefix("Document path name \"")
+        .and_then(|rest| rest.split_once("\" lacks \"/\" at index "))
+        .filter(|(name, _)| name.starts_with("projects/"));
+    if let Some((name, index)) = path {
+        return format!(
+            "Document path name \"{}\" lacks \"/\" at index {index}",
+            relative(name)
+        );
+    }
     match parent {
         Some((name, _)) => format!(
             "Document parent name \"{}\" lacks \"/\" at index <n>.",
@@ -503,7 +451,10 @@ fn normalize(value: &Value) -> Value {
             for (key, inner) in map {
                 let inner = match key.as_str() {
                     "doubleValue" | "latitude" | "longitude" => double(inner),
-                    "referenceValue" | "name" => json!(relative(inner.as_str().unwrap())),
+                    // A field may be called `name` (an alias in an aggregate or distinct answer).
+                    "referenceValue" | "name" if inner.is_string() => {
+                        json!(relative(inner.as_str().unwrap()))
+                    }
                     "timestampValue" => json!(timestamp(inner.as_str().unwrap())),
                     "createTime" | "updateTime" => json!("<t>"),
                     "message" if inner.is_string() => json!(message(inner.as_str().unwrap())),
@@ -529,9 +480,25 @@ fn normalize(value: &Value) -> Value {
     }
 }
 
+/// The documents of a runQuery answer, normalized and sorted (the read time is not compared).
+fn query_documents(body: &Value) -> Vec<String> {
+    let mut documents: Vec<String> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|element| element.get("document"))
+        .map(|document| normalize(document).to_string())
+        .collect();
+    documents.sort();
+    documents
+}
+
 /// The comparable answer of an executePipeline step: the status, and the result documents as
 /// a sorted list or the error body.
-fn answer(status: u16, body: &Value) -> Value {
+/// The comparable form of an answer: the status and the error body, or the results as a multiset
+/// (production's order without a sort is its own), or in order when `ordered` (the pipeline has
+/// a `sort` stage).
+fn answer_in(status: u16, body: &Value, ordered: bool) -> Value {
     if status != 200 {
         return json!({"status": status, "body": normalize(body)});
     }
@@ -542,7 +509,9 @@ fn answer(status: u16, body: &Value) -> Value {
         .flat_map(|element| element["results"].as_array().cloned().unwrap_or_default())
         .map(|result| normalize(&result).to_string())
         .collect();
-    results.sort();
+    if !ordered {
+        results.sort();
+    }
     json!({"status": 200, "results": results})
 }
 
@@ -663,15 +632,21 @@ fn o5_debt_schema_rejects_missing_unknown_duplicate_and_wrong_types() {
     }
 }
 
+fn o5_difference_rows() -> Vec<O5Difference> {
+    parse_o5_differences(include_str!("pipeline_o5_known_differences.json"))
+}
+
 fn o5_differences() -> BTreeMap<String, O5Difference> {
-    let rows = parse_o5_differences(include_str!("pipeline_o5_known_differences.json"));
-    assert_eq!(rows.len(), 271, "finite O5 debt inventory");
-    assert_eq!(
-        rows.iter().filter(|row| row.emulator.is_some()).count(),
-        198,
-        "finite emulator debt inventory"
-    );
-    assert_eq!(KNOWN_DIFFERENCES.len(), 83, "original debt inventory");
+    let rows = o5_difference_rows();
+    // (A run that regenerates the debt file counts what is there.)
+    if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
+        assert_eq!(rows.len(), 247, "finite O5 debt inventory");
+        assert_eq!(
+            rows.iter().filter(|row| row.emulator.is_some()).count(),
+            180,
+            "finite emulator debt inventory"
+        );
+    }
     let mut table = BTreeMap::new();
     let mut unknown = 0;
     for row in rows {
@@ -743,13 +718,19 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     );
     let debts = o5_differences();
     let mut failures = Vec::new();
+    // What each profile answers for a debt row, kept to regenerate the debt file
+    // (`REGENERATE_O5_DEBT=<path>`; review the result before it replaces the committed file).
+    let mut answers: BTreeMap<(bool, String), Value> = BTreeMap::new();
     for strict in [true, false] {
-        let s = state(strict);
         let mut differing = Vec::new();
+        let mut not_replayable = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
+            // Each program runs on its own database, as the recorder cleans its collections
+            // between programs (several programs seed the same collection names).
+            let s = state(strict);
             for seed in program["seed"].as_array().unwrap() {
                 let (status, body) = call(
                     &s,
@@ -767,6 +748,19 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 let (status, body) = if rpc == "get" {
                     let parent = step["parent"].as_str().unwrap();
                     call(&s, "GET", &format!("{DOCS}/{parent}"), &Value::Null)
+                } else if let Some(raw) = step["rawBody"].as_str() {
+                    // A body sent as written (O-8A): the in-process surface takes a parsed
+                    // body, so a text that is not JSON cannot be replayed here.
+                    let text = raw.replace("{docs}", DOCS);
+                    let Ok((value, key_order)) =
+                        fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(
+                            text.as_bytes(),
+                        )
+                    else {
+                        not_replayable.push(row);
+                        continue;
+                    };
+                    call_ordered(&s, "POST", &format!("{DOCS}:{rpc}"), &value, &key_order)
                 } else {
                     call_ordered(
                         &s,
@@ -777,6 +771,23 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     )
                 };
                 let expected = &recorded[step_id];
+                // The order of every pipeline answer is compared: a read without a sort is in
+                // production's scan order (ascending CRC-32 of the document ID, O-9), which
+                // fireemu reproduces. The groups of an aggregate come in an order of their own
+                // (not the scan order, nor a sort of the keys: production's is unobserved), so
+                // such an answer is a multiset unless a `sort` follows the grouping.
+                let stages = step["body"]["structuredPipeline"]["pipeline"]["stages"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let grouped_at = stages.iter().position(|stage| {
+                    stage["name"] == "aggregate"
+                        && stage["args"][1]["mapValue"]["fields"]
+                            .as_object()
+                            .is_some_and(|groups| !groups.is_empty())
+                });
+                let ordered = rpc == "executePipeline"
+                    && grouped_at.is_none_or(|at| stages[at..].iter().any(|s| s["name"] == "sort"));
                 assert!(!expected.is_null(), "{row} has no production row");
                 let matches = if rpc == "commit" {
                     u64::from(status) == expected["status"].as_u64().unwrap()
@@ -784,11 +795,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     // A document read: the status and the normalized document.
                     json!({"status": status, "body": normalize(&body)})
                         == json!({"status": expected["status"], "body": normalize(&expected["body"])})
+                } else if rpc == "runQuery" {
+                    json!({"status": status, "documents": query_documents(&body)})
+                        == json!({"status": expected["status"], "documents": query_documents(&expected["body"])})
                 } else {
-                    answer(status, &body)
-                        == answer(
+                    answer_in(status, &body, ordered)
+                        == answer_in(
                             u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
                             &expected["body"],
+                            ordered,
                         )
                 };
                 compared += 1;
@@ -805,11 +820,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         ));
                     }
                 }
-                let got = answer(status, &body);
-                let want = answer(
+                let got = answer_in(status, &body, ordered);
+                let want = answer_in(
                     u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
                     &expected["body"],
+                    ordered,
                 );
+                if debts.contains_key(&row) {
+                    answers.insert((strict, row.clone()), got.clone());
+                }
                 if let Some(debt) = debts.get(&row) {
                     if debt.production != want {
                         failures.push(format!(
@@ -841,21 +860,77 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 if !matches {
                     differing.push((
                         row,
-                        answer(status, &body),
-                        answer(
+                        answer_in(status, &body, ordered),
+                        answer_in(
                             u16::try_from(expected["status"].as_u64().unwrap_or(0)).unwrap(),
                             &expected["body"],
+                            ordered,
                         ),
                     ));
                 }
             }
         }
+        if let Ok(path) = std::env::var("DUMP_REPLAY_DIFFS") {
+            let rows: Vec<Value> = differing
+                .iter()
+                .map(|(row, got, want)| json!({"row": row, "got": got, "want": want}))
+                .collect();
+            std::fs::write(
+                format!("{path}.{}", if strict { "strict" } else { "emulator" }),
+                serde_json::to_string_pretty(&rows).unwrap(),
+            )
+            .unwrap();
+        }
         assert!(compared > 200, "{compared}");
-        let known = |row: &str| KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known);
+        // The O-8A bodies that are not JSON, or nest deeper than the parser takes, are the only rows
+        // this surface cannot take.
+        assert_eq!(
+            not_replayable,
+            [
+                "fs-ent-pipeline/o8a/precedence-main#empty-body",
+                "fs-ent-pipeline/o8a/precedence-main#not-json",
+                "fs-ent-pipeline/o8a/precedence-main#truncated",
+                // Nesting probes deeper than the 100 levels the request parser takes.
+                "fs-ent-pipeline/o8a/nesting-main#chain-32",
+                "fs-ent-pipeline/o8a/nesting-main#chain-33",
+                "fs-ent-pipeline/o8a/nesting-main#chain-47",
+                "fs-ent-pipeline/o8a/nesting-main#chain-48",
+                "fs-ent-pipeline/o8a/nesting-main#chain-100",
+            ],
+            "strict={strict}"
+        );
+        let known = |row: &str| {
+            KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
+                || UNMODELLED_PRODUCTION_ROWS
+                    .iter()
+                    .any(|(known, _, _, _)| row == *known)
+                || UNOBSERVED_ORDER_ROWS
+                    .iter()
+                    .any(|(known, _, _)| row == *known)
+                || (!strict
+                    && EMULATOR_ONLY_DIFFERENCES
+                        .iter()
+                        .any(|(known, _)| row == *known))
+        };
+        let pending = |row: &str| {
+            let program = row.split('#').next().unwrap_or(row);
+            PENDING_PROGRAMS.contains(&program)
+        };
+        for program in PENDING_PROGRAMS {
+            if !differing
+                .iter()
+                .any(|(row, _, _)| row.split('#').next() == Some(*program))
+            {
+                failures.push(format!(
+                    "strict={strict}: pending program no longer differs, remove it: {program}"
+                ));
+            }
+        }
         let unexpected: Vec<_> = differing
             .iter()
             .filter(|(row, _, _)| {
                 !known(row)
+                    && !pending(row)
                     && !debts
                         .get(row)
                         .is_some_and(|debt| strict || debt.emulator.is_some())
@@ -873,9 +948,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 stale.push(json!({"row": known, "reason": reason}));
                 continue;
             };
-            let pinned = if *known == "fs-ent-pipeline/results/metadata#limit" {
-                got["status"] == 200 && got["results"].as_array().map(Vec::len) == Some(2)
-            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
+            let pinned = if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
                 && !strict
             {
                 got["status"] == 400
@@ -888,14 +961,70 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }
         }
+        // An unobserved-order row must still answer 200 with its pinned count and differ.
+        for (known, reason, strict_status, emulator_status) in UNMODELLED_PRODUCTION_ROWS {
+            let want = if strict {
+                strict_status
+            } else {
+                emulator_status
+            };
+            match differing.iter().find(|(row, _, _)| row == known) {
+                Some((_, got, _)) if got["status"] == *want => {}
+                Some((_, got, _)) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                None => stale.push(json!({"row": known, "reason": reason})),
+            }
+        }
+        for (known, reason, count) in UNOBSERVED_ORDER_ROWS {
+            match differing.iter().find(|(row, _, _)| row == known) {
+                Some((_, got, _))
+                    if got["status"] == 200
+                        && got["results"].as_array().map(Vec::len) == Some(*count) => {}
+                Some((_, got, _)) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                None => stale.push(json!({"row": known, "reason": reason})),
+            }
+        }
         if !unexpected.is_empty() || !stale.is_empty() || !changed_known.is_empty() {
             failures.push(format!(
-                "strict={strict}: unexpected={}, stale={}, changedKnown={}",
+                "strict={strict}: unexpected={}, stale={}, changedKnown={}; stale rows {:?}; changed rows {:?}",
                 unexpected.len(),
                 stale.len(),
-                changed_known.len()
+                changed_known.len(),
+                stale.iter().map(|row| row["row"].clone()).collect::<Vec<_>>(),
+                changed_known.iter().map(|row| row["row"].clone()).collect::<Vec<_>>()
             ));
         }
+    }
+    if let Ok(path) = std::env::var("REGENERATE_O5_DEBT") {
+        let rows: Vec<Value> = o5_difference_rows()
+            .into_iter()
+            .filter_map(|debt| {
+                let strict = answers.get(&(true, debt.row.clone()))?;
+                let emulator = answers.get(&(false, debt.row.clone()))?;
+                if *strict == debt.production && *emulator == debt.production {
+                    return None;
+                }
+                let mut row = serde_json::Map::new();
+                row.insert("row".into(), json!(debt.row));
+                row.insert("category".into(), json!(debt.category));
+                row.insert("reason".into(), json!(debt.reason));
+                row.insert("production".into(), debt.production.clone());
+                row.insert("strict".into(), strict.clone());
+                row.insert(
+                    "emulator".into(),
+                    if *emulator == debt.production {
+                        Value::Null
+                    } else {
+                        emulator.clone()
+                    },
+                );
+                Some(Value::Object(row))
+            })
+            .collect();
+        std::fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

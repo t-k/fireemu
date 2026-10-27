@@ -1697,6 +1697,21 @@ fn collection_ref(name: &str) -> pb::Value {
     }
 }
 
+/// Rows in one fixed order. A pipeline reads a collection in production's scan order (ascending
+/// CRC-32 of the document ID), which is neither name order nor an order worth writing out, so
+/// the tests that do not test the order compare their rows sorted.
+fn sorted_rows(
+    mut rows: Vec<std::collections::HashMap<String, pb::Value>>,
+) -> Vec<std::collections::HashMap<String, pb::Value>> {
+    rows.sort_by_key(|row| {
+        format!(
+            "{:?}",
+            row.iter().collect::<std::collections::BTreeMap<_, _>>()
+        )
+    });
+    rows
+}
+
 fn s(v: &str) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
@@ -6256,6 +6271,14 @@ fn pipeline_stage(name: &str, value: pb::Value) -> pb::pipeline::Stage {
     }
 }
 
+fn pipeline_stage_args(name: &str, args: Vec<pb::Value>) -> pb::pipeline::Stage {
+    pb::pipeline::Stage {
+        name: name.to_owned(),
+        args,
+        ..Default::default()
+    }
+}
+
 fn pipeline_request(stages: Vec<pb::pipeline::Stage>) -> pb::ExecutePipelineRequest {
     pb::ExecutePipelineRequest {
         database: DB.to_owned(),
@@ -6457,7 +6480,6 @@ async fn execute_pipeline_where_equal_executes_scalar_matrix_and_rejects_missing
 async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_documents() {
     use pb::value::ValueType as V;
     let collection = || pipeline_stage("collection", collection_ref("where-refusals"));
-    let predicate = || pipeline_equal("score", i(7));
     let unsupported = tonic::Code::Unimplemented;
     let expression = |name: &str, args| pipeline_stage("where", pipeline_function(name, args));
     let mut options = pipeline_function("equal", vec![pipeline_field("score"), i(7)]);
@@ -6466,21 +6488,6 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
     };
     function.options.insert("unexpected".into(), i(1));
     let cases = [
-        (
-            "duplicate where",
-            vec![predicate(), predicate()],
-            unsupported,
-        ),
-        (
-            "where after select",
-            vec![pipeline_select("score"), predicate()],
-            unsupported,
-        ),
-        (
-            "where after limit",
-            vec![pipeline_stage("limit", i(1)), predicate()],
-            unsupported,
-        ),
         (
             "eq alias",
             vec![expression("eq", vec![pipeline_field("score"), i(7)])],
@@ -6719,7 +6726,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     .await;
     let expected = [("a", Some(7)), ("b", Some(8)), ("c", None)];
     assert_eq!(docs.len(), expected.len());
-    for (doc, (id, score)) in docs.iter().zip(expected) {
+    for (id, score) in expected {
         let mut want: std::collections::HashMap<String, pb::Value> =
             [("id".to_owned(), s(id)), ("coll".to_owned(), s("nest"))]
                 .into_iter()
@@ -6727,7 +6734,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         if let Some(score) = score {
             want.insert("score".to_owned(), i(score));
         }
-        assert_eq!(doc.fields, want, "{id}");
+        assert!(docs.iter().any(|doc| doc.fields == want), "{id}");
     }
     // A subcollection input: parent names the owning document.
     let docs = drain_pipeline(
@@ -6785,7 +6792,8 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert_eq!(
         docs[0].fields,
         [
-            ("n".to_owned(), reference("nest/a")),
+            // (The scan reads `c` first: ascending CRC-32 of the document ID.)
+            ("n".to_owned(), reference("nest/c")),
             ("lit".to_owned(), i(7)),
             (
                 "gone".to_owned(),
@@ -6948,7 +6956,21 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         } else {
             code
         };
-        assert_eq!(err.code(), code, "{label}: {err}");
+        let code = if label == "document_id of a map or integer field" && err.code() == invalid {
+            invalid
+        } else {
+            code
+        };
+        if label == "document_id of a map or integer field" {
+            // The first row the scan reads decides the failure: a map (unrecorded, unobserved
+            // under strict) or an integer (recorded by O-8C, answered in its words).
+            assert!(
+                err.code() == code || err.code() == invalid,
+                "{label}: {err}"
+            );
+        } else {
+            assert_eq!(err.code(), code, "{label}: {err}");
+        }
         // Under strict, fireemu's own texts are refused as unobserved (production names the
         // function's signature).
         if label == "equal with one argument" {
@@ -8621,7 +8643,7 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
             },
             Some("The 'select(...)' stage requires at least one field.".to_owned()),
         ),
-        // The official emulator answers these; the local executor does not run the stage.
+        // The stage runs and answers.
         (
             "aggregate with an empty group map",
             stage("aggregate", vec![map(vec![("c", count())]), map(vec![])]),
@@ -8648,9 +8670,23 @@ async fn execute_pipeline_alias_maps_follow_the_official_emulator() {
         let (mut client, _, handle) =
             start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
         for (label, stages, official) in &rows {
+            if official.is_none() {
+                // These stages run and answer (FS-ENT-ORACLE O-7).
+                let mut stream = client
+                    .execute_pipeline(pipeline_request(stages.clone()))
+                    .await
+                    .unwrap_or_else(|e| panic!("{policy:?} {label}: {e}"))
+                    .into_inner();
+                while stream
+                    .message()
+                    .await
+                    .unwrap_or_else(|e| panic!("{policy:?} {label}: {e}"))
+                    .is_some()
+                {}
+                continue;
+            }
             let err = pipeline_error(&mut client, stages.clone()).await;
-            // The emulator profile answers each as the official emulator does; the stages
-            // themselves are not run locally.
+            // The emulator profile answers each as the official emulator does.
             match official {
                 Some(text) if policy == IndexValidationPolicy::Production => {
                     assert_strict_refusal(&err, text, label);
@@ -8882,7 +8918,11 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             ),
         ];
         for (label, stages, official) in answered {
-            assert_eq!(run(stages).await.unwrap(), official, "{policy:?} {label}");
+            assert_eq!(
+                sorted_rows(run(stages).await.unwrap()),
+                sorted_rows(official),
+                "{policy:?} {label}"
+            );
         }
         // Cells O-2 and O-3 recorded, answered in both profiles: a missing field against an
         // array or map literal, a double or a string as the whole condition, two strings field
@@ -9122,11 +9162,16 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     )
     .await;
     assert_eq!(docs.len(), 65);
+    // The collection is read in production's scan order, ascending CRC-32 of the document ID.
+    let mut scan: Vec<i64> = (0..65).collect();
+    scan.sort_by_key(|index| {
+        fireemu_adapter_grpc::pipeline::crc32(format!("{index:03}").as_bytes())
+    });
     assert_eq!(
         docs.iter()
             .map(|doc| doc.fields["out"].clone())
             .collect::<Vec<_>>(),
-        (0..65).map(i).collect::<Vec<_>>()
+        scan.iter().copied().map(i).collect::<Vec<_>>()
     );
     assert!(docs.iter().all(|doc| doc.fields.len() == 1));
     let docs = drain_pipeline(
@@ -9142,7 +9187,7 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
         docs.iter()
             .map(|doc| doc.fields["out"].clone())
             .collect::<Vec<_>>(),
-        (0..33).map(i).collect::<Vec<_>>()
+        scan[..33].iter().copied().map(i).collect::<Vec<_>>()
     );
     let docs = drain_pipeline(
         client
@@ -9311,14 +9356,18 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
     assert_eq!(filtered, filtered_baseline[1..]);
     assert!(filtered.iter().any(|document| document.fields.is_empty()));
 
-    for (label, stages) in [
+    // Stages repeat and come in any order (production, FS-ENT-ORACLE O-6 `stage-order-relaxed`):
+    // an offset after a limit, a where after an offset, a second offset all answer.
+    for (label, stages, count) in [
         (
             "duplicate offset",
             vec![collection_stage(), pipeline_offset(1), pipeline_offset(2)],
+            None,
         ),
         (
             "offset after limit",
-            vec![collection_stage(), limit(1), pipeline_offset(1)],
+            vec![collection_stage(), limit(3), pipeline_offset(1)],
+            Some(2),
         ),
         (
             "where after offset",
@@ -9327,6 +9376,7 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
                 pipeline_offset(1),
                 pipeline_equal("group", s("match")),
             ],
+            None,
         ),
         (
             "select after offset",
@@ -9335,16 +9385,25 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
                 pipeline_offset(1),
                 pipeline_select("value"),
             ],
+            None,
         ),
     ] {
-        let error = client.execute_pipeline(execute(stages)).await.unwrap_err();
-        assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");
-        assert_eq!(
-            error.metadata().get("fireemu-code").unwrap(),
-            "FS_PIPE_UNSUPPORTED_STAGE",
-            "{label}: {error}"
-        );
-        assert!(error.metadata().get("fireemu-pipeline").is_some());
+        let mut stream = client
+            .execute_pipeline(execute(stages))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+            .into_inner();
+        let mut results = 0;
+        while let Some(response) = stream
+            .message()
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+        {
+            results += response.results.len();
+        }
+        if let Some(count) = count {
+            assert_eq!(results, count, "{label}");
+        }
     }
     // An offset beyond int32 is answered, as production answered 5000000000 (O-4).
     let too_large = client
@@ -9357,13 +9416,17 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .into_inner();
     assert!(drain_pipeline(too_large, 1).await.is_empty());
 
-    // Strict answers only the offsets production recorded (5000000000): a small one is
-    // unobserved.
+    // Strict answers the offsets production recorded (1, 2, 5, 7 and 5000000000, O-4 and O-6);
+    // zero is a boundary it never answered.
     let small = strict
-        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(1)]))
+        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(0)]))
         .await
         .unwrap_err();
     assert_eq!(small.code(), tonic::Code::Unimplemented, "{small}");
+    strict
+        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(1)]))
+        .await
+        .unwrap();
     // Production refused only a string offset (O-4 `stages#offset-string`); the official
     // emulator's texts for a negative offset and another type are unrecorded, so strict
     // refuses them as unobserved (the emulator profile answers them, see
@@ -9549,9 +9612,10 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     )
     .await;
     assert_eq!(projected.len(), 1);
+    // (The scan reads `two` before `one`: ascending CRC-32 of the document ID.)
     assert_eq!(
         projected[0].fields,
-        [("label".to_owned(), s("one"))].into_iter().collect()
+        [("label".to_owned(), s("two"))].into_iter().collect()
     );
     // Drain both responses, preserving multiplicity; collection input does not promise ordering.
     let all = drain_pipeline(
@@ -9606,18 +9670,21 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     // A quoted literal dot is one field, not a nested extraction.
     let literal = drain_pipeline(
         client
-            .execute_pipeline(request(vec![
-                collection("items"),
-                select("`literal.dot`"),
-                limit(1),
-            ]))
+            .execute_pipeline(request(vec![collection("items"), select("`literal.dot`")]))
             .await
             .unwrap()
             .into_inner(),
-        1,
+        2,
     )
     .await;
-    assert_eq!(literal[0].fields.get("label"), Some(&s("literal")));
+    assert_eq!(
+        literal
+            .iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("literal")))
+            .count(),
+        1
+    );
+    // Repeated and reordered stages answer (FS-ENT-ORACLE O-6 `stage-order-relaxed`).
     for (label, stages) in [
         (
             "duplicate limit",
@@ -9632,8 +9699,17 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
             vec![collection("items"), limit(1), select("name")],
         ),
     ] {
-        let err = client.execute_pipeline(request(stages)).await.unwrap_err();
-        assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
+        let mut stream = client
+            .execute_pipeline(request(stages))
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+            .into_inner();
+        while stream
+            .message()
+            .await
+            .unwrap_or_else(|e| panic!("{label}: {e}"))
+            .is_some()
+        {}
     }
     // `__name__` selects the document reference (FS-ENT-ORACLE O-1).
     let named = drain_pipeline(
@@ -13078,7 +13154,8 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         };
         let whole = responses(vec![pipeline_stage("collection", collection_ref("meta"))]).await;
         let results: Vec<_> = whole.iter().flat_map(|r| r.results.clone()).collect();
-        assert_eq!(results, vec![a.clone(), b.clone()], "{policy:?}");
+        // (Production's scan order: `b` before `a`, ascending CRC-32 of the document ID.)
+        assert_eq!(results, vec![b.clone(), a.clone()], "{policy:?}");
         assert!(
             whole.iter().all(|r| r.execution_time.is_some()),
             "{policy:?}"
@@ -13119,9 +13196,413 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
     }
 }
 
+/// The stages and functions O-6 and O-7 recorded run over gRPC under both profiles: a sort, a
+/// grouped aggregate, a distinct, `add_fields` and `remove_fields`, a collection group, a
+/// documents input, a logical condition and a stage order that was fixed before. A small answer
+/// is one response.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_runs_the_recorded_stages_and_inputs() {
+    let map = |entries: Vec<(&str, pb::Value)>| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: entries
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        })),
+    };
+    let order = |direction: &str, expression: pb::Value| {
+        map(vec![
+            ("direction", s(direction)),
+            ("expression", expression),
+        ])
+    };
+    let stage = |name: &str, args: Vec<pb::Value>| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args,
+        ..Default::default()
+    };
+    let reference = |path: &str| pb::Value {
+        value_type: Some(pb::value::ValueType::ReferenceValue(path.to_owned())),
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("st/a", &[("n", i(3)), ("g", s("x"))]),
+                    update_write("st/b", &[("n", i(1)), ("g", s("y"))]),
+                    update_write("st/c", &[("n", i(2)), ("g", s("x"))]),
+                    update_write("st/c/sub/z", &[("n", i(9))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let collection = || pipeline_stage("collection", collection_ref("st"));
+        let run = |stages: Vec<pb::pipeline::Stage>| {
+            let mut client = client.clone();
+            async move {
+                let mut stream = client
+                    .execute_pipeline(pipeline_request(stages))
+                    .await
+                    .unwrap_or_else(|e| panic!("{policy:?}: {e}"))
+                    .into_inner();
+                let mut responses = Vec::new();
+                while let Some(response) = stream
+                    .message()
+                    .await
+                    .unwrap_or_else(|e| panic!("{policy:?}: {e}"))
+                {
+                    responses.push(response);
+                }
+                assert_eq!(responses.len(), 1, "{policy:?}: one response");
+                responses.remove(0).results
+            }
+        };
+        let names = |docs: &[pb::Document]| -> Vec<String> {
+            docs.iter()
+                .map(|d| d.name.rsplit('/').next().unwrap_or_default().to_owned())
+                .collect()
+        };
+        // sort, descending, then limit
+        let sorted = run(vec![
+            collection(),
+            stage("sort", vec![order("descending", pipeline_field("n"))]),
+            stage("limit", vec![i(2)]),
+        ])
+        .await;
+        assert_eq!(names(&sorted), ["a", "c"], "{policy:?}");
+        // a where after a select reads the alias; a limit and an offset in any order
+        let late = run(vec![
+            collection(),
+            pipeline_select_map(vec![("m", pipeline_field("n"))]),
+            stage(
+                "where",
+                vec![pipeline_function(
+                    "greater_than",
+                    vec![pipeline_field("m"), i(1)],
+                )],
+            ),
+        ])
+        .await;
+        assert_eq!(late.len(), 2, "{policy:?}");
+        // aggregate with groups
+        let grouped = run(vec![
+            collection(),
+            stage(
+                "aggregate",
+                vec![
+                    map(vec![
+                        ("c", pipeline_function("count", vec![])),
+                        ("s", pipeline_function("sum", vec![pipeline_field("n")])),
+                    ]),
+                    map(vec![("g", pipeline_field("g"))]),
+                ],
+            ),
+            stage("sort", vec![order("ascending", pipeline_field("g"))]),
+        ])
+        .await;
+        let groups: Vec<(pb::Value, pb::Value, pb::Value)> = grouped
+            .iter()
+            .map(|d| {
+                (
+                    d.fields["g"].clone(),
+                    d.fields["c"].clone(),
+                    d.fields["s"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            groups,
+            [(s("x"), i(2), i(5)), (s("y"), i(1), i(1))],
+            "{policy:?}"
+        );
+        assert!(grouped.iter().all(|d| d.name.is_empty()), "{policy:?}");
+        // distinct
+        let distinct = run(vec![
+            collection(),
+            stage("distinct", vec![map(vec![("g", pipeline_field("g"))])]),
+        ])
+        .await;
+        assert_eq!(distinct.len(), 2, "{policy:?}");
+        // add_fields keeps the name, remove_fields removes
+        let changed = run(vec![
+            collection(),
+            stage("add_fields", vec![map(vec![("k", pipeline_field("n"))])]),
+            stage("remove_fields", vec![pipeline_field("g")]),
+            stage("sort", vec![order("ascending", pipeline_field("k"))]),
+        ])
+        .await;
+        assert_eq!(names(&changed), ["b", "c", "a"], "{policy:?}");
+        assert!(
+            changed.iter().all(|d| d.create_time.is_some()
+                && d.fields.contains_key("k")
+                && !d.fields.contains_key("g")),
+            "{policy:?}"
+        );
+        // a logical condition
+        let condition = run(vec![
+            collection(),
+            stage(
+                "where",
+                vec![pipeline_function(
+                    "and",
+                    vec![
+                        pipeline_function("equal", vec![pipeline_field("g"), s("x")]),
+                        pipeline_function("greater_than", vec![pipeline_field("n"), i(2)]),
+                    ],
+                )],
+            ),
+        ])
+        .await;
+        assert_eq!(names(&condition), ["a"], "{policy:?}");
+        // a collection group reads every collection of that id, at any depth
+        let group = run(vec![stage(
+            "collection_group",
+            vec![reference(""), s("sub")],
+        )])
+        .await;
+        assert_eq!(names(&group), ["z"], "{policy:?}");
+        // documents: the existing ones, in name order, a missing one skipped
+        let documents = run(vec![stage(
+            "documents",
+            vec![
+                reference("/st/c"),
+                reference("/st/none"),
+                reference("/st/a"),
+            ],
+        )])
+        .await;
+        assert_eq!(names(&documents), ["a", "c"], "{policy:?}");
+        handle.abort();
+    }
+}
+
+/// What the recorded stages refuse or take beyond the recorded rows: a signature-bearing arity
+/// text for a call of a new function, `add_fields` reading `__name__`, overlapping `add_fields`
+/// aliases, function options of an accumulator, and the read time of a documents input.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
+    let map = |entries: Vec<(&str, pb::Value)>| pb::Value {
+        value_type: Some(pb::value::ValueType::MapValue(pb::MapValue {
+            fields: entries
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        })),
+    };
+    let stage = |name: &str, args: Vec<pb::Value>| pb::pipeline::Stage {
+        name: name.to_owned(),
+        args,
+        ..Default::default()
+    };
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let strict = policy == IndexValidationPolicy::Production;
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("na/a", &[("n", i(1))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let collection = || pipeline_stage("collection", collection_ref("na"));
+        // A call of a function with the wrong number of arguments: production's signature
+        // wording under the emulator profile, UNIMPLEMENTED under strict (unrecorded shape).
+        for (name, call, text) in [
+            (
+                "array_contains",
+                pipeline_function("array_contains", vec![pipeline_field("n")]),
+                "The function 'array_contains(array: array[any], value: any): boolean' takes [2..2] argument(s), but 1 was provided.",
+            ),
+            (
+                "exists",
+                pipeline_function("exists", vec![]),
+                "The function 'exists(value: any?): boolean' takes [1..1] argument(s), but 0 were provided.",
+            ),
+        ] {
+            let err = pipeline_error(
+                &mut client,
+                vec![collection(), stage("where", vec![call])],
+            )
+            .await;
+            if strict {
+                assert_eq!(err.code(), tonic::Code::Unimplemented, "{name}: {err}");
+            } else {
+                assert_eq!(err.code(), tonic::Code::InvalidArgument, "{name}: {err}");
+                assert_eq!(err.message(), text, "{name}");
+            }
+        }
+        // add_fields reads `__name__` like any field.
+        let mut stream = client
+            .execute_pipeline(pipeline_request(vec![
+                collection(),
+                stage(
+                    "add_fields",
+                    vec![map(vec![("nm", pipeline_field("__name__"))])],
+                ),
+            ]))
+            .await
+            .unwrap()
+            .into_inner();
+        let results = stream.message().await.unwrap().unwrap().results;
+        assert_eq!(
+            results[0].fields["nm"].value_type,
+            Some(pb::value::ValueType::ReferenceValue(format!("{DOCS}/na/a"))),
+            "{policy:?}"
+        );
+        // Overlapping aliases are refused in production's words (O-9 `fields-main`); a gRPC map
+        // keeps no wire order, so strict has no recorded shape for them.
+        let err = pipeline_error(
+            &mut client,
+            vec![
+                collection(),
+                stage("add_fields", vec![map(vec![("a", i(1)), ("a.b", i(2))])]),
+            ],
+        )
+        .await;
+        if strict {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        } else {
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?}: {err}"
+            );
+            assert!(
+                err.message()
+                    .contains("'add_fields(...)' stage is attempting to set a parent"),
+                "{err}"
+            );
+        }
+        // Function options of an accumulator: ignored by the emulator profile, unobserved under
+        // strict.
+        let mut count = pipeline_function("count", vec![]);
+        let Some(pb::value::ValueType::FunctionValue(function)) = count.value_type.as_mut() else {
+            unreachable!()
+        };
+        function.options.insert("unexpected".into(), i(1));
+        let counted = client
+            .execute_pipeline(pipeline_request(vec![
+                collection(),
+                stage("aggregate", vec![map(vec![("c", count)]), map(vec![])]),
+            ]))
+            .await;
+        match counted {
+            Err(status) => assert!(strict, "{policy:?}: {status}"),
+            Ok(response) => {
+                let mut stream = response.into_inner();
+                let outcome = stream.message().await;
+                assert_eq!(outcome.is_err(), strict, "{policy:?}");
+            }
+        }
+        // A documents input carries the snapshot's read time.
+        let mut stream = client
+            .execute_pipeline(pipeline_request(vec![pipeline_stage(
+                "documents",
+                collection_ref("na/a"),
+            )]))
+            .await
+            .unwrap()
+            .into_inner();
+        let response = stream.message().await.unwrap().unwrap();
+        assert_eq!(response.results.len(), 1, "{policy:?}");
+        assert!(response.execution_time.is_some(), "{policy:?}");
+        // The references of an input stage: the ancestor of a collection group is validated as a
+        // document path and otherwise ignored (O-9 `cg-main`), in both profiles; the paths of a
+        // documents input are answered in the recorded two-segment form only under strict (the
+        // emulator profile reads any document path).
+        let raw = |path: &str| pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue(path.to_owned())),
+        };
+        let group = |ancestor: &str| {
+            vec![pipeline_stage_args(
+                "collection_group",
+                vec![raw(ancestor), s("na")],
+            )]
+        };
+        let documents = |paths: &[&str]| {
+            vec![pipeline_stage_args(
+                "documents",
+                paths.iter().map(|path| raw(path)).collect(),
+            )]
+        };
+        let own = format!("{DOCS}/zz/q");
+        // (label, stages, answered, refused as invalid, strict only refuses as unobserved)
+        for (label, stages, invalid, unobserved) in [
+            ("group, root", group(""), false, false),
+            ("group, document", group("/zz/q"), false, false),
+            ("group, deeper document", group("/a/b/c/d"), false, false),
+            ("group, collection", group("/zz"), true, false),
+            ("group, odd path", group("/a/b/c"), true, false),
+            ("group, slash", group("/"), true, false),
+            ("group, trailing slash", group("/zz/q/"), true, false),
+            ("group, no leading slash", group("zz/q"), true, false),
+            ("group, full name", group(&own), true, false),
+            (
+                "documents, two segments",
+                documents(&["/na/a"]),
+                false,
+                false,
+            ),
+            ("documents, deeper", documents(&["/na/a/s/b"]), false, true),
+            (
+                "documents, one deeper of two",
+                documents(&["/na/a", "/na/a/s/b"]),
+                false,
+                true,
+            ),
+        ] {
+            let outcome = client.execute_pipeline(pipeline_request(stages)).await;
+            let refused = match outcome {
+                Err(status) => Some(status),
+                Ok(response) => response.into_inner().message().await.err(),
+            };
+            match (invalid, strict && unobserved, refused) {
+                // (Strict answers the refusal only for the shapes the recording refused, which
+                // the replay checks; any other ancestor is unobserved there.)
+                (true, _, Some(status)) => {
+                    // The root `/` was recorded as refused in this shape (O-9 `anc-root-slash`).
+                    let want = if strict && label != "group, slash" {
+                        tonic::Code::Unimplemented
+                    } else {
+                        tonic::Code::InvalidArgument
+                    };
+                    assert_eq!(status.code(), want, "{label}: {status}");
+                }
+                (false, true, Some(status)) => {
+                    assert_eq!(
+                        status.code(),
+                        tonic::Code::Unimplemented,
+                        "{label}: {status}"
+                    );
+                }
+                (false, false, None) => {}
+                (_, _, got) => {
+                    panic!("{label}: invalid {invalid}, unobserved {unobserved}, got {got:?}")
+                }
+            }
+        }
+        handle.abort();
+    }
+}
+
 /// `select` of `__name__` as itself answers the document name next to the other selected
-/// fields under the emulator profile, as the official emulator 1.22.0 does; production has not
-/// answered it alone (O5), so strict refuses the form beside other aliases as unobserved.
+/// fields under the emulator profile, as the official emulator 1.22.0 does; production answered
+/// it alone (O5), beside another alias and with either side quoted (O-8A), so strict refuses
+/// only the unrecorded combinations as unobserved.
 #[tokio::test]
 async fn execute_pipeline_select_of_the_name_as_itself_carries_the_document_name() {
     let (mut client, _, handle) = start_with_edition_and_policy(
@@ -13172,10 +13653,9 @@ async fn execute_pipeline_select_of_the_name_as_itself_carries_the_document_name
     let refused = strict
         .execute_pipeline(pipeline_request(vec![
             pipeline_stage("collection", collection_ref("selname")),
-            pipeline_select_map(vec![
-                ("__name__", pipeline_field("__name__")),
-                ("v", pipeline_field("n")),
-            ]),
+            // Both sides quoted: the one identity select production was never given
+            // (O-8A `names-main` recorded each side quoted alone, and the name beside a field).
+            pipeline_select_map(vec![("`__name__`", pipeline_field("`__name__`"))]),
         ]))
         .await;
     let code = match refused {
@@ -13303,7 +13783,7 @@ async fn execute_pipeline_execution_time_is_the_snapshot_read_time() {
 /// A literal of more than 20 map or array levels, over gRPC (`PX1d` r7 review S1, S2): the
 /// emulator profile answers 20 levels and refuses 21 with the official emulator's text,
 /// whatever keys the literal holds (a `__type__` key takes another decoding path); strict
-/// answers 21 with UNIMPLEMENTED (no production row).
+/// answers 21 levels with the recorded text (O-8A) and a typed literal with UNIMPLEMENTED.
 #[tokio::test]
 async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
     use pb::value::ValueType as V;
@@ -13352,9 +13832,13 @@ async fn execute_pipeline_literals_hold_at_most_twenty_levels() {
                 ]
             };
             let err = pipeline_error(&mut client, stages(21)).await;
-            if policy == IndexValidationPolicy::Production {
+            if policy == IndexValidationPolicy::Production && typed {
+                // A `__type__` key makes another shape, which production was not asked about.
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{err}");
             } else {
+                // The shape of a 21-level array or map literal is a recorded refusal (O-8A
+                // `nesting-main#array-21`, `#map-21`), so strict answers it with the recorded
+                // text; the emulator profile answers it, typed or not, as the official emulator.
                 assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
                 assert_eq!(err.message(), "Values can be at most 20 levels deep.");
                 if !typed {

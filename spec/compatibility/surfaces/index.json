@@ -226,7 +226,7 @@
       "kind": "method",
       "transport": "gRPC",
       "classification": "requirement",
-      "reason": "Explicit unsupported-stage refusal invariant; FS-PIPE-RPC-1 implements a finite local collection / optional where(condition) / optional select / optional non-negative offset / optional limit subset. This mapping does not establish full execution or production parity.",
+      "reason": "Explicit unsupported-stage refusal invariant; FS-PIPE-RPC-1 implements a finite local collection / collection_group / documents input with where / select / sort / add_fields / remove_fields / distinct / aggregate / offset / limit stages. This mapping does not establish full execution or production parity.",
       "requirements": [
         "INV-PIPE-001"
       ]

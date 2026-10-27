@@ -191,7 +191,10 @@ function world({
       if (query !== undefined) {
         answer = {
           status: 200,
-          value: hit?.versions ? { versions: hit.versions.map((name) => ({ name })) } : {},
+          value: {
+            ...(hit?.versions ? { versions: hit.versions.map((name) => ({ name })) } : {}),
+            ...(hit?.token ? { nextPageToken: hit.token } : {}),
+          },
         };
       } else
         answer = hit
@@ -335,6 +338,11 @@ test("the image packages of a 1st gen function are read by their exact names aft
     assert.equal(leftState.cleaned, false, name);
     assert.match(leftState.cleanupError, /owned image version remains in rtdb_created_v1/);
   }
+  // a version list that goes on is more than empty
+  const longer = world({ packages: { [PACKAGE]: { versions: [], token: "more" } } });
+  const longerState = { started: true, cleaned: false, target };
+  await cleanupGen1(longer.control, target, longerState, { log: async () => {}, sleep: noSleep });
+  assert.match(longerState.cleanupError, /owned image version remains/);
   // a package that answers with another name is not read as ours
   const renamed = world({ packages: { [PACKAGE]: { name: `${PACKAGE}x`, versions: [] } } });
   const renamedState = { started: true, cleaned: false, target };

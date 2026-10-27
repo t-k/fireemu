@@ -138,3 +138,16 @@ test("several findings are several reasons", () => {
   const reasons = run({ frames: [], ignored: { unparsed: 1 } });
   assert.ok(reasons.length >= 2);
 });
+
+test("the counts per reason are counts, and a long list of missing deliveries is cut", () => {
+  const strangers = [1, 2].map((seq) =>
+    frameForTransition("rtdbWrittenV2", "a", { n: 9 }, { n: 10 }, { seq: 90 + seq }),
+  );
+  const reasons = run({ frames: [...frames(), ...strangers] });
+  assert.match(reasons[0], /2 frame\(s\) could not be attributed to a write \(no-match: 2\)/);
+  // no frame at all: every documented delivery is missing, and the list is cut after eight
+  const none = run({ frames: [] });
+  const missing = none.find((r) => /documented delivery received no frame/.test(r));
+  assert.match(missing, /and \d+ more/);
+  assert.equal(missing.split(", ").length, 8 + 0, missing);
+});

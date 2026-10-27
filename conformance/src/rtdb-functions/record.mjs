@@ -83,6 +83,16 @@ export function createTokenProvider(
   };
 }
 
+/** A token provider and the list of every access token it has handed out: secrets a stored file must not hold. */
+export function tokenProviderWithSecrets(adc, budget, options = {}) {
+  const secrets = [];
+  const getToken = createTokenProvider(adc, budget, {
+    ...options,
+    onToken: (value) => secrets.push(value),
+  });
+  return { getToken, secrets };
+}
+
 /** The FUNCTIONS-HTTP accounting constant per deploy; not a measured bill. */
 export const estimatedUsd = (requests) => Number((0.01 + requests.cliDeploy * 0.55).toFixed(2));
 export const exitCodeOf = ({ outcome, residual }) =>
@@ -255,10 +265,7 @@ export async function recordStage2() {
   const adc = await ownerAdc();
   const budget = createStage2Budget();
   // every access token this process holds is a secret a stored file must not contain
-  const secrets = [];
-  const getToken = createTokenProvider(adc.file, budget, {
-    onToken: (value) => secrets.push(value),
-  });
+  const { getToken, secrets } = tokenProviderWithSecrets(adc.file, budget);
   const { packetPins } = await admitRun({
     env: process.env,
     privateRoot: PRIVATE_ROOT,

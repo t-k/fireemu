@@ -18,6 +18,7 @@ import {
   executeRun,
   exitCodeOf,
   parsePacketPins,
+  tokenProviderWithSecrets,
 } from "./record.mjs";
 import { createRehearsalEnvironment } from "./world.fake.mjs";
 
@@ -88,6 +89,10 @@ test("the token provider refreshes after the token expired and counts every refr
   nowMs += 20_000;
   await watched();
   assert.deepEqual(known, ["tok-3", "tok-4"]);
+  // the entry keeps them as the secrets a stored file is checked against
+  const kept = tokenProviderWithSecrets({ file: 1 }, budget, { acquire, now: () => nowMs });
+  await kept.getToken();
+  assert.deepEqual(kept.secrets, ["tok-5"]);
 });
 
 test("the cost is the FUNCTIONS-HTTP constant per deploy, and the exit code tells recorded, review and residue apart", () => {
@@ -185,6 +190,7 @@ test("a run writes its private output and a summary of counts only", async () =>
     }
     const result = JSON.parse(await readFile(join(w.runDir, "result.json"), "utf8"));
     assert.equal(result.outcome, "recorded");
+    assert.match(result.nonce, /^[0-9a-f]{16}$/u);
     assert.equal(result.deployed, 8);
     const report = JSON.parse(await readFile(join(w.runDir, "report.json"), "utf8"));
     assert.equal(report.steps.length, 9);

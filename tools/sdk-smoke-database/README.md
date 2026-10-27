@@ -80,7 +80,7 @@ node tools/sdk-smoke-database/rtdb-s5.mjs local --official --out <new dir>
 node tools/sdk-smoke-database/rtdb-s5.mjs judge <journal.json>
 ```
 
-`production` needs a packet that pins `SOURCES` (the recorder, its page and judge, `rtdb-admin.mjs`, `rtdb-residual.mjs`, `adc-preflight.mjs` and `cv11-genuine-auth.mjs`). The recorder imports from `rtdb-residual.mjs` and changes none of the residual files. Recorded offline: the official emulator gives A, fireemu (both profiles) gives B.
+`production` needs a packet that pins `SOURCES` (the recorder, its page and judge, `rtdb-admin.mjs`, `rtdb-residual.mjs`, `adc-preflight.mjs` and `cv11-genuine-auth.mjs`). The recorder imports from `rtdb-residual.mjs` and changes none of the residual files. Recorded offline: the official emulator gives A. Production gave A in both rounds (RTDB-S5-20261027-01, 2026-10-27); fireemu gave B until the broken-node rule of `on_disconnect.rs` and gives A now, in both profiles. `rtdb-s5-fixture.mjs` builds the committed fixtures (`fixtures/production-rtdb-s5.json`, `fixtures/local-rtdb-s5.json`) and compares them (`summary`); the comparison is a match only when both sides gave the same settled answer.
 
 ## Production comparisons
 

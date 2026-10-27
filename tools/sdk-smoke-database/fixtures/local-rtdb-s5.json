@@ -1,0 +1,520 @@
+{
+ "recording": "fireemu-strict-local",
+ "envelope": "none (local run; no production request)",
+ "recordedOn": "2026-10-27",
+ "project": "fireemu-oracle-query",
+ "instance": "fireemu-q-rtdb2",
+ "sdk": "firebase 12.18.0 (web, headless Chromium)",
+ "rows": [
+  31,
+  31
+ ],
+ "profiles": [
+  {
+   "scenario": "s5",
+   "name": "r1-ws",
+   "journal": [
+    {
+     "scenario": "s5",
+     "step": "rules",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "scenario": "s5",
+     "step": "case-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "offline",
+     "actor": "w",
+     "label": "plain"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "{\"9\":3,\"10\":2}",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-plain",
+     "type": "get",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "{\"9\":3,\"10\":2}",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-plain",
+     "type": "get",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "offline",
+     "actor": "w",
+     "label": "whole"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "{\"9\":3,\"10\":2,\"b\":1}",
+     "priority": 1
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-whole",
+     "type": "get",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "{\"9\":3,\"10\":2,\"b\":1}",
+     "priority": 1
+    },
+    {
+     "scenario": "s5",
+     "step": "final-whole",
+     "type": "get",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-main",
+     "type": "value",
+     "actor": "o",
+     "label": "main-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-main",
+     "type": "value",
+     "actor": "o",
+     "label": "main-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-main",
+     "type": "offline",
+     "actor": "w",
+     "label": "main"
+    },
+    {
+     "scenario": "s5",
+     "step": "final-main",
+     "type": "get",
+     "actor": "o",
+     "label": "main-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-main",
+     "type": "get",
+     "actor": "o",
+     "label": "main-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "scenario": "s5",
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  },
+  {
+   "scenario": "s5",
+   "name": "r2-ws",
+   "journal": [
+    {
+     "scenario": "s5",
+     "step": "rules",
+     "type": "rules",
+     "actor": "o",
+     "code": "allowed"
+    },
+    {
+     "scenario": "s5",
+     "step": "case-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-plain",
+     "type": "ack",
+     "actor": "w",
+     "label": "plain-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "offline",
+     "actor": "w",
+     "label": "plain"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "{\"9\":3,\"10\":2}",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-plain",
+     "type": "value",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-plain",
+     "type": "get",
+     "actor": "o",
+     "label": "plain-s",
+     "shape": "{\"9\":3,\"10\":2}",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-plain",
+     "type": "get",
+     "actor": "o",
+     "label": "plain-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-whole",
+     "type": "ack",
+     "actor": "w",
+     "label": "whole-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "offline",
+     "actor": "w",
+     "label": "whole"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "{\"9\":3,\"10\":2,\"b\":1}",
+     "priority": 1
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-whole",
+     "type": "value",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-whole",
+     "type": "get",
+     "actor": "o",
+     "label": "whole-s",
+     "shape": "{\"9\":3,\"10\":2,\"b\":1}",
+     "priority": 1
+    },
+    {
+     "scenario": "s5",
+     "step": "final-whole",
+     "type": "get",
+     "actor": "o",
+     "label": "whole-t",
+     "shape": "1",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-main",
+     "type": "value",
+     "actor": "o",
+     "label": "main-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "case-main",
+     "type": "value",
+     "actor": "o",
+     "label": "main-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-s"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-cancel"
+    },
+    {
+     "scenario": "s5",
+     "step": "register-main",
+     "type": "ack",
+     "actor": "w",
+     "label": "main-register-t"
+    },
+    {
+     "scenario": "s5",
+     "step": "disconnect-main",
+     "type": "offline",
+     "actor": "w",
+     "label": "main"
+    },
+    {
+     "scenario": "s5",
+     "step": "final-main",
+     "type": "get",
+     "actor": "o",
+     "label": "main-s",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "final-main",
+     "type": "get",
+     "actor": "o",
+     "label": "main-t",
+     "shape": "null",
+     "priority": null
+    },
+    {
+     "scenario": "s5",
+     "step": "end",
+     "type": "done",
+     "actor": "o"
+    },
+    {
+     "scenario": "s5",
+     "step": "runner",
+     "type": "transport",
+     "code": "ws"
+    }
+   ]
+  }
+ ]
+}

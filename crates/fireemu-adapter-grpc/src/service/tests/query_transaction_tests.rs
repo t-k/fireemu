@@ -615,8 +615,11 @@ async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_p
     }));
     // The whole input is read before any result is sent (the scan order is not the name order),
     // so the call itself is in flight while the continuation page is held.
+    // (The service stays alive in the test, so the backend's two owners are the test and it.)
+    let service = Arc::new(service);
+    let task_service = Arc::clone(&service);
     let task = tokio::spawn(async move {
-        Firestore::execute_pipeline(&service, Request::new(pipeline_request())).await
+        Firestore::execute_pipeline(&*task_service, Request::new(pipeline_request())).await
     });
     tokio::time::timeout(Duration::from_secs(5), ready_rx)
         .await

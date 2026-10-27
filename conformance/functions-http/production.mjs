@@ -590,7 +590,7 @@ export async function readThirdRecoveryReadbacks(
   return { first, build };
 }
 
-async function acquireToken(adc, budget, kind) {
+export async function acquireToken(adc, budget, kind) {
   budget.take(kind);
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",

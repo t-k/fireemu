@@ -24,12 +24,14 @@ export function rulesFor(prefix) {
 }
 
 /**
- * `headers` carries the ADC token and the quota project (never in a URL); `packet` holds the project
- * identity and the Rules baseline sha; `now` stamps the answer of each write.
+ * The admin requests go through `adminFetch` (which adds the ADC token and the quota project, never in a
+ * URL; `headers` may add more), the two unauthenticated writes through `fetchImpl` with no header of the
+ * kind. `packet` holds the project identity and the Rules baseline sha; `now` stamps the answer of each write.
  */
 export function createRtdb({
   fetchImpl = fetch,
-  headers,
+  adminFetch = fetchImpl,
+  headers = {},
   packet,
   log,
   stop = {},
@@ -37,7 +39,7 @@ export function createRtdb({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now = Date.now,
 }) {
-  const admin = adminClient({ fetchImpl, headers, log, stop, secrets, caps: CAPS });
+  const admin = adminClient({ fetchImpl: adminFetch, headers, log, stop, secrets, caps: CAPS });
   const anonymous = adminClient({ fetchImpl, headers: {}, log, stop, secrets, caps: ANON_CAPS });
   const fns = createRtdbAdmin({
     instance: INSTANCE,

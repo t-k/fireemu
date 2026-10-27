@@ -399,8 +399,19 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       track.exitCode = 1;
       const failure = new Error("cliDeploy failed or attempted API enablement (exit 1)");
       failure.indeterminate = true;
-      // the CLI got far enough to create the function before it failed
-      w.functions.set(name, { gen: spec.generation === "gcfv2" ? 2 : 1 });
+      const failKind = options.failDeployKind ?? "created";
+      if (failKind === "refused") {
+        // production refused the create with a definite 4xx, which the CLI printed; nothing was made
+        const url =
+          spec.generation === "gcfv2"
+            ? `https://cloudfunctions.googleapis.com/v2/${REGION_PATH}/functions?functionId=${name}`
+            : `https://cloudfunctions.googleapis.com/v1/${REGION_PATH}/functions`;
+        failure.visibleOutput = `⚠  functions: Request to ${url} had HTTP Error: 400, Validation failed for trigger: Permission denied while using the Eventarc Service Agent. \n`;
+      } else if (failKind === "created") {
+        // the CLI got far enough to create the function before it failed
+        w.functions.set(name, { gen: spec.generation === "gcfv2" ? 2 : 1 });
+      }
+      // "absent-unknown": nothing was made that anybody can see, and the output proves nothing
       throw failure;
     }
     w.functions.set(name, { gen: spec.generation === "gcfv2" ? 2 : 1 });

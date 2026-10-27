@@ -45,6 +45,7 @@ export async function runStage2(deps) {
     report: null,
     nonce: deps.nonce ?? null,
     records: {},
+    deploys: {},
     frames: [],
     logs: { reads: 0, entries: 0, incomplete: false, ignored: {} },
     cleanup: { targets: {}, inventory: null, rtdb: null },
@@ -185,6 +186,30 @@ export async function runStage2(deps) {
     if (state.cleaned !== true) {
       result.residual = true;
       reasons.push(`${spec.key} was not cleaned: ${state.cleanupError ?? "unknown"}`);
+    }
+    if (state.deployFailure) {
+      // A failed deploy is a create whose outcome the run must settle. Production's definite refusal
+      // (the CLI printed a 4xx for this function's own create) means nothing was made. Otherwise the
+      // create is settled only by this run's own 200 read of the function before its exact delete; a 404
+      // never settles it, and the close then needs the coordinator's acceptance.
+      const { class: kind, evidence } = state.deployFailure;
+      // only a logged exact delete of the function says it was read present
+      const seen = state.functionSeen === true;
+      result.deploys[spec.key] = { class: kind, evidence, functionSeen: seen };
+      if (kind === "refused" && !seen) {
+        reasons.push(
+          `the deploy of ${spec.key} was refused by production (HTTP ${evidence.map((e) => e.status).join(", ")}); nothing was made`,
+        );
+      } else if (kind === "refused") {
+        reasons.push(
+          `the deploy of ${spec.key} was refused by production yet the function existed (read present, then deleted by its exact name)`,
+        );
+      } else if (!seen) {
+        result.residual = true;
+        reasons.push(
+          `the create of ${spec.key} is unknown: its deploy failed and the function was never read present; the close needs the coordinator's acceptance`,
+        );
+      }
     }
     if (state.record) {
       try {

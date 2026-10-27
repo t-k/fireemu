@@ -158,6 +158,18 @@ test("a service-agent role that disappeared during the run is a reason and leave
   }
 });
 
+test("result.json says how each failed deploy ended", async () => {
+  const w = await rehearse({ options: { failDeploy: "rtdbCreatedV2", failDeployKind: "refused" } });
+  try {
+    const result = JSON.parse(await readFile(join(w.runDir, "result.json"), "utf8"));
+    assert.equal(result.deploys.rtdbCreatedV2.class, "refused");
+    assert.equal(result.deploys.rtdbCreatedV2.functionSeen, false);
+    assert.equal(w.summary.residual, false);
+  } finally {
+    await rm(w.runDir, { recursive: true, force: true });
+  }
+});
+
 test("a stored file is refused when it holds a secret", async () => {
   const w = await rehearse({ options: { secretInRecord: "test-token" } });
   try {

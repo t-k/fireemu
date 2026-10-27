@@ -350,3 +350,133 @@ test("the preflight stops when the Eventarc or Pub/Sub service agent has not bee
     /Pub\/Sub service agent/,
   );
 });
+
+// ---- the bound operations record how a failed deploy ended and whether the function was ever seen ----
+
+const REFUSED_OUTPUT = `⚠  functions: Request to https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/us-central1/functions?functionId=rtdbCreatedV2 had HTTP Error: 400, Validation failed for trigger: Permission denied while using the Eventarc Service Agent. `;
+
+function spyOps(overrides = {}) {
+  const calls = [];
+  const impl = {
+    assertTargetAbsent: async () => {},
+    deployTarget: async () => {},
+    readDeployedTarget: async () => {},
+    cleanupTarget: async () => {},
+    assertGen1Absent: async () => {},
+    assertNoNameCollisions: async () => {},
+    deployGen1: async () => {},
+    readDeployedGen1: async () => {},
+    cleanupGen1: async () => {},
+    ...overrides,
+  };
+  const logs = [];
+  const ops = bindOps({
+    control: async () => ({ status: 200, value: {} }),
+    adcPath: "/adc",
+    budget: {},
+    runDir: "/run",
+    uploads: {},
+    runCli: "cli",
+    programId: "cv14-x",
+    log: async (action, detail) => logs.push([action, detail]),
+    sleep: "sleep",
+    forms: createFormsCollector(PN),
+    impl,
+  });
+  return { ops, calls, logs };
+}
+const v2spec = TARGETS.find((t) => t.functionName === "rtdbCreatedV2");
+const v1spec = TARGETS.find((t) => t.functionName === "rtdbCreatedV1");
+
+test("a deploy that fails with a definite 4xx on its own create is recorded as refused, and the error still reaches the flow", async () => {
+  const failure = Object.assign(
+    new Error("cliDeploy failed or attempted API enablement (exit 2)"),
+    {
+      visibleOutput: REFUSED_OUTPUT,
+    },
+  );
+  const { ops } = spyOps({
+    deployTarget: async (_s, _p, state) => {
+      state.deployTrack = { exited: true, exitCode: 2 };
+      throw failure;
+    },
+  });
+  const state = {};
+  await assert.rejects(
+    () => ops.gcfv2.deploy(v2spec, state),
+    (e) => e === failure,
+  );
+  assert.deepEqual(state.deployFailure, {
+    class: "refused",
+    evidence: [{ status: 400, create: "rtdbCreatedV2" }],
+  });
+});
+
+test("a failed deploy with no such proof, or a killed CLI, is recorded as unknown", async () => {
+  for (const [output, track] of [
+    [undefined, { exited: true, exitCode: 2 }],
+    [REFUSED_OUTPUT, { exited: false, exitCode: null }],
+    [REFUSED_OUTPUT.replace("400", "503"), { exited: true, exitCode: 2 }],
+  ]) {
+    const { ops } = spyOps({
+      deployTarget: async (_s, _p, state) => {
+        state.deployTrack = track;
+        throw Object.assign(new Error("x"), { visibleOutput: output });
+      },
+    });
+    const state = {};
+    await assert.rejects(() => ops.gcfv2.deploy(v2spec, state), /x/);
+    assert.equal(state.deployFailure.class, "unknown");
+  }
+  // 1st gen goes the same way
+  const { ops } = spyOps({
+    deployGen1: async (_s, _p, state) => {
+      state.deployTrack = { exited: true, exitCode: 2 };
+      throw Object.assign(new Error("x"), {
+        visibleOutput: `⚠  functions: Request to https://cloudfunctions.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/functions had HTTP Error: 403, denied`,
+      });
+    },
+  });
+  const state = {};
+  await assert.rejects(() => ops.gcfv1.deploy(v1spec, state), /x/);
+  assert.equal(state.deployFailure.class, "refused");
+});
+
+test("a deploy that succeeds records nothing", async () => {
+  const { ops } = spyOps();
+  const state = {};
+  await ops.gcfv2.deploy(v2spec, state);
+  await ops.gcfv1.deploy(v1spec, state);
+  assert.equal("deployFailure" in state, false);
+});
+
+test("the cleanup records whether it read the function present: function-deleted says yes, function-already-absent says no", async () => {
+  for (const [gen, spec, impl] of [
+    ["gcfv2", v2spec, "cleanupTarget"],
+    ["gcfv1", v1spec, "cleanupGen1"],
+  ]) {
+    for (const [action, seen] of [
+      ["function-deleted", true],
+      ["function-already-absent", false],
+    ]) {
+      const hooked = {
+        [impl]: async (...args) => {
+          const options = args.at(-1);
+          await options.log(action, "detail");
+        },
+      };
+      const { ops, logs } = spyOps(hooked);
+      const state = {};
+      await ops[gen].cleanup(spec, state);
+      assert.equal(state.functionSeen, seen, `${gen} ${action}`);
+      assert.deepEqual(logs, [[action, "detail"]], "the line still reaches the journal");
+    }
+    // other lines do not decide
+    const { ops } = spyOps({
+      [impl]: async (...args) => args.at(-1).log("image-version-deleted", "d"),
+    });
+    const state = {};
+    await ops[gen].cleanup(spec, state);
+    assert.equal("functionSeen" in state, false);
+  }
+});

@@ -14,6 +14,7 @@ import {
   targetResources,
 } from "../../functions-http/production.mjs";
 import { loggingApiState, maskProbeLine } from "../../functions-http/upload-probe.mjs";
+import { classifyDeployFailure } from "./deploy-outcome.mjs";
 import { assertGen1Absent, cleanupGen1, deployGen1, readDeployedGen1 } from "./gen1.mjs";
 import { INVENTORY_HOSTS } from "./inventory.mjs";
 import { LOGGING_HOST, listRequest, parseEntries } from "./logs.mjs";
@@ -150,6 +151,23 @@ export function bindOps({
   },
 }) {
   const tap = (spec) => (event, line) => forms.observe(event, line, spec.key);
+  // How a failed deploy ended: the CLI's own output and whether it ended by itself decide, never a guess.
+  const deployed = (spec, state, run) =>
+    run().catch((error) => {
+      state.deployFailure = classifyDeployFailure({
+        output: error?.visibleOutput,
+        exited: state.deployTrack?.exited,
+        exitCode: state.deployTrack?.exitCode,
+        spec,
+      });
+      throw error;
+    });
+  // Whether the cleanup read the function present (it then deleted it by its exact name) or absent.
+  const watching = (state) => async (action, detail) => {
+    if (action === "function-deleted") state.functionSeen = true;
+    else if (action === "function-already-absent") state.functionSeen = false;
+    await log(action, detail);
+  };
   return {
     gcfv1: {
       async assertAbsent(spec) {
@@ -158,33 +176,38 @@ export function bindOps({
         await impl.assertNoNameCollisions(control, twinOf(spec));
       },
       deploy: (spec, state) =>
-        impl.deployGen1(
-          spec,
-          programId,
-          state,
-          uploads,
-          adcPath,
-          budget,
-          runDir,
-          runCli,
-          tap(spec),
+        deployed(spec, state, () =>
+          impl.deployGen1(
+            spec,
+            programId,
+            state,
+            uploads,
+            adcPath,
+            budget,
+            runDir,
+            runCli,
+            tap(spec),
+          ),
         ),
       read: (spec, state) => impl.readDeployedGen1(control, spec, state),
-      cleanup: (spec, state) => impl.cleanupGen1(control, spec, state, { log, sleep }),
+      cleanup: (spec, state) =>
+        impl.cleanupGen1(control, spec, state, { log: watching(state), sleep }),
     },
     gcfv2: {
       assertAbsent: (spec) => impl.assertTargetAbsent(control, spec),
       deploy: (spec, state) =>
-        impl.deployTarget(
-          spec,
-          programId,
-          state,
-          uploads,
-          adcPath,
-          budget,
-          runDir,
-          runCli,
-          tap(spec),
+        deployed(spec, state, () =>
+          impl.deployTarget(
+            spec,
+            programId,
+            state,
+            uploads,
+            adcPath,
+            budget,
+            runDir,
+            runCli,
+            tap(spec),
+          ),
         ),
       async read(spec, state) {
         await impl.readDeployedTarget(control, spec, state);
@@ -196,7 +219,7 @@ export function bindOps({
       cleanup: (spec, state) =>
         impl.cleanupTarget(control, spec, adcPath, budget, runDir, state, {
           run: runCli,
-          log,
+          log: watching(state),
           sleep,
         }),
     },

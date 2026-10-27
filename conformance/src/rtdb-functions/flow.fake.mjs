@@ -72,7 +72,13 @@ export function makeWorld(options = {}) {
     deploy: async (spec, state) => {
       events.push(`deploy ${spec.functionName}`);
       Object.assign(state, { started: true, cleaned: false, gen });
-      if (options.failDeploy === spec.functionName) throw new Error("deploy failed");
+      if (options.failDeploy === spec.functionName) {
+        // what the bound operations record for a failed CLI deploy (wiring.mjs)
+        if (options.deployClass) {
+          state.deployFailure = { class: options.deployClass, evidence: [{ status: 400 }] };
+        }
+        throw new Error("deploy failed");
+      }
     },
     read: async (spec, state) => {
       events.push(`read ${spec.functionName}`);
@@ -81,6 +87,8 @@ export function makeWorld(options = {}) {
     },
     cleanup: async (spec, state) => {
       events.push(`cleanup ${spec.functionName}`);
+      // whether the cleanup read the function present before its exact delete
+      if (options.functionSeen !== undefined) state.functionSeen = options.functionSeen;
       if (options.cleanupThrows === spec.functionName) throw new Error("cleanup threw");
       if (options.cleanupFails === spec.functionName) {
         state.cleanupError = "function remains after delete";

@@ -311,3 +311,54 @@ test("a project whose Eventarc service agent has no role yet stops at the prefli
     await finish(env);
   }
 });
+
+test("a deploy production refused with a definite 4xx is not an unknown create: the run needs review and nothing is residual", async () => {
+  for (const name of ["rtdbCreatedV2", "rtdbUpdatedV1"]) {
+    const env = await setup({ options: { failDeploy: name, failDeployKind: "refused" } });
+    try {
+      const result = await run(env);
+      assert.equal(result.outcome, "stopped-needs-review");
+      assert.equal(result.residual, false, result.reasons.join("; "));
+      assert.match(
+        result.reasons.join(";"),
+        new RegExp(`the deploy of ${name} was refused by production \\(HTTP 400\\)`),
+      );
+      assert.equal(result.deploys[name].class, "refused");
+      assert.equal(result.deploys[name].functionSeen, false);
+      assert.equal(env.gcp.functions.size, 0);
+      assert.equal(env.rtdbWorld.baseline(), true);
+    } finally {
+      await finish(env);
+    }
+  }
+});
+
+test("a deploy that failed with no proof and left no function is an unknown create: residual, for the coordinator to accept", async () => {
+  const env = await setup({
+    options: { failDeploy: "rtdbCreatedV2", failDeployKind: "absent-unknown" },
+  });
+  try {
+    const result = await run(env);
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.residual, true);
+    assert.match(result.reasons.join(";"), /the create of rtdbCreatedV2 is unknown/);
+    assert.equal(result.deploys.rtdbCreatedV2.class, "unknown");
+    assert.equal(env.gcp.functions.size, 0);
+    assert.equal(env.rtdbWorld.baseline(), true, "the rest is cleaned all the same");
+  } finally {
+    await finish(env);
+  }
+});
+
+test("a deploy that failed after creating its function is settled by the cleanup's own read of it", async () => {
+  const env = await setup({ options: { failDeploy: "rtdbCreatedV2" } });
+  try {
+    const result = await run(env);
+    assert.equal(result.residual, false, result.reasons.join("; "));
+    assert.equal(result.deploys.rtdbCreatedV2.class, "unknown");
+    assert.equal(result.deploys.rtdbCreatedV2.functionSeen, true);
+    assert.doesNotMatch(result.reasons.join(";"), /is unknown/);
+  } finally {
+    await finish(env);
+  }
+});

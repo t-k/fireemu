@@ -448,3 +448,60 @@ test("the first write waits for the triggers to go live, and a signal ends that 
   assert.match(result.reasons.join(";"), /signal/);
   assert.equal(names(stopped.events, "cleanup ").length, 8);
 });
+
+// ---- a failed deploy: refused (nothing made) or an unknown create (review M2) ----
+
+test("a deploy that production refused, and whose function was never there, is not an unknown create", async () => {
+  const w = makeWorld({ failDeploy: "rtdbCreatedV2", deployClass: "refused", functionSeen: false });
+  const result = await runStage2(w.deps);
+  assert.equal(result.outcome, "stopped-needs-review");
+  assert.equal(result.residual, false, result.reasons.join(";"));
+  assert.match(
+    result.reasons.join(";"),
+    /the deploy of rtdbCreatedV2 was refused by production \(HTTP 400\); nothing was made/,
+  );
+  assert.deepEqual(result.deploys.rtdbCreatedV2, {
+    class: "refused",
+    evidence: [{ status: 400 }],
+    functionSeen: false,
+  });
+});
+
+test("a failed deploy whose function was never read present is an unknown create: residual, for the coordinator to accept", async () => {
+  for (const options of [
+    { deployClass: "unknown", functionSeen: false },
+    { deployClass: "unknown" },
+  ]) {
+    const w = makeWorld({ failDeploy: "rtdbWrittenV1", ...options });
+    const result = await runStage2(w.deps);
+    assert.equal(result.residual, true, JSON.stringify(options));
+    assert.match(result.reasons.join(";"), /the create of rtdbWrittenV1 is unknown/);
+    assert.equal(result.deploys.rtdbWrittenV1.class, "unknown");
+  }
+});
+
+test("a failed deploy whose function the cleanup read present and deleted is settled by that read", async () => {
+  const w = makeWorld({ failDeploy: "rtdbWrittenV1", deployClass: "unknown", functionSeen: true });
+  const result = await runStage2(w.deps);
+  assert.equal(result.residual, false, result.reasons.join(";"));
+  assert.doesNotMatch(result.reasons.join(";"), /is unknown/);
+  assert.equal(result.deploys.rtdbWrittenV1.functionSeen, true);
+});
+
+test("a refused deploy whose function nevertheless existed is a contradiction for the coordinator, and the exact delete still settled it", async () => {
+  const w = makeWorld({ failDeploy: "rtdbCreatedV2", deployClass: "refused", functionSeen: true });
+  const result = await runStage2(w.deps);
+  assert.equal(result.residual, false);
+  assert.match(
+    result.reasons.join(";"),
+    /rtdbCreatedV2 was refused by production yet the function existed/,
+  );
+});
+
+test("a deploy that did not fail leaves no deploy record", async () => {
+  const result = await runStage2(makeWorld().deps);
+  assert.deepEqual(result.deploys, {});
+  // a failure with no classification (the CLI never started) is not judged either
+  const plain = await runStage2(makeWorld({ failDeploy: "rtdbCreatedV1" }).deps);
+  assert.deepEqual(plain.deploys, {});
+});

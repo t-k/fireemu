@@ -2042,6 +2042,41 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The Node script of the test below: sign up a user, then POST the callable four times with
+/// different Bearers and write `<kind> <status>` lines to `statuses`.
+fn route_bearer_script(statuses: &Path) -> String {
+    format!(
+        r#"
+const project = "demo-manifest-route-bearer";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const host = (value) => (value.startsWith("http") ? value : "http://" + value);
+(async () => {{
+  const signUp = await fetch(
+    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+    {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ email: "ada@example.com", password: "secret-123", returnSecureToken: true }}) }},
+  );
+  const {{ localId }} = await signUp.json();
+  if (!localId) throw new Error("sign-up failed");
+  const now = Math.floor(Date.now() / 1000);
+  const token = (iat) =>
+    b64url({{ alg: "none", typ: "JWT" }}) + "." +
+    b64url({{ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: {{ identities: {{}}, sign_in_provider: "password" }} }}) + ".";
+  const lines = [];
+  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(now)], ["future", "Bearer " + token(now + 600)], ["malformed", "Bearer malformed"]]) {{
+    const headers = {{ "content-type": "application/json" }};
+    if (authorization) headers.authorization = authorization;
+    const response = await fetch(host(process.env.FIREEMU_FUNCTIONS_HOST) + "/" + project + "/us-central1/guarded", {{
+      method: "POST", headers, body: JSON.stringify({{ data: {{ kind }} }}),
+    }});
+    lines.push(kind + " " + response.status);
+  }}
+  require("fs").writeFileSync({statuses:?}, lines.join("\n") + "\n");
+}})().catch((error) => {{ console.error(String(error)); process.exit(1); }});
+"#,
+        statuses = statuses.display().to_string()
+    )
+}
+
 /// The route twin of the test above: a code-level callable that a configured manifest serves as
 /// an `onRequest` function. A request whose unsigned Bearer the Admin SDK's Auth-emulator
 /// verification accepts, but whose `iat` lies in the future, is refused with 401 by the strict
@@ -2073,36 +2108,7 @@ exports.guarded = onCall((request) => {{
         "manifest.json",
         r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": false}}]}"#,
     );
-    let script = format!(
-        r#"
-const project = "demo-manifest-route-bearer";
-const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
-const host = (value) => (value.startsWith("http") ? value : "http://" + value);
-(async () => {{
-  const signUp = await fetch(
-    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
-    {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ email: "ada@example.com", password: "secret-123", returnSecureToken: true }}) }},
-  );
-  const {{ localId }} = await signUp.json();
-  if (!localId) throw new Error("sign-up failed");
-  const now = Math.floor(Date.now() / 1000);
-  const token = (iat) =>
-    b64url({{ alg: "none", typ: "JWT" }}) + "." +
-    b64url({{ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: {{ identities: {{}}, sign_in_provider: "password" }} }}) + ".";
-  const lines = [];
-  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(now)], ["future", "Bearer " + token(now + 600)], ["malformed", "Bearer malformed"]]) {{
-    const headers = {{ "content-type": "application/json" }};
-    if (authorization) headers.authorization = authorization;
-    const response = await fetch(host(process.env.FIREEMU_FUNCTIONS_HOST) + "/" + project + "/us-central1/guarded", {{
-      method: "POST", headers, body: JSON.stringify({{ data: {{ kind }} }}),
-    }});
-    lines.push(kind + " " + response.status);
-  }}
-  require("fs").writeFileSync({statuses:?}, lines.join("\n") + "\n");
-}})().catch((error) => {{ console.error(String(error)); process.exit(1); }});
-"#,
-        statuses = statuses.display().to_string()
-    );
+    let script = route_bearer_script(&statuses);
     for profile in ["strict", "emulator"] {
         let _ = std::fs::remove_file(&hits);
         let _ = std::fs::remove_file(&statuses);

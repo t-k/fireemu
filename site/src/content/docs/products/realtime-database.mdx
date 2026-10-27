@@ -249,7 +249,7 @@ The Realtime Database page of the [Emulator UI](../../guides/ui/) browses the da
 The recorded cases are REST PUT, GET and PATCH values and priorities, `format=export`, `orderBy` with `startAt`, `limitToFirst` and `limitToLast`, ETag and `if-match`, and the recorded errors; rules loading and owner and UID `.read` and `.write` evaluation; anonymous event streams; and the web SDK's value listeners, `onDisconnect` `set`, `remove`, one transaction schedule and email/password Auth over WebSocket and long polling. Within them, these differences are known:
 
 - Two REST answers keep a different JSON member order: a multi-path PATCH answer, which production returns in the request's order, and an `orderBy` query answer, which production lists in query order. Status, parsed JSON and ETag are equal.
-- A long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, about 100 s to 105 s after its last request; production ran them after 100.8 s to 104.0 s.
+- A long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, about 100 s to 105 s after its last request; production ran them after 99.3 s to 104.0 s.
 - Production answers an event stream with `Connection: close` and closes the socket after the `cancel` event; Fireemu uses a chunked body, ends it after `cancel` and keeps the connection open. The event bytes are identical.
 - Production's Google-signed Firebase ID tokens are not accepted. Tokens issued by Fireemu's Auth and the `owner` credential are, and `strict` refuses another `gauth` credential with production's `permission_denied`.
 

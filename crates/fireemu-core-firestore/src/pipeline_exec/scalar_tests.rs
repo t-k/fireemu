@@ -757,8 +757,55 @@ fn the_profiles_differ_only_where_the_rows_stop() {
     ));
 }
 
+#[test]
+fn integer_round_minimum_places_preserves_profile_policy() {
+    assert!(is_unobserved(&strict("round", &[int(1250), int(i64::MIN)])));
+    assert_eq!(emulator("round", &[int(1250), int(i64::MIN)]), int(0));
+}
+
+#[test]
+fn integer_round_profile_value_places_matrix() {
+    // PICT pairwise rows, including the required minimum and boundary seeds.
+    let cases = [
+        (true, 1250, i64::MIN),
+        (false, 1250, i64::MIN),
+        (true, -1250, -18),
+        (false, -1250, -18),
+        (true, -1250, i64::MIN),
+        (true, 0, -2),
+        (false, -1250, -19),
+        (true, 1250, -19),
+        (false, 0, -18),
+        (false, 1250, -2),
+        (false, 1250, -18),
+        (true, 0, -19),
+        (false, 0, i64::MIN),
+        (false, -1250, -2),
+    ];
+    for (is_strict, value, places) in cases {
+        let args = [int(value), int(places)];
+        let got = if is_strict {
+            strict("round", &args)
+        } else {
+            emulator("round", &args)
+        };
+        if is_strict && places < -18 {
+            assert!(is_unobserved(&got), "{value}, {places}");
+        } else {
+            let expected = if places == -2 { value / 1250 * 1300 } else { 0 };
+            assert_eq!(got, int(expected), "{value}, {places}");
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn integer_round_extreme_negative_places_preserve_policy(value in any::<i64>(), places in i64::MIN..-18i64) {
+        prop_assert!(is_unobserved(&strict("round", &[int(value), int(places)])));
+        prop_assert_eq!(emulator("round", &[int(value), int(places)]), int(0));
+    }
 
     #[test]
     fn concat_of_strings_is_their_join(parts in proptest::collection::vec(".{0,6}", 2..6)) {

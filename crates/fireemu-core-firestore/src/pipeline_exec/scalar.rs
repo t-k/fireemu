@@ -1123,7 +1123,11 @@ fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
             invalid("round(...) int64 overflow")
         }
     };
-    let Some(digits) = u32::try_from(-places).ok().filter(|digits| *digits <= 18) else {
+    let Some(digits) = places
+        .checked_neg()
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|digits| *digits <= 18)
+    else {
         return if strict(cx) {
             unobserved("round", "places the rows do not show")
         } else {

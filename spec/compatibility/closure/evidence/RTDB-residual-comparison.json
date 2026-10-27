@@ -71,13 +71,15 @@
  "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
  "binding": {
   "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
-  "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+  "rustSourcesEqualTo": "built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version",
   "binarySha256": "7df56bd97433b81a0e711bb61ecff2b5d2d13cbf381e3e4fc554ef27558163d9",
   "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "host": "Darwin arm64",
   "profile": "strict",
-  "productionRequests": 0
+  "productionRequests": 0,
+  "buildPath": ".worktree/rtdb-residual",
+  "buildPathNote": "the sha256 holds for this build path: built under another path the binary differs only in LC_UUID and the ad hoc code signature (review 2026-10-27, check 2)"
  },
  "localRun": {
   "status": "closed",
@@ -106,7 +108,7 @@
    "cv10/r2-lp": 104.3
   }
  },
- "lineage": "cv11-genuine-auth.mjs now imports adc-preflight.mjs and runs the ADC scope check before its first request (2026-10-27). Its production-2 recording (RTDB-CV11-LEAN-20261025-02) was made by the version pinned in RTDB-genuine-auth-comparison.json, before this edit; the v4 review found nothing that binds the file at HEAD.",
+ "lineage": "cv11-genuine-auth.mjs now imports adc-preflight.mjs and runs the ADC scope check before its first request (2026-10-27). Its production-2 recording (RTDB-CV11-LEAN-20261025-02) was made by the version pinned in RTDB-genuine-auth-comparison.json, before this edit; the v4 review found nothing that binds the file at HEAD. The committed local journal (fixtures/local-rtdb-residual.json) was produced by rtdb-residual.mjs 412cd45e, the version that also made production-5, on the binary above; the later lift of the administration helpers into rtdb-admin.mjs (52f7c0e25) is behaviour-preserving, and the lifted tools reproduce MATCH 8/8 in both profiles on the same binary (review 2026-10-27, delta check 4).",
  "summary": {
   "verdict": "match",
   "match": true,

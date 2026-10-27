@@ -14,10 +14,10 @@
  },
  "closureReview": {
   "decision": "APPROVED",
-  "decidedOn": "2026-10-26",
+  "decidedOn": "2026-10-27",
   "decider": "project coordinator (delegated by the owner)",
-  "decisionRef": "docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
-  "reviewedCommit": "12fdeff75f334773484f436abe0b0b0321f67dc2",
+  "decisionRef": "docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
+  "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
   "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "reviews": [
@@ -32,9 +32,15 @@
     "reportSha256": "6149a83a3d8649955620ad53246ad9e7f995ee764d2baefba46a9f8d36f4e209",
     "reviewedCommit": "12fdeff75f334773484f436abe0b0b0321f67dc2",
     "outcome": "delta review: APPROVE, Must 0 (the report file was extended in place; the first entry's digest is the initial version)"
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md",
+    "reportSha256": "32767226df6f81a79fc991398a477be88f657032a1fc0041983e4b493f19a84e",
+    "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
+    "outcome": "Opus independent closure review of the CV08/CV10 update (production-5): APPROVE of dd90111a2 and of the delta 1170d27ce, Must 0 against the lane; M1 was the coordinator's closing step (R4 decided, this entry, closure_records --write); Should S1 to S5, DS1 and DS2 addressed in the closing commit"
    }
   ],
-  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md)."
+  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17."
  },
  "scopeDecisions": [
   {
@@ -74,10 +80,10 @@
    "decision": "R2 is amended for two of its items. Reconnect/resume, child-event and query-window order and query-scoped cancellation (CV08), and onDisconnect cancel, re-register, update/remove, server values and a Rules change between registration and firing (CV10), are observed in production (production-5, 2026-10-27, 8 profiles) and compared with fireemu: RTDB/sdk-reconnect-and-query-order and RTDB/sdk-ondisconnect-variants-and-rules, for the recorded shapes only. Still UNVERIFIED: SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge and onDisconnect update, SDK server values beyond the onDisconnect update, and everything else R2 lists (CV14 included).",
    "rationale": "The CV08 and CV10 gap actors never produced a result; the lean residual recorder did (production-5), after four spent envelopes that stopped at the first requests (ADC scopes, a propagation 423) without observing anything.",
    "amends": "R2",
-   "status": "PROPOSED",
-   "decidedBy": "coordinator (to confirm at the closure review)",
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
    "decidedOn": "2026-10-27",
-   "decisionRef": "docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
+   "decisionRef": "docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (M1: the coordinator's ruling of 2026-10-27 that R4 is decided); docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
   }
  ],
  "conditions": [
@@ -417,7 +423,7 @@
     "fixture": "tools/sdk-smoke-database/fixtures/production-cv11-genuine-auth.json",
     "comparisonTool": "tools/sdk-smoke-database/cv11-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "comparisonSha256": "eb45b2a04c4806c8ad01f476efcb390ca6e5dbcc0fa6a8f03d239b247a088933",
+    "comparisonSha256": "4e1fd3c38fc3751e16ef588b18ad760f0c2e07b730df9da3e9ae21aa25fb9ca1",
     "rows": {
      "MATCH": 92
     },
@@ -605,9 +611,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
+    "comparisonSha256": "ae902b56a9381257e216c3be54538285f7a0d462dc93be6bca9315dca12a88fa",
     "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
-    "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+    "rustSourcesEqualTo": "built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version",
     "knownDifferences": [],
     "rows": {
      "MATCH": 4
@@ -632,7 +638,7 @@
     "remove; update with a null and a kept field; update with increment and serverTimestamp",
     "cancel at a parent cancels the registrations below it",
     "a Rules change that denies a path between registration and firing: the write is not made; registering under denying Rules is refused with PERMISSION_DENIED",
-    "the writes of one connection fire in the order of production (e6, e5, marker, e4, e3, e2 for the six recorded keys), which is the Scala map order of the official emulator: registration order up to four entries, key hash order from five; fireemu matches it in every recorded step (no known difference in the order)",
+    "the six recorded writes of one connection fire in production's order e6, e5, marker, e4, e3, e2 (not registration order); fireemu matches it in every recorded step. The general rule (insertion order up to four entries, Scala hash-trie order from five) is fitted to the official emulator (4.11.2) and is not claimed for production beyond this key set",
     "WebSocket: the writes fire at once (0.2 s); long polling: after the idle close (99.3 s and 103.2 s in production, about 104 s in fireemu)"
    ],
    "status": "VERIFIED",
@@ -650,9 +656,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
+    "comparisonSha256": "ae902b56a9381257e216c3be54538285f7a0d462dc93be6bca9315dca12a88fa",
     "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
-    "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+    "rustSourcesEqualTo": "built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version",
     "knownDifferences": [
      "/knownDifferences/longPollingIdleClose"
     ],
@@ -701,7 +707,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
-    "sha256": "eb45b2a04c4806c8ad01f476efcb390ca6e5dbcc0fa6a8f03d239b247a088933",
+    "sha256": "4e1fd3c38fc3751e16ef588b18ad760f0c2e07b730df9da3e9ae21aa25fb9ca1",
     "rows": 92,
     "summary": {
      "match": true,
@@ -710,7 +716,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "sha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
+    "sha256": "ae902b56a9381257e216c3be54538285f7a0d462dc93be6bca9315dca12a88fa",
     "rows": 8,
     "summary": {
      "match": true,
@@ -721,12 +727,13 @@
      },
      "timingWithinTolerance": true
     },
-    "binding": "the release binary built from origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a with RUSTC_WRAPPER empty (sha256 in the evidence file)"
+    "binding": "the release binary 7df56bd9 built from built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version (RUSTC_WRAPPER empty, build path .worktree/rtdb-residual; sha256 in the evidence file)",
+    "buildPath": ".worktree/rtdb-residual"
    }
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
-  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium."
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences."
  },
  "knownDifferences": {
   "restMemberOrder": {
@@ -737,7 +744,7 @@
    ]
   },
   "longPollingIdleClose": {
-   "statement": "A long-polling client that goes offline without closing has its onDisconnect writes run when the server drops the idle connection: production after 100.8 s and 104.0 s in the two recorded flows, fireemu after about 105 s (100 s idle timeout plus the client's poll timing). The event sequence is identical; the comparison judges the delay within 5 s of production's range."
+   "statement": "A long-polling client that goes offline without closing has its onDisconnect writes run when the server drops the idle connection: production after 99.3 s to 104.0 s in the four recorded flows (100.8 s and 104.0 s in the onDisconnect recording, 99.3 s and 103.2 s in production-5), fireemu after 104.3 s to about 105 s (100 s idle timeout plus the client's poll timing). The event sequence is identical; the comparison judges the delay within 5 s of production's range."
   },
   "cv11WriteAfterDeleteRace": {
    "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step (and only that step) unordered; every other step, including the multi-event steps signin-a, signout, resignin-a and refresh-after-delete, is judged in recorded order. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."

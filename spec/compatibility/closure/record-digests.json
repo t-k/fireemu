@@ -144,7 +144,7 @@
     "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json": "4e1fd3c38fc3751e16ef588b18ad760f0c2e07b730df9da3e9ae21aa25fb9ca1",
     "spec/compatibility/closure/evidence/RTDB-residual-comparison.json": "ae902b56a9381257e216c3be54538285f7a0d462dc93be6bca9315dca12a88fa",
     "spec/compatibility/closure/evidence/RTDB-rest-comparison.json": "0275ac72fe198e68db2de0d4f9ff2123d32a50c6c68a63bf3c247dd6288ff600",
-    "spec/compatibility/closure/evidence/RTDB-s5-comparison.json": "d962d9c1b61bb77825fe71c7de8a9a80eae2496dd0b93bc8bf26ad27d0cafea1",
+    "spec/compatibility/closure/evidence/RTDB-s5-comparison.json": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
     "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json": "0ac5226a62ffe9e2d8184517d3c31707b22fc48ddb2081c8f515c2f1020dbde1",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",

@@ -29,7 +29,7 @@
  },
  "localJournal": {
   "path": "tools/sdk-smoke-database/fixtures/local-rtdb-s5.json",
-  "sha256": "131d4d602e3042fe4bcd47464c01173b304bd66ee1366279ecdccec4e9fac281"
+  "sha256": "8d2b438da019d324f2f888eda1b59cb35f8a7102117d28cd5f62bf6f7728fe05"
  },
  "tool": [
   {
@@ -68,9 +68,9 @@
  "command": "node tools/sdk-smoke-database/rtdb-s5.mjs local --fireemu <binary> --out <dir> --profile strict; node tools/sdk-smoke-database/rtdb-s5-fixture.mjs fixture <dir>/journal.json <fixture.json> --recording fireemu-strict-local --envelope \"none (local run; no production request)\" --recorded-on <date>; node tools/sdk-smoke-database/rtdb-s5-fixture.mjs summary tools/sdk-smoke-database/fixtures/production-rtdb-s5.json <fixture.json>",
  "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
  "binding": {
-  "toolCommit": "5f0e47b28f6a3b5ef287c8039a3b4040e412f759",
-  "rustSourcesEqualTo": "this branch at 389777c3a231a4366c006009b6461dd16306b0a3: origin/main edb56c689 plus the broken-node change of crates/fireemu-adapter-database/src/on_disconnect.rs; no later commit changes crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml",
-  "binarySha256": "e881ae850aab357977422b9aafcd39a0838291bcc6c455dfa5a16e03729f0f65",
+  "toolCommit": "a08d338545af1b202e020a1b03403c82da14c9c1",
+  "rustSourcesEqualTo": "Runtime Rust sources at ebf18e152ddd2100596ebbcc0a5e1b07c902fbb6; later commits through a08d338545af1b202e020a1b03403c82da14c9c1 change only documentation, fixture provenance and Txn-04 evidence.",
+  "binarySha256": "a18a612eed72139bb4bd052d2f5e741dfec9695892b7e8fc990a007a9900eff4",
   "buildPath": ".worktree/rtdb-s5-drop",
   "buildPathNote": "the sha256 holds for this build path: built under another path the binary differs only in LC_UUID and the ad hoc code signature",
   "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
@@ -92,7 +92,7 @@
   "note": "the same recorder with --profile emulator against the same binary; both profiles follow production here"
  },
  "officialEmulatorReference": "The pinned official emulator jar 4.11.2 gives A in both rounds with the same recorder (rehearsal docs.local/runs/rtdb-s5/local-official-2), as production did; it is a reference, not evidence.",
- "offlineOfficialEmulatorCases": "crates/fireemu-adapter-database/tests/fixtures/ondisconnect-priority-drop-official-emulator-4.11.2.json: 22 raw-frame cases on the pinned jar (what heals the broken node, which registrations it takes with it, other connections, nested and string priorities, the controls). Production observed only the first shape; the rest follows the official emulator.",
+ "offlineOfficialEmulatorCases": "31 raw-frame cases in crates/fireemu-adapter-database/tests/fixtures/ondisconnect-priority-drop-official-emulator-4.11.2.json, including review E4 and F1\u2013F8. The eight F cases were rechecked against the pinned official emulator jar and the release binary, including acknowledgements. Production observed only the recorded S5 shape; other cases are unverified in production.",
  "judging": "rtdb-s5-judge.mjs: a round is classified A (nothing fires), B (the remaining children and the unrelated write fire), C (the value fires whole) or D (only the unrelated write fires); a control that misbehaves, a missing or duplicated row, a timeout, error, rejection or cancel row or a transport other than WebSocket makes the round unclassified. The comparison is a match only when production and fireemu gave the same settled answer in both rounds.",
  "lineage": "Before the broken-node change fireemu answered B in both profiles (docs.local/runs/rtdb-s5/local-strict-2, local-emulator-2); the production answer A is why it changed.",
  "summary": {

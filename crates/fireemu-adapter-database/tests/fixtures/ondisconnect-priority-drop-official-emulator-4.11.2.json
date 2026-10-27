@@ -180,7 +180,7 @@
    "order": []
   },
   {
-   "name": "a cancel of the other child changes nothing",
+   "name": "a cancel of the other child leaves the update suppressed while priority remains",
    "connections": [
     [
      [
@@ -217,7 +217,7 @@
    "order": []
   },
   {
-   "name": "a write below the broken value changes nothing",
+   "name": "a later child write stays suppressed while the retained priority remains",
    "connections": [
     [
      [

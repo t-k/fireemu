@@ -38,9 +38,21 @@
     "reportSha256": "32767226df6f81a79fc991398a477be88f657032a1fc0041983e4b493f19a84e",
     "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
     "outcome": "Opus independent closure review of the CV08/CV10 update (production-5): APPROVE of dd90111a2 and of the delta 1170d27ce, Must 0 against the lane; M1 was the coordinator's closing step (R4 decided, this entry, closure_records --write); Should S1 to S5, DS1 and DS2 addressed in the closing commit"
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-27-rtdb-s5-drop-review.md",
+    "reportSha256": "ba97e3d3589f4903f909487f15b3f6e5d10ecbd2daeab983843950a8c367706d",
+    "reviewedCommit": "9893ad00b07d16a6259345aa64a9dc0ad8f9f11f",
+    "outcome": "Independent S5 review: CHANGES REQUESTED; retained-child model and scope corrections required."
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-28-rtdb-s5-sol.md",
+    "reportSha256": "8abc812be741646bc270da9aedeb5893a42fa46c6eb55de4a589d488125621aa",
+    "reviewedCommit": "a08d338545af1b202e020a1b03403c82da14c9c1",
+    "outcome": "Independent S5 source delta review: APPROVED for bounded source delta; final evidence and closure review remain pending."
    }
   ],
-  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17."
+  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17. S5 has a separate source review; the final evidence update and approval are pending."
  },
  "scopeDecisions": [
   {
@@ -90,10 +102,10 @@
    "decision": "R4 is amended for one more recorded shape. An onDisconnect value that carries a priority, split by a cancel of one of its children, is observed in production (production-1 of RTDB-S5-20261027-01, 2026-10-27, two rounds: the connection's whole onDisconnect update is dropped) and compared with fireemu in both profiles: RTDB/ondisconnect-prioritized-split, for the recorded shape only. The other cases of the official emulator's behaviour around it (healing, nested and string priorities, other connections) are probed offline and stay unobserved in production.",
    "rationale": "The official emulator drops the update and fireemu fired the remaining children; production decided which of the two is right, and it sided with the official emulator.",
    "amends": "R4",
-   "status": "PROPOSED",
-   "decidedBy": "coordinator (to confirm at the closure review)",
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
    "decidedOn": "2026-10-27",
-   "decisionRef": "docs.local/runs/rtdb-s5/production-1; docs.local/instructions/owner-decisions.md (line 1853, REVOKED RTDB-S5-20261027-01); the coordinator's ruling of 2026-10-27 that both profiles follow the answer"
+   "decisionRef": "docs.local/instructions/owner-decisions.md (lines 1854 and 1857, 2026-10-27 RTDB S5 prioritized split and scope R5); docs.local/reviews/2026-10-27-rtdb-s5-drop-review.md"
   }
  ],
  "conditions": [
@@ -711,9 +723,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-s5.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-s5-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
-    "comparisonSha256": "d962d9c1b61bb77825fe71c7de8a9a80eae2496dd0b93bc8bf26ad27d0cafea1",
-    "toolCommit": "5f0e47b28f6a3b5ef287c8039a3b4040e412f759",
-    "rustSourcesEqualTo": "this branch at 389777c3a231a4366c006009b6461dd16306b0a3: origin/main edb56c689 plus the broken-node change of crates/fireemu-adapter-database/src/on_disconnect.rs; no later commit changes crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml",
+    "comparisonSha256": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
+    "toolCommit": "a08d338545af1b202e020a1b03403c82da14c9c1",
+    "rustSourcesEqualTo": "Runtime Rust sources at ebf18e152ddd2100596ebbcc0a5e1b07c902fbb6; later commits through a08d338545af1b202e020a1b03403c82da14c9c1 change only documentation, fixture provenance and Txn-04 evidence.",
     "knownDifferences": [],
     "rows": {
      "MATCH": 2

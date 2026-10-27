@@ -46,6 +46,25 @@ pub(super) fn seeded_query(
     request
 }
 
+/// The ranks of `seeded_query(count)` in production's scan order: ascending CRC-32 of the
+/// document IDs (`000`, `001`, ...), where the rank of document `index` is `count - index`.
+fn ranks_in_scan_order(count: i64) -> Vec<i64> {
+    let mut indexes: Vec<i64> = (0..count).collect();
+    indexes.sort_by_key(|index| crate::pipeline::crc32(format!("{index:03}").as_bytes()));
+    indexes.into_iter().map(|index| count - index).collect()
+}
+
+fn rank_field(rank: i64) -> std::collections::HashMap<String, pb::Value> {
+    [(
+        "rank".to_owned(),
+        pb::Value {
+            value_type: Some(pb::value::ValueType::IntegerValue(rank)),
+        },
+    )]
+    .into_iter()
+    .collect()
+}
+
 fn selection_bytes(backend: &LocalBackend) -> u64 {
     backend
         .resources(&Scope::AllExcept(BTreeSet::default()), RootBudget::DEFAULT)
@@ -313,33 +332,15 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
         let response = response.unwrap();
         names.extend(response.results.into_iter().map(|document| document.fields));
     }
-    let expected: Vec<_> = (0..65)
-        .map(|index| {
-            [(
-                "rank".to_owned(),
-                pb::Value {
-                    value_type: Some(pb::value::ValueType::IntegerValue(65 - index)),
-                },
-            )]
-            .into_iter()
-            .collect()
-        })
+    // The rows come in production's scan order whatever the pages hold: ascending CRC-32 of the
+    // document IDs across the page boundary.
+    let expected: Vec<_> = ranks_in_scan_order(65)
+        .into_iter()
+        .map(rank_field)
         .collect();
-    // (Production scans in CRC-32 order of the document IDs, not in name order: compare the
-    // rows as a sorted list.)
-    let sorted = |mut rows: Vec<std::collections::HashMap<String, pb::Value>>| {
-        rows.sort_by_key(|row| {
-            format!(
-                "{:?}",
-                row.iter().collect::<std::collections::BTreeMap<_, _>>()
-            )
-        });
-        rows
-    };
     assert_eq!(
-        sorted(names),
-        sorted(expected),
-        "every original row, type and multiplicity must survive later-page mutations"
+        names, expected,
+        "every original row, type, order and multiplicity must survive later-page mutations"
     );
 }
 
@@ -392,10 +393,11 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
             })
             .unwrap();
         assert_eq!(legacy.len(), usize::try_from(count).unwrap());
-        let expected: Vec<_> = legacy
-            .iter()
-            .map(|doc| crate::encode::encode_document(doc).fields)
-            .collect();
+        let mut expected: Vec<_> = legacy.iter().map(crate::encode::encode_document).collect();
+        expected.sort_by_key(|doc| {
+            crate::pipeline::crc32(doc.name.rsplit('/').next().unwrap().as_bytes())
+        });
+        let expected: Vec<_> = expected.into_iter().map(|doc| doc.fields).collect();
         let legacy_retained_documents = legacy.len();
         drop(legacy);
         let mut stream = Firestore::execute_pipeline(&service, Request::new(pipeline_request()))
@@ -410,17 +412,8 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
                 actual.push(document.fields);
             }
         }
-        // (Rows come in production's scan order, CRC-32 of the document IDs: compare sorted.)
-        let sorted = |mut rows: Vec<std::collections::HashMap<String, pb::Value>>| {
-            rows.sort_by_key(|row| {
-                format!(
-                    "{:?}",
-                    row.iter().collect::<std::collections::BTreeMap<_, _>>()
-                )
-            });
-            rows
-        };
-        assert_eq!(sorted(actual), sorted(expected));
+        // Rows come in production's scan order: ascending CRC-32 of the document IDs.
+        assert_eq!(actual, expected);
         let (_, stats) = backend.latest_query_execution_stats().unwrap();
         println!(
             "pipeline_stats count={count} returned={returned} pages={} cloned={} field_bytes={} selection_paths={} selection_bytes={}",
@@ -541,11 +534,16 @@ async fn execute_pipeline_select_copies_only_projected_fields_across_pages() {
         assert!(actual
             .iter()
             .all(|fields| fields.len() == 1 && fields.contains_key("value")));
-        // (The rows come in production's scan order, so the largest rank is not first.)
-        assert!(actual
+        // The rows come in production's scan order: ascending CRC-32 of the document IDs.
+        let values: Vec<_> = actual
             .iter()
-            .any(|fields| fields["value"].value_type
-                == Some(pb::value::ValueType::IntegerValue(count))));
+            .map(|fields| fields["value"].value_type.clone())
+            .collect();
+        let want: Vec<_> = ranks_in_scan_order(count)
+            .into_iter()
+            .map(|rank| Some(pb::value::ValueType::IntegerValue(rank)))
+            .collect();
+        assert_eq!(values, want);
         let (_, stats) = backend.latest_query_execution_stats().unwrap();
         assert_eq!(
             stats.pages.cloned_field_bytes,
@@ -590,6 +588,45 @@ async fn execute_pipeline_drop_before_first_delivery_releases_snapshot() {
     })
     .await
     .unwrap();
+}
+
+/// `collection | limit(1)` over a collection of several pages returns the document that comes
+/// first in production's scan order (the lowest CRC-32 of the IDs), not the first by name: the
+/// input is read whole before the limit applies.
+#[tokio::test]
+async fn execute_pipeline_limit_over_pages_returns_the_first_document_in_scan_order() {
+    let backend = test_backend();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend.clone());
+    seeded_query(&backend, 65, false);
+    let mut request = pipeline_request();
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        unreachable!();
+    };
+    structured
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stages
+        .push(pb::pipeline::Stage {
+            name: "limit".to_owned(),
+            args: vec![pb::Value {
+                value_type: Some(pb::value::ValueType::IntegerValue(1)),
+            }],
+            ..Default::default()
+        });
+    let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut rows = Vec::new();
+    while let Some(response) = stream.next().await {
+        rows.extend(response.unwrap().results.into_iter().map(|d| d.fields));
+    }
+    assert_eq!(rows, vec![rank_field(ranks_in_scan_order(65)[0])]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

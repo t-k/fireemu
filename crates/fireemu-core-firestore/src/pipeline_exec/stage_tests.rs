@@ -1384,3 +1384,33 @@ fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_argume
         );
     }
 }
+
+/// An operand whose evaluation fails is reported wherever it stands (the emulator profile), and
+/// strict calls it unobserved when another operand decides the call: `or(true, not(1))` was not
+/// asked of production, so no recording of that shape may make strict answer it.
+#[test]
+fn a_failing_operand_beside_a_deciding_one_is_unobserved_under_strict() {
+    let t = || Eval::Value(Value::Boolean(true));
+    let f = || Eval::Value(Value::Boolean(false));
+    let failing = || {
+        Eval::Error(EvalError::WrongType {
+            function: "not",
+            expected: "Boolean",
+            got: "LONG",
+        })
+    };
+    for (name, deciding) in [("or", t()), ("nor", t()), ("and", f())] {
+        for position in 0..2 {
+            let mut args = vec![failing()];
+            args.insert(position, deciding.clone());
+            assert!(is_unobserved(&strict(name, &args)), "{name} {args:?}");
+            assert_eq!(emulator(name, &args), failing(), "{name} {args:?}");
+        }
+    }
+    // No deciding operand: the failure is the answer under both profiles.
+    for (name, plain) in [("or", f()), ("nor", f()), ("and", t())] {
+        let args = [plain, failing()];
+        assert_eq!(strict(name, &args), failing(), "{name}");
+        assert_eq!(emulator(name, &args), failing(), "{name}");
+    }
+}

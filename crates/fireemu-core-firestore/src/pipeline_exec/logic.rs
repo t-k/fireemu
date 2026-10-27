@@ -170,8 +170,25 @@ fn left_to_right(
     function: &'static str,
     args: &[Eval],
     decider: bool,
+    cx: Context,
 ) -> Result<Option<bool>, Eval> {
     if let Some(error) = first_error(args) {
+        // An operand whose own evaluation fails is reported before the walk, wherever it
+        // stands, so `or(true, not(1))` fails with the error of `not` although `true` decides
+        // first. Production was not asked about an error-valued operand beside a deciding one
+        // (O-9 `ops-main` only has constants of the wrong type, which a deciding operand
+        // before them hides): the emulator profile answers the error, strict says it is
+        // unobserved whatever a recording of the same shape might hold.
+        if cx.unrecorded == Unrecorded::Refuse
+            && args
+                .iter()
+                .any(|arg| matches!(arg, Eval::Value(Value::Boolean(b)) if *b == decider))
+        {
+            return Err(unobserved(
+                function,
+                "an operand that fails beside one that decides the call",
+            ));
+        }
         return Err(error);
     }
     let mut unknown = false;
@@ -207,15 +224,15 @@ fn tri(state: Option<bool>) -> Eval {
     state.map_or_else(null, boolean)
 }
 
-fn eval_and(args: &[Eval], _cx: Context) -> Eval {
-    match left_to_right("and", args, false) {
+fn eval_and(args: &[Eval], cx: Context) -> Eval {
+    match left_to_right("and", args, false, cx) {
         Ok(state) => tri(state),
         Err(error) => error,
     }
 }
 
-fn eval_or(args: &[Eval], _cx: Context) -> Eval {
-    match left_to_right("or", args, true) {
+fn eval_or(args: &[Eval], cx: Context) -> Eval {
+    match left_to_right("or", args, true, cx) {
         Ok(state) => tri(state),
         Err(error) => error,
     }
@@ -239,8 +256,8 @@ fn eval_xor(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// `nor`: the negation of `or`, read left to right like it.
-fn eval_nor(args: &[Eval], _cx: Context) -> Eval {
-    match left_to_right("nor", args, true) {
+fn eval_nor(args: &[Eval], cx: Context) -> Eval {
+    match left_to_right("nor", args, true, cx) {
         Ok(state) => tri(state.map(|b| !b)),
         Err(error) => error,
     }

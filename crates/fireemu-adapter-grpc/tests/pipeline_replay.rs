@@ -21,6 +21,10 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
+/// (Notes on what the replay assumes: a collection group's order by parent document, string
+/// order of the parent path, is generalized from the few parents of O-9 `cg-main` and O-9b
+/// `cg-parent`; CRC-32 ties and non-ASCII IDs are not observed.)
+///
 /// Programs that fireemu does not answer like production yet. They are replayed and compared
 /// like the rest, but a difference in them is not an unexpected one; each program must still
 /// differ in at least one row, so remove a program from this list when the work that makes it

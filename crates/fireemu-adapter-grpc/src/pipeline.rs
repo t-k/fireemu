@@ -1048,7 +1048,8 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
 
 /// An operand as the official emulator 1.22.0 prints it in a refusal (probed 2026-10-27):
 /// integers as `1L`, doubles as `1.5D`, strings in quotes (unescaped), `true`, `false`, `null`,
-/// arrays as `[1L, 2L]`, maps as `{k=1L}` in key order, field references by path and calls as
+/// arrays as `[1L, 2L]`, maps as `{k=1L, b=true}` in the order the request wrote them, field
+/// references by path and calls as
 /// `name(arg, ...)`. `None` for the kinds not printed here (timestamps, bytes, references,
 /// vectors, variables, pipelines) and for a double Java prints in exponent form.
 fn expression_text(value: &pb::Value) -> Option<String> {
@@ -1078,8 +1079,9 @@ fn expression_text(value: &pb::Value) -> Option<String> {
                 .join(", ")
         ),
         V::MapValue(map) => {
-            let mut keys: Vec<&String> = map.fields.keys().collect();
-            keys.sort();
+            // The jar prints the entries in the order the request wrote them (probed
+            // 2026-10-27: `{k=1L, b=true}`); a map whose order was lost has no text.
+            let keys = wire_keys(&map.fields)?;
             let entries = keys
                 .into_iter()
                 .map(|key| Some(format!("{key}={}", expression_text(&map.fields[key])?)))
@@ -2939,21 +2941,34 @@ impl Drop for WireOrderScope {
 /// none, and a refusal named first must be the same on every run). The official emulator
 /// 1.22.0 reads a literal's entries in wire order (`PX1d` r6 review S2).
 fn ordered_keys(fields: &std::collections::HashMap<String, pb::Value>) -> Vec<&String> {
+    wire_keys(fields).unwrap_or_else(|| {
+        let mut keys: Vec<&String> = fields.keys().collect();
+        keys.sort();
+        keys
+    })
+}
+
+/// A wire map's keys in the order the request wrote them, or `None` when the transport lost it
+/// (a decoded gRPC map with two or more entries) or the body holds two maps with the same keys
+/// in different orders.
+fn wire_keys(fields: &std::collections::HashMap<String, pb::Value>) -> Option<Vec<&String>> {
     let mut keys: Vec<&String> = fields.keys().collect();
     keys.sort();
+    if keys.len() < 2 {
+        return Some(keys);
+    }
     let sorted: Vec<String> = keys.iter().map(|k| (*k).clone()).collect();
-    let wire = WIRE_KEYS.with(|cell| {
+    let order = WIRE_KEYS.with(|cell| {
         cell.borrow()
             .as_ref()
             .and_then(|table| table.get(&sorted).cloned().flatten())
-    });
-    match wire {
-        Some(order) => order
+    })?;
+    Some(
+        order
             .iter()
             .filter_map(|k| fields.get_key_value(k).map(|(key, _)| key))
             .collect(),
-        None => keys,
-    }
+    )
 }
 
 /// The fields of a wire map value.
@@ -3130,7 +3145,9 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 /// bytes of the document ID (the last path segment), nothing else, so an unsorted answer, a
 /// `limit` or `offset` over it, the ties of a `sort` and the first member of a group all follow
 /// it; a collection group is read by parent path (the root first), and inside one parent by the
-/// same CRC-32. CRC-32 ties, which production has not shown, fall back to the name.
+/// same CRC-32. The parent-path order is an assumption generalized from the four parents
+/// production showed (root, `cg/a`, `cg/a/items/x`, `cg/b`, `oth/p` in O-9 `cg-main`; the root, `pp/a` and
+/// `pp/b` in O-9b): it is plain string order of the parent document's path. CRC-32 ties, which production has not shown, fall back to the name.
 #[must_use]
 pub fn in_scan_order(mut responses: Vec<pb::RunQueryResponse>) -> Vec<pb::RunQueryResponse> {
     let key = |response: &pb::RunQueryResponse| {
@@ -4543,6 +4560,36 @@ mod tests {
                 expression_text(&scalar(V::ReferenceValue("/a/b".into()))),
                 None
             );
+        }
+
+        /// The jar prints a map's entries in the order the request wrote them (`{k=1L, b=true}`);
+        /// where that order is lost (a decoded gRPC map) there is no text.
+        #[test]
+        fn a_map_operand_keeps_the_request_order_or_has_no_text() {
+            use pb::value::ValueType as V;
+            let map = |entries: &[(&str, V)]| {
+                scalar(V::MapValue(pb::MapValue {
+                    fields: entries
+                        .iter()
+                        .map(|(key, value)| ((*key).to_owned(), scalar(value.clone())))
+                        .collect(),
+                }))
+            };
+            let two = map(&[("k", V::IntegerValue(1)), ("b", V::BooleanValue(true))]);
+            let one = map(&[("k", V::IntegerValue(1))]);
+            // No wire order: one entry is still printed, two are not.
+            assert_eq!(expression_text(&one).as_deref(), Some("{k=1L}"));
+            assert_eq!(expression_text(&two), None);
+            // The body's order is known (REST): the entries come as written.
+            let (_, order) =
+                crate::rest::json_syntax::parse_with_key_order(br#"{"k": 1, "b": true}"#).unwrap();
+            let scope = WireOrderScope::enter(Some(&order));
+            assert_eq!(expression_text(&two).as_deref(), Some("{k=1L, b=true}"));
+            let (_, reversed) =
+                crate::rest::json_syntax::parse_with_key_order(br#"{"b": true, "k": 1}"#).unwrap();
+            drop(scope);
+            let _scope = WireOrderScope::enter(Some(&reversed));
+            assert_eq!(expression_text(&two).as_deref(), Some("{b=true, k=1L}"));
         }
 
         #[test]

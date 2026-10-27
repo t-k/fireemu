@@ -827,6 +827,8 @@ export async function cli(
   if (code !== 0 || summary.autoEnabledApi) {
     const failure = new Error(`${kind} failed or attempted API enablement (exit ${code})`);
     failure.indeterminate = kind === "cliDeploy";
+    // what the CLI printed (its debug lines are already gone), for a caller that classifies the failure
+    failure.visibleOutput = visible.slice(-200_000);
     try {
       await writeCliDiagnostic(visible, code, kind, attempt, runDir);
     } catch {

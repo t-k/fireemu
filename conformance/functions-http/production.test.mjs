@@ -1811,3 +1811,36 @@ writeFileSync("saw-stale.txt", String(existsSync("firebase-debug.log")));`,
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a failed CLI call carries the visible output (no debug line) for the caller to classify, and its message does not", async () => {
+  const run = await runFakeCli(
+    FAKE_RECEIPT_SCRIPT(
+      'console.error("\\u26a0  functions: Request to https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions?functionId=f had HTTP Error: 400, no"); process.exit(2);',
+    ),
+    "cliDeploy",
+    { onEvent() {} },
+  );
+  try {
+    assert.match(run.error.message, /cliDeploy failed/);
+    assert.doesNotMatch(run.error.message, /HTTP Error/);
+    assert.match(run.error.visibleOutput, /HTTP Error: 400/);
+    assert.doesNotMatch(
+      run.error.visibleOutput,
+      /generateUploadUrl|SECRET-MARKER|X-Goog-Signature/,
+    );
+  } finally {
+    await rm(run.dir, { recursive: true, force: true });
+  }
+  // a long output is cut to its last 200 000 characters
+  const long = await runFakeCli(
+    'process.stdout.write("line\\n".repeat(60000) + "END", () => process.exit(1));',
+    "cliDelete",
+    undefined,
+  );
+  try {
+    assert.equal(long.error.visibleOutput.length, 200000);
+    assert.ok(long.error.visibleOutput.endsWith("END"));
+  } finally {
+    await rm(long.dir, { recursive: true, force: true });
+  }
+});

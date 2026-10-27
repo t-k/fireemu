@@ -57,7 +57,8 @@ function fakeWorld(faults = []) {
 
 const fire = () => ({ scenario: 's5', step: 'final-main', type: 'get', label: 'main-t', shape: '1' });
 // The browser stand-in follows the page: it writes under the run prefix and returns a journal.
-const fakeBrowser = (w, journal = []) => async (cfg) => {
+const fakeBrowser = (w, journal = [], seen = []) => async (cfg) => {
+  seen.push(cfg);
   w.data[`${cfg.base}/main/t`] = 1;
   return { journal: [...journal, { scenario: 's5', step: 'end', type: 'done' }], counts: { http: 1, ws: 4, frames: 1 } };
 };
@@ -73,7 +74,7 @@ test('rules: the run prefix is the only open part', () => {
 
 test('two WebSocket rounds of one scenario, and a bounded budget', () => {
   assert.deepEqual(PROFILES, [{ round: 1, transport: 'ws', name: 'r1-ws' }, { round: 2, transport: 'ws', name: 'r2-ws' }]);
-  assert.ok(CAPS.observe + CAPS.cleanup <= 64 && CAPS.mutations <= 12, JSON.stringify(CAPS));
+  assert.deepEqual(CAPS, { observe: 40, cleanup: 24, mutations: 12, pollsPerOperation: 12, browserHttp: 80, browserWs: 16, browserFrames: 800 }, 'the budget of the packet');
   assert.ok(FIRE_GRACE_MS > 105000);
   assert.ok(PROFILE_TIMEOUT_MS >= 3 * (20 + 30 + 3 + 20 + 3) * 1000 / 2, 'longer than the worst case of the page\'s own waits');
 });
@@ -161,4 +162,21 @@ test('the packet pins every source this recorder is made of', () => {
     assert.throws(() => verifyPacket(...write(missing)), /source pin differs/, s);
   }
   assert.deepEqual(verifyPacket(...write(real)).sources, real);
+});
+
+test('the page of a round is told its own base below the run prefix and the scenario', async () => {
+  const seen = [];
+  const w = fakeWorld();
+  await prod(w, { browser: async (cfg) => { seen.push(cfg); w.data[`${cfg.base}/x`] = 1; return { journal: [], counts: {} }; } });
+  assert.deepEqual(seen.filter((c) => c.base).map((c) => [c.scenario, c.name, c.base]), [['s5', 'r1-ws', `${PREFIX}/s5/r1-ws`], ['s5', 'r2-ws', `${PREFIX}/s5/r2-ws`]]);
+});
+
+test('an error during cleanup leaves the observation incomplete, and a refused prefix delete leaves the run not closed', async () => {
+  const w = fakeWorld([{ method: 'DELETE', path: /rr1/, kind: '4xx' }]);
+  const r = await prod(w);
+  assert.equal(r.status, 'needs-recovery', 'the data was never restored');
+  assert.ok(!r.observationComplete, 'a cleanup error is an error of the run');
+  assert.ok(r.errors.some((e) => /prefix-delete: refused/.test(e)), r.errors.join());
+  const ok = await prod(fakeWorld());
+  assert.ok(ok.observationComplete && ok.status === 'closed');
 });

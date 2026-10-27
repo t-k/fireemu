@@ -103,3 +103,70 @@ test('the journal kept in the repository holds the kept fields only', () => {
   const kept = sanitizeProfiles([{ scenario: 's5', name: 'r1-ws', journal: [{ scenario: 's5', step: 'final', type: 'get', actor: 'o', label: 'main-s', shape: 'null', priority: null, ms: 1234, secret: 'x' }] }]);
   assert.deepEqual(kept[0].journal[0], { scenario: 's5', step: 'final', type: 'get', actor: 'o', label: 'main-s', shape: 'null', priority: null });
 });
+
+test('rows that count twice, or count as another type, do not satisfy the checks', () => {
+  const base = journal();
+  const dup = (match) => [...base, base.find(match)];
+  assert.equal(classify(dup((r) => r.type === 'transport')).outcome, 'unclassified', 'two transport rows');
+  for (const label of Object.values(REGISTRATIONS).flat()) assert.equal(classify(dup((r) => r.type === 'ack' && r.label === label)).outcome, 'unclassified', `${label} acknowledged twice`);
+  for (const c of CASES) assert.equal(classify(dup((r) => r.type === 'offline' && r.label === c)).outcome, 'unclassified', `${c} offline twice`);
+  for (const label of Object.values(REGISTRATIONS).flat()) assert.equal(classify(journal({ drop: [{ type: 'ack', label }] })).outcome, 'unclassified', `${label} not acknowledged`);
+  const retyped = (match, type) => base.map((r) => (match(r) ? { ...r, type } : r));
+  assert.equal(classify(retyped((r) => r.type === 'ack' && r.label === REGISTRATIONS.main[0], 'value')).outcome, 'unclassified', 'a value row is no acknowledgement');
+  assert.equal(classify(retyped((r) => r.type === 'offline' && r.label === 'whole', 'value')).outcome, 'unclassified', 'a value row is no offline row');
+});
+
+test('the shape of a get must be JSON text', () => {
+  for (const shape of ['{oops', undefined, 5, null, {}]) {
+    const j = journal();
+    j.find((r) => r.label === 'main-s').shape = shape;
+    assert.doesNotThrow(() => classify(j));
+    assert.equal(classify(j).outcome, 'unclassified', String(shape));
+  }
+});
+
+test('a get without a priority field reads as no priority', () => {
+  const j = journal();
+  for (const r of j) if (r.type === 'get') delete r.priority;
+  j.find((r) => r.label === 'whole-s').priority = 1;
+  assert.equal(classify(j).outcome, 'B');
+});
+
+test('each part of each control is checked on its own', () => {
+  assert.equal(classify(journal({ plain: [SPLIT, 1, 1] })).outcome, 'unclassified', 'plain must hold no priority');
+  for (const t of [null, 2, 0]) {
+    assert.equal(classify(journal({ plain: [SPLIT, t, null] })).outcome, 'unclassified', `plain t=${t}`);
+    assert.equal(classify(journal({ whole: [WHOLE, t, 1] })).outcome, 'unclassified', `whole t=${t}`);
+  }
+  assert.equal(classify(journal({ plain: [WHOLE, 1, null] })).outcome, 'unclassified');
+  assert.equal(classify(journal({ whole: [SPLIT, 1, 1] })).outcome, 'unclassified');
+});
+
+test('the answer carries its reason, the priority of B, and the state of an unclassified main case', () => {
+  assert.match(classify(journal({ main: [null, null, null] })).reason, /whole disconnect update is dropped/);
+  assert.match(classify(journal({ main: [SPLIT, 1, null] })).reason, /remaining children fire/);
+  assert.match(classify(journal({ main: [WHOLE, 1, 1] })).reason, /fires whole/);
+  assert.match(classify(journal({ main: [null, 1, null] })).reason, /only the unrelated write fires/);
+  assert.equal(classify(journal({ main: [SPLIT, 1, 1] })).priority, 1);
+  assert.equal(classify(journal({ main: [SPLIT, 1, null] })).priority, null);
+  const odd = classify(journal({ main: [{ b: 1 }, 2, null] }));
+  assert.match(odd.reason, /none of A to D: s=\{"b":1\} t=2/);
+  assert.equal(classify([]).reason, 'no journal');
+  assert.match(classify(journal({ extra: [{ scenario: 's5', type: 'timeout' }] })).reason, /timeout row at step \?/);
+});
+
+test('rounds: a foreign scenario is ignored, the order of the input does not matter, and non-arrays are unclassified', () => {
+  const profile = (name, j, scenario = 's5') => ({ scenario, name, journal: j });
+  const a = (n) => profile(n, journal({ main: [null, null, null] })), b = (n) => profile(n, journal({ main: [SPLIT, 1, null] }));
+  assert.equal(judgeRounds([a('r1-ws'), a('r2-ws'), profile('r1-ws', [], 'cv10')]).verdict, 'A', 'a profile of another scenario is not a round');
+  const reversed = judgeRounds([a('r2-ws'), b('r1-ws')]);
+  assert.equal(reversed.verdict, 'unsettled');
+  assert.equal(reversed.reason, 'round 1 gave B, round 2 gave A');
+  assert.deepEqual(reversed.rounds.map((r) => r.name), ['r1-ws', 'r2-ws']);
+  for (const bad of [{}, 'x', 5, null]) assert.equal(judgeRounds(bad).verdict, 'unclassified');
+});
+
+test('the journal kept in the repository drops fields that are undefined', () => {
+  const kept = sanitizeProfiles([{ scenario: 's5', name: 'r1-ws', journal: [{ scenario: 's5', step: 'x', type: 'get', priority: undefined, shape: 'null' }] }]);
+  assert.deepEqual(Object.keys(kept[0].journal[0]), ['scenario', 'step', 'type', 'shape']);
+});

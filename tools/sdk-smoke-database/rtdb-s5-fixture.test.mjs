@@ -1,7 +1,11 @@
 // node --test rtdb-s5-fixture.test.mjs: the committed S5 fixtures and their comparison.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { CASES, REGISTRATIONS } from './rtdb-s5-judge.mjs';
 import { buildFixture, summarize } from './rtdb-s5-fixture.mjs';
@@ -46,8 +50,26 @@ test('summarize: the same settled answer on both sides is a match, another answe
   assert.deepEqual(same.rounds, [{ name: 'r1-ws', production: 'A', local: 'A' }, { name: 'r2-ws', production: 'A', local: 'A' }]);
   const differ = summarize(a, b);
   assert.deepEqual([differ.production, differ.local, differ.match], ['A', 'B', false]);
+  assert.deepEqual(differ.rounds, [{ name: 'r1-ws', production: 'A', local: 'B' }, { name: 'r2-ws', production: 'A', local: 'B' }]);
+  assert.deepEqual(summarize(b, a).rounds, [{ name: 'r1-ws', production: 'B', local: 'A' }, { name: 'r2-ws', production: 'B', local: 'A' }]);
   assert.deepEqual(summarize(b, a).match, false);
   assert.equal(summarize(b, b).match, true);
+});
+
+test('summarize: every settled answer matches itself', () => {
+  for (const [letter, main] of [['A', [null, null, null]], ['B', [SPLIT, null, 1]], ['C', [WHOLE, 1, 1]], ['D', [null, null, 1]]]) {
+    const doc = buildFixture(raw(main), META);
+    const out = summarize(doc, buildFixture(raw(main), META));
+    assert.deepEqual([out.production, out.local, out.match], [letter, letter, true]);
+  }
+});
+
+test('summarize: a local side without the two rounds has no round to show and does not match', () => {
+  const good = buildFixture(raw([null, null, null]), META);
+  const wrong = { ...buildFixture(raw([null, null, null]), META), profiles: [{ scenario: 's5', name: 'r1-ws', journal: [] }] };
+  const out = summarize(good, wrong);
+  assert.deepEqual([out.match, out.local], [false, 'unclassified']);
+  assert.deepEqual(out.rounds, [{ name: 'r1-ws', production: 'A', local: null }, { name: 'r2-ws', production: 'A', local: null }]);
 });
 
 test('summarize: unsettled and unclassified sides never match, even against themselves', () => {
@@ -80,4 +102,24 @@ test('fireemu answers what production answered', () => {
   const out = summarize(read('fixtures/production-rtdb-s5.json'), read('fixtures/local-rtdb-s5.json'));
   assert.equal(out.match, true, JSON.stringify(out));
   assert.deepEqual(out.rounds, [{ name: 'r1-ws', production: 'A', local: 'A' }, { name: 'r2-ws', production: 'A', local: 'A' }]);
+});
+
+// The command line: the exit status of `summary` is the match, and `fixture` writes the document it built.
+test('the command line writes a fixture and reports the match in its exit status', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const dir = mkdtempSync(path.join(tmpdir(), 's5-fixture-'));
+  const run = (...args) => spawnSync(process.execPath, [path.join(here, 'rtdb-s5-fixture.mjs'), ...args], { encoding: 'utf8' });
+  const journal = (main) => { const file = path.join(dir, `j${Math.random()}.json`); writeFileSync(file, JSON.stringify({ profiles: raw(main) })); return file; };
+  const out = path.join(dir, 'fixture.json');
+  const built = run('fixture', journal([null, null, null]), out, '--recording', 'production-1', '--envelope', 'RTDB-S5-20261027-01', '--recorded-on', '2026-10-27');
+  assert.equal(built.status, 0, built.stderr);
+  const text = readFileSync(out, 'utf8');
+  assert.ok(text.endsWith('}\n') && text.includes('\n "recording": "production-1"'), 'one-space indentation and a final newline');
+  const other = path.join(dir, 'other.json');
+  assert.equal(run('fixture', journal([SPLIT, null, 1]), other, '--recording', 'r', '--envelope', 'e', '--recorded-on', 'd').status, 0);
+  const same = run('summary', out, out);
+  assert.deepEqual([same.status, JSON.parse(same.stdout)], [0, { production: 'A', local: 'A', match: true }]);
+  assert.equal(run('summary', out, other).status, 1);
+  assert.equal(run('fixture', journal([null, null, null]), path.join(dir, 'x.json')).status, 2, 'missing metadata is a usage error');
+  assert.equal(run('frobnicate').status, 2);
 });

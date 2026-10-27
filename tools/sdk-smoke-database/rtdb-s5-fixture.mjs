@@ -32,7 +32,8 @@ export function buildFixture(profiles, meta) {
  */
 export function summarize(production, local) {
   const p = judgeRounds(sanitizeProfiles(production.profiles)), l = judgeRounds(sanitizeProfiles(local.profiles));
-  const settled = ANSWERS.includes(p.verdict) && ANSWERS.includes(l.verdict);
+  // Equal verdicts are settled on both sides or on neither, so one side decides.
+  const settled = ANSWERS.includes(p.verdict);
   return {
     production: p.verdict,
     local: l.verdict,

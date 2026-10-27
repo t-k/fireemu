@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- `strict` with App Check off: a task sent to a queue that a `functions.manifest` serves for an export the codebase declares callable now passes the Bearer check a callable request passes. A Bearer that is not one of the project's users is answered 401 before the code runs, where before only the Admin SDK's Auth-emulator verification, which does not check signatures, stood in the way. Startup prints a warning naming the function; the `emulator` profile and a queue the code exports with `onTaskDispatched` are unchanged.
+- `strict` with App Check off: a task sent to a queue that a `functions.manifest` serves for an export the codebase declares callable now passes the Bearer check a callable request passes. A Bearer that is not one of the project's users is answered 401 before the code runs, which for a task is a failed dispatch that is retried under the queue's retry policy until it gives up (a stderr line names the function each time), where before only the Admin SDK's Auth-emulator verification, which does not check signatures, stood in the way. Startup prints a warning naming the function; the `emulator` profile and a queue the code exports with `onTaskDispatched` are unchanged.
 
 ## [0.31.0] - 2026-10-27
 

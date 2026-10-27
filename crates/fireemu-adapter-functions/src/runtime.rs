@@ -3247,6 +3247,14 @@ impl FunctionsRuntime {
                 .map(|(_, value)| value.clone())
                 .collect();
             if crate::http::strict_callable_bearer_unverified(self, &presented) {
+                // The refusal never reaches the runner, so nothing else records it; the dispatch
+                // fails and is retried under the queue's policy. The credential is not logged.
+                eprintln!(
+                    "[functions] a task for {:?} was refused by the strict Bearer check (401): its \
+                     Authorization is not a Bearer for a user of this project, and the function is \
+                     callable; the dispatch fails and is retried under the queue's retry policy",
+                    target.function
+                );
                 return Ok(ProxiedResponse {
                     status: 401,
                     headers: vec![(

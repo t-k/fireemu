@@ -1944,6 +1944,104 @@ sleep 3"#
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The previous test shows the daemon marks the entry; this one shows the mark reaches the task
+/// dispatch. A callable served as a queue gets two tasks whose Bearer the Admin SDK's
+/// Auth-emulator verification accepts (an unsigned token of a real user): one the strict daemon
+/// verifies too, one whose `iat` lies in the future, which only the daemon refuses. The emulator
+/// profile delivers both, which shows the wrapper alone would have run the second.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn the_strict_mark_reaches_the_task_dispatch_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-task-mark");
+    let hits = dir.join("hits.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+exports.guarded = onCall((request) => {{
+  fs.appendFileSync({hits:?}, "guarded:" + request.data.kind + ":" + (request.auth ? "auth" : "anonymous") + "\n");
+  return {{ ok: true }};
+}});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}}]}"#,
+    );
+    let script = r#"
+const project = "demo-manifest-task-mark";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const host = (value) => (value.startsWith("http") ? value : "http://" + value);
+(async () => {
+  const signUp = await fetch(
+    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "ada@example.com", password: "secret-123", returnSecureToken: true }) },
+  );
+  const { localId } = await signUp.json();
+  if (!localId) throw new Error("sign-up failed");
+  const now = Math.floor(Date.now() / 1000);
+  const token = (iat) =>
+    b64url({ alg: "none", typ: "JWT" }) + "." +
+    b64url({ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: { identities: {}, sign_in_provider: "password" } }) + ".";
+  let n = 0;
+  for (const [kind, iat] of [["now", now], ["future", now + 600]]) {
+    const body = Buffer.from(JSON.stringify({ data: { kind } })).toString("base64");
+    await fetch(host(process.env.CLOUD_TASKS_EMULATOR_HOST) + "/projects/" + project + "/locations/us-central1/queues/guarded/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task: { name: "projects/" + project + "/locations/us-central1/queues/guarded/tasks/t" + (n++), httpRequest: { url: "", body, headers: { Authorization: "Bearer " + token(iat) } } } }),
+    });
+    await sleep(2500);
+  }
+})().catch((error) => { console.error(String(error)); process.exit(1); });
+"#;
+    for profile in ["strict", "emulator"] {
+        let _ = std::fs::remove_file(&hits);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-task-mark")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "node", "-e", script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile}: {stderr}");
+        let seen = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert!(
+            seen.lines().any(|line| line == "guarded:now:auth"),
+            "{profile}: the token the daemon verifies is delivered: hits {seen:?}\n{stderr}"
+        );
+        assert_eq!(
+            seen.lines().any(|line| line == "guarded:future:auth"),
+            profile == "emulator",
+            "{profile}: hits {seen:?}\n{stderr}"
+        );
+        // The refusal leaves a line naming the function and the reason, never the credential.
+        assert_eq!(
+            stderr.contains("a task for \"guarded\" was refused by the strict Bearer check (401)"),
+            profile == "strict",
+            "{profile}: {stderr}"
+        );
+        assert!(!stderr.contains("Bearer eyJ"), "{profile}: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The refusal above is deliberately tied to the callable trusted protocol. Without App Check the
 /// runner is not given `skipTokenVerification` and the daemon strips the auth-override fields
 /// from every request it forwards, so none reaches the callable wrapper that a mislabelled entry

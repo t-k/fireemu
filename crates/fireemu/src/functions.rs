@@ -2822,6 +2822,41 @@ fn launch_codebases(
         .collect()
 }
 
+/// The runtime configuration of the Functions backend for this run: the project, the location, the
+/// limits and, by profile, how events are named and shaped.
+fn functions_config(
+    cfg: &RuntimeConfig,
+    functions_host: Option<String>,
+    runner_secret: &str,
+) -> FunctionsConfig {
+    FunctionsConfig {
+        project: cfg.auth_project.clone(),
+        default_bucket: format!("{}.appspot.com", cfg.auth_project),
+        location: match cfg.profile {
+            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
+            CompatibilityProfile::Emulator => "nam5".to_owned(),
+        },
+        session: SessionId::new(u128::from(cfg.seed)),
+        max_running: cfg.functions_max_running,
+        debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
+        retry_attempts: cfg.events_max_attempts,
+        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
+        runner_secret: runner_secret.to_owned(),
+        overlap: overlap_policy_for(cfg.profile, cfg.scheduler_overlap.as_deref()),
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
+        functions_host,
+        clock_policy: cfg.functions_clock,
+        // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
+        // once, so only the strict profile waits.
+        honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
+        clock_start_pinned: cfg.clock_start_pinned,
+        subscription_naming: subscription_naming(cfg.profile),
+        auth_context: auth_context_naming(cfg.profile),
+        database_event_shape: database_event_shape(cfg.profile),
+    }
+}
+
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
@@ -2881,32 +2916,7 @@ pub async fn start(
     }
     let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> =
         outcomes.into_iter().filter_map(Result::ok).collect();
-    let config = FunctionsConfig {
-        project: cfg.auth_project.clone(),
-        default_bucket: format!("{}.appspot.com", cfg.auth_project),
-        location: match cfg.profile {
-            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
-            CompatibilityProfile::Emulator => "nam5".to_owned(),
-        },
-        session: SessionId::new(u128::from(cfg.seed)),
-        max_running: cfg.functions_max_running,
-        debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
-        retry_attempts: cfg.events_max_attempts,
-        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
-        runner_secret: runner_secret.to_owned(),
-        overlap: overlap_policy_for(cfg.profile, cfg.scheduler_overlap.as_deref()),
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
-            .unwrap_or_default(),
-        functions_host: hosts.functions.clone(),
-        clock_policy: cfg.functions_clock,
-        // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
-        // once, so only the strict profile waits.
-        honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
-        clock_start_pinned: cfg.clock_start_pinned,
-        subscription_naming: subscription_naming(cfg.profile),
-        auth_context: auth_context_naming(cfg.profile),
-        database_event_shape: database_event_shape(cfg.profile),
-    };
+    let config = functions_config(cfg, hosts.functions.clone(), runner_secret);
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
     let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
@@ -12676,6 +12686,50 @@ exports.add = onCall({{}}, observe("add"));
             .subscription_config(victim.subscription.as_ref().unwrap())
             .is_ok());
         assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
+    }
+
+    /// The daemon hands the profile to the Functions runtime: a regression here would silently give the
+    /// emulator profile production's event shapes, or the strict profile the official emulator's.
+    #[test]
+    fn the_functions_config_carries_the_profile_choices_of_the_daemon() {
+        use fireemu_adapter_functions::events::{
+            AuthContextNaming, DatabaseEventShape, SubscriptionNaming,
+        };
+        for (profile, shape, naming, subscriptions, location, honours_schedule) in [
+            (
+                "strict",
+                DatabaseEventShape::Production,
+                AuthContextNaming::Production,
+                SubscriptionNaming::default(),
+                "us-central1",
+                true,
+            ),
+            (
+                "emulator",
+                DatabaseEventShape::Official,
+                AuthContextNaming::Official,
+                SubscriptionNaming::EmulatorTopic,
+                "nam5",
+                false,
+            ),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "profile": profile, "firestore": {"location": "us-central1"}
+            }))
+            .unwrap();
+            let config = super::functions_config(&cfg, Some("127.0.0.1:5001".to_owned()), "secret");
+            assert_eq!(config.database_event_shape, shape, "{profile}");
+            assert_eq!(config.auth_context, naming, "{profile}");
+            assert_eq!(config.subscription_naming, subscriptions, "{profile}");
+            assert_eq!(config.location, location, "{profile}");
+            assert_eq!(
+                config.honour_task_schedule_time, honours_schedule,
+                "{profile}"
+            );
+            assert_eq!(config.project, cfg.auth_project);
+            assert_eq!(config.functions_host.as_deref(), Some("127.0.0.1:5001"));
+            assert_eq!(config.runner_secret, "secret");
+        }
     }
 
     #[test]

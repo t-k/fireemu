@@ -315,47 +315,6 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
-    "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-arity",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "where expression is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "validation-order-or-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'select(...)' stage requires at least one field.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
             "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
@@ -412,88 +371,6 @@
           "error": {
             "code": 501,
             "message": "where expression is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-order#select-arity-then-select-unknown",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-order#select-arity-before-unknown",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -576,47 +453,6 @@
           "error": {
             "code": 501,
             "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 1 was provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-order#arity-around-unknown-argument",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2421,47 +2257,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'add[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-add",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"add\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"+\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -2489,88 +2284,6 @@
           "error": {
             "code": 501,
             "message": "function \"+\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"subtract\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'subtract[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-subtract",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"subtract\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"multiply\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'multiply[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-multiply",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"multiply\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2626,47 +2339,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"divide\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'divide[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-divide",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"divide\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"/\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -2694,47 +2366,6 @@
           "error": {
             "code": 501,
             "message": "function \"/\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"mod\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'mod[T <: number](x: T, y: T): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-mod",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"mod\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -3063,211 +2694,6 @@
           "error": {
             "code": 501,
             "message": "function \"rand\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"abs\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'abs[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-abs",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"abs\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ceil\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'ceil[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-ceil",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ceil\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"floor\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'floor[T <: number](number: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-floor",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"floor\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"round\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'round' does not accept 0 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-round",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"round\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"pow\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'pow(base: number, exponent: number): float64' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-pow",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"pow\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -5041,47 +4467,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"concat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'concat[T: string | bytes | array[any]](input: T*): T' takes [2..+∞) argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-concat",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"concat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"length\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -6786,129 +6171,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"to_lower\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'to_lower[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-to_lower",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"to_lower\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"to_upper\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'to_upper[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-to_upper",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"to_upper\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"char_length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'char_length(str: string): int64' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-char_length",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"char_length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"byte_length\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -6936,88 +6198,6 @@
           "error": {
             "code": 501,
             "message": "function \"byte_length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"starts_with\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'starts_with(value: string, prefix: string): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-starts_with",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"starts_with\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ends_with\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'ends_with(value: string, postfix: string): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-ends_with",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ends_with\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -7195,136 +6375,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"substring\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
             "code": 400,
-            "message": "The function 'substring' does not accept 0 argument(s). Valid options are:\n- substring[T: string | bytes](input: T, position: int64): T with [2..2] argument(s).\n- substring[T: string | bytes](input: T, position: int64, length: int64): T with [3..3] argument(s).",
+            "message": "function \"ltrim\" takes 1 to 2 argument(s), got 0 argument(s)",
             "status": "INVALID_ARGUMENT"
           }
         }
       ],
       "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-substring",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"substring\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_contains\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_contains(value: string, substring: string): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_contains",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_contains\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"trim\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'trim' does not accept 0 argument(s). Valid options are:\n- trim[T: string | bytes](input: T): T with [1..1] argument(s).\n- trim[T: string | bytes](input: T, values_to_trim: T): T with [2..2] argument(s).",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-trim",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"trim\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ltrim\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
     },
     "production": {
       "body": [
@@ -7345,7 +6402,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"ltrim\" is unsupported locally",
+            "message": "function \"ltrim\" takes 1 to 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -7359,13 +6416,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"rtrim\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"rtrim\" takes 1 to 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -7386,48 +6443,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"rtrim\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"split\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'split' does not accept 0 argument(s). Valid options are:\n- split(input: string): array[string] with [1..1] argument(s).\n- split[T: string | bytes](input: T, delimiter: T): array[T] with [2..2] argument(s).",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-split",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"split\" is unsupported locally",
+            "message": "function \"rtrim\" takes 1 to 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }

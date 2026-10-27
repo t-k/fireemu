@@ -24,6 +24,7 @@ const fn function(
         arity,
         returns_boolean: true,
         signature,
+        overloads: &[],
         eval,
     }
 }
@@ -77,6 +78,7 @@ pub(super) const TYPE: Function = Function {
     arity: Arity::Exact(1),
     returns_boolean: false,
     signature: "type(input: any): string",
+    overloads: &[],
     eval: eval_type,
 };
 pub(super) const IS_TYPE: Function = function(

@@ -116,6 +116,7 @@
   "frames": [
     {
       "n": 1,
+      "step": "s1",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -187,6 +188,7 @@
     },
     {
       "n": 2,
+      "step": "s1",
       "handler": "rtdbCreatedV2",
       "generation": 2,
       "event": {
@@ -251,6 +253,7 @@
     },
     {
       "n": 3,
+      "step": "s1",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -302,6 +305,7 @@
     },
     {
       "n": 4,
+      "step": "s1",
       "handler": "rtdbCreatedV1",
       "generation": 1,
       "event": {
@@ -346,6 +350,7 @@
     },
     {
       "n": 5,
+      "step": "s2",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -401,6 +406,7 @@
     },
     {
       "n": 6,
+      "step": "s2",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -476,6 +482,7 @@
     },
     {
       "n": 7,
+      "step": "s2",
       "handler": "rtdbUpdatedV2",
       "generation": 2,
       "event": {
@@ -551,6 +558,7 @@
     },
     {
       "n": 8,
+      "step": "s2",
       "handler": "rtdbUpdatedV1",
       "generation": 1,
       "event": {
@@ -606,6 +614,7 @@
     },
     {
       "n": 9,
+      "step": "s4",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -677,6 +686,7 @@
     },
     {
       "n": 10,
+      "step": "s4",
       "handler": "rtdbDeletedV2",
       "generation": 2,
       "event": {
@@ -741,6 +751,7 @@
     },
     {
       "n": 11,
+      "step": "s4",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -792,6 +803,7 @@
     },
     {
       "n": 12,
+      "step": "s4",
       "handler": "rtdbDeletedV1",
       "generation": 1,
       "event": {
@@ -836,6 +848,7 @@
     },
     {
       "n": 13,
+      "step": "s5",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -912,6 +925,7 @@
     },
     {
       "n": 14,
+      "step": "s5",
       "handler": "rtdbCreatedV1",
       "generation": 1,
       "event": {
@@ -961,6 +975,7 @@
     },
     {
       "n": 15,
+      "step": "s5",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -1017,6 +1032,7 @@
     },
     {
       "n": 16,
+      "step": "s5",
       "handler": "rtdbCreatedV2",
       "generation": 2,
       "event": {
@@ -1086,6 +1102,7 @@
     },
     {
       "n": 17,
+      "step": "s6",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -1151,6 +1168,7 @@
     },
     {
       "n": 18,
+      "step": "s6",
       "handler": "rtdbUpdatedV2",
       "generation": 2,
       "event": {
@@ -1236,6 +1254,7 @@
     },
     {
       "n": 19,
+      "step": "s6",
       "handler": "rtdbUpdatedV1",
       "generation": 1,
       "event": {
@@ -1301,6 +1320,7 @@
     },
     {
       "n": 20,
+      "step": "s6",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -1386,6 +1406,7 @@
     },
     {
       "n": 21,
+      "step": "s8",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -1456,6 +1477,7 @@
     },
     {
       "n": 22,
+      "step": "s8",
       "handler": "rtdbCreatedV2",
       "generation": 2,
       "event": {
@@ -1519,6 +1541,7 @@
     },
     {
       "n": 23,
+      "step": "s8",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -1571,6 +1594,7 @@
     },
     {
       "n": 24,
+      "step": "s8",
       "handler": "rtdbCreatedV1",
       "generation": 1,
       "event": {
@@ -1616,6 +1640,7 @@
     },
     {
       "n": 25,
+      "step": "s9",
       "handler": "rtdbWrittenV1",
       "generation": 1,
       "event": {
@@ -1668,6 +1693,7 @@
     },
     {
       "n": 26,
+      "step": "s9",
       "handler": "rtdbWrittenV2",
       "generation": 2,
       "event": {
@@ -1738,6 +1764,7 @@
     },
     {
       "n": 27,
+      "step": "s9",
       "handler": "rtdbDeletedV1",
       "generation": 1,
       "event": {
@@ -1783,6 +1810,7 @@
     },
     {
       "n": 28,
+      "step": "s9",
       "handler": "rtdbDeletedV2",
       "generation": 2,
       "event": {

@@ -9,7 +9,7 @@ import { test } from "node:test";
 
 import { RECORDED_MEMBERS } from "./frames.mjs";
 import { judgeRun } from "./judge.mjs";
-import { buildSteps, observe } from "./sequence.mjs";
+import { buildSteps, matchFrame, observe } from "./sequence.mjs";
 
 const recording = JSON.parse(
   readFileSync(new URL("./recorded/production-rtdb-triggers.json", import.meta.url), "utf8"),
@@ -37,6 +37,10 @@ test("the recording holds 28 frames, each attributed to one write, every documen
   assert.equal(recording.frames.length, 28);
   const report = observe({ writes, frames: frames(), steps });
   assert.deepEqual(report.totals, { frames: 28, attributed: 28, unattributed: 0 });
+  for (const stored of recording.frames) {
+    const { n: _n, step, ...frame } = stored;
+    assert.equal(matchFrame(frame, steps).step, step, `frame ${stored.n}`);
+  }
   for (const step of report.steps) {
     for (const [handler, seen] of Object.entries(step.handlers)) {
       assert.equal(seen.matchesDocumented, true, `${step.id} ${handler}`);

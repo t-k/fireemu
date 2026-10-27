@@ -17,7 +17,6 @@ export function maskRecording({ runDirectory, envelope, recordedOn, read = readF
   const nonce = result.nonce;
   if (!HEX16.test(nonce)) throw new Error("the run has no 16-hex nonce");
   const mask = (text) => text.split(nonce).join(MASKED_NONCE);
-  const steps = buildSteps(nonce);
   const lines = mask(read(`${runDirectory}/frames.jsonl`, "utf8"))
     .split("\n")
     .filter((line) => line.length > 0);
@@ -26,14 +25,8 @@ export function maskRecording({ runDirectory, envelope, recordedOn, read = readF
     const frame = JSON.parse(line);
     const match = matchFrame(frame, maskedSteps);
     if (match.step === null) throw new Error(`frame ${index + 1} belongs to no single write`);
-    return { n: index + 1, step: match.step.id, ...frame };
+    return Object.assign({ n: index + 1, step: match.step }, frame);
   });
-  const unmasked = matchFrame(
-    JSON.parse(read(`${runDirectory}/frames.jsonl`, "utf8").split("\n")[0]),
-    steps,
-  );
-  if (unmasked.step === null)
-    throw new Error("the first frame is not attributed with the run's own nonce");
   return {
     kind: "rtdb-trigger-recording-v1",
     recording: {

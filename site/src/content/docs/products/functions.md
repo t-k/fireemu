@@ -98,7 +98,7 @@ For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker
   - a callable whose `enforceAppCheck` or `consumeAppCheckToken` differs from the code;
   - an HTTP function the codebase does not export.
 
-  With App Check off, these checks do not run; only the Blocking Auth match above applies. That is safe because the runner is then not told to skip token verification: the callable wrapper checks ID tokens itself, as it does in production, and ignores the emulator-internal auth override fields that only the App Check protocol enables, so a callable listed as a task queue gets no more trust than any other request. The official emulator does not compare a `functions.yaml` with the code either.
+  With App Check off, these checks do not run; only the Blocking Auth match above applies. No override reaches the callable wrapper that a mislabelled entry points at: the runner is not told to skip token verification (only the App Check protocol does that), and the daemon strips the emulator-internal auth override fields (`x-callable-context-auth`, `x-original-auth`) from every request it forwards, task dispatch included. The wrapper's token check is the Auth emulator's, exactly as for an `onTaskDispatched` function reached by a task; under `strict` the daemon's own Bearer check on the callable route is not applied to a task. The official emulator does not compare a `functions.yaml` with the code either.
 
 ## Scheduled functions
 

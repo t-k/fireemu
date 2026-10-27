@@ -1854,9 +1854,10 @@ exports.guarded = onCall(() => ({ ok: true }));
 }
 
 /// The refusal above is deliberately tied to the callable trusted protocol. Without App Check the
-/// runner is not given `skipTokenVerification`, so the callable wrapper that a mislabelled entry
-/// reaches verifies ID tokens itself and never reads the auth-override fields; it answers as it
-/// would to any request whose token production would reject. `functions.manifest` is a fireemu
+/// runner is not given `skipTokenVerification` and the daemon strips the auth-override fields
+/// from every request it forwards, so none reaches the callable wrapper that a mislabelled entry
+/// points at; its token check is the Auth emulator's, as for an `onTaskDispatched` function.
+/// (Strict's daemon-side Bearer check is not applied to a task: a known gap.) `functions.manifest` is a fireemu
 /// setting and firebase-tools 15.28.2 loads a contradicting `functions.yaml` without comparing it
 /// with the code, so refusing here would only make the emulator profile refuse more than it does.
 #[test]

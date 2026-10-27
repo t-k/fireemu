@@ -3703,10 +3703,12 @@ async fn start_codebase(
             serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             // Only the trusted protocol turns on `skipTokenVerification`, so only there can a
-            // mislabelled callable reach a wrapper that trusts unverified credentials. Without
-            // App Check the wrapper verifies tokens itself, as in production, and firebase-tools
-            // does not compare a configured manifest with the code at all, so the emulator
-            // profile must not refuse it (see `runner_debug_features`).
+            // mislabelled callable reach a wrapper that trusts unverified credentials, and the
+            // daemon strips the auth override fields from every request it forwards, tasks
+            // included. Without App Check the wrapper's token check is the Auth emulator's, as
+            // for any `onTaskDispatched` function reached by a task. firebase-tools does not
+            // compare a configured manifest with the code at all, so the emulator profile must
+            // not refuse it (see `runner_debug_features`).
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
                 clear_on_request_consumption(&mut manifest);

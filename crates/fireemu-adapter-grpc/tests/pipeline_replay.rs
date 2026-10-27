@@ -103,17 +103,14 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
     })
 }
 
-/// How far a clock row may be from the clock it is judged against: a day. The recordings are
-/// minutes apart; a millisecond-scale or zero answer is far outside it.
-const CLOCK_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+/// The clock of the in-process server under test, in seconds since the epoch (`state()` starts
+/// its `VirtualClock` here); a clock row is judged against it, not against the wall clock.
+const REPLAY_CLOCK_SECONDS: i64 = 1_788_004_860;
 
-/// The clock in seconds since the epoch.
-fn now_seconds() -> i64 {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
-    i64::try_from(elapsed.as_secs()).unwrap()
-}
+/// How far a clock row may be from the clock it is judged against: two minutes. The two
+/// recordings are a minute apart; a time-zone offset (hours), a millisecond-scale answer or zero
+/// is far outside it.
+const CLOCK_WINDOW_SECONDS: i64 = 120;
 
 /// Whether an answer satisfies the rule of its row.
 /// `now` is the clock in seconds since the epoch that a clock row is judged against.
@@ -438,7 +435,7 @@ fn state(strict: bool) -> RestState {
         indexes: IndexSet::default(),
     };
     let clock = Arc::new(Mutex::new(VirtualClock::new(
-        LogicalInstant::from_unix_seconds(1_788_004_860),
+        LogicalInstant::from_unix_seconds(REPLAY_CLOCK_SECONDS),
     )));
     RestState {
         local: Arc::new(LocalBackend::new(gateway.clone(), clock, 7)),
@@ -926,26 +923,16 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         )
                 };
                 let matches = match nondeterministic(&row) {
-                    Some(rule) => satisfies(&rule, status, &body, now_seconds()),
+                    Some(rule) => satisfies(&rule, status, &body, REPLAY_CLOCK_SECONDS),
                     None => matches,
                 };
                 compared += 1;
                 seen.insert(row.clone());
                 if pending(&row) {
                     let program = row.split('#').next().unwrap_or(&row);
-                    let pinned = PENDING_MATCHES
-                        .iter()
-                        .any(|(id, strict_rows, emulator_rows)| {
-                            *id == program
-                                && (if strict { strict_rows } else { emulator_rows })
-                                    .contains(&step_id)
-                        });
-                    if matches != pinned {
-                        failures.push(format!(
-                            "strict={strict} {row}: pending row {} production, pinned {}",
-                            if matches { "matches" } else { "differs from" },
-                            if pinned { "matching" } else { "differing" },
-                        ));
+                    let pinned = is_pinned(PENDING_MATCHES, program, step_id, strict);
+                    if let Some(failure) = pin_failure(&row, strict, matches, pinned) {
+                        failures.push(failure);
                     }
                 }
                 if rpc == "executePipeline" && matches && status == 200 {
@@ -1052,38 +1039,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         .iter()
                         .any(|(known, _)| row == *known))
         };
-        // The pins stay meaningful: each names a pending program once, each step it lists is
-        // replayed in this profile (a renamed or no longer replayable step would never be
-        // compared), and no step is listed twice.
-        let mut pinned_programs = HashSet::new();
-        for (program, strict_rows, emulator_rows) in PENDING_MATCHES {
-            if !pinned_programs.insert(*program) {
-                failures.push(format!("strict={strict}: pins listed twice: {program}"));
-            }
-            if !PENDING_PROGRAMS.contains(program) {
-                failures.push(format!(
-                    "strict={strict}: pins of a program that is not pending: {program}"
-                ));
-            }
-            for rows in [strict_rows, emulator_rows] {
-                let mut listed = HashSet::new();
-                for step_id in *rows {
-                    if !listed.insert(*step_id) {
-                        failures.push(format!(
-                            "strict={strict}: pin listed twice: {program}#{step_id}"
-                        ));
-                    }
-                }
-            }
-            let pinned_here = if strict { *strict_rows } else { *emulator_rows };
-            for step_id in pinned_here {
-                if !seen.contains(&format!("{program}#{step_id}")) {
-                    failures.push(format!(
-                        "strict={strict}: pinned step is not replayed: {program}#{step_id}"
-                    ));
-                }
-            }
-        }
+        failures.extend(pin_problems(
+            PENDING_MATCHES,
+            PENDING_PROGRAMS,
+            &seen,
+            strict,
+        ));
         for program in PENDING_PROGRAMS {
             if !differing
                 .iter()
@@ -1197,6 +1158,106 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Whether a step of a pending program is pinned as matching production in a profile.
+fn is_pinned(
+    table: &[(&str, &[&str], &[&str])],
+    program: &str,
+    step_id: &str,
+    strict: bool,
+) -> bool {
+    table.iter().any(|(id, strict_rows, emulator_rows)| {
+        *id == program && (if strict { strict_rows } else { emulator_rows }).contains(&step_id)
+    })
+}
+
+/// The failure of a pending row whose match with production differs from its pin.
+fn pin_failure(row: &str, strict: bool, matches: bool, pinned: bool) -> Option<String> {
+    (matches != pinned).then(|| {
+        format!(
+            "strict={strict} {row}: pending row {} production, pinned {}",
+            if matches { "matches" } else { "differs from" },
+            if pinned { "matching" } else { "differing" },
+        )
+    })
+}
+
+/// The pins stay meaningful: each names a pending program once, each step it lists is replayed in
+/// this profile (a renamed or no longer replayable step would never be compared), and no step is
+/// listed twice.
+fn pin_problems(
+    table: &[(&str, &[&str], &[&str])],
+    pending: &[&str],
+    seen: &HashSet<String>,
+    strict: bool,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut pinned_programs = HashSet::new();
+    for (program, strict_rows, emulator_rows) in table {
+        if !pinned_programs.insert(*program) {
+            problems.push(format!("strict={strict}: pins listed twice: {program}"));
+        }
+        if !pending.contains(program) {
+            problems.push(format!(
+                "strict={strict}: pins of a program that is not pending: {program}"
+            ));
+        }
+        for rows in [strict_rows, emulator_rows] {
+            let mut listed = HashSet::new();
+            for step_id in *rows {
+                if !listed.insert(*step_id) {
+                    problems.push(format!(
+                        "strict={strict}: pin listed twice: {program}#{step_id}"
+                    ));
+                }
+            }
+        }
+        let pinned_here = if strict { *strict_rows } else { *emulator_rows };
+        for step_id in pinned_here {
+            if !seen.contains(&format!("{program}#{step_id}")) {
+                problems.push(format!(
+                    "strict={strict}: pinned step is not replayed: {program}#{step_id}"
+                ));
+            }
+        }
+    }
+    problems
+}
+
+#[test]
+fn the_pending_pins_fail_in_both_directions_and_check_themselves() {
+    let table: &[(&str, &[&str], &[&str])] = &[("p/a", &["s1", "s2"], &["s1"])];
+    // A pin applies to its own program, step and profile only.
+    assert!(is_pinned(table, "p/a", "s1", true));
+    assert!(is_pinned(table, "p/a", "s2", true));
+    assert!(!is_pinned(table, "p/a", "s2", false));
+    assert!(is_pinned(table, "p/a", "s1", false));
+    assert!(!is_pinned(table, "p/a", "s3", true));
+    assert!(!is_pinned(table, "p/b", "s1", true));
+    assert!(!is_pinned(&[], "p/a", "s1", true));
+    // A pinned row that differs, and an unpinned row that matches, both fail; the rest pass.
+    assert!(pin_failure("p/a#s1", true, false, true).is_some_and(|f| f.contains("differs from")));
+    assert!(pin_failure("p/a#s3", false, true, false).is_some_and(|f| f.contains("matches")));
+    assert!(pin_failure("p/a#s1", true, true, true).is_none());
+    assert!(pin_failure("p/a#s3", true, false, false).is_none());
+    // The table checks itself.
+    let seen: HashSet<String> = ["p/a#s1", "p/a#s2"].map(String::from).into();
+    assert!(pin_problems(table, &["p/a"], &seen, true).is_empty());
+    assert!(pin_problems(&[], &["p/a"], &seen, true).is_empty());
+    let problems = |table: &[(&str, &[&str], &[&str])], pending: &[&str], strict| {
+        pin_problems(table, pending, &seen, strict).join(";")
+    };
+    assert!(problems(table, &[], true).contains("not pending: p/a"));
+    assert!(problems(&[table[0], table[0]], &["p/a"], true).contains("pins listed twice: p/a"));
+    let twice: &[(&str, &[&str], &[&str])] = &[("p/a", &["s1", "s1"], &[])];
+    assert!(problems(twice, &["p/a"], true).contains("pin listed twice: p/a#s1"));
+    let renamed: &[(&str, &[&str], &[&str])] = &[("p/a", &["s9"], &[])];
+    assert!(problems(renamed, &["p/a"], true).contains("not replayed: p/a#s9"));
+    // A step is checked in the profile that pins it: s2 is replayed, and the emulator pins only s1.
+    let emulator_only: &[(&str, &[&str], &[&str])] = &[("p/a", &[], &["s9"])];
+    assert!(problems(emulator_only, &["p/a"], true).is_empty());
+    assert!(problems(emulator_only, &["p/a"], false).contains("not replayed: p/a#s9"));
+}
+
 /// The six rows judged by rule accept both recordings of production and refuse the near misses.
 #[test]
 fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
@@ -1276,6 +1337,12 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         !clock_ok(&integer(now + CLOCK_WINDOW_SECONDS + 1), now),
         "just past the window"
     );
+    assert!(clock_ok(&integer(now + 60), now), "a minute ahead");
+    assert!(!clock_ok(&integer(now + 3600), now), "an hour ahead");
+    assert!(
+        !clock_ok(&integer(now + 32_400), now),
+        "a time-zone offset of nine hours"
+    );
     assert!(!clock_ok(&integer(0), now), "zero");
     assert!(!clock_ok(&integer(-1), now), "negative");
     assert!(!clock_ok(&integer(now * 1000), now), "milliseconds");
@@ -1284,6 +1351,9 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         "a string"
     );
     assert!(!clock_ok(&json!({"doubleValue": 1.5}), now), "a double");
-    // The replay judges against the real clock.
-    assert!(now_seconds() > 1_700_000_000);
+    // The replay judges against the clock of its own server.
+    assert!(clock_ok(
+        &integer(REPLAY_CLOCK_SECONDS + 5),
+        REPLAY_CLOCK_SECONDS
+    ));
 }

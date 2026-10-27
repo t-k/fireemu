@@ -119,7 +119,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
         service: "firebaseio.com",
       },
       sourceUploadUrl:
-        "https://storage.googleapis.com/uploads-100000000001.us-central1.cloudfunctions.appspot.com",
+        "https://storage.googleapis.com/uploads-100000000001.us-central1.cloudfunctions.appspot.com/9be229fd-1507-4797-ab4b-69f2fda6e54a.zip",
     };
   }
 
@@ -177,8 +177,21 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     if (u.host === "cloudresourcemanager.googleapis.com") {
       return reply(200, { bindings: w.iamBindings });
     }
-    if (u.host === "logging.googleapis.com")
-      return reply(200, { entries: w.logEntries.slice(0, 200) });
+    if (u.host === "logging.googleapis.com") {
+      // entries:list needs the resource names and a filter; a request without them answers 400
+      const valid =
+        method === "POST" &&
+        path === "/v2/entries:list" &&
+        Array.isArray(body?.resourceNames) &&
+        body.resourceNames.length === 1 &&
+        body.resourceNames[0] === `projects/${PROJECT}` &&
+        typeof body.filter === "string" &&
+        body.filter.length > 0 &&
+        Number.isInteger(body.pageSize) &&
+        body.pageSize > 0 &&
+        body.pageSize <= 1000;
+      return valid ? reply(200, { entries: w.logEntries.slice(0, 200) }) : reply(400);
+    }
     if (u.host === "eventarc.googleapis.com") {
       if (path.endsWith("/triggers"))
         return list(

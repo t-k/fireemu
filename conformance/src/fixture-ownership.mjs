@@ -53,3 +53,24 @@ export function fixtureOwnershipFailures(
 
   return failures;
 }
+
+/**
+ * The fixtures ORACLE.md and DEBT.md describe: every scenario fixture, without the datasets a lane
+ * records and compares with its own tool (those have their own schema and no steps).
+ */
+export function corpusFixturesForDocuments(fixtures, { datasets = OWN_COMPARER_DATASETS } = {}) {
+  return [...fixtures]
+    .filter(([id]) => !datasets.some(({ directory }) => id.startsWith(`${directory}/`)))
+    .map(([, fixture]) => fixture);
+}
+
+export function documentedTotals(fixtures) {
+  let stepCount = 0;
+  for (const fixture of fixtures) {
+    if (!Array.isArray(fixture.steps)) {
+      throw new Error(`${fixture.id}: a corpus fixture has no steps`);
+    }
+    stepCount += fixture.steps.length;
+  }
+  return { scenarioCount: fixtures.length, stepCount };
+}

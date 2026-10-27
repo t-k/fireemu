@@ -14,7 +14,9 @@ integrity.
 
 | Package | Version |
 | --- | --- |
+| `@google-cloud/firestore` | `8.7.1` |
 | `@google-cloud/pubsub` | `4.11.0` |
+| `@grpc/grpc-js` | `1.14.4` |
 | `firebase` | `12.18.0` |
 | `firebase-admin` | `14.3.0` |
 | `firebase-functions` | `7.3.2` |
@@ -60,7 +62,7 @@ Cached on the machine that recorded the fixtures:
 
 ## Corpus
 
-25 scenarios, 215 recorded steps.
+26 scenarios, 221 recorded steps.
 
 ## What the oracle cannot answer
 

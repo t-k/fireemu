@@ -131,7 +131,7 @@
     "verification/quint/bin/process-group": "842349d6136e1fbb9f2c6015cbdcae5b9a972e4e795a27cca473251a15968798",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/RegexLinearRepeat.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "1097a156d23f014872bd8cdd164dc590ab05990250bc8a80c06379bdbbcd9e01",
+    "verification/quint/evidence/cargo-authority.json": "048c448656f529e9dcb3382c38c1f3ca226de1ecc0a5b5a0a52d902430e9132c",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
     "verification/quint/mutations/RegexLinearRepeat.json": "89a13577673f8966fc166a95efde65f01ecfa1d5f04dbe070347bde9faafbfa9",
     "verification/quint/package.json": "20b2dba605c639ca7de4714d895c4bda2d4bf4213372aa2b2d2e28fc5993286f",

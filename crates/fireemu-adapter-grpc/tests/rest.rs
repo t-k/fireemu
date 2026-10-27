@@ -7864,3 +7864,157 @@ fn rest_execute_pipeline_literals_follow_the_body_order() {
         "Value type is not supported: FIELD_REFERENCE_VALUE"
     );
 }
+
+/// The body production answered a runQuery with an unknown field-filter operator
+/// (`conformance/fs-query-index-production.json`, `fs-query-index/filter-validation/operators-and-values`,
+/// step `operator-unknown`, recorded 2026-09-24): a one-element array whose error carries the
+/// transcoder's `BadRequest` detail. The same request is a 400 under both profiles; only the
+/// words may differ from production's, and the emulator profile uses production's.
+fn recorded_unknown_operator_body() -> Value {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fs-query-index-production.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let recorded: Value = serde_json::from_str(&text).unwrap();
+    recorded["programs"]["fs-query-index/filter-validation/operators-and-values"]["steps"]
+        ["operator-unknown"]["body"]
+        .clone()
+}
+
+fn run_query_with_operator(s: &RestState, action: &str, operator: &str) -> (u16, Value) {
+    let structured = json!({
+        "from": [{"collectionId": "c"}],
+        "where": {"fieldFilter": {
+            "field": {"fieldPath": "a"},
+            "op": operator,
+            "value": {"integerValue": "1"}
+        }}
+    });
+    let body = if action == "runQuery" {
+        json!({"structuredQuery": structured})
+    } else {
+        json!({"structuredAggregationQuery": {
+            "structuredQuery": structured,
+            "aggregations": [{"count": {}, "alias": "n"}]
+        }})
+    };
+    call(s, "POST", &format!("{DOCS}:{action}"), body)
+}
+
+#[test]
+fn an_unknown_field_filter_operator_answers_the_recorded_production_body_in_both_profiles() {
+    let recorded = recorded_unknown_operator_body();
+    // The recorded violation names SIMILAR_TO; the recorded body is the expected answer as is.
+    assert_eq!(
+        recorded[0]["error"]["details"][0]["fieldViolations"][0]["description"],
+        "Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"SIMILAR_TO\""
+    );
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = run_query_with_operator(&s, "runQuery", "SIMILAR_TO");
+        assert_eq!(status, 400, "strict={strict} {body}");
+        assert_eq!(body, recorded, "strict={strict}");
+    }
+}
+
+#[test]
+fn an_unknown_operator_in_an_aggregation_query_is_refused_with_production_words_in_both_profiles() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = run_query_with_operator(&s, "runAggregationQuery", "SIMILAR_TO");
+        assert_eq!(status, 400, "strict={strict} {body}");
+        let error = &body[0]["error"];
+        assert_eq!(
+            error["status"], "INVALID_ARGUMENT",
+            "strict={strict} {body}"
+        );
+        assert_eq!(
+            error["message"],
+            "Invalid value at 'structured_aggregation_query.structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"SIMILAR_TO\"",
+            "strict={strict} {body}"
+        );
+        assert_eq!(
+            error["details"][0]["fieldViolations"][0]["field"],
+            "structured_aggregation_query.structured_query.where.field_filter.op",
+            "strict={strict} {body}"
+        );
+    }
+}
+
+#[test]
+fn a_known_operator_is_still_served_and_a_refusal_adds_no_rejection_in_the_emulator_profile() {
+    let s = state_with_profile(false);
+    let (status, body) = run_query_with_operator(&s, "runQuery", "EQUAL");
+    assert_eq!(status, 200, "{body}");
+    // A body the transcoder alone would refuse (an unknown member) is still served under the
+    // emulator profile, as before: only the words of a refusal it makes anyway change.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "c"}], "extra": 1}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn only_the_unknown_operator_name_takes_production_words_in_the_emulator_profile() {
+    let s = state_with_profile(false);
+    // Another parse refusal keeps fireemu's own text: the transcoder is not applied here.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "c"}], "where": {"fieldFilter": {
+            "field": {"fieldPath": "a"}, "op": true, "value": {"integerValue": "1"}
+        }}}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body[0]["error"]["message"], "fieldFilter.op must be a string or enum number",
+        "{body}"
+    );
+    assert!(body[0]["error"].get("details").is_none(), "{body}");
+}
+
+#[test]
+fn a_partition_query_with_an_unknown_operator_is_worded_like_production_in_both_profiles() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:partitionQuery"),
+            json!({"partitionCount": 2, "structuredQuery": {"from": [{"collectionId": "c"}],
+                "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "SIMILAR_TO",
+                "value": {"integerValue": "1"}}}}}),
+        );
+        assert_eq!(status, 400, "strict={strict} {body}");
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.starts_with("Invalid value at 'structured_query.where.field_filter.op'"),
+            "strict={strict} {body}"
+        );
+    }
+}
+
+#[test]
+fn a_lowercase_operator_name_is_served_by_strict_and_refused_in_fireemus_words_by_the_emulator_profile(
+) {
+    // Production's transcoder reads enum names without regard to case, so strict serves
+    // `equal`. The emulator profile has never read it (the transcoder is not applied there) and
+    // refuses it in fireemu's own words: a split that predates the production-worded refusal of
+    // an unknown name, which the transcoder would not refuse here and so leaves alone.
+    let strict = state_with_profile(true);
+    let (status, body) = run_query_with_operator(&strict, "runQuery", "equal");
+    assert_eq!(status, 200, "{body}");
+    let emulator = state_with_profile(false);
+    let (status, body) = run_query_with_operator(&emulator, "runQuery", "equal");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body[0]["error"]["message"], "unknown field filter operator",
+        "{body}"
+    );
+    assert!(body[0]["error"].get("details").is_none(), "{body}");
+}

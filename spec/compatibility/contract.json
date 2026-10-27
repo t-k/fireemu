@@ -652,29 +652,10 @@
             ],
             "conformance": [
               {
-                "fixture": "firestore/rest-error-shapes",
-                "excludedSteps": [
-                  {
-                    "step": "runQuery-with-an-unknown-operator",
-                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
-                    "reason": "status and canonical code agree; the message differs (the official emulator says \"Payload isn't valid for request.\", fireemu names the unknown operator)"
-                  },
-                  {
-                    "step": "get-a-missing-document",
-                    "issue": "docs.local/issues/open/close-firestore-emulator-compatibility-gaps.md",
-                    "reason": "status and canonical code agree; the word order of the message differs"
-                  }
-                ]
+                "fixture": "firestore/rest-error-shapes"
               },
               {
-                "fixture": "firestore/lite-rest-transport",
-                "excludedSteps": [
-                  {
-                    "step": "write-into-a-rules-closed-collection-is-denied",
-                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
-                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
-                  }
-                ]
+                "fixture": "firestore/lite-rest-transport"
               }
             ]
           },
@@ -991,29 +972,7 @@
             ],
             "conformance": [
               {
-                "fixture": "firestore/rules-decisions",
-                "excludedSteps": [
-                  {
-                    "step": "anonymous-read-of-a-closed-document",
-                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
-                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
-                  },
-                  {
-                    "step": "anonymous-write-to-an-owner-document",
-                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
-                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
-                  },
-                  {
-                    "step": "owner-cannot-write-another-document",
-                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
-                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
-                  },
-                  {
-                    "step": "after-sign-out-the-document-is-protected-again",
-                    "issue": "docs.local/issues/open/close-security-rules-runtime-and-diagnostics-gaps.md",
-                    "reason": "the decision and the canonical code agree; only the denial message differs: the official emulator prints its per-allow evaluation trace, fireemu names the operation and the path and publishes the trace through its rules request-trace routes instead"
-                  }
-                ]
+                "fixture": "firestore/rules-decisions"
               }
             ]
           },
@@ -2227,7 +2186,7 @@
       "claims": [
         {
           "id": "UI-CLAIM-WORKFLOWS",
-          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, labels deferred and not-planned products, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
+          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
           "capabilities": [],
           "evidence": {
             "integration": [

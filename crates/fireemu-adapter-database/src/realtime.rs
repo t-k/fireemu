@@ -794,11 +794,17 @@ impl Session {
         )
         .map_err(|err| change_failure(&err))?;
         let effective = db.effective(&self.namespace, &absolute, before);
-        let entries = relative
-            .into_iter()
-            .zip(effective)
-            .map(|((_, path), effective)| Patched { path, effective })
-            .collect();
+        let entries = crate::rest::in_write_order(
+            relative
+                .into_iter()
+                .zip(effective)
+                .map(|((key, path), effective)| Patched {
+                    path,
+                    key,
+                    effective,
+                })
+                .collect(),
+        );
         let change = Change::Patch {
             base: path,
             entries,

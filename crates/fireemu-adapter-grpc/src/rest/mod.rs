@@ -1489,6 +1489,22 @@ impl RestState {
         }
     }
 
+    /// The status for a query body `structured_query_from_json` refused. Under the emulator
+    /// profile the transcoder is not applied (it may add no rejection), but a body with an
+    /// unknown operator name is refused there too, as the official emulator refuses it, so the
+    /// refusal is worded as production words it (400 with the transcoder's `BadRequest`
+    /// detail, `firestore-production-matrix` `errors/rest-shapes#unknown-operator` and
+    /// `fs-query-index-production` `operator-unknown`). Every other parse refusal keeps its
+    /// own text.
+    fn query_parse_status(&self, action: &str, body: &Value, error: &JsonError) -> Status {
+        if error.0 == json::UNKNOWN_FIELD_FILTER_OPERATOR && !self.gateway.production_refusals() {
+            if let Err(status) = transcode::check_body(action, body) {
+                return status;
+            }
+        }
+        bad(error)
+    }
+
     /// `:listCollectionIds`, its body after production's transcoder (strict).
     fn list_collection_ids(
         &self,
@@ -1716,7 +1732,8 @@ impl RestState {
                 crate::query_messages::PARTITION_WITHOUT_QUERY,
             ));
         };
-        let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        let structured = structured_query_from_json(sq)
+            .map_err(|e| self.query_parse_status("partitionQuery", body, &e))?;
         let partition_count = match body.get("partitionCount") {
             None => 0,
             Some(Value::String(s)) => s
@@ -1939,7 +1956,8 @@ impl RestState {
                 crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
-        let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        let structured = structured_query_from_json(sq)
+            .map_err(|e| self.query_parse_status("runQuery", body, &e))?;
         crate::query_messages::check_find_nearest_request(
             &structured,
             self.gateway.production_refusals(),
@@ -2028,7 +2046,8 @@ impl RestState {
                 crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        let aggregation = aggregation_query_from_json(saq)
+            .map_err(|e| self.query_parse_status("runAggregationQuery", body, &e))?;
         if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
             &aggregation.query_type
         {

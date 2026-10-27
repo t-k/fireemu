@@ -57,6 +57,14 @@ const receiptOf = (object = OBJECT, bucket = FAKE_BUCKET) => ({ bucket, object }
 const putStatus = (deploy, object, status) =>
   deploy.observe({ type: "put-status", bucket: FAKE_BUCKET, object, status });
 
+describe("the helper's region", () => {
+  it("is exposed with its bucket, so a caller can refuse a target of another region", () => {
+    const { uploads } = open(createFakeGcs(), { ledgerPath: join(dir, "region.jsonl") });
+    assert.equal(uploads.region, FAKE_REGION);
+    assert.equal(uploads.bucket, FAKE_BUCKET);
+  });
+});
+
 describe("the reviewed bounds", () => {
   it("are the numbers a packet binds before it sends", () => {
     assert.deepEqual(

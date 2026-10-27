@@ -98,9 +98,6 @@
     {
       "id": "unknown-method",
       "status": "documented-divergence",
-      "documents": "conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md",
-      "reason": "Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML.",
-      "testd": { "status": 404, "body": { "nonJsonBodyLength": 88 } },
       "oracle": {
         "body": {
           "error": {
@@ -116,7 +113,15 @@
           }
         },
         "status": 404
-      }
+      },
+      "testd": {
+        "body": {
+          "nonJsonBodyLength": 88
+        },
+        "status": 404
+      },
+      "documents": "conformance/PRODUCTION-GAP-FOLLOWUP-2026-09-07.md",
+      "reason": "Production returns a non-JSON 404 for an unknown method; fireemu follows that response class with static HTML."
     }
   ]
 }

@@ -270,8 +270,25 @@ impl Change {
 pub(crate) struct Patched {
     /// The entry's path, relative to the base.
     pub path: Path,
+    /// The entry's key as it was sent (`a/x`, or `/a/x` or `a//x`, which the server hashes as written).
+    pub key: String,
     /// Whether the entry counts for the realtime listens.
     pub effective: bool,
+}
+
+/// The entries of a multi-path write in the order the official emulator hands them out (see
+/// [`crate::scala_map`]), from the order they were sent in.
+pub(crate) fn in_write_order(entries: Vec<Patched>) -> Vec<Patched> {
+    let raw: Vec<String> = entries.iter().map(|entry| entry.key.clone()).collect();
+    let paths: Vec<Vec<String>> = entries
+        .iter()
+        .map(|entry| entry.path.keys().to_vec())
+        .collect();
+    let mut slots: Vec<Option<Patched>> = entries.into_iter().map(Some).collect();
+    crate::scala_map::write_order(&raw, &paths)
+        .into_iter()
+        .filter_map(|at| slots[at].take())
+        .collect()
 }
 
 /// The namespaces a session owns, as a snapshot captured them: each namespace that held
@@ -941,14 +958,17 @@ impl Database {
         }
         .map_err(|err| change_refusal(&err, || Refusal::bad(PATCH_ERROR)))?;
         let effective = self.effective(&call.namespace, &absolute, before);
-        let entries = entries
-            .into_iter()
-            .zip(effective)
-            .map(|(entry, effective)| Patched {
-                path: entry.path,
-                effective,
-            })
-            .collect();
+        let entries = in_write_order(
+            entries
+                .into_iter()
+                .zip(effective)
+                .map(|(entry, effective)| Patched {
+                    path: entry.path,
+                    key: entry.key,
+                    effective,
+                })
+                .collect(),
+        );
         let response = json_response(&echo, &call.output, None);
         let change = Change::Patch {
             base: call.path.clone(),
@@ -1226,6 +1246,7 @@ impl Database {
             .listens
             .values_mut()
             .partition(|listen| listen.window.is_none());
+        let plain = in_hearing_order(plain, change);
         for listen in plain.into_iter().chain(windows) {
             // A write that touches neither the location nor anything above it sends nothing;
             // its view is not rebuilt either.
@@ -1536,7 +1557,11 @@ impl Database {
                 entries: paths
                     .into_iter()
                     .zip(effective)
-                    .map(|(path, effective)| Patched { path, effective })
+                    .map(|(path, effective)| Patched {
+                        key: path.keys().join("/"),
+                        path,
+                        effective,
+                    })
                     .collect(),
             }
         };
@@ -2374,6 +2399,46 @@ for(let i=0;i<boundaries.length-1;i++) {
   container.append(span);
 }
 </script></html>"#;
+
+/// The order in which the plain listens hear a multi-path write, as the official emulator does it
+/// (probed with raw frames, one listen per path): a listen at or above the base of the write
+/// hears first, in registration order. When a connection has one, its other listens follow in
+/// path order, by the path's text (`q10` before `q9`, as the jar does, not in key order).
+/// Otherwise each listen hears when its first entry comes up in the write's order, a listen above
+/// an entry before the one at it. Other changes keep the registration order. This is one sort
+/// over the listens of all connections, so the listens at or above the base of every connection
+/// come before the others of any; each connection has its own queue of frames, so only the order
+/// among one connection's frames can be seen, and that is the order above.
+fn in_hearing_order<'a>(mut listens: Vec<&'a mut Listen>, change: &Change) -> Vec<&'a mut Listen> {
+    let Change::Patch { base, entries } = change else {
+        return listens;
+    };
+    let written: Vec<Path> = entries
+        .iter()
+        .filter(|entry| entry.effective)
+        .map(|entry| base.join(&entry.path))
+        .collect();
+    let covered: BTreeSet<u64> = listens
+        .iter()
+        .filter(|listen| listen.path.contains(base))
+        .map(|listen| listen.client)
+        .collect();
+    // Registration order is the tie-break: the sort is stable.
+    listens.sort_by_cached_key(|listen| {
+        if listen.path.contains(base) {
+            (0, 0, Vec::new(), 0)
+        } else if covered.contains(&listen.client) {
+            (1, 0, listen.path.keys().to_vec(), 0)
+        } else {
+            let rank = written
+                .iter()
+                .position(|path| listen.path.contains(path) || path.contains(&listen.path))
+                .unwrap_or(usize::MAX);
+            (2, rank, Vec::new(), listen.path.depth())
+        }
+    });
+    listens
+}
 
 #[cfg(test)]
 mod tests {

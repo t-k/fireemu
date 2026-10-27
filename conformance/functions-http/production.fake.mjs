@@ -140,7 +140,7 @@ export const FH_VERSION = `${FH_PACKAGE}/versions/${FH_DIGEST}`;
 /** The fake REST world, the harmless deploy child and the upload helper, without running a program. */
 export async function deployWorld({ deployScript, deleteStatus, caps, buildsImage = true }) {
   const base = await uploadWorld({ caps });
-  const deployed = { present: false, versionExists: false, bindings: [] };
+  const deployed = { present: false, versionExists: false, bindings: [], setPolicyCalls: 0 };
   const control = async (method, url, body, kind = "control", allowed = [200]) => {
     base.budget.take(kind);
     const reply = (status, value = {}) => ({ status, value, bytes: 10 });
@@ -207,12 +207,38 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
     } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:getIamPolicy`) {
       result = reply(200, { bindings: deployed.bindings });
     } else if (url === `https://run.googleapis.com/v2/${FH_SERVICE}:setIamPolicy`) {
-      deployed.bindings = body.policy.bindings;
-      result = reply(200, body.policy);
-    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
-      result = deployed.versionExists ? reply(200, { name: FH_PACKAGE }) : reply(404);
+      deployed.setPolicyCalls += 1;
+      if (deployed.setPolicyStatus) {
+        result = reply(deployed.setPolicyStatus);
+      } else {
+        deployed.bindings = body.policy.bindings;
+        result = reply(200, body.policy);
+      }
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}%2Fcache`) {
+      result =
+        deployed.cacheVersion || deployed.cacheVersionsNext
+          ? reply(200, { name: `${FH_PACKAGE}%2Fcache` })
+          : reply(404);
     } else if (
-      url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}/versions?pageSize=1000`
+      url.startsWith(`https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}%2Fcache/versions?`)
+    ) {
+      result = reply(
+        200,
+        deployed.cacheVersion
+          ? { versions: [{ name: `${FH_PACKAGE}%2Fcache/versions/${FH_DIGEST}` }] }
+          : deployed.cacheVersionsNext
+            ? { nextPageToken: "t" }
+            : {},
+      );
+    } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}`) {
+      result =
+        deployed.versionExists || deployed.packageRemains
+          ? reply(200, { name: FH_PACKAGE })
+          : reply(404);
+    } else if (
+      url.startsWith(
+        `https://artifactregistry.googleapis.com/v1/${FH_PACKAGE}/versions?pageSize=1000`,
+      )
     ) {
       result = reply(200, deployed.versionExists ? { versions: [{ name: FH_VERSION }] } : {});
     } else if (url === `https://artifactregistry.googleapis.com/v1/${FH_VERSION}?force=true`) {
@@ -257,6 +283,10 @@ export async function deployWorld({ deployScript, deleteStatus, caps, buildsImag
     base.gcs.put(UPLOAD_OBJECT);
     deployed.versionExists = buildsImage;
     deployed.present = /process\.exit\(0\)/.test(deployScript);
+    // firebase-tools 15.28.2 deploys an onRequest function with the public invoker (fabricator.js,
+    // gcp/run.js setInvokerCreate): the service policy gets allUsers on roles/run.invoker.
+    if (deployed.present)
+      deployed.bindings = [{ role: "roles/run.invoker", members: ["allUsers"] }];
     return production.cli(args, adc, budget, kind, runDir, track, [process.execPath, scriptPath]);
   };
   if (deleteStatus)

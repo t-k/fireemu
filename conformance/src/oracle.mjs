@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { CONFORMANCE_DIR, RUNS_DIR, STATUS } from "./config.mjs";
 import { scenariosFor, variantsUsed } from "./corpus/index.mjs";
 import { classifyScenario } from "./diff.mjs";
+import { corpusFixturesForDocuments, documentedTotals } from "./fixture-ownership.mjs";
 import { readAllFixtures, summarize, writeFixture } from "./fixtures.mjs";
 import { collectProvenance, renderOracleDoc } from "./provenance.mjs";
 import { configFor, runOfficial, runTestd } from "./sides.mjs";
@@ -91,12 +92,12 @@ for (const [scenarioId, { scenario, oracleScenario, testdScenario }] of byScenar
 // ORACLE.md and DEBT.md describe the whole committed fixture tree, not just this run:
 // a filtered re-record (`node src/oracle.mjs storage`) must not drop the other products'
 // rows from the generated documents.
-const allFixtures = [...(await readAllFixtures()).values()];
-const allStepCount = allFixtures.reduce((n, f) => n + f.steps.length, 0);
+const allFixtures = corpusFixturesForDocuments(await readAllFixtures());
+const { scenarioCount: allScenarioCount, stepCount: allStepCount } = documentedTotals(allFixtures);
 const provenance = await collectProvenance();
 await writeFile(
   join(CONFORMANCE_DIR, "ORACLE.md"),
-  renderOracleDoc(provenance, { scenarioCount: allFixtures.length, stepCount: allStepCount }),
+  renderOracleDoc(provenance, { scenarioCount: allScenarioCount, stepCount: allStepCount }),
   "utf8",
 );
 await writeFile(join(CONFORMANCE_DIR, "DEBT.md"), renderDebtDoc(allFixtures), "utf8");

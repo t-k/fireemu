@@ -17,6 +17,7 @@ pub mod realtime;
 pub mod request;
 pub mod rest;
 pub mod rules_file;
+mod scala_map;
 pub mod server;
 pub mod target_escape;
 pub mod websocket;

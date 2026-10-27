@@ -4235,6 +4235,20 @@ fn check_manifest_agrees_on_callables(
     };
     for f in &configured.functions {
         if !matches!(f.trigger, Trigger::Http { .. }) {
+            // The runner serves an export by name whatever trigger the manifest gave it, so a
+            // real callable listed as a task queue, a blocking function or an event trigger
+            // would reach the onCall wrapper without passing the callable trust boundary.
+            if callable_in(discovered, &f.name) == Some(true) {
+                return Err(format!(
+                    "the configured functions manifest declares {:?} as a non-HTTP function, but \
+                     the codebase declares it callable; App Check for callables cannot trust a \
+                     manifest that disagrees with the code. List it as an http function with \
+                     callable: true and the App Check options the code declares, remove it from \
+                     the manifest, or export it with onTaskDispatched if it is meant to be a task \
+                     queue",
+                    f.name
+                ));
+            }
             continue;
         }
         if let (Some(configured_options), Some(discovered_options)) = (
@@ -13926,6 +13940,57 @@ module.exports = { tick, observer };
 
         super::check_manifest_agrees_on_callables(&discovered, &discovered)
             .expect("an agreeing manifest starts");
+    }
+
+    /// The runner picks an export by name from its own discovery and serves it whatever trigger
+    /// the manifest gave it. A real `onCall` written as a task queue or a blocking function would
+    /// reach the callable wrapper without passing the callable trust boundary (the wrapper decodes
+    /// the credentials and the auth-override fields of the request without verifying them), so
+    /// the mismatch is as fatal as calling it an `onRequest` function. A real task queue, or a
+    /// queue the code does not export, is not a callable and still loads.
+    #[test]
+    fn a_configured_manifest_cannot_present_a_callable_as_any_other_trigger() {
+        let discovered = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        for (label, entry) in [
+            ("a task queue", json!({"type": "tasks"})),
+            (
+                "a blocking function",
+                json!({"type": "blockingAuth", "eventType": "beforeCreate"}),
+            ),
+            ("a Pub/Sub trigger", json!({"type": "pubsub", "topic": "t"})),
+            (
+                "a schedule",
+                json!({"type": "schedule", "schedule": "every 5 minutes"}),
+            ),
+        ] {
+            let configured = parse_manifest(&json!({
+                "functions": [{"name": "guarded", "generation": 2, "trigger": entry}]
+            }))
+            .expect("the fixture manifest parses");
+            let e = super::check_manifest_agrees_on_callables(&configured, &discovered)
+                .expect_err(&format!("{label} may not carry a callable"));
+            assert!(e.contains("guarded"), "{label}: {e}");
+            assert!(e.contains("callable"), "{label}: {e}");
+            assert!(e.contains("callable: true"), "{label}: {e}");
+            assert!(e.contains("remove it from the manifest"), "{label}: {e}");
+            assert!(e.contains("onTaskDispatched"), "{label}: {e}");
+        }
+        // A real task queue, and a queue name the code does not export, still load.
+        let honest = parse_manifest(&json!({
+            "functions": [
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "ghostQueue", "generation": 2, "trigger": {"type": "tasks"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        super::check_manifest_agrees_on_callables(&honest, &discovered)
+            .expect("a task queue that is not a callable loads");
     }
 
     #[test]

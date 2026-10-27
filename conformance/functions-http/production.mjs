@@ -17,7 +17,7 @@ import {
   PROJECT,
   REGION,
   createBudget,
-  expectedFunctionName,
+  resolveTarget,
   invalidSignatureToken,
   validateCorpus,
   validateFunctionRecord,
@@ -81,8 +81,6 @@ const ARTIFACT_HOST = "https://artifactregistry.googleapis.com";
 const SERVICE_USAGE_HOST = "https://serviceusage.googleapis.com";
 const RESOURCE_MANAGER_HOST = "https://cloudresourcemanager.googleapis.com";
 const STORAGE_HOST = "https://storage.googleapis.com";
-const RESOURCE = `projects/${PROJECT}/locations/${REGION}`;
-const REPOSITORY = `${RESOURCE}/repositories/gcf-artifacts`;
 const SERVICE_AGENT_DOMAINS = {
   eventarc: "gcp-sa-eventarc.iam.gserviceaccount.com",
   pubsub: "gcp-sa-pubsub.iam.gserviceaccount.com",
@@ -289,7 +287,8 @@ export function retryAccounting(requests) {
 
 export function assertOwnedImage(image, target) {
   const name = packageId(target);
-  const prefix = `${REGION}-docker.pkg.dev/${PROJECT}/gcf-artifacts/${name}`;
+  const { region, project } = resolveTarget(target);
+  const prefix = `${region}-docker.pkg.dev/${project}/gcf-artifacts/${name}`;
   if (!image?.startsWith(prefix))
     throw new Error("image differs from the owned function and repository");
   const suffix = image.slice(prefix.length);
@@ -307,7 +306,8 @@ function packageId(target) {
       .replaceAll("-", "--")
       .replace(/^[A-Z]/, (letter) => `${letter.toLowerCase()}-${letter.toLowerCase()}`)
       .replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-  return [PROJECT, REGION, expectedFunctionName(target)].map(encodePart).join("__");
+  const { project, region, functionName } = resolveTarget(target);
+  return [project, region, functionName].map(encodePart).join("__");
 }
 
 export function assertPublicReadback(readbackPolicy, expectedPublic) {
@@ -821,15 +821,43 @@ export async function cli(
   return summary;
 }
 
-const functionUrl = (target) =>
-  `${FUNCTION_HOST}/v2/${RESOURCE}/functions/${expectedFunctionName(target)}`;
-const serviceName = (target) =>
-  `${RESOURCE}/services/${expectedFunctionName(target).toLowerCase()}`;
+const locationOf = ({ project, region }) => `projects/${project}/locations/${region}`;
+const functionUrl = (target) => {
+  const spec = resolveTarget(target);
+  return `${FUNCTION_HOST}/v2/${locationOf(spec)}/functions/${spec.functionName}`;
+};
+const serviceName = (target) => {
+  const spec = resolveTarget(target);
+  return `${locationOf(spec)}/services/${spec.functionName.toLowerCase()}`;
+};
 const serviceUrl = (target) => `${RUN_HOST}/v2/${serviceName(target)}`;
 const policyUrl = (target, operation) => `${serviceUrl(target)}:${operation}`;
-const packageName = (target) => `${REPOSITORY}/packages/${packageId(target)}`;
+const packageName = (target) => {
+  const spec = resolveTarget(target);
+  return `${locationOf(spec)}/repositories/gcf-artifacts/packages/${packageId(target)}`;
+};
 
-export async function preflightCliSideEffects(control) {
+/** The resource names and CLI arguments of one target (a named target or a target spec). */
+export function targetResources(target) {
+  const spec = resolveTarget(target);
+  return {
+    functionUrl: functionUrl(target),
+    serviceName: serviceName(target),
+    serviceUrl: serviceUrl(target),
+    packageName: packageName(target),
+    imagePrefix: `${spec.region}-docker.pkg.dev/${spec.project}/gcf-artifacts/${packageId(target)}`,
+    deployArgs: ["deploy", "--only", `functions:${spec.codebase}:${spec.functionName}`],
+    // Only the named fixture functions are deleted by the CLI. A bare `functions:delete <name>` also
+    // deletes a codebase of that name and every `<name>-*` function, so a spec is deleted by its exact
+    // resource (deleteFunctionExact) and has no CLI delete at all.
+    deleteArgs: spec.named
+      ? ["functions:delete", spec.functionName, "--region", spec.region, "--force"]
+      : null,
+  };
+}
+
+export async function preflightCliSideEffects(control, region = REGION) {
+  const repository = `projects/${PROJECT}/locations/${region}/repositories/gcf-artifacts`;
   const services = await control(
     "GET",
     `${SERVICE_USAGE_HOST}/v1/projects/${PROJECT}/services?filter=state%3AENABLED&pageSize=200`,
@@ -857,12 +885,12 @@ export async function preflightCliSideEffects(control) {
   }
   const repo = await control(
     "GET",
-    `${ARTIFACT_HOST}/v1/${REPOSITORY}`,
+    `${ARTIFACT_HOST}/v1/${repository}`,
     undefined,
     "control",
     [200, 404],
   );
-  if (repo.status !== 200 || repo.value.name !== REPOSITORY) {
+  if (repo.status !== 200 || repo.value.name !== repository) {
     throw new Error(
       "gcf-artifacts repository is absent; cleanup-policy setup needs separate review",
     );
@@ -968,6 +996,32 @@ async function listOwnedVersions(control, target, kind) {
     throw new Error("Artifact Registry returned an unowned version");
   }
   return versions;
+}
+
+/**
+ * After the function delete no image of the target may remain. Observed: a 2nd gen function delete
+ * removes the image package and its `/cache` package service-side (FE stage 2, 2026-09-30 and
+ * 2026-10-01; the stage 1 probe, 2026-10-26, found the package absent after the delete). The target's
+ * two package names are read exactly (a readable 404 is absent; the repository is never listed, so a
+ * large repository cannot overrun the response bound) and a version left in either is a residue to
+ * name, not to ignore. An empty package is no residue.
+ */
+export async function assertNoImageResidue(control, target, kind) {
+  const base = packageName(target);
+  for (const name of [base, `${base}%2Fcache`]) {
+    const found = await control("GET", `${ARTIFACT_HOST}/v1/${name}`, undefined, kind, [200, 404]);
+    if (found.status === 404) continue;
+    if (found.value.name !== name) throw new Error("Artifact Registry package name changed");
+    const versions = await control(
+      "GET",
+      `${ARTIFACT_HOST}/v1/${name}/versions?pageSize=1000&fields=versions.name,nextPageToken`,
+      undefined,
+      kind,
+    );
+    if (versions.value.nextPageToken || (versions.value.versions ?? []).length > 0) {
+      throw new Error(`owned image version remains in ${name.split("/packages/")[1]}`);
+    }
+  }
 }
 
 async function assertOwnedTag(control, target, tag, versionName) {
@@ -1095,10 +1149,12 @@ export async function cleanupTarget(
   budget,
   runDir,
   state,
-  { run = cli, log = logChange } = {},
+  { run = cli, log = logChange, sleep: pause = sleep } = {},
 ) {
   if (!state.started) return;
   try {
+    // Clean exactly what was deployed: the spec resolved once at deploy time, not the caller's object again.
+    target = state.target ?? resolveTarget(target);
     const current = await inspectAbsence(control, target, "cleanup");
     if (!current.serviceAbsent) {
       try {
@@ -1108,14 +1164,19 @@ export async function cleanupTarget(
       }
     }
     if (!current.functionAbsent || !current.serviceAbsent) {
-      await run(
-        ["functions:delete", expectedFunctionName(target), "--region", REGION, "--force"],
-        adcPath,
-        budget,
-        "cliDelete",
-        runDir,
-      );
-      await log("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
+      if (target.named) {
+        await run(targetResources(target).deleteArgs, adcPath, budget, "cliDelete", runDir);
+        await log("function-deleted", `${functionUrl(target)}; Firebase CLI completed`);
+      } else {
+        // A spec is deleted by its exact resource: `functions:delete <name>` also deletes a codebase
+        // of that name and every `<name>-*` function (firebase-tools 15.28.2).
+        if (!current.functionAbsent) {
+          await deleteFunctionExact(control, target, pause);
+          await log("function-deleted", `${functionUrl(target)}; exact delete completed`);
+        } else {
+          await log("function-already-absent", `${functionUrl(target)}; no delete sent`);
+        }
+      }
     }
     const absent = await inspectAbsence(control, target, "cleanup");
     if (!absent.functionAbsent || !absent.serviceAbsent)
@@ -1151,9 +1212,9 @@ export async function cleanupTarget(
       );
       if (
         deleted.value.name &&
-        !new RegExp(`^projects/${PROJECT}/locations/${REGION}/operations/[A-Za-z0-9_-]+$`).test(
-          deleted.value.name,
-        )
+        !new RegExp(
+          `^projects/${target.project}/locations/${target.region}/operations/[A-Za-z0-9_-]+$`,
+        ).test(deleted.value.name)
       ) {
         throw new Error("Artifact Registry returned an unreviewed delete operation");
       }
@@ -1186,6 +1247,7 @@ export async function cleanupTarget(
       if (after.status !== 404) throw new Error("owned image version remains");
       await log("image-version-deleted", `${state.versionName}; absence read back`);
     }
+    await assertNoImageResidue(control, target, "cleanup");
     if (state.uploadCleanupError) throw new Error(state.uploadCleanupError);
     state.cleaned = true;
   } catch (error) {
@@ -1208,7 +1270,12 @@ export async function deployTarget(
   run = cli,
   tap = () => {},
 ) {
-  const upload = await uploads.beginDeploy(`${programId}:${target}`);
+  const spec = resolveTarget(target);
+  // One helper serves one region's uploads bucket: refuse a target elsewhere before anything is started.
+  if (uploads.region !== spec.region) {
+    throw new Error("target region differs from the region of the upload helper");
+  }
+  const upload = await uploads.beginDeploy(`${programId}:${spec.key}`);
   // `tap` sees every upload event with its raw line (the stage 1 probe records the line forms).
   const deployTrack = {
     onEvent: (event, line) => {
@@ -1216,31 +1283,87 @@ export async function deployTarget(
       upload.observe(event);
     },
   };
-  Object.assign(state, { upload, deployTrack, started: true, exposureStart: Date.now() });
-  await run(
-    ["deploy", "--only", `functions:functions-http-oracle:${expectedFunctionName(target)}`],
-    adcPath,
-    budget,
-    "cliDeploy",
-    runDir,
+  Object.assign(state, {
+    target: spec,
+    upload,
     deployTrack,
+    started: true,
+    exposureStart: Date.now(),
+  });
+  await run(targetResources(spec).deployArgs, adcPath, budget, "cliDeploy", runDir, deployTrack);
+}
+
+/**
+ * Deletes one function by its exact resource and waits for the long-running operation. The delete is sent
+ * once: an unknown answer (a thrown request, a 5xx) is an error and is never retried. The caller reads the
+ * function and service back.
+ */
+export async function deleteFunctionExact(control, target, pause = sleep) {
+  const spec = resolveTarget(target);
+  const operationName = new RegExp(
+    `^projects/${spec.project}/locations/${spec.region}/operations/[A-Za-z0-9_.-]+$`,
   );
+  const started = await control("DELETE", functionUrl(spec), undefined, "cleanup", [200]);
+  const name = started.value.name;
+  if (typeof name !== "string" || !operationName.test(name)) {
+    throw new Error("Cloud Functions returned an unreviewed delete operation");
+  }
+  let operation = started.value;
+  for (let poll = 0; !operation.done && poll < 10; poll += 1) {
+    await pause(10_000);
+    operation = (await control("GET", `${FUNCTION_HOST}/v2/${name}`, undefined, "cleanup")).value;
+  }
+  if (operation.error) throw new Error("function delete operation failed");
+  if (!operation.done)
+    throw new Error("function delete operation did not complete within 10 polls");
+}
+
+/**
+ * A spec's name must not collide with other functions of its region: no other function id equal to it or
+ * starting with `<name>-`, and no function deployed from a codebase of that name. The list must be complete.
+ */
+export async function assertNoNameCollisions(control, target) {
+  const spec = resolveTarget(target);
+  let pageToken = "";
+  for (let page = 0; page < 5; page += 1) {
+    const response = await control(
+      "GET",
+      `${FUNCTION_HOST}/v2/${locationOf(spec)}/functions?pageSize=100${pageToken}`,
+      undefined,
+      "control",
+    );
+    for (const entry of response.value.functions ?? []) {
+      const id = String(entry.name).split("/").at(-1);
+      if (id === spec.functionName || id.startsWith(`${spec.functionName}-`)) {
+        throw new Error(`target name collides with the function ${id}`);
+      }
+      if (entry.labels?.["firebase-functions-codebase"] === spec.functionName) {
+        throw new Error(`target name equals the codebase of the function ${id}`);
+      }
+    }
+    if (!response.value.nextPageToken) return;
+    pageToken = `&pageToken=${encodeURIComponent(response.value.nextPageToken)}`;
+  }
+  throw new Error("function list of the region is incomplete");
 }
 
 /** The reserved function, service and image package must not exist before a deploy. */
 export async function assertTargetAbsent(control, target) {
-  const absence = await inspectAbsence(control, target, "control");
+  const spec = resolveTarget(target);
+  const absence = await inspectAbsence(control, spec, "control");
   if (
     !absence.functionAbsent ||
     !absence.serviceAbsent ||
-    (await inspectOwnedPackage(control, target, "control"))
+    (await inspectOwnedPackage(control, spec, "control"))
   ) {
     throw new Error("reserved function, service or image package already exists");
   }
+  if (!spec.named) await assertNoNameCollisions(control, spec);
 }
 
 /** Reads the deployed function, its service and its one owned image version into `state`. */
 export async function readDeployedTarget(control, target, state) {
+  target = resolveTarget(target);
   const functionRecord = (await control("GET", functionUrl(target), undefined, "control")).value;
   state.url = validateFunctionRecord(functionRecord, target);
   const service = (await control("GET", serviceUrl(target), undefined, "control")).value;
@@ -1264,6 +1387,32 @@ export async function readDeployedTarget(control, target, state) {
   state.versionName = versions[0].name;
 }
 
+/**
+ * The distinct targets of a program, resolved once and in order. States, endpoints and ledger keys use the
+ * canonical key; two entries for the same function (by key or by resource) are an error.
+ */
+export function programTargets(program) {
+  const byKey = new Map();
+  const byResource = new Map();
+  for (const step of program.cases) {
+    const spec = resolveTarget(step.target);
+    if (byKey.has(spec.key)) {
+      if (byKey.get(spec.key).resourceId !== spec.resourceId) {
+        throw new Error(`two different targets share the key ${spec.key}`);
+      }
+      continue;
+    }
+    // Function ids that differ only in case share one Cloud Run service.
+    const resource = spec.resourceId.toLowerCase();
+    if (byResource.has(resource)) {
+      throw new Error(`two targets name the same function ${spec.resourceId}`);
+    }
+    byKey.set(spec.key, spec);
+    byResource.set(resource, spec);
+  }
+  return [...byKey.values()];
+}
+
 export async function observeProgram(
   program,
   control,
@@ -1275,9 +1424,9 @@ export async function observeProgram(
   uploads,
   { run = cli, log = logChange, fetchImpl } = {},
 ) {
-  const targets = [...new Set(program.cases.map((step) => step.target))];
+  const targets = programTargets(program);
   const states = Object.fromEntries(
-    targets.map((target) => [target, { started: false, cleaned: false }]),
+    targets.map((target) => [target.key, { started: false, cleaned: false }]),
   );
   let user;
   let error;
@@ -1294,13 +1443,24 @@ export async function observeProgram(
     for (const target of targets) {
       if (abort.stopped) throw new Error("signal stopped observation before deploy");
       await assertTargetAbsent(control, target);
-      await deployTarget(target, program.id, states[target], uploads, adcPath, budget, runDir, run);
+      await deployTarget(
+        target,
+        program.id,
+        states[target.key],
+        uploads,
+        adcPath,
+        budget,
+        runDir,
+        run,
+      );
       await log("function-deployed", `${functionUrl(target)}; Firebase CLI completed`);
-      await readDeployedTarget(control, target, states[target]);
+      await readDeployedTarget(control, target, states[target.key]);
       await publicInvoker(control, target, true, "control", log);
-      states[target].publicSince = Date.now();
+      states[target.key].publicSince = Date.now();
     }
-    const endpoints = Object.fromEntries(targets.map((target) => [target, states[target].url]));
+    const endpoints = Object.fromEntries(
+      targets.map((target) => [target.key, states[target.key].url]),
+    );
     const replacements = user ? { [user.localId]: "{{uid}}", [user.email]: "{{email}}" } : {};
     const tokens = user
       ? {
@@ -1310,7 +1470,7 @@ export async function observeProgram(
         }
       : {};
     const deadline = Math.min(
-      ...targets.map((target) => states[target].exposureStart + EXPOSURE_MS),
+      ...targets.map((target) => states[target.key].exposureStart + EXPOSURE_MS),
     );
     for (const pass of [0, 1]) {
       if (abort.stopped || Date.now() >= deadline) {
@@ -1335,7 +1495,10 @@ export async function observeProgram(
     error = caught;
   } finally {
     for (const target of targets.toReversed())
-      await cleanupTarget(control, target, adcPath, budget, runDir, states[target], { run, log });
+      await cleanupTarget(control, target, adcPath, budget, runDir, states[target.key], {
+        run,
+        log,
+      });
     if (user) {
       try {
         await deleteUser(control, user, runDir, program.id);
@@ -1345,13 +1508,13 @@ export async function observeProgram(
     }
   }
   const incomplete =
-    targets.some((target) => states[target].started && !states[target].cleaned) ||
+    targets.some((target) => states[target.key].started && !states[target.key].cleaned) ||
     states.userCleanupError ||
     (userAttempted && !user) ||
     error?.indeterminate;
   if (incomplete) {
     const failure = new Error(
-      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" ? undefined : value))}`,
+      `${program.id}: cleanup requires review; ${JSON.stringify(states, (key, value) => (key === "url" || key === "upload" || key === "target" ? undefined : value))}`,
     );
     failure.residual = true;
     throw failure;

@@ -1,0 +1,2 @@
+[2026-10-26T18:25:00.891Z] <<< [apiv2][body] POST https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-query/locations/us-central1/functions:generateUploadUrl {"uploadUrl":"[REDACTED UPLOAD URL]","storageSource":{"bucket":"gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com","object":"514cacbe-3258-46fd-9a02-54b7485b11c1.zip"}}
+[2026-10-26T18:25:01.233Z] <<< [apiv2][status] PUT https://storage.googleapis.com/gcf-v2-uploads-123456789012.us-central1.cloudfunctions.appspot.com/514cacbe-3258-46fd-9a02-54b7485b11c1.zip 200

@@ -1644,6 +1644,7 @@ const { onRequest } = require('firebase-functions/v2/https');
 const routes = async (req, res) => {
   const host = process.env.FIREEMU_APP_CHECK_EMULATOR_HOST ?? null;
   const jwks = process.env.FIREEMU_APP_CHECK_JWKS_URL ?? null;
+  const admin = process.env.FIREEMU_APP_CHECK_ADMIN ?? null;
   const auth = process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null;
   let keys = null;
   if (req.query.probe === '1') {
@@ -1654,16 +1655,16 @@ const routes = async (req, res) => {
     if (!response.ok) { res.status(500).json({ error: 'JWKS unavailable' }); return; }
     keys = (await response.json()).keys.length;
   }
-  res.json({host, jwks, auth, keys});
+  res.json({host, jwks, admin, auth, keys});
 };
 exports.routes = onRequest(routes);
-exports.routesWithSecret = onRequest({secrets: ['FIREEMU_APP_CHECK_EMULATOR_HOST', 'FIREEMU_APP_CHECK_JWKS_URL']}, routes);
+exports.routesWithSecret = onRequest({secrets: ['FIREEMU_APP_CHECK_EMULATOR_HOST', 'FIREEMU_APP_CHECK_JWKS_URL', 'FIREEMU_APP_CHECK_ADMIN']}, routes);
 ",
     );
     write(
         &dir,
         ".env",
-        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:1\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:1/v1/jwks\n",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:1\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:1/v1/jwks\nFIREEMU_APP_CHECK_ADMIN=0\n",
     );
     let script = r"
 const assert = require('node:assert/strict');
@@ -1676,6 +1677,8 @@ const assert = require('node:assert/strict');
   const available = process.env.EXPECT_APP_CHECK === 'true';
   assert.equal(body.host, available ? process.env.FIREEMU_APP_CHECK_EMULATOR_HOST : null);
   assert.equal(body.jwks, available ? process.env.FIREEMU_APP_CHECK_JWKS_URL : null);
+  // The daemon alone decides whether the Admin SDK instrumentation is asked for.
+  assert.equal(body.admin, available ? '1' : null);
   assert.equal(body.auth, process.env.FIREBASE_AUTH_EMULATOR_HOST ?? null);
   if (body.host) {
     assert.equal(body.jwks, `http://${body.host}/v1/jwks`);
@@ -1742,7 +1745,7 @@ const assert = require('node:assert/strict');
             write(
         &dir,
         ".secret.local",
-        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:3\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:3/v1/jwks\n",
+        "FIREEMU_APP_CHECK_EMULATOR_HOST=127.0.0.1:3\nFIREEMU_APP_CHECK_JWKS_URL=http://127.0.0.1:3/v1/jwks\nFIREEMU_APP_CHECK_ADMIN=0\n",
     );
         } else {
             std::fs::remove_file(dir.join(".secret.local")).unwrap();
@@ -1763,6 +1766,7 @@ const assert = require('node:assert/strict');
             .env("EXPECT_APP_CHECK", available.to_string())
             .env("FIREEMU_APP_CHECK_EMULATOR_HOST", "127.0.0.1:2")
             .env("FIREEMU_APP_CHECK_JWKS_URL", "http://127.0.0.1:2/v1/jwks")
+            .env("FIREEMU_APP_CHECK_ADMIN", "0")
             .stdin(Stdio::null())
             .output()
             .unwrap();
@@ -1780,6 +1784,71 @@ const assert = require('node:assert/strict');
         assert_eq!(value["host"].is_string(), available, "{config}, {only}");
         assert_eq!(value["jwks"].is_string(), available, "{config}, {only}");
         assert_eq!(value["auth"].is_string(), auth_selected, "{config}, {only}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With the callable trust boundary active, a configured `functions.manifest` may not present a
+/// code-level callable as any other trigger type: the runner serves an export by name whatever
+/// the manifest says, so a callable written as a task queue or a blocking function would reach
+/// the onCall wrapper without the daemon verifying its credentials. A manifest that agrees with
+/// the code starts, in both profiles.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_configured_manifest_cannot_present_a_callable_as_a_task_queue_or_blocking_function() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "manifest-mislabel",
+        r#"
+const { onCall } = require("firebase-functions/v2/https");
+exports.guarded = onCall(() => ({ ok: true }));
+"#,
+    );
+    let callable = r#"{"type": "http", "callable": true, "enforceAppCheck": false, "consumeAppCheckToken": "disabled"}"#;
+    for profile in ["strict", "emulator"] {
+        for (label, trigger, refused) in [
+            (
+                "a task queue",
+                r#"{"type": "tasks"}"#,
+                Some("declares \"guarded\" as a non-HTTP function, but the codebase declares it callable"),
+            ),
+            // The Blocking Auth reconciliation refuses this one first, with its own message.
+            (
+                "a blocking function",
+                r#"{"type": "blockingAuth", "eventType": "beforeCreate"}"#,
+                Some("invents Blocking Auth hook \"guarded\""),
+            ),
+            ("the callable it is", callable, None),
+        ] {
+            write(
+                &dir,
+                "manifest.json",
+                &format!(
+                    r#"{{"functions": [{{"name": "guarded", "generation": 2, "trigger": {trigger}}}]}}"#
+                ),
+            );
+            write(
+                &dir,
+                "fireemu.test.json",
+                &format!(
+                    r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": true}}, "functions": {{"manifest": "{}"}}}}"#,
+                    dir.join("manifest.json").display()
+                ),
+            );
+            let out = fireemu_exec(&dir, "demo-manifest-mislabel")
+                .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+                .args(["--", "true"])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if let Some(expected) = refused {
+                assert!(!out.status.success(), "{profile}, {label}: {stderr}");
+                assert!(stderr.contains(expected), "{profile}, {label}: {stderr}");
+            } else {
+                assert!(out.status.success(), "{profile}, {label}: {stderr}");
+            }
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

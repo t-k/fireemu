@@ -93,14 +93,14 @@ fn summary(frame: &str) -> String {
         .next()
         .unwrap()
         .to_owned();
-    let data = frame.split(r#""d":"#).nth(2).unwrap_or("");
+    // `{"t":"d","d":{"b":{"p":"<path>","d":<DATA>},"a":"<action>"}}`: DATA ends before `},"a":"..."}}`.
+    let after_path = frame.find(r#""p":""#).unwrap();
+    let start = after_path + frame[after_path..].find(r#"","d":"#).unwrap() + r#"","d":"#.len();
+    let end = frame.len() - format!(r#"}},"a":"{action}"}}}}"#).len();
+    let data = &frame[start..end];
     if action == "m" {
         // The members in the order the frame lists them.
-        let inner = data
-            .split(r#"},"a":"#)
-            .next()
-            .unwrap()
-            .trim_start_matches('{');
+        let inner = data.trim_start_matches('{');
         let mut names = Vec::new();
         let mut depth = 0;
         let mut quote = false;
@@ -480,8 +480,8 @@ mod model {
 
         /// Registering and cancelling children of one node: up to four registered children fire in
         /// the order they were registered (a cancelled one that registers again goes last); once the
-        /// node has held five it stays a hash map and fires by the fixed hash order of the keys,
-        /// which the jar recorded for a 40-key set.
+        /// node has held five it stays a hash map until it is emptied and fires by the fixed hash order
+        /// of the keys, which the jar recorded for a 40-key set.
         #[test]
         fn registrations_and_cancels_fire_as_the_model_says(
             ops in prop::collection::vec((any::<bool>(), 0usize..9), 1..24),
@@ -507,6 +507,10 @@ mod model {
                     }
                 } else {
                     held.retain(|k| k != key);
+                    // A map emptied by cancels is a new map again (probed on the jar).
+                    if held.is_empty() {
+                        hashed = false;
+                    }
                 }
             }
             let mut want = held.clone();
@@ -514,7 +518,161 @@ mod model {
                 want.sort_by_key(position);
             }
             let want: Vec<String> = want.into_iter().map(|k| format!("d:k/{k}")).collect();
-            prop_assert_eq!(after_ops("q1", &pool, &ops), want);
+            prop_assert_eq!(after_ops("q1", &pool, &ops), want, "pool {:?} ops {:?}", pool, ops);
         }
+    }
+}
+
+/// The raw-frame recordings of the order review's cases (nested bodies, integer keys, splits, covered listens).
+fn cases() -> serde_json::Value {
+    let text = include_str!("fixtures/multi-path-order-cases-official-emulator-4.11.2.json");
+    serde_json::from_str(text).unwrap()
+}
+
+fn strings(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn nested_and_integer_bodies_reach_a_base_listen_in_the_recorded_member_order_by_merge_and_patch() {
+    let cases = cases();
+    let all: Vec<&serde_json::Value> = cases["nested"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(cases["flatIntegers"].as_array().unwrap())
+        .collect();
+    assert!(all.len() >= 100);
+    for (n, case) in all.into_iter().enumerate() {
+        let keys = strings(&case["keys"]);
+        let members: Vec<String> = keys
+            .iter()
+            .enumerate()
+            .map(|(j, k)| format!("{}:{j}", serde_json::to_string(k).unwrap()))
+            .collect();
+        let body: &'static str = Box::leak(format!("{{{}}}", members.join(",")).into_boxed_str());
+        let want = vec![format!("m:k{{{}}}", strings(&case["order"]).join(","))];
+        let ns = format!("n{n}");
+        let got = if case["mode"] == "merge" {
+            received(&ns, "null", &[""], merge(body))
+        } else {
+            let ns2 = ns.clone();
+            received(&ns, "null", &[""], move |db, _| {
+                rest(db, "PATCH", &format!("/k.json?ns={ns2}"), body);
+            })
+        };
+        assert_eq!(got, want, "{case}");
+    }
+}
+
+/// A connection that registers `ops` (`o` with data, `oc`) and ends: what the listens at `listens` below `/k` hear.
+fn after_registrations(
+    ns: &str,
+    listens: &[String],
+    ops: &[(String, String, Option<serde_json::Value>)],
+) -> Vec<String> {
+    let mut db = Database::new(RestOptions::default(), 1);
+    let mut a = open(&mut db, ns);
+    for (r, listen) in (1..).zip(listens) {
+        send(
+            &mut db,
+            &mut a,
+            &format!(r#"{{"t":"d","d":{{"r":{r},"a":"q","b":{{"p":"/k/{listen}","h":""}}}}}}"#),
+        );
+    }
+    db.drain_pushes();
+    let mut b = open(&mut db, ns);
+    for (r, (action, path, data)) in (1..).zip(ops) {
+        let body = data.as_ref().map_or_else(
+            || format!(r#"{{"p":"/k/{path}"}}"#),
+            |d| format!(r#"{{"p":"/k/{path}","d":{d}}}"#),
+        );
+        send(
+            &mut db,
+            &mut b,
+            &format!(r#"{{"t":"d","d":{{"r":{r},"a":"{action}","b":{body}}}}}"#),
+        );
+    }
+    db.drain_pushes();
+    db.close_realtime(b.client(), NOW + 1);
+    db.drain_pushes()
+        .into_iter()
+        .filter(|(client, _)| *client == a.client())
+        .map(|(_, frame)| summary(&frame))
+        .collect()
+}
+
+#[test]
+fn a_split_by_a_cancel_fires_the_remaining_children_in_the_recorded_order() {
+    let cases = cases();
+    for (n, case) in cases["splits"].as_array().unwrap().iter().enumerate() {
+        let ops: Vec<(String, String, Option<serde_json::Value>)> = case["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|op| {
+                (
+                    op[0].as_str().unwrap().to_owned(),
+                    op[1].as_str().unwrap().to_owned(),
+                    op.get(2).cloned(),
+                )
+            })
+            .collect();
+        // The listens the recording used, below /k.
+        let listens = strings(&case["listens"]);
+        let want: Vec<String> = strings(&case["order"])
+            .iter()
+            .map(|f| {
+                let (kind, rest) = f.split_once(':').unwrap();
+                format!("{kind}:k/{rest}")
+            })
+            .collect();
+        assert_eq!(
+            after_registrations(&format!("s{n}"), &listens, &ops),
+            want,
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn covered_listens_hear_in_path_text_order_not_key_order() {
+    // Base listen first, then the per-path listens in string order: q10 before q9 (probed on the jar). Do not "fix" this to key order.
+    let cases = cases();
+    let covered = cases["covered"].as_array().unwrap();
+    assert!(covered.len() >= 2);
+    for (n, case) in covered.iter().enumerate() {
+        let keys = strings(&case["keys"]);
+        let body: &'static str = Box::leak(
+            format!(
+                "{{{}}}",
+                keys.iter()
+                    .enumerate()
+                    .map(|(j, k)| format!(r#""{k}":{j}"#))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+            .into_boxed_str(),
+        );
+        let listens = strings(&case["listens"]);
+        let listens: Vec<&str> = listens.iter().map(String::as_str).collect();
+        let want: Vec<String> = strings(&case["order"])
+            .iter()
+            .map(|f| match f.split_once(':') {
+                Some(("m", rest)) => format!("m:k{rest}"),
+                Some((action, rest)) => format!("{action}:k/{rest}"),
+                None => f.clone(),
+            })
+            .collect();
+        assert_eq!(
+            received(&format!("c{n}"), "null", &listens, merge(body)),
+            want,
+            "{case}"
+        );
     }
 }

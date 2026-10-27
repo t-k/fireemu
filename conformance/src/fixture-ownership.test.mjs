@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { fixtureOwnershipFailures } from "./fixture-ownership.mjs";
+import {
+  corpusFixturesForDocuments,
+  documentedTotals,
+  fixtureOwnershipFailures,
+} from "./fixture-ownership.mjs";
 
 const fixture = (id, ownership) => [id, { id, ownership }];
 
@@ -126,4 +130,35 @@ test("the repository's list names datasets and comparers that exist", async () =
     assert.ok(existsSync(join(CONFORMANCE_DIR, comparer)), `${comparer} does not exist`);
   }
   assert.deepEqual(fixtureOwnershipFailures(new Map(), []), []);
+});
+
+test("the generated documents count the corpus fixtures and skip a dataset a comparer owns", () => {
+  const datasets = [{ directory: "own-dataset-production", comparer: "x.mjs" }];
+  const fixtures = new Map([
+    ["auth/a", { id: "auth/a", steps: [{}, {}] }],
+    ["firestore/b", { id: "firestore/b", steps: [{}] }],
+    ["own-dataset-production/a", { recipeId: "a", rows: [], exchanges: [] }],
+    ["own-dataset-production/index", { recipes: [] }],
+  ]);
+
+  const documented = corpusFixturesForDocuments(fixtures, { datasets });
+  assert.deepEqual(
+    documented.map((item) => item.id),
+    ["auth/a", "firestore/b"],
+  );
+  assert.deepEqual(documentedTotals(documented), { scenarioCount: 2, stepCount: 3 });
+  // A directory that merely starts with the dataset's name is still a corpus directory.
+  assert.equal(
+    corpusFixturesForDocuments(new Map([["own-dataset-production-2/a", { id: "x", steps: [] }]]), {
+      datasets,
+    }).length,
+    1,
+  );
+});
+
+test("a corpus fixture without steps is named, not a TypeError", () => {
+  assert.throws(
+    () => documentedTotals([{ id: "auth/broken" }]),
+    /auth\/broken: a corpus fixture has no steps/,
+  );
 });

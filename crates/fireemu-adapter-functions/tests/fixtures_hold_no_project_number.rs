@@ -1,14 +1,16 @@
 //! No committed fixture may hold the number of a sandbox project, in the clear or encoded.
 //!
-//! This test reads every file under `crates/` and `conformance/` (`node_modules`, `target` and `.git`
-//! excluded; files over 40 MB are skipped) and decodes every run of base64 or base64url characters in two ways.
+//! This test reads every file of the repository that git tracks, and the files under `crates/` and
+//! `conformance/` that are not tracked or ignored yet (a recording is scanned before it is committed), and
+//! decodes every run of base64 or base64url characters in two ways. A file larger than 128 MB is not skipped:
+//! the test fails and names it, so that a large production-derived fixture cannot go unread.
 //! A number that is not the mask `123456789012` that the fixtures use is refused in these two forms:
 //! - As a protobuf varint. A page token, a cursor or any other opaque value that a service hands out can carry
 //!   a project number this way. A run counts when it parses as a protobuf message (it is tried from every
 //!   offset), and the varint has 12 or 13 digits, or 10 digits outside the seconds window of 2020 to 2036
 //!   (the real `sourceToken` holds a timestamp's seconds). 11 digit varints are not refused here: random bytes
 //!   that parse as a message produce them. A run that is a
-//!   subresource integrity digest (`sha512-...`) or a snake case identifier is not decoded as a message:
+//!   subresource integrity digest (`sha512-...`) or a lower case identifier or path (`snake_case`, `kebab-case`, `dir/file`) is not decoded as a message:
 //!   random bytes parse as one now and then. No instant is exempt as a varint, so a token that holds an epoch
 //!   in milliseconds as a varint would be refused.
 //! - As ASCII decimal digits (a GCF v2 `sourceToken` carried the events project number this way): a whole run
@@ -37,7 +39,8 @@ use std::path::{Path, PathBuf};
 /// The number the fixtures use in place of a project number.
 const MASK: u64 = 123_456_789_012;
 const MIN_RUN: usize = 24;
-const MAX_FILE_BYTES: u64 = 40 * 1024 * 1024;
+/// A file larger than this is not scanned, and the test fails naming it.
+const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 
 fn value_of(byte: u8) -> Option<u8> {
     match byte {
@@ -128,11 +131,12 @@ fn varints(bytes: &[u8], depth: u32, out: &mut Vec<u64>) -> usize {
     at
 }
 
-/// A hit counts when the run parses as a message, give or take a short tail. A page token parses to its last
-/// byte (its checksum is a fixed64 field); a hash, a signature or any other random run fails that almost
-/// always, because every tag has to be valid.
+/// A hit counts when the run parses as a message to its last byte. A page token does (its checksum is a
+/// fixed64 field); a hash, a signature, a file name or any other run that is not a message fails that almost
+/// always, because every tag has to be valid. (A tolerance of a short tail was tried on the whole repository:
+/// prose and identifiers parse by chance often enough that documents, specs and tools were refused.)
 fn parses_as_a_message(parsed: usize, total: usize) -> bool {
-    total - parsed <= 2 && parsed * 10 >= total * 9
+    parsed == total
 }
 
 /// Runs longer than this are decoded from their first four offsets only (a run is tried from every offset
@@ -171,10 +175,22 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     runs
 }
 
-/// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile) or a
-/// snake case identifier (lower case letters, digits and underscores only: a random token of 24 characters has
-/// no upper case letter once in 250,000). Random bytes parse as a message now and then, and across a corpus of
-/// hashes and identifiers they do, so these runs are not decoded as protobuf.
+/// A run is also decoded without its last 1 to 3 characters (a token glued to what follows it, as the start
+/// offsets cover a token glued to what precedes it).
+const END_TRIM: usize = 3;
+
+/// A run that is words, not a token: at least this share of its characters are lower case letters.
+const WORDS_LOWER_SHARE: (usize, usize) = (4, 5);
+
+/// A run that is not a token: a subresource integrity digest (`sha512-` and the like, as in a lockfile), a
+/// lower case identifier or path (lower case letters, digits, `_`, `-` and `/` only: a random token of 24
+/// characters has no upper case letter and no `+` once in 250,000, and a hex digest is one of these), or words
+/// (`CamelCaseNames`, `schemas/GoogleFirestoreAdminV1IndexConfigDelta`: four fifths of the characters are
+/// lower case letters, which a random token of 24 characters reaches about once in 32,000 (measured on two
+/// million) and one of 48 never). Random bytes parse as a message now and then, and across a corpus of hashes, identifiers, file
+/// names and words they do, so these runs are not decoded as protobuf. (A rule on letters and separators
+/// only was tried first: one in about 3,500 random tokens of 48 characters is that, and the repository
+/// still held names with a digit that it let through.)
 fn is_digest_or_identifier(run: &[u8]) -> bool {
     let digest = run.strip_prefix(b"sha").is_some_and(|rest| {
         let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
@@ -183,7 +199,9 @@ fn is_digest_or_identifier(run: &[u8]) -> bool {
     digest
         || run
             .iter()
-            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'/'))
+        || run.iter().filter(|b| b.is_ascii_lowercase()).count() * WORDS_LOWER_SHARE.1
+            >= run.len() * WORDS_LOWER_SHARE.0
 }
 
 /// The 12-digit numbers that the base64 runs of `text` carry as protobuf varints.
@@ -193,17 +211,46 @@ fn project_numbers_in(text: &[u8]) -> Vec<u64> {
         if is_digest_or_identifier(run) {
             continue;
         }
-        let offsets = if run.len() <= EVERY_OFFSET_UP_TO {
-            run.len() - MIN_RUN
+        // A token may start anywhere in a run of up to 512 characters, and in the first four characters of
+        // a longer one; it may also start just after a `/` or a `-` (a path segment) in either.
+        let separators: Vec<usize> = run
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| matches!(byte, b'/' | b'-'))
+            .map(|(index, _)| index)
+            .collect();
+        // Each candidate is `(position, cut)`: `cut` is true for a position next to a separator.
+        let plain_starts = if run.len() <= EVERY_OFFSET_UP_TO {
+            0..=run.len() - MIN_RUN
         } else {
-            3
+            0..=3
         };
-        for offset in 0..=offsets {
-            let bytes = decode(&run[offset..]);
-            let mut found = Vec::new();
-            let parsed = varints(&bytes, 0, &mut found);
-            if parses_as_a_message(parsed, bytes.len()) {
-                numbers.extend(found.into_iter().filter(|n| is_project_number(*n)));
+        let mut starts: Vec<(usize, bool)> = plain_starts.map(|index| (index, false)).collect();
+        starts.extend(separators.iter().map(|index| (index + 1, true)));
+        // It may end up to three characters before the end of the run (text glued behind it), or just
+        // before a `/` or a `-`.
+        let mut ends: Vec<(usize, bool)> = (0..=END_TRIM)
+            .map(|trim| (run.len() - trim, false))
+            .collect();
+        ends.extend(separators.iter().map(|index| (*index, true)));
+        for &(end, cut_end) in &ends {
+            for &(start, cut_start) in &starts {
+                // A piece between separators is a run of its own and has to be as long as one; a piece that
+                // only loses glued characters may be a few shorter.
+                let long_enough = if cut_start || cut_end {
+                    start < end && end - start >= MIN_RUN
+                } else {
+                    start <= end.saturating_sub(MIN_RUN)
+                };
+                if !long_enough {
+                    continue;
+                }
+                let bytes = decode(&run[start..end]);
+                let mut found = Vec::new();
+                let parsed = varints(&bytes, 0, &mut found);
+                if parses_as_a_message(parsed, bytes.len()) {
+                    numbers.extend(found.into_iter().filter(|n| is_project_number(*n)));
+                }
             }
         }
     }
@@ -319,26 +366,43 @@ fn ascii_numbers_in(text: &[u8]) -> Vec<String> {
     numbers
 }
 
-fn files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// The files the scan reads, as git lists them from `root`: every tracked file, and the files under `crates/`
+/// and `conformance/` that are not tracked and not ignored yet (a recording is scanned before it is
+/// committed). Git's own ignore rules replace a list of excluded directories (`node_modules`, `target`,
+/// worktrees). A tracked file that was deleted from the work tree is listed; the scan skips what it cannot read.
+fn corpus_files(root: &Path) -> Vec<PathBuf> {
+    let list = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["ls-files", "-z"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "git ls-files {args:?}");
+        output.stdout
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if matches!(name.as_ref(), "node_modules" | "target" | ".git") {
-            continue;
-        }
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        if kind.is_dir() {
-            files(&path, out);
-        } else if kind.is_file() && entry.metadata().is_ok_and(|m| m.len() <= MAX_FILE_BYTES) {
-            out.push(path);
-        }
-    }
+    let mut names = list(&["--cached"]);
+    names.extend(list(&[
+        "--others",
+        "--exclude-standard",
+        "--",
+        "crates",
+        "conformance",
+    ]));
+    parse_listing(root, &names)
+}
+
+/// The paths in a NUL separated listing of `git ls-files -z`, joined to `root`, sorted, each once.
+fn parse_listing(root: &Path, names: &[u8]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = names
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| root.join(String::from_utf8_lossy(name).as_ref()))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// What the scan makes of one file: the forms in which a number that is not the mask was found, and how many
@@ -374,13 +438,46 @@ fn judge(text: &[u8]) -> Verdict {
 struct Corpus {
     /// `path (form)` for each number that is not the mask (the number itself is never kept).
     refused: Vec<String>,
+    /// Files larger than the limit, which were not scanned.
+    oversize: Vec<String>,
     varint_masks: usize,
     ascii_masks: usize,
 }
 
-fn scan(paths: &[PathBuf]) -> Corpus {
+/// Scans the files on a few threads (the repository holds 250 MB of fixtures, one of them 56 MB); the result
+/// lists the files in the order given.
+fn scan(paths: &[PathBuf], max_bytes: u64) -> Corpus {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(8);
+    let chunk = paths.len().div_ceil(threads).max(1);
+    let parts: Vec<Corpus> = std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || scan_in_order(part, max_bytes)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("a scan thread"))
+            .collect()
+    });
+    let mut corpus = Corpus::default();
+    for part in parts {
+        corpus.refused.extend(part.refused);
+        corpus.oversize.extend(part.oversize);
+        corpus.varint_masks += part.varint_masks;
+        corpus.ascii_masks += part.ascii_masks;
+    }
+    corpus
+}
+
+fn scan_in_order(paths: &[PathBuf], max_bytes: u64) -> Corpus {
     let mut corpus = Corpus::default();
     for path in paths {
+        if std::fs::metadata(path).is_ok_and(|meta| meta.len() > max_bytes) {
+            corpus.oversize.push(path.display().to_string());
+            continue;
+        }
         let Ok(bytes) = std::fs::read(path) else {
             continue;
         };
@@ -395,22 +492,39 @@ fn scan(paths: &[PathBuf]) -> Corpus {
 }
 
 #[test]
-fn no_file_under_crates_or_conformance_holds_a_project_number_inside_an_encoded_value() {
+fn no_tracked_file_holds_a_project_number_inside_an_encoded_value() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut all = Vec::new();
-    for top in ["crates", "conformance"] {
-        files(&root.join(top), &mut all);
-    }
+    let all = corpus_files(&root);
     assert!(
         all.len() > 100,
         "the scan found the repository: {} files",
         all.len()
     );
-    assert_corpus_clean(&scan(&all));
+    // Beyond crates/ and conformance/: a root file, a tool, a spec file, and the largest fixture.
+    for needle in [
+        "Cargo.toml",
+        "tools/",
+        "spec/",
+        "conformance/fs-data-write-production-matrix.json",
+        "crates/fireemu-adapter-functions/tests/fixtures_hold_no_project_number.rs",
+    ] {
+        assert!(
+            all.iter().any(|path| path
+                .strip_prefix(&root)
+                .is_ok_and(|rel| rel.to_string_lossy().contains(needle))),
+            "the scan lists {needle}"
+        );
+    }
+    assert_corpus_clean(&scan(&all, MAX_FILE_BYTES));
 }
 
 /// The assertions on what the scan made of the corpus: nothing refused, and both forms saw the mask.
 fn assert_corpus_clean(corpus: &Corpus) {
+    assert!(
+        corpus.oversize.is_empty(),
+        "a file is larger than the scan limit and was not scanned: {:?}",
+        corpus.oversize
+    );
     assert!(
         corpus.refused.is_empty(),
         "an encoded number that is not the mask is in (the number is not printed): {:?}",
@@ -434,6 +548,7 @@ fn assert_corpus_clean(corpus: &Corpus) {
 fn a_clean_corpus_that_saw_the_mask_in_both_forms_passes() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 1,
     });
@@ -444,6 +559,7 @@ fn a_clean_corpus_that_saw_the_mask_in_both_forms_passes() {
 fn a_corpus_with_a_refused_number_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec!["a.json (ASCII digits)".to_string()],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 1,
     });
@@ -454,6 +570,7 @@ fn a_corpus_with_a_refused_number_fails() {
 fn a_corpus_that_never_saw_the_mask_as_a_varint_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 0,
         ascii_masks: 1,
     });
@@ -464,6 +581,7 @@ fn a_corpus_that_never_saw_the_mask_as_a_varint_fails() {
 fn a_corpus_that_never_saw_the_mask_in_ascii_digits_fails() {
     assert_corpus_clean(&Corpus {
         refused: vec![],
+        oversize: vec![],
         varint_masks: 1,
         ascii_masks: 0,
     });
@@ -483,14 +601,17 @@ fn a_dirty_file_is_named_and_a_clean_or_masked_one_is_not() {
     let in_ascii = write("ascii.json", &ascii_token(0, "123456789012", true, false));
     let dirty_varint = write("varint.json", &token_of(111_111_111_111));
     let dirty_ascii = write("dirty.json", &ascii_token(1, "111111111111", false, true));
-    let corpus = scan(&[
-        clean,
-        dir.join("missing.json"),
-        masked,
-        in_ascii,
-        dirty_varint.clone(),
-        dirty_ascii.clone(),
-    ]);
+    let corpus = scan(
+        &[
+            clean,
+            dir.join("missing.json"),
+            masked,
+            in_ascii,
+            dirty_varint.clone(),
+            dirty_ascii.clone(),
+        ],
+        MAX_FILE_BYTES,
+    );
     std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
     assert_eq!(
         corpus,
@@ -499,10 +620,170 @@ fn a_dirty_file_is_named_and_a_clean_or_masked_one_is_not() {
                 format!("{} (varint)", dirty_varint.display()),
                 format!("{} (ASCII digits)", dirty_ascii.display()),
             ],
+            oversize: vec![],
             varint_masks: 1,
             ascii_masks: 1,
         }
     );
+}
+
+#[test]
+fn the_threaded_scan_equals_the_scan_in_order() {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-order-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let mut paths = Vec::new();
+    for index in 0..37 {
+        let path = dir.join(format!("{index:02}.json"));
+        let text = match index % 4 {
+            0 => ascii_token(0, "111111111111", true, false),
+            1 => token_of(MASK),
+            2 => ascii_token(1, "123456789012", false, true),
+            _ => "{}".to_string(),
+        };
+        std::fs::write(&path, text).expect("scratch file");
+        paths.push(path);
+    }
+    let threaded = scan(&paths, MAX_FILE_BYTES);
+    let in_order = scan_in_order(&paths, MAX_FILE_BYTES);
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+    assert_eq!(threaded, in_order);
+    assert_eq!(
+        (
+            threaded.refused.len(),
+            threaded.varint_masks,
+            threaded.ascii_masks
+        ),
+        (10, 9, 9)
+    );
+}
+
+#[test]
+fn a_file_over_the_limit_is_named_not_skipped_and_one_at_the_limit_is_scanned() {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-cap-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let write = |name: &str, text: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).expect("scratch file");
+        path
+    };
+    // A dirty file of exactly 64 bytes (the limit below), one of 65 bytes, and a clean small one.
+    let dirty = ascii_token(0, "111111111111", true, false);
+    let pad = |total: usize| format!("{dirty}{}", " ".repeat(total - dirty.len()));
+    let at_limit = write("at.json", &pad(64));
+    let over = write("over.json", &pad(65));
+    let small = write("small.json", "{}");
+    let corpus = scan(&[at_limit.clone(), over.clone(), small], 64);
+    std::fs::remove_dir_all(&dir).expect("remove the scratch directory");
+    assert_eq!(
+        corpus,
+        Corpus {
+            refused: vec![format!("{} (ASCII digits)", at_limit.display())],
+            oversize: vec![over.display().to_string()],
+            varint_masks: 0,
+            ascii_masks: 0,
+        }
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "a file is larger than the scan limit and was not scanned: [\"big.json\"]"
+)]
+fn a_corpus_with_an_unscanned_file_fails_and_names_it() {
+    assert_corpus_clean(&Corpus {
+        refused: vec![],
+        oversize: vec!["big.json".to_string()],
+        varint_masks: 1,
+        ascii_masks: 1,
+    });
+}
+
+/// A scratch git repository whose index and work tree hold the given files (nothing is committed).
+fn scratch_repository(name: &str, tracked: &[&str], untracked: &[&str], ignore: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "fixtures-hold-no-number-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join(".gitignore"), ignore).expect("ignore file");
+    for path in tracked.iter().chain(untracked) {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("directories");
+        std::fs::write(file, "x").expect("file");
+    }
+    for path in tracked {
+        git(&["add", path]);
+    }
+    dir
+}
+
+#[test]
+fn the_listing_holds_every_tracked_file_and_the_unignored_new_files_of_crates_and_conformance_only()
+{
+    let dir = scratch_repository(
+        "listing",
+        &[
+            "Cargo.toml",
+            "tools/a.txt",
+            "spec/b/c.json",
+            "crates/x/t.rs",
+            "conformance/y.json",
+        ],
+        &[
+            "conformance/new/rec.json",
+            "crates/new/rec.json",
+            "tools/new.txt",
+            "scratch.txt",
+            "crates/ignored/skip.json",
+            "node_modules/pkg/i.js",
+        ],
+        "crates/ignored/\nnode_modules/\n",
+    );
+    let listed: Vec<String> = corpus_files(&dir)
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&dir)
+                .expect("under the root")
+                .display()
+                .to_string()
+        })
+        .collect();
+    // A tracked file that was deleted from the work tree is listed too: the scan skips what it cannot read.
+    std::fs::remove_file(dir.join("tools/a.txt")).expect("remove");
+    let after = corpus_files(&dir).len();
+    std::fs::remove_dir_all(&dir).expect("remove the scratch repository");
+    assert_eq!(
+        listed,
+        [
+            "Cargo.toml",
+            "conformance/new/rec.json",
+            "conformance/y.json",
+            "crates/new/rec.json",
+            "crates/x/t.rs",
+            "spec/b/c.json",
+            "tools/a.txt",
+        ],
+        "untracked files outside crates/ and conformance/ (tools/new.txt, scratch.txt, .gitignore) and ignored ones are not listed"
+    );
+    assert_eq!(after, 7, "the deleted tracked file is still listed");
 }
 
 #[test]
@@ -919,13 +1200,250 @@ fn the_number_in_the_committed_source_token_shape_is_found_when_it_is_not_the_ma
 }
 
 #[test]
+fn a_token_followed_by_one_to_three_glued_base64_characters_is_still_found() {
+    // The run ends with characters that belong to the text around the token, not to it ("/", "-", "/x",
+    // "-ab"), at every length of the token modulo four.
+    let number = 407_182_936_504;
+    for filler in 9..17 {
+        let token = encode(&message_of(number, filler), true, false);
+        for glue in ["/", "-", "/x", "-ab", "x", "xyz", "+/-"] {
+            for prefix in ["", "a", "pageToken/"] {
+                let text = format!("{prefix}{token}{glue}");
+                assert_eq!(
+                    project_numbers_in(text.as_bytes()),
+                    [number],
+                    "filler {filler}, prefix {prefix:?}, glue {glue:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn page_like_tokens_are_never_skipped_as_digests_or_words() {
+    // 10,000 seeded tokens of the shape of a page token (a made-up number, a short string, a checksum),
+    // some with a long string field so that the run passes the 48 character mark of the words rule.
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for round in 0..10_000 {
+        let number = 100_000_000_000 + next() % 900_000_000_000;
+        if number == MASK {
+            continue;
+        }
+        let filler = usize::try_from(next() % 40).expect("small") + 9;
+        let mut bytes = message_of(number, filler);
+        // Make the string field text-like, so that long tokens are mostly letters.
+        for byte in bytes.iter_mut().skip(9) {
+            *byte = b'a' + u8::try_from(next() % 26).expect("small");
+        }
+        let token = encode(&bytes, next() % 2 == 0, false);
+        assert!(
+            !is_digest_or_identifier(token.as_bytes()),
+            "round {round}: {token}"
+        );
+        assert!(
+            project_numbers_in(token.as_bytes()).contains(&number),
+            "round {round}"
+        );
+    }
+}
+
+#[test]
+fn a_run_of_lower_case_letters_digits_and_separators_is_an_identifier_whatever_its_share_of_letters(
+) {
+    // Hex digests, dates and numbered paths: few letters, so they are not words, but they are not tokens.
+    for run in [
+        "12-34-56-78-90-ab-cd-ef-12-34",
+        "12/34/56/78/90/ab/cd/ef/12/34",
+        "12_34_56_78_90_ab_cd_ef_12_34",
+        "0123456789z0123456789z0123456789z",
+        "0123456789abcdef0123456789abcdef",
+    ] {
+        assert!(is_digest_or_identifier(run.as_bytes()), "{run}");
+    }
+    // One upper case letter or a `+` is a token.
+    for run in [
+        "12-34-56-78-90-aB-cd-ef-12-34",
+        "12/34/56/78/90/a+-cd-ef-12-34",
+        "0123456789Z0123456789z0123456789z",
+    ] {
+        assert!(!is_digest_or_identifier(run.as_bytes()), "{run}");
+    }
+}
+
+#[test]
+fn a_token_between_path_separators_is_found_whatever_surrounds_it() {
+    // A token that is a middle path segment, with a long suffix (and, on a run over 512 characters, a long
+    // prefix): the run is cut at every `/` and `-`.
+    let number = 407_182_936_504;
+    let token = encode(&message_of(number, 12), true, false);
+    let front = "AbCd/".repeat(110);
+    let lower = "abcdefghijklmnopqrstuvwxyzabcdefghijkl";
+    for text in [
+        format!("{token}/next/page/{lower}"),
+        format!("{token}-more-words-here-and-there-and-more"),
+        format!("v1/{token}/next/page/{lower}"),
+        format!("AbCd-{token}-{lower}"),
+        format!("{front}{token}"),
+        format!("{front}{token}/{lower}"),
+        format!("{front}x-y/{token}-{lower}"),
+    ] {
+        assert!(!is_digest_or_identifier(text.as_bytes()), "{text}");
+        assert_eq!(
+            project_numbers_in(text.as_bytes()),
+            [number],
+            "{}",
+            &text[text.len().saturating_sub(80)..]
+        );
+    }
+}
+
+#[test]
+fn a_piece_between_separators_is_a_run_of_its_own_and_has_to_be_as_long_as_one() {
+    let number = 407_182_936_504;
+    let lower = "abcdefghijklmnopqrstuvwxyzabcd";
+    let exact = encode(&message_of(number, 9), true, false);
+    let short = encode(&message_of(number, 8), true, false);
+    let token = encode(&message_of(number, 12), true, false);
+    assert_eq!((exact.len(), short.len()), (MIN_RUN, MIN_RUN - 1));
+    // Exactly the minimum, cut at `/` and at `-`: found. One character less: not found. Cut at `+` or `_`
+    // (which are not path separators): not found, the suffix is longer than the glue tolerance.
+    for (text, found) in [
+        (format!("{exact}/{lower}"), true),
+        (format!("{exact}-{lower}"), true),
+        (format!("{short}/{lower}"), false),
+        (format!("{short}-{lower}"), false),
+        (format!("{token}+{lower}"), false),
+        (format!("{token}_{lower}"), false),
+        // A short token reaches the minimum run with up to three glued characters, and is found then.
+        (format!("{short}_ab"), true),
+        (format!("{short}+ab"), true),
+    ] {
+        assert!(!is_digest_or_identifier(text.as_bytes()), "{text}");
+        let expected: Vec<u64> = found.then_some(number).into_iter().collect();
+        assert_eq!(project_numbers_in(text.as_bytes()), expected, "{text}");
+    }
+}
+
+#[test]
+fn a_token_before_a_separator_is_found_at_every_length_modulo_four() {
+    // The cut is made before the separator: a character kept would complete an extra byte at some lengths.
+    let number = 407_182_936_504;
+    let lower = "abcdefghijklmnopqrstuvwxyzabcd";
+    for filler in 9..17 {
+        let token = encode(&message_of(number, filler), true, false);
+        for separator in ["/", "-"] {
+            let text = format!("{token}{separator}{lower}");
+            assert_eq!(
+                project_numbers_in(text.as_bytes()),
+                [number],
+                "filler {filler}, {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_token_shorter_than_the_minimum_run_is_a_known_gap_left_to_the_pre_push_scan() {
+    // Measured on the repository when this was written: a minimum of 12, 16 or 20 characters refused 30 or
+    // more files at each (names, generated code and specs parse as messages by chance), so it stays at 24.
+    let number = 407_182_936_504;
+    let long_enough = encode(&message_of(number, 9), true, false);
+    assert_eq!(long_enough.len(), MIN_RUN);
+    assert_eq!(project_numbers_in(long_enough.as_bytes()), [number]);
+    for filler in 0..9 {
+        let short = encode(&message_of(number, filler), true, false);
+        assert!(short.len() < MIN_RUN, "{}", short.len());
+        assert!(
+            project_numbers_in(short.as_bytes()).is_empty(),
+            "filler {filler}"
+        );
+    }
+}
+
+#[test]
+fn four_glued_characters_are_beyond_the_tolerance_at_some_token_lengths() {
+    // Three glued characters are covered at every length (see above); four complete an extra byte at some
+    // lengths, and then the run no longer parses.
+    let number = 407_182_936_504;
+    let found = (9..17)
+        .filter(|filler| {
+            let text = format!("{}_abc", encode(&message_of(number, *filler), true, false));
+            project_numbers_in(text.as_bytes()) == [number]
+        })
+        .count();
+    assert!((1..8).contains(&found), "{found} of 8");
+}
+
+#[test]
+fn a_run_is_words_when_four_fifths_of_it_is_lower_case_letters() {
+    for (run, words) in [
+        // 24 characters: 20 lower case is words, 19 is not.
+        ("abcdefghijklmnopqrstABCD".to_string(), true),
+        ("abcdefghijklmnopqrsABCDE".to_string(), false),
+        // 25 characters: 20 lower case is exactly four fifths.
+        ("abcdefghijklmnopqrstABCDE".to_string(), true),
+        ("abcdefghijklmnopqrs1ABCDE".to_string(), false),
+        // Digits, `+` and separators count as not lower case.
+        ("abcdefghijklmnopqrst1234".to_string(), true),
+        ("abcdefghijklmnopqrst+/-_".to_string(), true),
+        ("abcdefghijklmnopqrs+/-_1".to_string(), false),
+        // The names the repository holds.
+        (
+            "schemas/GoogleFirestoreAdminV1IndexConfigDelta".to_string(),
+            true,
+        ),
+        (
+            "changed-ccccccccccccccccccccccccccccccccPrincipal".to_string(),
+            true,
+        ),
+        ("taskResetDispatchCorrectness".to_string(), true),
+        (
+            "ChQYASCAwMrzhKMCKghjaGFubmVscyEBAgMEBQYHCA".to_string(),
+            false,
+        ),
+    ] {
+        assert_eq!(is_digest_or_identifier(run.as_bytes()), words, "{run}");
+    }
+}
+
+#[test]
+fn the_listing_parser_drops_empty_names_sorts_and_removes_duplicates() {
+    let root = Path::new("/r");
+    assert_eq!(
+        parse_listing(root, b"b\0a\0b\0\0c/d\0a\0"),
+        [root.join("a"), root.join("b"), root.join("c/d")]
+    );
+    assert!(parse_listing(root, b"").is_empty());
+    assert!(parse_listing(root, b"\0\0").is_empty());
+    // A name with a newline or a space is one name (the list is NUL separated).
+    assert_eq!(parse_listing(root, b"x y\nz\0"), [root.join("x y\nz")]);
+}
+
+#[test]
+fn scanning_nothing_is_clean() {
+    assert_eq!(scan(&[], MAX_FILE_BYTES), Corpus::default());
+}
+
+#[test]
 fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
     for run in [
         "sha512-r1w81DpR".as_bytes(),
         b"sha1-x",
         b"sha256-",
         b"a_snake_case_identifier_9",
+        b"auth-refusal-precedence-comparison-approval",
+        b"tools/compat-check/src/inventory/render",
         b"zzz_aaa",
+        b"changed-ccccccccccccccccccccccccccccccccPrincipal",
+        b"schemas/GoogleFirestoreAdminIndexConfigDeltaAndMore",
+        b"auth-refusal-precedence",
+        b"tools/compat-check/src",
         b"___",
         b"0123456789",
     ] {
@@ -941,9 +1459,8 @@ fn a_digest_or_an_identifier_is_not_decoded_as_a_message_but_a_token_is() {
         b"sha512r1w81DpR",
         b"xsha512-r1w81DpR",
         b"a_snake_Case_identifier_9",
-        b"a_snake_case-identifier_9",
-        b"a_snake_case+identifier_9",
         b"A_SNAKE",
+        b"WordsWithOneDigit1AndLongEnoughToCount0123456789ABCDEF",
     ] {
         assert!(
             !is_digest_or_identifier(run),

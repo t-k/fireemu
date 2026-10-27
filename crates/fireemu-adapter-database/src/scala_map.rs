@@ -67,13 +67,15 @@ struct Node {
     leaf: Option<usize>,
 }
 
-/// The order of the entries of one multi-path write whose paths are `paths`, in the order they
-/// were sent: the indices into `paths`.
-pub(crate) fn write_order(paths: &[Vec<String>]) -> Vec<usize> {
+/// The order of the entries of one multi-path write whose paths are `paths` and whose keys as
+/// sent are `raw`: the indices into `paths`. The server keeps the write as a map keyed by the
+/// raw key text (`a/x`, hashed as written), gathers it into a tree in that map's order, and
+/// lists each node's children as a map again.
+pub(crate) fn write_order(raw: &[String], paths: &[Vec<String>]) -> Vec<usize> {
     let mut root = Node::default();
-    for (index, path) in paths.iter().enumerate() {
+    for index in scala_order(raw, false) {
         let mut node = &mut root;
-        for key in path {
+        for key in &paths[index] {
             let at = if let Some(at) = node.children.iter().position(|(name, _)| name == key) {
                 at
             } else {
@@ -198,12 +200,40 @@ pub(crate) mod tests {
             .iter()
             .map(|p| p.split('/').map(str::to_owned).collect())
             .collect();
-        let order: Vec<String> = write_order(&paths)
-            .into_iter()
-            .map(|i| paths[i].join("/"))
-            .collect();
+        let order: Vec<String> = write_order(
+            &paths.iter().map(|p| p.join("/")).collect::<Vec<_>>(),
+            &paths,
+        )
+        .into_iter()
+        .map(|i| paths[i].join("/"))
+        .collect();
         // Probed on the jar: s, t, u, q, then the parents p and r (not s, r/x, p/a, t, u, q).
         assert_eq!(order, ["s", "t", "u", "q", "p/a", "r/x"]);
+    }
+
+    #[test]
+    fn the_order_equals_the_scala_2_12_12_library_on_ascii_non_ascii_and_surrogate_keys() {
+        // Differential table from scala-library 2.12.12 in the jar (see the fixture's provenance).
+        let text = include_str!("../tests/fixtures/scala-map-order-scala-2.12.12.json");
+        let table: serde_json::Value = serde_json::from_str(text).unwrap();
+        let sets = table["sets"].as_array().unwrap();
+        assert!(sets.len() >= 100);
+        assert!(sets
+            .iter()
+            .any(|s| s["keys"].as_array().unwrap().len() >= 100));
+        let mut hashed_sets = 0;
+        for set in sets {
+            let keys = strings(&set["keys"]);
+            assert_eq!(ordered(&keys), strings(&set["order"]), "{set}");
+            hashed_sets += usize::from(keys.len() > 4);
+        }
+        assert!(hashed_sets >= 80);
+        // The table covers non-ASCII keys and keys outside the BMP (two UTF-16 units).
+        let every_key: Vec<String> = sets.iter().flat_map(|s| strings(&s["keys"])).collect();
+        assert!(every_key.iter().any(|k| !k.is_ascii()));
+        assert!(every_key
+            .iter()
+            .any(|k| k.chars().any(|c| u32::from(c) >= 0x1_0000)));
     }
 
     #[test]
@@ -229,23 +259,94 @@ pub(crate) mod tests {
         );
     }
 
+    /// The second fixture: raw-frame recordings for nested bodies, integer keys, splits and covered listens.
+    pub(crate) fn cases() -> serde_json::Value {
+        let text =
+            include_str!("../tests/fixtures/multi-path-order-cases-official-emulator-4.11.2.json");
+        serde_json::from_str(text).unwrap()
+    }
+
+    fn paths_of(keys: &[String]) -> Vec<Vec<String>> {
+        keys.iter()
+            .map(|k| {
+                k.split('/')
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn written(keys: &[String]) -> Vec<String> {
+        let paths = paths_of(keys);
+        write_order(keys, &paths)
+            .into_iter()
+            .map(|i| paths[i].join("/"))
+            .collect()
+    }
+
     #[test]
-    fn nested_registrations_follow_the_recorded_orders() {
-        let fixture = fixture();
-        let cases = fixture["nested"].as_array().unwrap();
-        assert!(cases.len() >= 40);
-        for case in cases {
-            let registered = strings(&case["registered"]);
-            let paths: Vec<Vec<String>> = registered
-                .iter()
-                .map(|p| p.split('/').map(str::to_owned).collect())
-                .collect();
-            let order: Vec<String> = write_order(&paths)
-                .into_iter()
-                .map(|i| registered[i].clone())
-                .collect();
-            assert_eq!(order, strings(&case["order"]), "{case}");
+    fn the_reviews_four_nested_rows_follow_the_hash_order_of_the_keys_as_sent() {
+        let owned = |keys: &[&str]| keys.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>();
+        // Order review of 2026-10-27, raw frames on the jar: the order does not depend on the send order.
+        assert_eq!(
+            written(&owned(&["a/x", "a/y", "b", "c", "d"])),
+            ["a/y", "a/x", "b", "c", "d"]
+        );
+        assert_eq!(
+            written(&owned(&["d", "c", "b", "a/y", "a/x"])),
+            ["a/y", "a/x", "b", "c", "d"]
+        );
+        assert_eq!(
+            written(&owned(&["zz", "a/x", "a/y", "a/z", "a/w", "a/v"])),
+            ["a/x", "a/y", "a/v", "a/w", "a/z", "zz"]
+        );
+        assert_eq!(
+            written(&owned(&["a/x", "a/y", "a/v", "a/w", "a/z", "zz"])),
+            ["a/x", "a/y", "a/v", "a/w", "a/z", "zz"]
+        );
+    }
+
+    #[test]
+    fn nested_and_integer_writes_follow_the_recorded_orders_by_patch_and_by_merge() {
+        let cases = cases();
+        let nested = cases["nested"].as_array().unwrap();
+        // Table rows, three spellings the server hashes as written, 40 random nested bodies (by PATCH and by merge).
+        assert!(nested.len() >= 90);
+        for kind in ["table", "rawSpelling", "random"] {
+            assert!(nested.iter().any(|c| c["kind"] == kind), "{kind}");
         }
+        for case in nested {
+            assert_eq!(
+                written(&strings(&case["keys"])),
+                strings(&case["order"]),
+                "{case}"
+            );
+        }
+        let integers = cases["flatIntegers"].as_array().unwrap();
+        assert!(integers.len() >= 8);
+        for case in integers {
+            assert_eq!(
+                written(&strings(&case["keys"])),
+                strings(&case["order"]),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_server_hashes_the_key_as_it_was_sent_not_the_path_it_names() {
+        // 'u//x' names u/x but hashes as written (probed on the jar: u/x, u/y, f, b, d; not f, u/y, u/x, b, d).
+        let keys: Vec<String> = ["u//x", "u/y", "b", "f", "d"]
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect();
+        assert_eq!(written(&keys), ["u/x", "u/y", "f", "b", "d"]);
+        let normalized: Vec<String> = ["u/x", "u/y", "b", "f", "d"]
+            .iter()
+            .map(|k| (*k).to_owned())
+            .collect();
+        assert_eq!(written(&normalized), ["f", "u/y", "u/x", "b", "d"]);
     }
 
     proptest! {
@@ -286,7 +387,7 @@ pub(crate) mod tests {
         fn flat_paths_are_ordered_as_keys(keys in prop::collection::btree_set("[a-z0-9]{1,6}", 0..20)) {
             let keys: Vec<String> = keys.into_iter().collect();
             let paths: Vec<Vec<String>> = keys.iter().map(|k| vec![k.clone()]).collect();
-            prop_assert_eq!(write_order(&paths), scala_order(&keys, false));
+            prop_assert_eq!(write_order(&keys, &paths), scala_order(&keys, false));
         }
     }
 }

@@ -35,6 +35,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const RUNNER_FILES = [
   "index.mjs",
   "clock.mjs",
+  "admin-app-check.mjs",
   "callable-app-check.mjs",
   "callable-app-check-loader.mjs",
   "app-check-token.mjs",

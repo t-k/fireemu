@@ -44,6 +44,14 @@ function decodeMessage(payload) {
       decimal(message.instantNanos, true) && decimal(message.elapsedNanos) && decimal(message.revision)) return message;
   if (message.type === 'clock:runDue' && text(message.invocationId) &&
       (message.budget === undefined || (Number.isSafeInteger(message.budget) && message.budget >= 1 && message.budget <= 10000))) return message;
+  // The daemon's answer to an Admin SDK App Check question (tools/runner-node/admin-app-check.mjs).
+  if (message.type === 'appCheck:verdict') {
+    if (!text(message.requestId) || message.requestId.length > 128 || typeof message.ok !== 'boolean' ||
+        (message.reason !== undefined && (typeof message.reason !== 'string' || message.reason.length > 64))) {
+      throw new ProtocolError('message fields');
+    }
+    return message;
+  }
   if (message.type !== 'invoke' || !text(message.invocationId) ||
       !text(message.function) || !text(message.trigger) || !object(message.event) ||
       (message.entryPoint !== undefined && !text(message.entryPoint))) {

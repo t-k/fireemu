@@ -1961,6 +1961,10 @@ pub struct EmulatorHosts {
     pub pubsub: Option<String>,
     /// Emulator Hub listener, exported as a bare host and port.
     pub hub: Option<String>,
+    /// Answers the Admin SDK App Check questions of every runner, when App Check is enabled.
+    /// Its presence is what tells a runner to ask the daemon in place of the SDK's JWKS fetch.
+    pub admin_app_check:
+        Option<Arc<dyn fireemu_adapter_functions::admin_app_check::AdminAppCheckVerifier>>,
 }
 
 /// Where a located runner script came from.
@@ -2913,6 +2917,9 @@ pub async fn start(
             return Err(e);
         }
     };
+    if let Some(verifier) = &hosts.admin_app_check {
+        runtime.set_admin_app_check(verifier.clone());
+    }
     tokio::spawn(runtime.clone().dispatch_loop());
     // Commits reserve their complete Functions fan-out before the database publishes and
     // activate that already-built batch before releasing the database critical section.
@@ -3471,10 +3478,17 @@ async fn start_codebase(
     let is_app_check_route = |name: &str| {
         matches!(
             name,
-            "FIREEMU_APP_CHECK_EMULATOR_HOST" | "FIREEMU_APP_CHECK_JWKS_URL"
+            "FIREEMU_APP_CHECK_EMULATOR_HOST"
+                | "FIREEMU_APP_CHECK_JWKS_URL"
+                | "FIREEMU_APP_CHECK_ADMIN"
         )
     };
     env.retain(|(name, _)| !is_app_check_route(name));
+    if hosts.admin_app_check.is_some() {
+        // The daemon owns the question and the answer; the runner only asks (see
+        // `tools/runner-node/admin-app-check.mjs`).
+        env.push(("FIREEMU_APP_CHECK_ADMIN".to_owned(), "1".to_owned()));
+    }
     if let Some(host) = &hosts.app_check {
         env.push(("FIREEMU_APP_CHECK_EMULATOR_HOST".to_owned(), host.clone()));
         env.push((
@@ -3584,10 +3598,15 @@ async fn start_codebase(
         hello_timeout: Duration::from_secs(60),
     };
     let runner = Arc::new(
-        Runner::spawn_spec(&spec)
+        Runner::spawn_spec_with(&spec, hosts.admin_app_check.clone())
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if hosts.admin_app_check.is_some() {
+        if let Some(note) = admin_app_check_note(label, runner.hello().admin_app_check.as_ref()) {
+            eprintln!("note: {note}");
+        }
+    }
     if cfg.functions_clock.date_virtual {
         let capability = runner.hello().clock.as_ref();
         let supports = capability.is_some_and(|c| {
@@ -4216,6 +4235,20 @@ fn check_manifest_agrees_on_callables(
     };
     for f in &configured.functions {
         if !matches!(f.trigger, Trigger::Http { .. }) {
+            // The runner serves an export by name whatever trigger the manifest gave it, so a
+            // real callable listed as a task queue, a blocking function or an event trigger
+            // would reach the onCall wrapper without passing the callable trust boundary.
+            if callable_in(discovered, &f.name) == Some(true) {
+                return Err(format!(
+                    "the configured functions manifest declares {:?} as a non-HTTP function, but \
+                     the codebase declares it callable; App Check for callables cannot trust a \
+                     manifest that disagrees with the code. List it as an http function with \
+                     callable: true and the App Check options the code declares, remove it from \
+                     the manifest, or export it with onTaskDispatched if it is meant to be a task \
+                     queue",
+                    f.name
+                ));
+            }
             continue;
         }
         if let (Some(configured_options), Some(discovered_options)) = (
@@ -4355,6 +4388,31 @@ fn check_callable_app_check(
         ));
     }
     Ok(())
+}
+
+/// What to tell the user about the Admin SDK `verifyToken` instrumentation of one codebase, when
+/// it is not in place. `None` when it is, or when the codebase does not use `firebase-admin`.
+///
+/// Not being in place is never unsafe: the stock SDK then fetches Google's keys, which no
+/// fireemu token verifies against, so `verifyToken` rejects fireemu tokens instead of
+/// accepting one it cannot check.
+fn admin_app_check_note(label: &str, report: Option<&serde_json::Value>) -> Option<String> {
+    let Some(report) = report else {
+        return Some(format!(
+            "functions[{label}]: the runner did not report the firebase-admin App Check instrumentation; \
+             getAppCheck().verifyToken() keeps the SDK's own check and rejects fireemu App Check tokens"
+        ));
+    };
+    let state = report
+        .get("instrumentation")
+        .and_then(serde_json::Value::as_str)?;
+    if state == "ok" || state == "not-installed" {
+        return None;
+    }
+    Some(format!(
+        "functions[{label}]: getAppCheck().verifyToken() is not verified by the daemon ({state}); the \
+         SDK keeps its own check and rejects fireemu App Check tokens"
+    ))
 }
 
 /// Reconciles a configured manifest's `consumeAppCheckToken` with the code when App Check is
@@ -6465,10 +6523,10 @@ mod tests {
     #[cfg(unix)]
     use super::probe_node;
     use super::{
-        blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
-        blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
-        clear_on_request_consumption, consume_app_check_note, function_pubsub_resources,
-        functions_source_stamp, functions_source_stamp_with_charge,
+        admin_app_check_note, blocking_auth_io_failure, blocking_auth_read_response,
+        blocking_auth_response_failure, blocking_auth_write_request, changed_source_stamp,
+        check_callable_app_check, clear_on_request_consumption, consume_app_check_note,
+        function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
         functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
         load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
         parse_node_version, provision_function_pubsub_resources,
@@ -7998,6 +8056,7 @@ root	unchanged	small	firstGen";
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         for (profile, firestore, expected) in [
             ("strict", json!({}), "nam5"),
@@ -8105,6 +8164,7 @@ root	unchanged	small	firstGen";
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         for profile in ["emulator", "strict"] {
             let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
@@ -8197,6 +8257,7 @@ root	unchanged	small	firstGen";
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         for consume in ["enabled", "undetermined"] {
             let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
@@ -8301,6 +8362,7 @@ root	unchanged	small	firstGen";
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
             "schemaVersion": 1, "profile": "emulator"
@@ -8430,6 +8492,7 @@ exports.add = onCall({{}}, observe("add"));
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
             "schemaVersion": 1, "profile": "emulator"
@@ -10088,6 +10151,7 @@ exports.add = onCall({{}}, observe("add"));
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         let cache = Arc::new(super::NodeProbeCache::default());
         for (retry, refused_text) in [
@@ -10197,6 +10261,7 @@ exports.add = onCall({{}}, observe("add"));
             logging: None,
             pubsub: None,
             hub: None,
+            admin_app_check: None,
         };
         let cache = Arc::new(super::NodeProbeCache::default());
         let mut declarations = vec![
@@ -13442,6 +13507,41 @@ module.exports = { tick, observer };
             .expect("the codebase loads without App Check");
     }
 
+    /// The Admin SDK instrumentation is silent when it is in place or the codebase has no
+    /// `firebase-admin`, and names the reason (and what the user gets) in every other case.
+    #[test]
+    fn the_admin_app_check_note_is_printed_only_when_the_instrumentation_is_not_in_place() {
+        use serde_json::json;
+        for silent in [
+            json!({"instrumentation": "ok", "firebaseAdminVersion": "14.3.0"}),
+            json!({"instrumentation": "not-installed", "firebaseAdminVersion": null}),
+        ] {
+            assert_eq!(
+                admin_app_check_note("default", Some(&silent)),
+                None,
+                "{silent}"
+            );
+        }
+        for (reason, version) in [
+            (
+                "firebase-admin 15.0.0 is outside the supported range (major 13, 14)",
+                "15.0.0",
+            ),
+            ("daemon-unavailable", "14.3.0"),
+            ("disabled", "14.3.0"),
+        ] {
+            let report = json!({"instrumentation": reason, "firebaseAdminVersion": version});
+            let note = admin_app_check_note("api", Some(&report)).expect("a note");
+            assert!(note.contains("functions[api]"), "{note}");
+            assert!(note.contains(reason), "{note}");
+            assert!(note.contains("rejects fireemu App Check tokens"), "{note}");
+        }
+        let missing = admin_app_check_note("default", None).expect("a note");
+        assert!(missing.contains("did not report"), "{missing}");
+        // A report without the field says nothing rather than guessing.
+        assert_eq!(admin_app_check_note("default", Some(&json!({}))), None);
+    }
+
     /// The one startup note names every token-consuming callable and says what a call to it
     /// gets in the active mode; nothing is printed when no callable consumes tokens.
     #[test]
@@ -13840,6 +13940,57 @@ module.exports = { tick, observer };
 
         super::check_manifest_agrees_on_callables(&discovered, &discovered)
             .expect("an agreeing manifest starts");
+    }
+
+    /// The runner picks an export by name from its own discovery and serves it whatever trigger
+    /// the manifest gave it. A real `onCall` written as a task queue or a blocking function would
+    /// reach the callable wrapper without passing the callable trust boundary (the wrapper decodes
+    /// the credentials and the auth-override fields of the request without verifying them), so
+    /// the mismatch is as fatal as calling it an `onRequest` function. A real task queue, or a
+    /// queue the code does not export, is not a callable and still loads.
+    #[test]
+    fn a_configured_manifest_cannot_present_a_callable_as_any_other_trigger() {
+        let discovered = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        for (label, entry) in [
+            ("a task queue", json!({"type": "tasks"})),
+            (
+                "a blocking function",
+                json!({"type": "blockingAuth", "eventType": "beforeCreate"}),
+            ),
+            ("a Pub/Sub trigger", json!({"type": "pubsub", "topic": "t"})),
+            (
+                "a schedule",
+                json!({"type": "schedule", "schedule": "every 5 minutes"}),
+            ),
+        ] {
+            let configured = parse_manifest(&json!({
+                "functions": [{"name": "guarded", "generation": 2, "trigger": entry}]
+            }))
+            .expect("the fixture manifest parses");
+            let e = super::check_manifest_agrees_on_callables(&configured, &discovered)
+                .expect_err(&format!("{label} may not carry a callable"));
+            assert!(e.contains("guarded"), "{label}: {e}");
+            assert!(e.contains("callable"), "{label}: {e}");
+            assert!(e.contains("callable: true"), "{label}: {e}");
+            assert!(e.contains("remove it from the manifest"), "{label}: {e}");
+            assert!(e.contains("onTaskDispatched"), "{label}: {e}");
+        }
+        // A real task queue, and a queue name the code does not export, still load.
+        let honest = parse_manifest(&json!({
+            "functions": [
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "ghostQueue", "generation": 2, "trigger": {"type": "tasks"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        super::check_manifest_agrees_on_callables(&honest, &discovered)
+            .expect("a task queue that is not a callable loads");
     }
 
     #[test]

@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 6d3cccad63f74d067062276cefa70aa46829b37567692c83b439d0a3dac39b8f # shrinks to writes = [([], Object({"a": Number(Int(0))})), (["a", "a"], Null)]
 cc 43eab6ba95fc3a86760a5ca2fc611424d739c91dcb1e8584c422e7bf082d3f96 # shrinks to groups = [(["a"], Object({".priority": Number(Int(0)), ".value": Number(Int(0))}), Some(Number(Int(0))))]
+cc a6f44f11bf24353e7992ba4fec3f91e08d0e0c7f196832354d793bebcd61cf18 # shrinks to value = Object({"a": Null}), cancel = ["a"]

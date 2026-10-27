@@ -244,17 +244,54 @@ impl AdmissionDecision {
     }
 }
 
+/// The one check a production-shaped caller (the Admin SDK's `verifyToken`) may skip.
+///
+/// Production does not compare a token's `iat` with the clock. Every other check, and the order
+/// of all of them, is unchanged, so skipping this one can never mask a signature, expiry,
+/// issuer, audience, app or epoch fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VerifyOptions {
+    /// Do not refuse a token whose `iat` is after the clock ([`AppCheckFailure::NotYetValid`]).
+    pub allow_future_iat: bool,
+}
+
+impl VerifyOptions {
+    /// Every check on: what every transport and the callable boundary use.
+    pub const STRICT: Self = Self {
+        allow_future_iat: false,
+    };
+}
+
 /// Verifies a presented token against the target project.
 ///
 /// The order is the one section 11 requires: framing, then header, then signature, and only
 /// then any claim. Nothing about the payload is trusted before the signature verifies.
-#[allow(clippy::too_many_lines)]
 pub fn verify_token(
     token: &str,
     registry: &AppCheckRegistry,
     project_id: &str,
     signer: &dyn AppCheckSigner,
     now: LogicalInstant,
+) -> Result<AppIdentity, AppCheckFailure> {
+    verify_token_with(
+        token,
+        registry,
+        project_id,
+        signer,
+        now,
+        VerifyOptions::STRICT,
+    )
+}
+
+/// [`verify_token`] with the skippable check named by `options`.
+#[allow(clippy::too_many_lines)]
+pub fn verify_token_with(
+    token: &str,
+    registry: &AppCheckRegistry,
+    project_id: &str,
+    signer: &dyn AppCheckSigner,
+    now: LogicalInstant,
+    options: VerifyOptions,
 ) -> Result<AppIdentity, AppCheckFailure> {
     if token.len() > MAX_TOKEN_BYTES {
         return Err(AppCheckFailure::Malformed);
@@ -305,7 +342,7 @@ pub fn verify_token(
         return Err(AppCheckFailure::Malformed);
     }
     let now_seconds = unix_seconds(now);
-    if now_seconds < iat {
+    if now_seconds < iat && !options.allow_future_iat {
         return Err(AppCheckFailure::NotYetValid);
     }
     if now_seconds >= exp {

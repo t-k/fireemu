@@ -3241,6 +3241,38 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, HttpInvokeError> {
+        // A callable that a configured manifest serves as a queue, in the strict profile: the
+        // task passes the Bearer check a callable request passes, so the wrapper's own
+        // verification (signature-less under the Auth emulator) is not the only one.
+        if self
+            .manifest()
+            .get(&target.function)
+            .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
+        {
+            let presented: Vec<String> = headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.clone())
+                .collect();
+            if crate::http::strict_callable_bearer_unverified(self, &presented) {
+                // The refusal never reaches the runner, so nothing else records it; the dispatch
+                // fails and is retried under the queue's policy. The credential is not logged.
+                eprintln!(
+                    "[functions] a task for {:?} was refused by the strict Bearer check (401): its \
+                     Authorization is not a Bearer for a user of this project, and the function is \
+                     callable; the dispatch fails and is retried under the queue's retry policy",
+                    target.function
+                );
+                return Ok(ProxiedResponse {
+                    status: 401,
+                    headers: vec![(
+                        "content-type".to_owned(),
+                        "text/html; charset=UTF-8".to_owned(),
+                    )],
+                    body: Vec::new(),
+                });
+            }
+        }
         self.invoke_http_classified(
             target,
             "POST",

@@ -68,6 +68,14 @@ class Echo(http.server.BaseHTTPRequestHandler):
             task_name = self.headers.get("x-cloudtasks-taskname", "")
             failing = "failing" in task_name
             entry = queue
+            if "forged" in task_name:
+                # Which emulator-internal auth channels survived the daemon, and the secret it
+                # added (never a caller-supplied one).
+                entry = (
+                    f"{queue}:{self.headers.get('x-callable-context-auth')}:"
+                    f"{self.headers.get('x-original-auth')}:"
+                    f"{self.headers.get('x-fireemu-runner-secret')}"
+                )
             if failing:
                 entry = (
                     f"{queue}:{self.headers.get('x-cloudtasks-taskretrycount')}:"

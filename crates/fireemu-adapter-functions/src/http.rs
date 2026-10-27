@@ -1100,17 +1100,48 @@ fn invocation_refusal(
     }
 }
 
+/// Whether the daemon marked this entry as a code-level callable served as something else
+/// (`PlatformOptions::strict_callable_ingress`).
+fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
+    runtime
+        .manifest()
+        .get(function)
+        .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
+}
+
 fn strict_callable_bearer_refusal(
     runtime: &FunctionsRuntime,
     raw: &hyper::HeaderMap,
 ) -> Option<Response<OutBody>> {
     let presented = field_values(raw, "authorization");
-    let [authorization] = presented.as_slice() else {
-        return None;
+    strict_callable_bearer_unverified(runtime, &presented).then(|| {
+        typed(
+            StatusCode::UNAUTHORIZED,
+            "text/html; charset=UTF-8",
+            UNAUTHORIZED_PAGE,
+        )
+    })
+}
+
+/// Whether the credential a strict callable request presents is a Bearer the daemon cannot
+/// verify as one of the project's users. Anything else (no credential, two of them, another
+/// scheme, an empty token) is left to the handler.
+///
+/// A task delivered to a callable that a configured manifest serves as a queue passes the same
+/// check ([`crate::runtime`]), because the Admin SDK's own verification under the Auth
+/// emulator does not check signatures.
+pub(crate) fn strict_callable_bearer_unverified(
+    runtime: &FunctionsRuntime,
+    presented: &[String],
+) -> bool {
+    let [authorization] = presented else {
+        return false;
     };
-    let (scheme, token) = authorization.split_once(' ')?;
+    let Some((scheme, token)) = authorization.split_once(' ') else {
+        return false;
+    };
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
-        return None;
+        return false;
     }
     let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
         matches!(
@@ -1119,13 +1150,7 @@ fn strict_callable_bearer_refusal(
             Ok(fireemu_adapter_grpc::rules::Principal::User(_))
         )
     });
-    (!verified_user).then(|| {
-        typed(
-            StatusCode::UNAUTHORIZED,
-            "text/html; charset=UTF-8",
-            UNAUTHORIZED_PAGE,
-        )
-    })
+    !verified_user
 }
 
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.
@@ -1718,7 +1743,14 @@ async fn respond(
     };
     let streaming =
         !callable_preflight && streaming_callable && accepts_callable_stream(req.headers());
-    if callable && !callable_preflight && profile == FunctionsHttpProfile::Strict {
+    // An entry the daemon marked (a code-level callable that a configured manifest serves as an
+    // `onRequest` function, strict profile, no App Check) runs the callable's wrapper too, so
+    // its requests pass the same Bearer check. A preflight is the SDK's CORS handling and
+    // carries no credential check, as for a callable.
+    let code_callable = marked_callable_in_code(&runtime, function);
+    if profile == FunctionsHttpProfile::Strict
+        && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
+    {
         if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
             drain_refused_body(req.into_body()).await;
             return Ok(denial);

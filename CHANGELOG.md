@@ -17,6 +17,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 - Realtime Database, scope of the 0.31.0 write-order entry: the order of a multi-path write is the official emulator's; production-5 confirmed it for one six-key `onDisconnect` set (`e6`, `e5`, `marker`, `e4`, `e3`, `e2`), not for other key sets.
 - Realtime Database, known difference: a long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, after 104.3 s to about 105 s in fireemu and 99.3 s to 104.0 s in the four production recordings.
 
+### Fixed
+
+- `strict` with App Check off: a task sent to a queue that a `functions.manifest` serves for an export the codebase declares callable now passes the Bearer check a callable request passes. A Bearer that is not one of the project's users is answered 401 before the code runs, which for a task is a failed dispatch that is retried under the queue's retry policy until it gives up (a stderr line names the function each time), where before only the Admin SDK's Auth-emulator verification, which does not check signatures, stood in the way. Startup prints a warning naming the function; the `emulator` profile and a queue the code exports with `onTaskDispatched` are unchanged.
+- `strict` with App Check off: a request to an export the codebase declares callable that a `functions.manifest` serves as an `onRequest` function (`"callable": false`) now passes the same Bearer check: a Bearer that is not one of the project's users is answered 401 (the recorded page of a callable), where before only the Admin SDK's Auth-emulator verification stood in the way. A preflight, a request with no credential or another scheme, the `emulator` profile and an `onRequest` function the code really exports are unchanged.
+
 ## [0.31.0] - 2026-10-27
 
 ### Added

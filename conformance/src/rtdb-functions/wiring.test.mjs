@@ -417,6 +417,9 @@ test("a failed deploy with no such proof, or a killed CLI, is recorded as unknow
     [undefined, { exited: true, exitCode: 2 }],
     [REFUSED_OUTPUT, { exited: false, exitCode: null }],
     [REFUSED_OUTPUT.replace("400", "503"), { exited: true, exitCode: 2 }],
+    // a CLI that did not end by itself, and a clean exit with a failure to report, are not proof either
+    [REFUSED_OUTPUT, { exited: false, exitCode: 2 }],
+    [REFUSED_OUTPUT, { exited: true, exitCode: 0 }],
   ]) {
     const { ops } = spyOps({
       deployTarget: async (_s, _p, state) => {

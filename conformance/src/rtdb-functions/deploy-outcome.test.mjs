@@ -54,6 +54,11 @@ test("everything but a definite 4xx on this function's own create is unknown", (
   const cases = [
     ["a killed or timed-out CLI", RECORDED, { exited: false, exitCode: null }],
     ["a CLI that exited 0", RECORDED, { exited: true, exitCode: 0 }],
+    [
+      "a CLI that did not end by itself, whatever code it reports",
+      RECORDED,
+      { exited: false, exitCode: 2 },
+    ],
     ["no HTTP error at all", "Error: socket hang up\nDeploys failed.", ended],
     ["empty output", "", ended],
     ["a 5xx", line(url2(), 503), ended],
@@ -101,4 +106,22 @@ test("the output of an unknown kind never throws", () => {
     "unknown",
     "no CLI track",
   );
+});
+
+test("only this project, this region, this generation's URL form and this function name count", () => {
+  const other = (url) =>
+    classifyDeployFailure({ output: line(url, 400), ...ended, spec: v2 }).class;
+  const base = `https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/us-central1/functions?functionId=rtdbCreatedV2`;
+  assert.equal(other(base), "refused");
+  assert.equal(other(base.replace(PROJECT, "someone-else")), "unknown");
+  assert.equal(other(base.replace("us-central1", "europe-west1")), "unknown");
+  assert.equal(other(base.replace("/v2/", "/v1/")), "unknown");
+  assert.equal(other(base.replace("?functionId=rtdbCreatedV2", "")), "unknown");
+  // for a 1st gen target: the v1 URL without an id only
+  const one = (url) => classifyDeployFailure({ output: line(url, 400), ...ended, spec: v1 }).class;
+  assert.equal(one(url1), "refused");
+  assert.equal(one(url1.replace("/v1/", "/v2/")), "unknown");
+  assert.equal(one(`${url1}?functionId=rtdbCreatedV1`), "unknown");
+  assert.equal(one(url1.replace(PROJECT, "someone-else")), "unknown");
+  assert.equal(one(url1.replace("us-central1", "europe-west1")), "unknown");
 });

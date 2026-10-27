@@ -182,6 +182,81 @@ test("a transient 403 on a management read-back during the cleanup is retried wi
   assert.equal(w.baseline(), true);
 });
 
+// The recorded shape (CV14 run 2026-10-27, journal rows instance-before / instance-before-retry-1 and instance-disabled):
+// one 403 "Management API has not been used" on a GET of the instance, then the same GET answers 200.
+const FORBIDDEN = {
+  error: {
+    code: 403,
+    message:
+      "Firebase Realtime Database Management API has not been used in project before or it is disabled.",
+    status: "PERMISSION_DENIED",
+  },
+};
+
+test("the recorded 403-then-200 on the read-back right after the instance disable is retried in the cleanup", async () => {
+  const w = fakeWorld();
+  const steps = [];
+  let disabled = false;
+  let refusals = 0;
+  const rtdb = make(w, {
+    sleep: async () => {},
+    log: (row) => steps.push(row.step),
+    fetchImpl: async (url, init) => {
+      const answer = await w.fetch(url, init);
+      if (init.method === "POST" && url.endsWith(":disable")) disabled = true;
+      else if (
+        disabled &&
+        init.method === "GET" &&
+        INSTANCE_GET.test(new URL(url).pathname) &&
+        refusals < 1
+      ) {
+        refusals += 1;
+        return json(403, FORBIDDEN);
+      }
+      return answer;
+    },
+  });
+  await rtdb.setup();
+  const closed = await rtdb.cleanup();
+  assert.equal(refusals, 1, "the disable read-back was refused once");
+  assert.equal(closed.closed, true, JSON.stringify(closed));
+  assert.ok(steps.includes("instance-disabled"));
+  assert.ok(steps.includes("instance-disabled-retry-1"), steps.join(","));
+  assert.equal(w.baseline(), true);
+});
+
+test("the recorded 403-then-200 on the first instance read of the cleanup is retried too", async () => {
+  const w = fakeWorld();
+  const steps = [];
+  let armed = false;
+  let refusals = 0;
+  const rtdb = make(w, {
+    sleep: async () => {},
+    log: (row) => steps.push(row.step),
+    fetchImpl: async (url, init) => {
+      if (
+        armed &&
+        init.method === "GET" &&
+        INSTANCE_GET.test(new URL(url).pathname) &&
+        refusals < 1
+      ) {
+        refusals += 1;
+        return json(403, FORBIDDEN);
+      }
+      return w.fetch(url, init);
+    },
+  });
+  await rtdb.setup();
+  armed = true;
+  const closed = await rtdb.cleanup();
+  assert.equal(refusals, 1);
+  assert.equal(closed.closed, true, JSON.stringify(closed));
+  assert.ok(
+    steps.some((step) => /-retry-1$/u.test(step)),
+    steps.join(","),
+  );
+});
+
 test("a read-back that keeps being refused is retried within 120 s in all and then leaves the RTDB not closed", async () => {
   const w = fakeWorld();
   const slept = [];

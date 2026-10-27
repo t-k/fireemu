@@ -1990,16 +1990,15 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
     host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
     { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "ada@example.com", password: "secret-123", returnSecureToken: true }) },
   );
-  const { localId } = await signUp.json();
+  const { localId, idToken } = await signUp.json();
   if (!localId) throw new Error("sign-up failed");
-  // Issued a little in the past: the daemon runs on its own clock and refuses a token issued in
-  // its future, so a token issued "now" can be refused by a daemon whose second lags.
-  const now = Math.floor(Date.now() / 1000);
-  const token = (iat) =>
-    b64url({ alg: "none", typ: "JWT" }) + "." +
-    b64url({ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now - 30, iat, exp: now + 3600, firebase: { identities: {}, sign_in_provider: "password" } }) + ".";
+  // The claims the daemon itself issued (so its clock agrees with them), re-issued unsigned: the
+  // Admin SDK's Auth-emulator verification accepts an unsigned token, and the strict daemon
+  // refuses one whose `iat` is in its future.
+  const claims = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString());
+  const token = (iat) => b64url({ alg: "none", typ: "JWT" }) + "." + b64url({ ...claims, iat }) + ".";
   let n = 0;
-  for (const [kind, iat] of [["now", now - 30], ["future", now + 600]]) {
+  for (const [kind, iat] of [["now", claims.iat], ["future", claims.iat + 600]]) {
     const body = Buffer.from(JSON.stringify({ data: { kind } })).toString("base64");
     await fetch(host(process.env.CLOUD_TASKS_EMULATOR_HOST) + "/projects/" + project + "/locations/us-central1/queues/guarded/tasks", {
       method: "POST",

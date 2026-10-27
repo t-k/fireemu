@@ -299,7 +299,7 @@
     "crates/fireemu-adapter-functions/src/ordered_json.rs": "233123ccc7e652080705956e68ae9e2358e7066da1c83c586d334e2a0393d55d",
     "crates/fireemu-adapter-functions/src/protocol.rs": "a184f53b42687eebd8221ab8a01c05642418712bf622b29af27383763b969ddc",
     "crates/fireemu-adapter-functions/src/runner.rs": "578f462ebc6e17d9a19b459687a522ef5df537165957de16b5694edbb2dd17a9",
-    "crates/fireemu-adapter-functions/src/runtime.rs": "6ec8bffeb2fff954ddcc9c554397d07b8813e2313707bf831cd21f0a4de956ef",
+    "crates/fireemu-adapter-functions/src/runtime.rs": "99517928196cb7d3c4291be658de9b4f08f7d7d9bd9a055450efee715513c490",
     "crates/fireemu-adapter-functions/src/task_scheduler.rs": "57d117a7b510865ef350c23e6d5ac8a666cd10ec98b068dd2d29c253623a3e22",
     "crates/fireemu-adapter-functions/src/tasks.rs": "62f7613a15862a056ec71950ad8c20d21a649e34ec259b8efa82b29b2eb5374e",
     "crates/fireemu-adapter-functions/src/zone.rs": "ae132893d5b072cc587d56b86327ca803a81f5adda28a1625f53239afeafabcb",

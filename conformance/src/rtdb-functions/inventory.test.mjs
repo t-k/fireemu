@@ -230,3 +230,23 @@ test("an incomplete list after the run is not ok", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.incomplete, true);
 });
+
+test("several owned trigger and topic pairs are each deleted by exact name, once", async () => {
+  const w = world();
+  const before = await takeInventory(w.control, "inventory");
+  const pairs = ["a", "b"].map((n) => ({
+    trigger: `projects/${PROJECT}/locations/${REGION}/triggers/f${n}-1`,
+    topic: `projects/${PROJECT}/topics/eventarc-${REGION}-f${n}-1-1`,
+  }));
+  for (const pair of pairs) {
+    w.sets.triggers.add(pair.trigger);
+    w.sets.topics.add(pair.topic);
+  }
+  const result = await removeLeftovers(w.control, before, pairs, { sleep: noSleep });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(
+    result.deleted,
+    pairs.flatMap((p) => [p.trigger, p.topic]),
+  );
+  assert.equal(w.calls.filter((c) => c.method === "DELETE").length, 4);
+});

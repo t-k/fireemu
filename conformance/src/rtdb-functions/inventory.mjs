@@ -148,8 +148,11 @@ export async function removeLeftovers(control, before, owned, { sleep = sleepFor
     }
     const fresh = newItems(before, after);
     const owes = [];
-    if (owned && fresh.triggers.includes(owned.trigger)) owes.push([owned.trigger, "trigger"]);
-    if (owned && fresh.topics.includes(owned.topic)) owes.push([owned.topic, "topic"]);
+    // `owned` is one {trigger, topic}, a list of them, or null.
+    for (const names of owned === null || owned === undefined ? [] : [owned].flat()) {
+      if (fresh.triggers.includes(names.trigger)) owes.push([names.trigger, "trigger"]);
+      if (fresh.topics.includes(names.topic)) owes.push([names.topic, "topic"]);
+    }
     for (const [name, kind] of owes) {
       if (kind === "trigger") await deleteTrigger(control, name, sleep);
       else

@@ -187,9 +187,9 @@ pub fn database_event_id(seed: &str) -> String {
     let bytes: Vec<u8> = (0..3).flat_map(|_| next().to_be_bytes()).take(20).collect();
     let mut out = String::with_capacity(28);
     for chunk in bytes.chunks(3) {
-        let group = chunk.iter().enumerate().fold(0u32, |acc, (i, byte)| {
-            acc | (u32::from(*byte) << (16 - 8 * i))
-        });
+        let mut padded = [0u8; 4];
+        padded[1..=chunk.len()].copy_from_slice(chunk);
+        let group = u32::from_be_bytes(padded);
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(ALPHABET[((group >> (18 - 6 * i)) & 0x3f) as usize] as char);

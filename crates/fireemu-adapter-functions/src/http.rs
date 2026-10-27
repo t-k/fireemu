@@ -1105,12 +1105,34 @@ fn strict_callable_bearer_refusal(
     raw: &hyper::HeaderMap,
 ) -> Option<Response<OutBody>> {
     let presented = field_values(raw, "authorization");
-    let [authorization] = presented.as_slice() else {
-        return None;
+    strict_callable_bearer_unverified(runtime, &presented).then(|| {
+        typed(
+            StatusCode::UNAUTHORIZED,
+            "text/html; charset=UTF-8",
+            UNAUTHORIZED_PAGE,
+        )
+    })
+}
+
+/// Whether the credential a strict callable request presents is a Bearer the daemon cannot
+/// verify as one of the project's users. Anything else (no credential, two of them, another
+/// scheme, an empty token) is left to the handler.
+///
+/// A task delivered to a callable that a configured manifest serves as a queue passes the same
+/// check ([`crate::runtime`]), because the Admin SDK's own verification under the Auth
+/// emulator does not check signatures.
+pub(crate) fn strict_callable_bearer_unverified(
+    runtime: &FunctionsRuntime,
+    presented: &[String],
+) -> bool {
+    let [authorization] = presented else {
+        return false;
     };
-    let (scheme, token) = authorization.split_once(' ')?;
+    let Some((scheme, token)) = authorization.split_once(' ') else {
+        return false;
+    };
     if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
-        return None;
+        return false;
     }
     let verified_user = runtime.callable_auth_verifier().is_some_and(|verifier| {
         matches!(
@@ -1119,13 +1141,7 @@ fn strict_callable_bearer_refusal(
             Ok(fireemu_adapter_grpc::rules::Principal::User(_))
         )
     });
-    (!verified_user).then(|| {
-        typed(
-            StatusCode::UNAUTHORIZED,
-            "text/html; charset=UTF-8",
-            UNAUTHORIZED_PAGE,
-        )
-    })
+    !verified_user
 }
 
 /// Answers the Cloud Tasks routes, including the emulator diagnostics endpoint.

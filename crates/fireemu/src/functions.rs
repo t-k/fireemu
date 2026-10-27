@@ -3716,6 +3716,15 @@ async fn start_codebase(
                 for warning in reconcile_consumption_without_app_check(&mut manifest, &discovered) {
                     eprintln!("warning: {warning}");
                 }
+                if cfg.profile == CompatibilityProfile::Strict {
+                    for name in mark_strict_callable_ingress(&mut manifest, &discovered) {
+                        eprintln!(
+                            "warning: the configured functions manifest serves {name:?} as a \
+                             task queue, but the codebase declares it callable; a task sent to \
+                             it must carry no credential or a Bearer the Auth emulator verifies"
+                        );
+                    }
+                }
             }
         }
         check_callable_app_check(
@@ -4420,6 +4429,35 @@ fn admin_app_check_note(label: &str, report: Option<&serde_json::Value>) -> Opti
         "functions[{label}]: getAppCheck().verifyToken() is not verified by the daemon ({state}); the \
          SDK keeps its own check and rejects fireemu App Check tokens"
     ))
+}
+
+/// Marks every entry of a configured manifest that serves as another trigger type an export the
+/// codebase's own discovery declares callable, and returns their names.
+///
+/// This is for the strict profile without App Check, where such a manifest still starts (see the
+/// gate in `start_codebase`). A request to a callable passes the daemon's Bearer check there; a
+/// task delivered to the same export through its queue entry would not, and the callable
+/// wrapper's own check under the Auth emulator does not verify signatures. The marker makes the
+/// task path apply the callable check (`PlatformOptions::strict_callable_ingress`).
+fn mark_strict_callable_ingress(
+    configured: &mut fireemu_core_functions::manifest::FunctionManifest,
+    discovered: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Vec<String> {
+    use fireemu_core_functions::manifest::Trigger;
+    let callable_in_code = |name: &str| {
+        discovered
+            .functions
+            .iter()
+            .any(|d| d.name == name && matches!(d.trigger, Trigger::Http { callable: true, .. }))
+    };
+    let mut marked = Vec::new();
+    for f in &mut configured.functions {
+        if !matches!(f.trigger, Trigger::Http { .. }) && callable_in_code(&f.name) {
+            f.platform_options.strict_callable_ingress = true;
+            marked.push(f.name.clone());
+        }
+    }
+    marked
 }
 
 /// Reconciles a configured manifest's `consumeAppCheckToken` with the code when App Check is
@@ -14022,6 +14060,52 @@ module.exports = { tick, observer };
         .expect("the fixture manifest parses");
         super::check_manifest_agrees_on_callables(&honest, &discovered)
             .expect("a task queue that is not a callable loads");
+    }
+
+    /// Without App Check the strict profile still starts a manifest that serves a callable as a
+    /// queue, and marks that entry so a task sent to it passes the callable's Bearer check. A real
+    /// queue, a queue the code does not export and the callable's own entry are not marked.
+    #[test]
+    fn a_callable_served_as_a_queue_is_marked_for_the_strict_bearer_check() {
+        let discovered = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        let mut configured = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "ghostQueue", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "onCreate", "generation": 2, "trigger": {"type": "pubsub", "topic": "t"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        assert_eq!(
+            super::mark_strict_callable_ingress(&mut configured, &discovered),
+            vec!["guarded".to_owned()]
+        );
+        let marked: Vec<_> = configured
+            .functions
+            .iter()
+            .map(|f| (f.name.as_str(), f.platform_options.strict_callable_ingress))
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                ("guarded", true),
+                ("worker", false),
+                ("ghostQueue", false),
+                ("onCreate", false)
+            ]
+        );
+        let mut honest_callable = parse_manifest(&json!({
+            "functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}}]
+        }))
+        .expect("the fixture manifest parses");
+        assert!(super::mark_strict_callable_ingress(&mut honest_callable, &discovered).is_empty());
     }
 
     #[test]

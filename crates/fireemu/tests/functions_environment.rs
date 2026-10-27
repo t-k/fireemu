@@ -1853,6 +1853,97 @@ exports.guarded = onCall(() => ({ ok: true }));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Without App Check a configured manifest may serve a callable as a task queue (see the test
+/// below). In the strict profile a task sent to such a queue passes the Bearer check a callable
+/// request passes, because the wrapper's own verification under the Auth emulator does not check
+/// signatures; the emulator profile, and a queue the code really exports with `onTaskDispatched`,
+/// deliver whatever the task's `Authorization` says.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_task_sent_to_a_callable_served_as_a_queue_passes_the_strict_bearer_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-task-bearer");
+    let hits = dir.join("hits.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+const {{ onTaskDispatched }} = require("firebase-functions/v2/tasks");
+const hit = (name) => fs.appendFileSync({hits:?}, name + "\n");
+exports.guarded = onCall(() => {{ hit("guarded"); return {{ ok: true }}; }});
+exports.worker = onTaskDispatched(() => {{ hit("worker"); }});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [
+            {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+            {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+        ]}"#,
+    );
+    for (profile, queue, authorization, delivered) in [
+        ("strict", "guarded", Some("Bearer malformed"), false),
+        ("strict", "guarded", None, true),
+        ("strict", "worker", Some("Bearer malformed"), true),
+        // The emulator profile adds no check of its own: the callable wrapper (not the daemon)
+        // answers a task that carries no credential.
+        ("emulator", "guarded", None, true),
+        ("emulator", "worker", Some("Bearer malformed"), true),
+    ] {
+        let _ = std::fs::remove_file(&hits);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let headers = authorization.map_or_else(String::new, |value| {
+            format!(r#","headers":{{"Authorization":"{value}"}}"#)
+        });
+        let script = format!(
+            r#"H="$CLOUD_TASKS_EMULATOR_HOST"; case "$H" in http*) ;; *) H="http://$H" ;; esac
+curl -s --max-time 10 -o /dev/null -X POST -H 'content-type: application/json' \
+  -d '{{"task":{{"name":"projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks/t1","httpRequest":{{"url":"","body":"eyJkYXRhIjp7fX0="{headers}}}}}}}' \
+  "$H/projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks"
+sleep 3"#
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-task-bearer")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "/bin/sh", "-c", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile} {queue}: {stderr}");
+        // The daemon says which entry it marked, in the strict profile only; the Bearer check
+        // itself is exercised against a fake runner in `tests/strict_task_bearer.rs` (the
+        // callable wrapper also refuses a malformed Bearer, so a missing hit alone could not
+        // tell the two refusals apart).
+        assert_eq!(
+            stderr.contains(
+                "serves \"guarded\" as a task queue, but the codebase declares it callable"
+            ),
+            profile == "strict",
+            "{profile} {queue}: {stderr}"
+        );
+        let seen = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert_eq!(
+            seen.lines().any(|line| line == queue),
+            delivered,
+            "{profile} {queue} {authorization:?}: hits {seen:?}\n{stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The refusal above is deliberately tied to the callable trusted protocol. Without App Check the
 /// runner is not given `skipTokenVerification` and the daemon strips the auth-override fields
 /// from every request it forwards, so none reaches the callable wrapper that a mislabelled entry

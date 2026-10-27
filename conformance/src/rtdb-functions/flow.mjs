@@ -17,6 +17,9 @@ export const STAGE2_WINDOWS = Object.freeze({
   quietMs: 30_000,
   finalMs: 120_000,
   pollMs: 10_000,
+  // After the last deploy and before the first write: a trigger is not live the moment its deploy ends
+  // (the FUNCTIONS-EVENTS recorder waits the same 300 s, deploy.mjs PROPAGATION_WAIT_SECONDS).
+  propagationMs: 300_000,
 });
 
 const TRANSITIONS = new Map(itemTransitions(STEPS).map((t) => [t.step, t]));
@@ -101,6 +104,13 @@ export async function runStage2(deps) {
     }
 
     await phase("observe");
+    await log("propagation-wait", `${windows.propagationMs} ms before the first write`);
+    for (
+      const until = clock.now() + windows.propagationMs;
+      clock.now() < until && !abort.stopped;
+    ) {
+      await clock.sleep(Math.min(3 * windows.pollMs, until - clock.now()));
+    }
     let sent = 0;
     for (const step of STEPS) {
       if (abort.stopped) {

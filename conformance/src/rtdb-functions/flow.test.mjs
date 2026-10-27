@@ -163,7 +163,10 @@ test("the wait for a step is bounded and the run waits a final window after the 
   await runStage2(w.deps);
   const elapsed = w.clock.now() - start;
   const w2 = STAGE2_WINDOWS;
-  assert.ok(elapsed <= STEPS.length * w2.stepMs + w2.finalMs + 60_000, "bounded");
+  assert.ok(
+    elapsed <= STEPS.length * w2.stepMs + w2.finalMs + w2.propagationMs + 60_000,
+    "bounded",
+  );
   assert.ok(
     w.events.filter((e) => e === "logs").length <=
       STEPS.length * Math.ceil(w2.stepMs / w2.pollMs) + Math.ceil(w2.finalMs / w2.pollMs) + 20,
@@ -340,4 +343,40 @@ test("a signal during the final window ends it at once", async () => {
     between(w.events, "write s9", "cleanup rtdbCreatedV1") <= 3,
     "the final window did not run on",
   );
+});
+
+test("the first write waits for the triggers to go live, and a signal ends that wait", async () => {
+  const w = makeWorld();
+  const startedAt = w.clock.now();
+  const slept = [];
+  const original = w.clock.sleep;
+  w.deps.clock.sleep = async (ms) => {
+    slept.push(ms);
+    return original(ms);
+  };
+  let firstWriteAt;
+  const write = w.deps.rtdb.write;
+  w.deps.rtdb.write = async (step) => {
+    firstWriteAt ??= w.clock.now();
+    return write(step);
+  };
+  await runStage2(w.deps);
+  assert.ok(firstWriteAt - startedAt >= STAGE2_WINDOWS.propagationMs, "the wait came first");
+  assert.ok(slept.slice(0, 10).every((ms) => ms <= 3 * STAGE2_WINDOWS.pollMs));
+
+  const abort = { stopped: false };
+  const stopped = makeWorld({ abort });
+  const sleep = stopped.clock.sleep;
+  stopped.deps.clock.sleep = async (ms) => {
+    abort.stopped = true;
+    return sleep(ms);
+  };
+  const result = await runStage2(stopped.deps);
+  assert.equal(
+    names(stopped.events, "write ").length,
+    0,
+    "no write after a signal during the wait",
+  );
+  assert.match(result.reasons.join(";"), /signal/);
+  assert.equal(names(stopped.events, "cleanup ").length, 8);
 });

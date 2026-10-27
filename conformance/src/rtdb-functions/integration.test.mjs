@@ -234,3 +234,18 @@ test("the upload ceiling is wired into the helper: a run short of requests stops
     await finish(env);
   }
 });
+
+test("the 1st gen upload bucket outside the project is never listed, read or deleted", async () => {
+  const env = await setup();
+  try {
+    await run(env);
+    const outside = "uploads-100000000001";
+    assert.ok(env.gcp.requests.length > 100);
+    assert.ok(env.gcp.requests.every((request) => !request.url.includes(outside)));
+    assert.ok(env.gcp.gcs.requests.every((request) => !request.url.includes(outside)));
+    // the deploy lines were seen (the form is recorded), only nothing was done about them
+    assert.equal(env.assembled.forms.summary().rtdbCreatedV1.externalUpload, true);
+  } finally {
+    await finish(env);
+  }
+});

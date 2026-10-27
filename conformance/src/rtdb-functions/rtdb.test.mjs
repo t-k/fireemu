@@ -252,7 +252,7 @@ test("the recorded 403-then-200 on the first instance read of the cleanup is ret
   assert.equal(refusals, 1);
   assert.equal(closed.closed, true, JSON.stringify(closed));
   assert.ok(
-    steps.some((step) => /-retry-1$/u.test(step)),
+    steps.some((step) => step.endsWith("-retry-1")),
     steps.join(","),
   );
 });

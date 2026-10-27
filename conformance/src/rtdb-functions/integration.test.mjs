@@ -297,3 +297,17 @@ test("the Rules refusing the unauthenticated writes is a reason for each of them
     await finish(env);
   }
 });
+
+test("a project whose Eventarc service agent has no role yet stops at the preflight, before any RTDB request or deploy", async () => {
+  const env = await setup({ options: { agentsProvisioned: false } });
+  try {
+    const result = await run(env);
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.match(result.reasons.join(";"), /Eventarc service agent has not been provisioned/);
+    assert.equal(env.gcp.deploys.length, 0);
+    assert.equal(env.rtdbWorld.sent.length, 0);
+    assert.equal(result.residual, false);
+  } finally {
+    await finish(env);
+  }
+});

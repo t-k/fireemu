@@ -233,16 +233,21 @@ test("the target operations are the 1st gen or 2nd gen ones, bound to this run's
   assert.ok(getControl.at(-1)[1].includes(`/functions/${g2.functionName}`));
 });
 
+const PROVISIONED = {
+  eventarc: ["roles/eventarc.serviceAgent"],
+  pubsub: ["roles/iam.serviceAccountTokenCreator"],
+};
+
 test("the preflight needs Cloud Logging enabled, runs the CLI side-effect check and returns the project grants", async () => {
   const order = [];
   const impl = {
     loggingApiState: async () => (order.push("logging"), "ENABLED"),
     preflightCliSideEffects: async () => order.push("cli"),
-    readServiceAgentGrants: async (_c, n) => (order.push(`grants ${n}`), { eventarc: ["roles/x"] }),
+    readServiceAgentGrants: async (_c, n) => (order.push(`grants ${n}`), PROVISIONED),
   };
   const grants = await preflightStage2({ control: () => {}, projectNumber: PN, impl });
   assert.deepEqual(order, ["logging", "cli", `grants ${PN}`]);
-  assert.deepEqual(grants, { eventarc: ["roles/x"] });
+  assert.deepEqual(grants, PROVISIONED);
   for (const state of ["DISABLED", "UNKNOWN", undefined]) {
     order.length = 0;
     await assert.rejects(
@@ -297,4 +302,51 @@ test("every ceiling is the worst case counted from the code plus at least a fift
   assert.equal(88, 6 + 4 * 6 + 4 * 8 + 4 * 6 + 2);
   assert.equal(212, 4 * 36 + 4 * 17);
   assert.equal(243, (7 * 9 + 2 * 3 + 12) * 3);
+});
+
+test("the preflight stops when the Eventarc or Pub/Sub service agent has not been provisioned by an earlier run", async () => {
+  // CV14 run 2026-10-27: the agents held no role before the run; the first 2nd gen deploy generated them and its
+  // create was refused at once ("recently started to use Eventarc ... a few minutes"). Their roles are in
+  // the project policy only after that happened, so a policy that already holds them was settled earlier.
+  const grantsOf = (grants) => ({
+    loggingApiState: async () => "ENABLED",
+    preflightCliSideEffects: async () => {},
+    readServiceAgentGrants: async () => grants,
+  });
+  const run = (grants) =>
+    preflightStage2({ control: () => {}, projectNumber: PN, impl: grantsOf(grants) });
+  assert.deepEqual(await run(PROVISIONED), PROVISIONED);
+  assert.deepEqual(
+    await run({
+      eventarc: ["roles/other", "roles/eventarc.serviceAgent"],
+      pubsub: ["roles/iam.serviceAccountTokenCreator", "roles/x"],
+    }),
+    {
+      eventarc: ["roles/other", "roles/eventarc.serviceAgent"],
+      pubsub: ["roles/iam.serviceAccountTokenCreator", "roles/x"],
+    },
+  );
+  for (const grants of [
+    { eventarc: [], pubsub: [] },
+    { eventarc: [], pubsub: PROVISIONED.pubsub },
+    { eventarc: PROVISIONED.eventarc, pubsub: [] },
+    { eventarc: ["roles/eventarc.eventReceiver"], pubsub: PROVISIONED.pubsub },
+    { eventarc: PROVISIONED.eventarc, pubsub: ["roles/iam.serviceAccountUser"] },
+    { eventarc: PROVISIONED.eventarc },
+    {},
+  ]) {
+    await assert.rejects(
+      () => run(grants),
+      /service agent has not been provisioned/,
+      JSON.stringify(grants),
+    );
+  }
+  await assert.rejects(
+    () => run({ eventarc: [], pubsub: PROVISIONED.pubsub }),
+    /Eventarc service agent/,
+  );
+  await assert.rejects(
+    () => run({ eventarc: PROVISIONED.eventarc, pubsub: [] }),
+    /Pub\/Sub service agent/,
+  );
 });

@@ -215,5 +215,23 @@ export async function preflightStage2({
     );
   }
   await impl.preflightCliSideEffects(control);
-  return impl.readServiceAgentGrants(control, projectNumber);
+  const grants = await impl.readServiceAgentGrants(control, projectNumber);
+  // CV14 run 2026-10-27: the Eventarc and Pub/Sub service agents held no role before the run. The first 2nd
+  // gen event deploy generated them and its create was refused at once with 400 "Permission denied while
+  // using the Eventarc Service Agent ... may take a few minutes before all necessary permissions are
+  // propagated". Their roles are in the project policy only after that happened, so a policy that already
+  // holds them was settled by an earlier run, and the run is not admitted without them.
+  for (const [kind, label, role] of SERVICE_AGENT_ROLES) {
+    if (!grants?.[kind]?.includes(role)) {
+      throw new Error(
+        `the ${label} service agent has not been provisioned (no ${role}): a 2nd gen event deploy would be refused until it propagates; provision it in an earlier run`,
+      );
+    }
+  }
+  return grants;
 }
+
+const SERVICE_AGENT_ROLES = [
+  ["eventarc", "Eventarc", "roles/eventarc.serviceAgent"],
+  ["pubsub", "Pub/Sub", "roles/iam.serviceAccountTokenCreator"],
+];

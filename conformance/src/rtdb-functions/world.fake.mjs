@@ -73,7 +73,26 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     deploys: [],
     deleted: [],
     bindings: new Map(),
-    iamBindings: [...(options.iamBindings ?? [])],
+    // the Eventarc and Pub/Sub service agents hold their roles unless a test says the project is new
+    iamBindings: [
+      ...(options.agentsProvisioned === false
+        ? []
+        : [
+            {
+              role: "roles/eventarc.serviceAgent",
+              members: [
+                `serviceAccount:service-${projectNumber}@gcp-sa-eventarc.iam.gserviceaccount.com`,
+              ],
+            },
+            {
+              role: "roles/iam.serviceAccountTokenCreator",
+              members: [
+                `serviceAccount:service-${projectNumber}@gcp-sa-pubsub.iam.gserviceaccount.com`,
+              ],
+            },
+          ]),
+      ...(options.iamBindings ?? []),
+    ],
     opN: 0,
     insertN: 0,
     eventN: 0,
@@ -351,7 +370,10 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       throw new Error(`unexpected CLI call ${args.join(" ")}`);
     }
     w.deploys.push(name);
-    if (options.iamRemovedByDeploy) w.iamBindings.length = 0;
+    const isAgent = (b) =>
+      b.role === "roles/eventarc.serviceAgent" || b.role === "roles/iam.serviceAccountTokenCreator";
+    if (options.iamRemovedByDeploy) w.iamBindings = w.iamBindings.filter(isAgent);
+    if (options.agentRemovedByDeploy) w.iamBindings = w.iamBindings.filter((b) => !isAgent(b));
     const lines = [];
     if (spec.generation === "gcfv2") {
       const object = `${String(++w.uploadN).padStart(8, "0")}-1111-4222-8333-444444444444.zip`;

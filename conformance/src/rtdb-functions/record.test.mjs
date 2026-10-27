@@ -144,6 +144,20 @@ test("IAM bindings a deploy added are reported masked; one that disappeared is a
   }
 });
 
+test("a service-agent role that disappeared during the run is a reason and leaves the run residual", async () => {
+  const w = await rehearse({ options: { agentRemovedByDeploy: true } });
+  try {
+    assert.equal(w.summary.outcome, "stopped-needs-review");
+    assert.equal(w.summary.residual, true);
+    assert.match(
+      JSON.parse(await readFile(join(w.runDir, "result.json"), "utf8")).reasons.join(";"),
+      /service-agent grant disappeared/,
+    );
+  } finally {
+    await rm(w.runDir, { recursive: true, force: true });
+  }
+});
+
 test("a stored file is refused when it holds a secret", async () => {
   const w = await rehearse({ options: { secretInRecord: "test-token" } });
   try {

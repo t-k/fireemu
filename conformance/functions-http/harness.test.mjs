@@ -151,3 +151,34 @@ test("invalid signatures preserve claims and local expiry cannot alter signed pr
   assert.deepEqual(invalid.split(".").slice(0, 2), signed.split(".").slice(0, 2));
   assert.notEqual(invalid, signed);
 });
+
+test("a recorder may add request kinds of its own; they are capped, counted and cannot raise a ceiling", () => {
+  const plain = createBudget();
+  assert.deepEqual(Object.keys(plain.snapshot()), [
+    "invocation",
+    "control",
+    "cleanup",
+    "auth",
+    "cliDeploy",
+    "cliDelete",
+    "token",
+    "upload",
+  ]);
+  assert.throws(() => plain.take("logs"), /unknown request kind logs/);
+  const budget = createBudget({ logs: 3 }, { logs: 10, inventory: 5 });
+  assert.deepEqual(budget.snapshot().logs, 0);
+  assert.deepEqual(budget.snapshot().inventory, 0);
+  for (let n = 0; n < 3; n += 1) budget.take("logs");
+  assert.throws(() => budget.take("logs"), /logs ceiling 3 reached/);
+  for (let n = 0; n < 5; n += 1) budget.take("inventory");
+  assert.throws(() => budget.take("inventory"), /inventory ceiling 5 reached/);
+  // a cap above the own ceiling does not raise it
+  const high = createBudget({ logs: 99 }, { logs: 10 });
+  for (let n = 0; n < 10; n += 1) high.take("logs");
+  assert.throws(() => high.take("logs"), /ceiling 10/);
+  for (const bad of [{ logs: -1 }, { logs: 1.5 }, { logs: "3" }]) {
+    assert.throws(() => createBudget({}, bad), /invalid request ceiling for logs/);
+  }
+  assert.throws(() => createBudget({}, { control: 5 }), /already a request kind/);
+  assert.throws(() => createBudget({ nope: 1 }, { logs: 1 }), /invalid request cap for nope/);
+});

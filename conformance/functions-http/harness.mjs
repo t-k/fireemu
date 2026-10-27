@@ -248,7 +248,8 @@ export function validateCorpus(corpus) {
 }
 
 // `caps` lowers ceilings for one run (a packet's own request lists); it can never raise one.
-export function createBudget(caps = {}) {
+// `extraKinds` names request kinds a second recorder adds, each with its own ceiling.
+export function createBudget(caps = {}, extraKinds = {}) {
   const used = {
     invocation: 0,
     control: 0,
@@ -269,6 +270,14 @@ export function createBudget(caps = {}) {
     token: BOUNDS.token,
     upload: BOUNDS.upload,
   };
+  for (const [kind, ceiling] of Object.entries(extraKinds)) {
+    if (kind in limits) throw new Error(`${kind} is already a request kind`);
+    if (!Number.isInteger(ceiling) || ceiling < 0) {
+      throw new Error(`invalid request ceiling for ${kind}`);
+    }
+    used[kind] = 0;
+    limits[kind] = ceiling;
+  }
   for (const [kind, cap] of Object.entries(caps)) {
     if (!(kind in limits) || !Number.isInteger(cap) || cap < 0) {
       throw new Error(`invalid request cap for ${kind}`);

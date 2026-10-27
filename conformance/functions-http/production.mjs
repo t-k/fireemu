@@ -4,7 +4,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -637,21 +637,28 @@ function safeJsonResponse(body) {
   return body ? JSON.parse(body) : {};
 }
 
-export function createControl(adc, budget) {
+// `extraHosts` are further hosts a second recorder may reach (exact `https://host` strings).
+export function createControl(adc, budget, { extraHosts = [] } = {}) {
+  if (
+    !Array.isArray(extraHosts) ||
+    extraHosts.some((host) => !/^https:\/\/[a-z0-9.-]+$/u.test(host))
+  ) {
+    throw new Error("an extra host must be an exact https://host string");
+  }
+  const hosts = [
+    FUNCTION_HOST,
+    RUN_HOST,
+    ARTIFACT_HOST,
+    AUTH_HOST,
+    FIREBASE_HOST,
+    SERVICE_USAGE_HOST,
+    RESOURCE_MANAGER_HOST,
+    STORAGE_HOST,
+    ...extraHosts,
+  ];
   let token;
   return async function control(method, url, body, kind = "control", allowed = [200]) {
-    if (
-      ![
-        FUNCTION_HOST,
-        RUN_HOST,
-        ARTIFACT_HOST,
-        AUTH_HOST,
-        FIREBASE_HOST,
-        SERVICE_USAGE_HOST,
-        RESOURCE_MANAGER_HOST,
-        STORAGE_HOST,
-      ].some((host) => url.startsWith(`${host}/`))
-    ) {
+    if (!hosts.some((host) => url.startsWith(`${host}/`))) {
       throw new Error("unreviewed REST host");
     }
     if (!token || Date.now() >= token.expiresAt) token = await acquireToken(adc, budget, "token");
@@ -694,13 +701,13 @@ export const withoutDebugLines = (output) =>
     .filter((line) => !DEBUG_LINE.test(line))
     .join("\n");
 
-async function removeCliDebugLogs() {
+async function removeCliDebugLogs(directory = HERE) {
   const { rm } = await import("node:fs/promises");
   for (const name of [
     "firebase-debug.log",
     ...Array.from({ length: 9 }, (_, i) => `firebase-debug.${i + 1}.log`),
   ]) {
-    await rm(join(HERE, name), { force: true });
+    await rm(join(directory, name), { force: true });
   }
 }
 
@@ -734,13 +741,22 @@ export async function cli(
   runDir,
   deployTrack,
   command = [process.execPath, CLI],
+  { cwd = HERE } = {},
 ) {
+  // The directory holds the firebase.json of the codebase the CLI deploys; a second recorder has its own.
+  if (
+    typeof cwd !== "string" ||
+    !isAbsolute(cwd) ||
+    !(await stat(cwd).catch(() => null))?.isDirectory()
+  ) {
+    throw new Error("the CLI directory must be an existing absolute directory");
+  }
   const attempt = budget.take(kind);
   const isolatedConfig = join(runDir, "firebase-cli-config");
   await mkdir(isolatedConfig, { recursive: true, mode: 0o700 });
   const debug = deployTrack !== undefined;
   // A debug log left by an earlier run holds a signed upload URL and must not be mistaken for ours.
-  if (debug) await removeCliDebugLogs();
+  if (debug) await removeCliDebugLogs(cwd);
   const outputLimit = debug ? 16_000_000 : 1_000_000;
   const child = spawn(
     command[0],
@@ -753,7 +769,7 @@ export async function cli(
       "--non-interactive",
     ],
     {
-      cwd: HERE,
+      cwd,
       detached: true,
       env: cliEnvironment(adcPath, isolatedConfig),
       stdio: ["ignore", "pipe", "pipe"],
@@ -799,7 +815,7 @@ export async function cli(
       for (const scanner of scanners) scanner.flush();
       deployTrack.exited = false;
       deployTrack.exitCode = null;
-      await removeCliDebugLogs();
+      await removeCliDebugLogs(cwd);
     }
   }
   if (debug) {

@@ -1672,3 +1672,110 @@ setInterval(() => {}, 1000);`,
     await rm(run.dir, { recursive: true, force: true });
   }
 });
+
+// ---- the pieces a second recorder (CV14) reuses: its own CLI directory, hosts and request kinds ----
+
+test("a deploy CLI runs in the directory it is given, and only that directory's debug logs are removed", async () => {
+  const { mkdir } = await import("node:fs/promises");
+  const { createBudget } = await import("./harness.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "functions-http-cwd-"));
+  const work = join(dir, "work");
+  const runDir = join(dir, "run");
+  await mkdir(work);
+  await mkdir(runDir);
+  const script = join(dir, "fake-cli.mjs");
+  await writeFile(
+    script,
+    `import { writeFileSync } from "node:fs";
+writeFileSync("firebase-debug.log", "signed");
+writeFileSync("ran-here.txt", "yes");`,
+  );
+  try {
+    const summary = await production.cli(
+      ["deploy"],
+      "/adc",
+      createBudget(),
+      "cliDeploy",
+      runDir,
+      { onEvent() {} },
+      [process.execPath, script],
+      { cwd: work },
+    );
+    assert.equal(summary.exitCode, 0);
+    assert.equal(await readFile(join(work, "ran-here.txt"), "utf8"), "yes");
+    await assert.rejects(() => stat(join(work, "firebase-debug.log")), { code: "ENOENT" });
+    await assert.rejects(
+      () => stat(new URL("firebase-debug.log", import.meta.url)),
+      { code: "ENOENT" },
+      "the default directory was never written",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a CLI directory must be absolute and exist as a directory", async () => {
+  const { createBudget } = await import("./harness.mjs");
+  for (const cwd of ["relative/dir", "", 7, null]) {
+    await assert.rejects(
+      () =>
+        production.cli(
+          ["deploy"],
+          "/adc",
+          createBudget(),
+          "cliDelete",
+          "/nowhere",
+          undefined,
+          [process.execPath, "-e", "0"],
+          { cwd },
+        ),
+      /CLI directory/,
+      String(cwd),
+    );
+  }
+});
+
+test("the REST control reaches an extra host only when the caller names it exactly", async () => {
+  const { createBudget } = await import("./harness.mjs");
+  const adc = { refresh_token: "r", client_id: "c", client_secret: "s" };
+  const handler = (url) =>
+    url.startsWith("https://oauth2.googleapis.com/")
+      ? new Response(JSON.stringify({ access_token: "t", expires_in: 3600 }))
+      : new Response("{}", { status: 200 });
+  await withStubbedFetch(handler, async (seen) => {
+    const plain = production.createControl(adc, createBudget());
+    await assert.rejects(
+      () => plain("GET", "https://logging.googleapis.com/v2/entries:list", undefined, "control"),
+      /unreviewed REST host/,
+    );
+    const extended = production.createControl(adc, createBudget(), {
+      extraHosts: ["https://logging.googleapis.com"],
+    });
+    const reply = await extended(
+      "POST",
+      "https://logging.googleapis.com/v2/entries:list",
+      { pageSize: 1 },
+      "control",
+    );
+    assert.equal(reply.status, 200);
+    await assert.rejects(
+      () => extended("GET", "https://logging.googleapis.com.evil.example/x", undefined, "control"),
+      /unreviewed REST host/,
+    );
+    assert.ok(seen.every((request) => !request.url.includes("evil.example")));
+  });
+  for (const extraHosts of [
+    "https://logging.googleapis.com",
+    ["http://logging.googleapis.com"],
+    ["https://a/b"],
+    ["https://x.test/"],
+    [7],
+    ["logging.googleapis.com"],
+  ]) {
+    assert.throws(
+      () => production.createControl(adc, createBudget(), { extraHosts }),
+      /extra host/,
+      JSON.stringify(extraHosts),
+    );
+  }
+});

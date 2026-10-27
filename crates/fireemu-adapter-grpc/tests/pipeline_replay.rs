@@ -30,6 +30,19 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o8a/dupquote-main",
     "fs-ent-pipeline/o8a/base64-main",
+    "fs-ent-pipeline/o8b/strings-main",
+    "fs-ent-pipeline/o8b/math-main",
+    "fs-ent-pipeline/o8c/timestamps-main",
+    "fs-ent-pipeline/o8c/collections-main",
+    "fs-ent-pipeline/o8d/stages-main",
+    "fs-ent-pipeline/o9/reps-main",
+    "fs-ent-pipeline/o9/fields-main",
+    "fs-ent-pipeline/o9/types-main",
+    "fs-ent-pipeline/o9/ops-main",
+    "fs-ent-pipeline/o9/cg-main",
+    "fs-ent-pipeline/o9/order-main",
+    "fs-ent-pipeline/o9b/types-matrix",
+    "fs-ent-pipeline/o9b/cg-parent",
 ];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and

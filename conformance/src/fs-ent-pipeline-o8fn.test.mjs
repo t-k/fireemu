@@ -507,3 +507,66 @@ test("the functions whose refusal names no count are called with the counts prod
     assert.ok(!cases.some((k) => k.kind === "arity" && k.args.length === count), name);
   }
 });
+
+test("the recorded O-8B programs are in the fixture with their own digests and every step", () => {
+  assert.equal(O8B_PROGRAMS.length, 2);
+  for (const program of O8B_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    // Every step answered: nothing was left unsettled (status 0, or a server error).
+    for (const [step, answer] of Object.entries(row.steps)) {
+      assert.ok(
+        answer.status === 200 || answer.status === 400,
+        `${program.id}#${step}: ${answer.status}`,
+      );
+    }
+  }
+});
+
+test("the recorded O-8C programs are in the fixture with their own digests and every step", () => {
+  assert.equal(O8C_PROGRAMS.length, 2);
+  for (const program of O8C_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    for (const [step, answer] of Object.entries(row.steps)) {
+      // One answer is a server error: array_reverse with no argument (HTTP 500, both recordings),
+      // where the other count errors are 400.
+      const open =
+        `${program.id}#${step}` === "fs-ent-pipeline/o8c/collections-main#array-reverse-none";
+      assert.ok(
+        open ? answer.status === 500 : answer.status === 200 || answer.status === 400,
+        `${program.id}#${step}: ${answer.status}`,
+      );
+    }
+  }
+  // The clock-based difference is the one row whose two recordings differ.
+  const timestamps = production.programs["fs-ent-pipeline/o8c/timestamps-main"];
+  assert.deepEqual(Object.keys(timestamps.second ?? {}), ["timestamp-diff-now"]);
+  assert.equal(production.programs["fs-ent-pipeline/o8c/collections-main"].second, undefined);
+});
+
+test("the recorded O-8D program is in the fixture with its own digest and every step", () => {
+  assert.equal(O8D_PROGRAMS.length, 1);
+  for (const program of O8D_PROGRAMS) {
+    const row = production.programs[program.id];
+    assert.ok(row, program.id);
+    assert.equal(row.corpusDigest, programDigest(program), program.id);
+    assert.deepEqual(Object.keys(row.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    for (const [step, answer] of Object.entries(row.steps)) {
+      assert.ok(answer.status === 200 || answer.status === 400, `${program.id}#${step}`);
+    }
+  }
+  // Only the five sample rows differ between the two recordings: sample picks at random.
+  const stages = production.programs["fs-ent-pipeline/o8d/stages-main"];
+  assert.deepEqual(Object.keys(stages.second ?? {}).toSorted(), [
+    "sample-after-where",
+    "sample-documents-10",
+    "sample-documents-2",
+    "sample-percent-50",
+    "sample-then-limit",
+  ]);
+});

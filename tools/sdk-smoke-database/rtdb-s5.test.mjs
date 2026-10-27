@@ -180,3 +180,12 @@ test('an error during cleanup leaves the observation incomplete, and a refused p
   const ok = await prod(fakeWorld());
   assert.ok(ok.observationComplete && ok.status === 'closed');
 });
+
+test('a log row that cannot be written leaves the run not closed even when nothing else changed', async () => {
+  const w = fakeWorld();
+  const r = await prod(w, { log: (x) => { if (x.step === 'api-before') throw Error('output refused'); } });
+  assert.equal(r.status, 'needs-recovery', 'a request whose row was lost is unaccounted for');
+  assert.ok(!r.observationComplete);
+  assert.deepEqual(r.unknownAnswers, ['api-before']);
+  assert.ok(w.baseline());
+});

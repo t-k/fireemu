@@ -175,6 +175,9 @@ export function openSourceUploads({
   }
   const state = openOwnership({ path: ledgerPath, runId });
   const started = new Set();
+  // The objects any deploy of this run holds a receipt for: a deploy that finishes later than its siblings
+  // started finds their objects in the bucket, and they are not unexplained.
+  const claimed = new Set();
 
   async function dispatch(method, url) {
     let reply;
@@ -289,6 +292,7 @@ export function openSourceUploads({
       }
       const name = `${bucket}/${candidate.object}`;
       try {
+        claimed.add(candidate.object);
         receipts.set(candidate.object, {
           name,
           statuses: [],
@@ -420,7 +424,8 @@ export function openSourceUploads({
         }
         for (const name of [...after.names].toSorted()) {
           const entry = receipts.get(name);
-          const explained = entry !== undefined && putClass(entry.statuses) !== "refused";
+          const explained =
+            entry === undefined ? claimed.has(name) : putClass(entry.statuses) !== "refused";
           if (!baseline.has(name) && !explained) reasons.push(`unexplained-object:${name}`);
         }
         // Bookkeeping only: this name is no resource, so the answer is not a production status.

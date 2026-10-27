@@ -839,6 +839,42 @@ describe("delete and read-back answers (T4)", () => {
     );
   });
 
+  it("deploys of one run explain each other's objects, so they can finish in any order", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    world.put(OBJECT);
+    first.receipt(receiptOf(OBJECT));
+    putStatus(first, OBJECT, 200);
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(OTHER);
+    second.receipt(receiptOf(OTHER));
+    putStatus(second, OTHER, 200);
+    // the first finishes while the second's object is in the bucket, and its baseline did not hold it
+    const a = await first.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(a.clean, true, a.reasons.join(","));
+    const b = await second.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(b.clean, true, b.reasons.join(","));
+    assert.equal(world.objects.size, 0);
+    assert.equal(uploads.report().closureReady, true);
+  });
+
+  it("an object no deploy of the run claims is still unexplained, also when another deploy has receipts", async () => {
+    const world = createFakeGcs();
+    const { uploads } = open(world);
+    const first = await uploads.beginDeploy("program-1:first");
+    world.put(OBJECT);
+    first.receipt(receiptOf(OBJECT));
+    putStatus(first, OBJECT, 200);
+    const second = await uploads.beginDeploy("program-1:second");
+    world.put(FOREIGN);
+    const a = await first.finish({ cliExited: true, exitCode: 0 });
+    assert.equal(a.clean, false);
+    assert.ok(a.reasons.includes(`unexplained-object:${FOREIGN}`));
+    const b = await second.finish({ cliExited: true, exitCode: 0 });
+    assert.ok(b.reasons.includes("no-receipt"));
+  });
+
   it("a PUT line for an object with no receipt, or in another bucket, owns nothing", async () => {
     const world = createFakeGcs();
     const { uploads } = open(world);

@@ -39,6 +39,121 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o8d/stages-main",
 ];
 
+/// The rows of a pending program that match production today, per profile (strict, emulator):
+/// the commits that seed or write, the refusals the validators already answer, and the select
+/// `__name__` forms. Every other row of a pending program must differ. A row that stops
+/// matching, or starts to, fails the replay until this table is updated, so the work that
+/// implements a stage cannot drop or gain a match unnoticed.
+const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[];
+
+/// The sample set a random draw may return: the members of the input and how many to expect.
+struct SampleOf {
+    count: usize,
+    members: &'static [&'static str],
+}
+
+/// Rows whose production answer differs between two recordings of the same request. They are
+/// judged by rule, never against one recording: a `sample` returns that many distinct members of
+/// its input in any order, and a difference of two timestamps taken from the request clock is an
+/// integer whatever its value.
+enum Nondeterministic {
+    Sample(SampleOf),
+    ClockSeconds,
+}
+
+const SU: &[&str] = &[
+    "{docs}/su/a",
+    "{docs}/su/b",
+    "{docs}/su/c",
+    "{docs}/su/d",
+    "{docs}/su/e",
+];
+const SU_AFTER_N_1: &[&str] = &["{docs}/su/b", "{docs}/su/c", "{docs}/su/d", "{docs}/su/e"];
+
+fn nondeterministic(row: &str) -> Option<Nondeterministic> {
+    Some(match row {
+        "fs-ent-pipeline/o8d/stages-main#sample-documents-2" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 2,
+                members: SU,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-documents-10" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 5,
+                members: SU,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-percent-50" => Nondeterministic::Sample(SampleOf {
+            count: 2,
+            members: SU,
+        }),
+        "fs-ent-pipeline/o8d/stages-main#sample-after-where" => {
+            Nondeterministic::Sample(SampleOf {
+                count: 2,
+                members: SU_AFTER_N_1,
+            })
+        }
+        "fs-ent-pipeline/o8d/stages-main#sample-then-limit" => Nondeterministic::Sample(SampleOf {
+            count: 1,
+            members: SU,
+        }),
+        "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now" => Nondeterministic::ClockSeconds,
+        _ => return None,
+    })
+}
+
+/// How far a clock row may be from the clock it is judged against: a day. The recordings are
+/// minutes apart; a millisecond-scale or zero answer is far outside it.
+const CLOCK_WINDOW_SECONDS: i64 = 24 * 60 * 60;
+
+/// The clock in seconds since the epoch.
+fn now_seconds() -> i64 {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    i64::try_from(elapsed.as_secs()).unwrap()
+}
+
+/// Whether an answer satisfies the rule of its row.
+/// `now` is the clock in seconds since the epoch that a clock row is judged against.
+fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bool {
+    if status != 200 {
+        return false;
+    }
+    let results: Vec<&Value> = body
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|element| element["results"].as_array().into_iter().flatten())
+        .collect();
+    match rule {
+        Nondeterministic::Sample(SampleOf { count, members }) => {
+            let names: Vec<String> = results
+                .iter()
+                .map(|result| relative(result["name"].as_str().unwrap_or("")))
+                .collect();
+            let distinct: HashSet<&String> = names.iter().collect();
+            names.len() == *count
+                && distinct.len() == names.len()
+                && names.iter().all(|name| members.contains(&name.as_str()))
+        }
+        Nondeterministic::ClockSeconds => {
+            let [result] = results.as_slice() else {
+                return false;
+            };
+            let fields = result["fields"].as_object();
+            fields.is_some_and(|fields| {
+                fields.len() == 1
+                    && fields["v"]["integerValue"].as_str().is_some_and(|text| {
+                        text.parse::<i64>()
+                            .is_ok_and(|seconds| (seconds - now).abs() <= CLOCK_WINDOW_SECONDS)
+                    })
+            })
+        }
+    }
+}
+
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
@@ -726,6 +841,10 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         let mut not_replayable = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
+        let pending = |row: &str| {
+            let program = row.split('#').next().unwrap_or(row);
+            PENDING_PROGRAMS.contains(&program)
+        };
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
             // Each program runs on its own database, as the recorder cleans its collections
@@ -806,8 +925,29 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                             ordered,
                         )
                 };
+                let matches = match nondeterministic(&row) {
+                    Some(rule) => satisfies(&rule, status, &body, now_seconds()),
+                    None => matches,
+                };
                 compared += 1;
                 seen.insert(row.clone());
+                if pending(&row) {
+                    let program = row.split('#').next().unwrap_or(&row);
+                    let pinned = PENDING_MATCHES
+                        .iter()
+                        .any(|(id, strict_rows, emulator_rows)| {
+                            *id == program
+                                && (if strict { strict_rows } else { emulator_rows })
+                                    .contains(&step_id)
+                        });
+                    if matches != pinned {
+                        failures.push(format!(
+                            "strict={strict} {row}: pending row {} production, pinned {}",
+                            if matches { "matches" } else { "differs from" },
+                            if pinned { "matching" } else { "differing" },
+                        ));
+                    }
+                }
                 if rpc == "executePipeline" && matches && status == 200 {
                     // Production packs a small answer into one response (FS-ENT-ORACLE O-1,
                     // results/metadata): the number of array elements and the results each
@@ -912,10 +1052,38 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                         .iter()
                         .any(|(known, _)| row == *known))
         };
-        let pending = |row: &str| {
-            let program = row.split('#').next().unwrap_or(row);
-            PENDING_PROGRAMS.contains(&program)
-        };
+        // The pins stay meaningful: each names a pending program once, each step it lists is
+        // replayed in this profile (a renamed or no longer replayable step would never be
+        // compared), and no step is listed twice.
+        let mut pinned_programs = HashSet::new();
+        for (program, strict_rows, emulator_rows) in PENDING_MATCHES {
+            if !pinned_programs.insert(*program) {
+                failures.push(format!("strict={strict}: pins listed twice: {program}"));
+            }
+            if !PENDING_PROGRAMS.contains(program) {
+                failures.push(format!(
+                    "strict={strict}: pins of a program that is not pending: {program}"
+                ));
+            }
+            for rows in [strict_rows, emulator_rows] {
+                let mut listed = HashSet::new();
+                for step_id in *rows {
+                    if !listed.insert(*step_id) {
+                        failures.push(format!(
+                            "strict={strict}: pin listed twice: {program}#{step_id}"
+                        ));
+                    }
+                }
+            }
+            let pinned_here = if strict { *strict_rows } else { *emulator_rows };
+            for step_id in pinned_here {
+                if !seen.contains(&format!("{program}#{step_id}")) {
+                    failures.push(format!(
+                        "strict={strict}: pinned step is not replayed: {program}#{step_id}"
+                    ));
+                }
+            }
+        }
         for program in PENDING_PROGRAMS {
             if !differing
                 .iter()
@@ -1027,4 +1195,95 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         std::fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The six rows judged by rule accept both recordings of production and refuse the near misses.
+#[test]
+fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
+    let production = read("fs-ent-pipeline-production.json");
+    let mut checked = 0;
+    for (id, program) in production["programs"].as_object().unwrap() {
+        let Some(second) = program["second"].as_object() else {
+            continue;
+        };
+        for (step, again) in second {
+            let row = format!("{id}#{step}");
+            let rule = nondeterministic(&row).unwrap_or_else(|| panic!("no rule for {row}"));
+            // A clock row is judged against the first recording's own value (the day it was
+            // taken), so the check does not age; the second recording is a minute later.
+            let now = program["steps"][step]["body"][0]["results"][0]["fields"]["v"]
+                ["integerValue"]
+                .as_str()
+                .map_or(0, |text| text.parse::<i64>().unwrap());
+            for recording in [&program["steps"][step], again] {
+                let status = u16::try_from(recording["status"].as_u64().unwrap()).unwrap();
+                assert!(satisfies(&rule, status, &recording["body"], now), "{row}");
+            }
+            // A refusal is no answer to a request production accepted.
+            assert!(!satisfies(&rule, 400, &json!([]), now), "{row}");
+            assert!(!satisfies(&rule, 200, &json!([]), now), "{row}");
+            checked += 1;
+        }
+    }
+    // Five `sample` rows and the clock row: the fixture lists no other row that differs.
+    assert_eq!(checked, 6);
+
+    let named = |names: &[&str]| {
+        json!([{
+            "results": names
+                .iter()
+                .map(|name| json!({"name": format!("projects/p/databases/d/documents/su/{name}"), "fields": {}}))
+                .collect::<Vec<_>>()
+        }])
+    };
+    let two = Nondeterministic::Sample(SampleOf {
+        count: 2,
+        members: SU,
+    });
+    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
+    assert!(!satisfies(&two, 200, &named(&["a"]), 0), "too few");
+    assert!(
+        !satisfies(&two, 200, &named(&["a", "b", "c"]), 0),
+        "too many"
+    );
+    assert!(!satisfies(&two, 200, &named(&["a", "a"]), 0), "a repeat");
+    assert!(
+        !satisfies(&two, 200, &named(&["a", "z"]), 0),
+        "not a member"
+    );
+    let filtered = Nondeterministic::Sample(SampleOf {
+        count: 2,
+        members: SU_AFTER_N_1,
+    });
+    assert!(
+        !satisfies(&filtered, 200, &named(&["a", "b"]), 0),
+        "filtered out"
+    );
+
+    let clock = |value: &Value| json!([{"results": [{"fields": {"v": value}}]}]);
+    let now = 1_793_029_330;
+    let integer = |seconds: i64| json!({"integerValue": seconds.to_string()});
+    let clock_ok = |value: &Value, now: i64| {
+        satisfies(&Nondeterministic::ClockSeconds, 200, &clock(value), now)
+    };
+    assert!(clock_ok(&integer(now), now));
+    assert!(clock_ok(&integer(now + 57), now), "a minute later");
+    assert!(
+        clock_ok(&integer(now - CLOCK_WINDOW_SECONDS), now),
+        "edge of the window"
+    );
+    assert!(
+        !clock_ok(&integer(now + CLOCK_WINDOW_SECONDS + 1), now),
+        "just past the window"
+    );
+    assert!(!clock_ok(&integer(0), now), "zero");
+    assert!(!clock_ok(&integer(-1), now), "negative");
+    assert!(!clock_ok(&integer(now * 1000), now), "milliseconds");
+    assert!(
+        !clock_ok(&json!({"stringValue": now.to_string()}), now),
+        "a string"
+    );
+    assert!(!clock_ok(&json!({"doubleValue": 1.5}), now), "a double");
+    // The replay judges against the real clock.
+    assert!(now_seconds() > 1_700_000_000);
 }

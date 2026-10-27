@@ -84,6 +84,16 @@
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-27",
    "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27 RTDB closure-residual R4); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (M1); docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
+  },
+  {
+   "id": "R5",
+   "decision": "R4 is amended for one more recorded shape. An onDisconnect value that carries a priority, split by a cancel of one of its children, is observed in production (production-1 of RTDB-S5-20261027-01, 2026-10-27, two rounds: the connection's whole onDisconnect update is dropped) and compared with fireemu in both profiles: RTDB/ondisconnect-prioritized-split, for the recorded shape only. The other cases of the official emulator's behaviour around it (healing, nested and string priorities, other connections) are probed offline and stay unobserved in production.",
+   "rationale": "The official emulator drops the update and fireemu fired the remaining children; production decided which of the two is right, and it sided with the official emulator.",
+   "amends": "R4",
+   "status": "PROPOSED",
+   "decidedBy": "coordinator (to confirm at the closure review)",
+   "decidedOn": "2026-10-27",
+   "decisionRef": "docs.local/runs/rtdb-s5/production-1; docs.local/instructions/owner-decisions.md (line 1853, REVOKED RTDB-S5-20261027-01); the coordinator's ruling of 2026-10-27 that both profiles follow the answer"
   }
  ],
  "conditions": [
@@ -674,6 +684,51 @@
     ],
     "scope": "cv10 profiles r1-ws, r1-lp, r2-ws, r2-lp of the comparison"
    }
+  },
+  {
+   "conditionId": "RTDB/ondisconnect-prioritized-split",
+   "coverageLedgerRows": [
+    "RTDB-CV-10"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "an onDisconnect value that carries a priority (setWithPriority({b:1,10:2,9:3}, 1)), a cancel of its child b and an unrelated write registered next to it: when the connection ends nothing fires, the whole onDisconnect update is dropped (production, two WebSocket rounds); fireemu does the same in both profiles",
+    "control in the same recording: the same value without a priority is split by the cancel (s = {9:3,10:2}) and the unrelated write fires",
+    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires",
+    "beyond the recorded shape fireemu follows the official emulator, recorded offline and not observed in production: the node stays broken until it is cancelled or registered again, other connections still fire, a string or a nested priority breaks too, and a cancel of the priority itself does not break"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "production-1",
+      "envelope": "RTDB-S5-20261027-01",
+      "recordedOn": "2026-10-27",
+      "project": "fireemu-oracle-query",
+      "rounds": 2
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rtdb-s5.json",
+    "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-s5.json",
+    "comparisonTool": "tools/sdk-smoke-database/rtdb-s5-fixture.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
+    "comparisonSha256": "d962d9c1b61bb77825fe71c7de8a9a80eae2496dd0b93bc8bf26ad27d0cafea1",
+    "toolCommit": "5f0e47b28f6a3b5ef287c8039a3b4040e412f759",
+    "rustSourcesEqualTo": "this branch at 389777c3a231a4366c006009b6461dd16306b0a3: origin/main edb56c689 plus the broken-node change of crates/fireemu-adapter-database/src/on_disconnect.rs; no later commit changes crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml",
+    "knownDifferences": [],
+    "rows": {
+     "MATCH": 2
+    },
+    "tests": [
+     "tools/sdk-smoke-database/rtdb-s5-judge.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5-page.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5-fixture.test.mjs",
+     "crates/fireemu-adapter-database/tests/on_disconnect_priority_drop.rs",
+     "crates/fireemu-adapter-database/src/on_disconnect.rs#tests"
+    ],
+    "scope": "the two rounds r1-ws and r2-ws of the S5 recording; the recorded shape only"
+   }
   }
  ],
  "integratedRegression": {
@@ -729,11 +784,22 @@
     },
     "binding": "the release binary 7df56bd9 built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version (RUSTC_WRAPPER empty, build path .worktree/rtdb-residual; sha256 in the evidence file)",
     "buildPath": ".worktree/rtdb-residual"
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
+    "sha256": "d962d9c1b61bb77825fe71c7de8a9a80eae2496dd0b93bc8bf26ad27d0cafea1",
+    "rows": 2,
+    "summary": {
+     "match": true,
+     "production": "A",
+     "local": "A"
+    },
+    "binding": "the release binary e881ae85 built from 389777c3a231a4366c006009b6461dd16306b0a3 with RUSTC_WRAPPER empty (build path .worktree/rtdb-s5-drop; sha256 in the evidence file)"
    }
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
-  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences."
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences. The S5 comparison (production-1 of RTDB-S5-20261027-01) is bound to its own release binary, built from the commit named in its evidence."
  },
  "knownDifferences": {
   "restMemberOrder": {
@@ -763,8 +829,8 @@
   "browserRunsOnOlderBinaries": {
    "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
   },
-  "onDisconnectPrioritizedSplit": {
-   "statement": "Not claimed: an onDisconnect value that carries `.priority`, followed by a cancel of one of its children (not of the priority itself). The official emulator accepts every request and then drops the whole disconnect update (no frame, the data stays null, even a write registered next to it); production was not observed; fireemu fires the remaining children. Tracked in docs.local/issues/open/rtdb-ondisconnect-split-of-a-prioritized-value-drops-the-whole-update.md."
+  "prioritizedSplitBeyondTheRecordedShape": {
+   "statement": "The broken-node rule around the recorded S5 shape follows the official emulator and was not observed in production: that the node stays broken until it is cancelled or registered again, that a registration or a cancel below it changes nothing, that other connections still fire, and that a string or a nested priority breaks it too. Production observed one shape: a numeric priority on the registered value and a cancel of one of its children."
   }
  },
  "outOfScope": [

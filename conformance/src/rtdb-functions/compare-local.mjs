@@ -20,7 +20,8 @@ const TRACEPARENT = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[0-3]$/u;
 /** The form of an event id: the production form is base64 of 20 bytes. */
 export function idForm(value) {
   if (typeof value !== "string") return `<id:${typeof value}>`;
-  if (BASE64_20.test(value)) return "<id:base64-20-bytes>";
+  if (BASE64_20.test(value) && Buffer.from(value, "base64").toString("base64") === value)
+    return "<id:base64-20-bytes>";
   if (UUID.test(value)) return "<id:uuid>";
   return "<id:other>";
 }
@@ -28,7 +29,12 @@ export function idForm(value) {
 /** The form of an event time: the production form is RFC 3339 UTC with exactly three fraction digits. */
 export function timeForm(value) {
   if (typeof value !== "string") return `<time:${typeof value}>`;
-  if (TIME_MS.test(value)) return "<time:rfc3339-utc-ms>";
+  if (
+    TIME_MS.test(value) &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  )
+    return "<time:rfc3339-utc-ms>";
   if (TIME_OTHER.test(value)) return `<time:rfc3339-other:${value.replace(/\d/gu, "9")}>`;
   return "<time:other>";
 }

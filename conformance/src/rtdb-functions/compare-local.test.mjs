@@ -48,6 +48,7 @@ test("the forms: the production id is base64 of twenty bytes, the time has three
     "<id:other>",
     "28 characters are not 20 bytes",
   );
+  assert.equal(idForm("c3Z9sjVyryIB8xWn9p+AnnaNVKt="), "<id:other>");
   assert.equal(idForm(7), "<id:number>");
   assert.equal(timeForm("2026-10-27T12:12:10.146Z"), "<time:rfc3339-utc-ms>");
   assert.equal(
@@ -55,6 +56,15 @@ test("the forms: the production id is base64 of twenty bytes, the time has three
     "<time:rfc3339-other:9999-99-99T99:99:99.999999999Z>",
   );
   assert.equal(timeForm("2026-10-27T12:12:10Z"), "<time:rfc3339-other:9999-99-99T99:99:99Z>");
+  for (const value of [
+    "2026-99-99T99:99:99.999Z",
+    "2026-02-29T00:00:00.000Z",
+    "2024-02-30T00:00:00.000Z",
+    "2026-01-01T24:00:00.000Z",
+  ]) {
+    assert.notEqual(timeForm(value), "<time:rfc3339-utc-ms>");
+  }
+  assert.equal(timeForm("2024-02-29T23:59:59.999Z"), "<time:rfc3339-utc-ms>");
   assert.equal(timeForm("yesterday"), "<time:other>");
   assert.equal(
     traceForm("00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-01"),
@@ -74,7 +84,7 @@ test("the per-delivery values are compared by form: another id, time or tracepar
       frame.event.context.eventId = "AAAAAAAAAAAAAAAAAAAAAAAAAAA=";
       frame.event.context.timestamp = "2030-01-01T00:00:00.001Z";
     } else {
-      frame.event.id = "BBBBBBBBBBBBBBBBBBBBBBBBBBB=";
+      frame.event.id = "BBBBBBBBBBBBBBBBBBBBBBBBBBA=";
       frame.event.time = "2030-01-01T00:00:00.001Z";
       frame.event.extras.traceparent = "00-00000000000000000000000000000001-0000000000000002-00";
     }

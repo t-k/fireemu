@@ -72,14 +72,31 @@ test("every recorded member is named for the generation and event types it was r
     RECORDED_MEMBERS.map((e) => `${e.generation}/${past[e.event]}/${e.member}`),
   );
   assert.deepEqual([...seen.keys()].toSorted(), [...named].toSorted());
+  const past2 = { create: "created", update: "updated", delete: "deleted", write: "written" };
   for (const entry of RECORDED_MEMBERS) {
-    assert.match(
-      entry.source,
-      /^recorded\/production-rtdb-triggers\.json frame \d+ \(rtdb\w+ seq \d+, step s\d\)$/u,
-    );
-    const frame = recording.frames[Number(/frame (\d+)/u.exec(entry.source)[1]) - 1];
-    assert.equal(frame.generation, entry.generation);
+    const cited =
+      /^recorded\/production-rtdb-triggers\.json frame (\d+) \((rtdb\w+) seq (\d+), step (s\d)\)$/u.exec(
+        entry.source,
+      );
+    assert.ok(cited, entry.source);
+    const frame = recording.frames[Number(cited[1]) - 1];
+    assert.equal(frame.n, Number(cited[1]));
+    assert.equal(frame.handler, cited[2], entry.source);
+    assert.equal(frame.seq, Number(cited[3]), entry.source);
+    assert.equal(frame.step, cited[4], entry.source);
+    assert.equal(frame.generation, entry.generation, entry.source);
+    assert.equal(kindOf(frame), past2[entry.event], entry.source);
     assert.ok(entry.member in (holderOf(frame).extras ?? {}), entry.source);
+    // it is the first recorded frame of that kind that shows the member
+    const earlier = recording.frames
+      .slice(0, frame.n - 1)
+      .filter(
+        (f) =>
+          f.generation === entry.generation &&
+          kindOf(f) === past2[entry.event] &&
+          entry.member in (holderOf(f).extras ?? {}),
+      );
+    assert.equal(earlier.length, 0, entry.source);
   }
 });
 
@@ -146,6 +163,86 @@ test("a member outside the recorded scope is still unnamed: the other event type
       `${handler} ${member} ${JSON.stringify(value)}`,
     );
   }
+  // traceparent forms outside W3C version 00 with flags 00 to 03
+  for (const value of [
+    "01-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-01",
+    "00-BA24EC84F95950AECA52ADE83309684F-70b4120df31afb90-01",
+    "00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-09",
+    "00-ba24ec84f95950aeca52ade83309684-70b4120df31afb90-01",
+    "00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb9-01",
+    " 00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-01",
+  ]) {
+    assert.equal(
+      unnamedIn((list) => {
+        find(list, "rtdbCreatedV2").event.extras.traceparent = value;
+      }).length,
+      1,
+      value,
+    );
+  }
+  for (const flags of ["00", "01", "02", "03"]) {
+    assert.equal(
+      unnamedIn((list) => {
+        find(list, "rtdbCreatedV2").event.extras.traceparent =
+          `00-ba24ec84f95950aeca52ade83309684f-70b4120df31afb90-${flags}`;
+      }).length,
+      0,
+      flags,
+    );
+  }
+  // an object shape whose keys are right but in another order, or one more
+  for (const keys of [
+    ["before", "after"],
+    ["after", "before", "x"],
+  ]) {
+    assert.equal(
+      unnamedIn((list) => {
+        find(list, "rtdbWrittenV2").event.extras.change = { type: "object", keys };
+      }).length,
+      1,
+      keys.join(),
+    );
+  }
+  assert.equal(
+    unnamedIn((list) => {
+      find(list, "rtdbWrittenV2").event.extras.change = {
+        type: "array",
+        keys: ["after", "before"],
+      };
+    }).length,
+    1,
+  );
+  // an object shape that is null, a string, an array-like object, or has keys that are not an array
+  for (const value of [
+    null,
+    "after,before",
+    { type: "object", keys: { 0: "after", 1: "before", length: 2 } },
+    { type: "object", keys: "after,before" },
+    { keys: ["after", "before"] },
+    { type: "object" },
+    ["after", "before"],
+  ]) {
+    assert.equal(
+      unnamedIn((list) => {
+        find(list, "rtdbWrittenV2").event.extras.change = value;
+      }).length,
+      1,
+      JSON.stringify(value),
+    );
+  }
+  // a recorded member that the frame lists in its keys but did not describe in its extras is not named
+  assert.equal(
+    unnamedIn((list) => {
+      delete find(list, "rtdbCreatedV2").event.extras.snapshot;
+    }).length,
+    1,
+  );
+  assert.equal(
+    unnamedIn((list) => {
+      delete find(list, "rtdbCreatedV1").event.context.extras.domain;
+    }).length,
+    1,
+  );
   // a member nobody recorded
   assert.equal(
     unnamedIn((list) => {

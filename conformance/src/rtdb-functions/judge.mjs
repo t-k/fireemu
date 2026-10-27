@@ -24,8 +24,7 @@ function unnamedMembers(frame) {
   // a member the production recording showed is named for its generation, event type and shape only
   const extras = holder?.extras ?? {};
   return [...found].filter(
-    (key) =>
-      !(key in extras && isRecordedMember(frame.handler, frame.generation, key, extras[key])),
+    (key) => !isRecordedMember(frame.handler, frame.generation, key, extras[key]),
   );
 }
 

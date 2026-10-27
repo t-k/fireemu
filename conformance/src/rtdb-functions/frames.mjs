@@ -123,21 +123,15 @@ export function isRecordedMember(handler, generation, member, value) {
     (e) => e.generation === generation && e.event === EVENT_OF.get(handler) && e.member === member,
   );
   if (entry === undefined) return false;
-  switch (entry.shape.kind) {
-    case "value":
-      return value === entry.shape.value;
-    case "traceparent":
-      return typeof value === "string" && TRACEPARENT.test(value);
-    case "object":
-      return (
-        value !== null &&
-        typeof value === "object" &&
-        value.type === "object" &&
-        Array.isArray(value.keys) &&
-        value.keys.length === entry.shape.keys.length &&
-        entry.shape.keys.every((key, index) => value.keys[index] === key)
-      );
-    default:
-      return false;
-  }
+  const { shape } = entry;
+  if (shape.kind === "value") return value === shape.value;
+  if (shape.kind === "traceparent") return typeof value === "string" && TRACEPARENT.test(value);
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.type === "object" &&
+    Array.isArray(value.keys) &&
+    value.keys.length === shape.keys.length &&
+    shape.keys.every((key, index) => value.keys[index] === key)
+  );
 }

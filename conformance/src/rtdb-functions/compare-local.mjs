@@ -129,8 +129,15 @@ export function compareRecordings({ production, local }) {
       const differences = [];
       if (a.length !== b.length)
         differences.push({ path: "deliveries", production: a.length, local: b.length });
-      else if (a.length === 1)
-        differences.push(...diffValues(normalizeFrame(a[0]), normalizeFrame(b[0])));
+      else {
+        // equal counts (production showed one delivery per write and handler): in order of arrival
+        a.forEach((frame, index) => {
+          const prefix = a.length === 1 ? "" : `[${index}]`;
+          for (const d of diffValues(normalizeFrame(frame), normalizeFrame(b[index]))) {
+            differences.push({ ...d, path: `$${prefix}${d.path.slice(1)}` });
+          }
+        });
+      }
       rows.push({
         row: key,
         verdict: differences.length === 0 ? "MATCH" : "DIFFERENCE",

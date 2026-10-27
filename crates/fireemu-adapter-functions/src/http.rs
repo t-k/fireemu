@@ -1100,6 +1100,15 @@ fn invocation_refusal(
     }
 }
 
+/// Whether the daemon marked this entry as a code-level callable served as something else
+/// (`PlatformOptions::strict_callable_ingress`).
+fn marked_callable_in_code(runtime: &FunctionsRuntime, function: &str) -> bool {
+    runtime
+        .manifest()
+        .get(function)
+        .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
+}
+
 fn strict_callable_bearer_refusal(
     runtime: &FunctionsRuntime,
     raw: &hyper::HeaderMap,
@@ -1738,10 +1747,7 @@ async fn respond(
     // `onRequest` function, strict profile, no App Check) runs the callable's wrapper too, so
     // its requests pass the same Bearer check. A preflight is the SDK's CORS handling and
     // carries no credential check, as for a callable.
-    let code_callable = runtime
-        .manifest()
-        .get(function)
-        .is_some_and(|entry| entry.platform_options.strict_callable_ingress);
+    let code_callable = marked_callable_in_code(&runtime, function);
     if profile == FunctionsHttpProfile::Strict
         && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
     {

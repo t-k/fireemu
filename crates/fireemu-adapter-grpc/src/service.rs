@@ -722,10 +722,9 @@ impl Firestore for GatewayService {
                         .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
                     Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
                 } else {
-                    self.run_query_with_caller(caller, compiled.input.clone())
+                    self.scan_ordered_input(caller, &compiled.input)
                         .await
                         .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
-                        .into_inner()
                 };
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
                 input, compiled, unrecorded, canonical, gate,
@@ -1298,6 +1297,28 @@ impl Drop for QueryTransactionGuard {
 }
 
 impl GatewayService {
+    /// The input query of a pipeline as a stream of responses in production's scan order, which is
+    /// not the name order (ascending CRC-32 of the document IDs), so the whole input is read
+    /// before the first result.
+    async fn scan_ordered_input(
+        &self,
+        caller: Caller,
+        input: &pb::RunQueryRequest,
+    ) -> Result<BoxStream<pb::RunQueryResponse>, Status> {
+        use tokio_stream::StreamExt as _;
+        let responses = self
+            .run_query_with_caller(caller, input.clone())
+            .await?
+            .into_inner()
+            .collect::<Result<Vec<_>, _>>()
+            .await?;
+        Ok(Box::pin(tokio_stream::iter(
+            crate::pipeline::in_scan_order(responses)
+                .into_iter()
+                .map(Ok),
+        )))
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn run_query_with_caller(
         &self,

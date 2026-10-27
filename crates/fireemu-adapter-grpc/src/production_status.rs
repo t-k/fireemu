@@ -285,10 +285,22 @@ pub fn top_level_property_path_only(field: &str, message: &str) -> Status {
 /// `INVALID_ARGUMENT` with an `ErrorInfo` naming the child path.
 #[must_use]
 pub fn select_overlapping_paths(child: &str) -> Status {
+    overlapping_paths("select", child)
+}
+
+/// Production's refusal of an `add_fields` stage that sets a field and one of its children
+/// (FS-ENT-ORACLE O-9 `fields-main#overlap-*`, also when the parent's value is missing): the
+/// same words and `ErrorInfo` as for `select`, naming the alias set later in the request.
+#[must_use]
+pub fn add_fields_overlapping_paths(child: &str) -> Status {
+    overlapping_paths("add_fields", child)
+}
+
+fn overlapping_paths(stage: &str, child: &str) -> Status {
     with_details(
         Code::InvalidArgument,
         &format!(
-            "The request is invalid because the 'select(...)' stage is attempting to set a \
+            "The request is invalid because the '{stage}(...)' stage is attempting to set a \
 parent document and one of its child fields simultaneously. In this case the parent document \
 reference of '{child}' overlaps with a child field already being configured in this stage.\n\n\
 To fix this issue, either set only the parent document reference, or explicitly set all the \

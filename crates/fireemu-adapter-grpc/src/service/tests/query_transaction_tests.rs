@@ -325,9 +325,21 @@ async fn execute_pipeline_snapshot_remains_stable_across_page_boundary() {
             .collect()
         })
         .collect();
+    // (Production scans in CRC-32 order of the document IDs, not in name order: compare the
+    // rows as a sorted list.)
+    let sorted = |mut rows: Vec<std::collections::HashMap<String, pb::Value>>| {
+        rows.sort_by_key(|row| {
+            format!(
+                "{:?}",
+                row.iter().collect::<std::collections::BTreeMap<_, _>>()
+            )
+        });
+        rows
+    };
     assert_eq!(
-        names, expected,
-        "every original row, type, order and multiplicity must survive later-page mutations"
+        sorted(names),
+        sorted(expected),
+        "every original row, type and multiplicity must survive later-page mutations"
     );
 }
 
@@ -398,7 +410,17 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
                 actual.push(document.fields);
             }
         }
-        assert_eq!(actual, expected);
+        // (Rows come in production's scan order, CRC-32 of the document IDs: compare sorted.)
+        let sorted = |mut rows: Vec<std::collections::HashMap<String, pb::Value>>| {
+            rows.sort_by_key(|row| {
+                format!(
+                    "{:?}",
+                    row.iter().collect::<std::collections::BTreeMap<_, _>>()
+                )
+            });
+            rows
+        };
+        assert_eq!(sorted(actual), sorted(expected));
         let (_, stats) = backend.latest_query_execution_stats().unwrap();
         println!(
             "pipeline_stats count={count} returned={returned} pages={} cloned={} field_bytes={} selection_paths={} selection_bytes={}",
@@ -519,10 +541,11 @@ async fn execute_pipeline_select_copies_only_projected_fields_across_pages() {
         assert!(actual
             .iter()
             .all(|fields| fields.len() == 1 && fields.contains_key("value")));
-        assert_eq!(
-            actual[0]["value"].value_type,
-            Some(pb::value::ValueType::IntegerValue(count))
-        );
+        // (The rows come in production's scan order, so the largest rank is not first.)
+        assert!(actual
+            .iter()
+            .any(|fields| fields["value"].value_type
+                == Some(pb::value::ValueType::IntegerValue(count))));
         let (_, stats) = backend.latest_query_execution_stats().unwrap();
         assert_eq!(
             stats.pages.cloned_field_bytes,
@@ -576,7 +599,7 @@ async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_p
     gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
     let mut service = GatewayService::local(gateway, backend.clone());
     seeded_query(&backend, 65, false);
-    let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let ready_tx = Mutex::new(Some(ready_tx));
     let (release_tx, release_rx) = mpsc::channel();
     let release_rx = Mutex::new(release_rx);
@@ -590,28 +613,21 @@ async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_p
                 .unwrap();
         }
     }));
-    let mut stream = Firestore::execute_pipeline(&service, Request::new(pipeline_request()))
+    // The whole input is read before any result is sent (the scan order is not the name order),
+    // so the call itself is in flight while the continuation page is held.
+    let task = tokio::spawn(async move {
+        Firestore::execute_pipeline(&service, Request::new(pipeline_request())).await
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx)
         .await
         .unwrap()
-        .into_inner();
-    let mut documents = 0;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            tokio::select! {
-                ready = &mut ready_rx => { ready.unwrap(); break; }
-                response = stream.next() => { documents += response.unwrap().unwrap().results.len(); }
-            }
-        }
-    }).await.unwrap();
-    // The first page's results are held for the response they share with the next page's
-    // (production packs a small answer into one response), so none is sent yet.
-    assert_eq!(documents, 0);
+        .unwrap();
     assert_eq!(
         backend.latest_query_execution_stats().unwrap().1.page_count,
         2
     );
     assert_eq!(transaction_stats(&backend).active, 1);
-    drop(stream);
+    task.abort();
     release_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while Arc::strong_count(&backend) != 2 || transaction_stats(&backend).active != 0 {
@@ -888,18 +904,12 @@ async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
     )
     .unwrap()
     .canonical_text();
-    let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+    // The whole input is read before any result is sent (the scan order is not the name order),
+    // so a stale continuation fails the call itself.
+    let error = Firestore::execute_pipeline(&service, Request::new(request))
         .await
-        .unwrap()
-        .into_inner();
-    let mut count = 0;
-    let error = loop {
-        match stream.next().await.expect("stale continuation must fail") {
-            Ok(response) => count += response.results.len(),
-            Err(error) => break error,
-        }
-    };
-    assert!(count > 0 && count <= 32);
+        .err()
+        .expect("stale continuation must fail");
     assert_eq!(error.code(), tonic::Code::Unavailable);
     assert_eq!(
         error
@@ -910,7 +920,6 @@ async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
             .unwrap(),
         canonical
     );
-    assert!(stream.next().await.is_none());
     tokio::time::timeout(Duration::from_secs(5), async {
         while Arc::strong_count(&backend) != 2 || transaction_stats(&backend).active != 0 {
             tokio::task::yield_now().await;

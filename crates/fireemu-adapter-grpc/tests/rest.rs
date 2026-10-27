@@ -7066,11 +7066,12 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
             {"name": "offset", "args": [{"integerValue": "1"}]},
             {"name": "limit", "args": [{"integerValue": "5"}]},
         ]));
-        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`).
+        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`). The scan reads
+        // `b` before `a` (ascending CRC-32 of the document ID), so the offset leaves `a`.
         assert_eq!(status, 200, "strict={strict} {body}");
         assert_eq!(
             body,
-            json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
+            json!([{"results": [{"fields": {"id": {"stringValue": "a"}, "coll": {"stringValue": "nest"}}}]}]),
             "strict={strict}"
         );
         let (status, body) = run(json!([
@@ -7708,7 +7709,9 @@ fn rest_execute_pipeline_results_carry_document_metadata_without_select() {
         ]));
         assert_eq!(status, 200, "{body}");
         let element = &body[0];
-        assert_eq!(element["results"], json!([stored]), "strict={strict}");
+        // The scan reads `b` before `a` (ascending CRC-32 of the document ID).
+        let (_, first) = call(&s, "GET", &format!("{DOCS}/nest/b"), json!({}));
+        assert_eq!(element["results"], json!([first]), "strict={strict}");
         assert!(
             element["executionTime"].is_string(),
             "strict={strict} {body}"
@@ -7825,7 +7828,10 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
         );
         // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`).
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body[0]["results"], json!([empty]));
+        // The scan reads `b` before `a` (ascending CRC-32 of the document ID): the offset
+        // leaves `a`.
+        let (_, left) = call(&s, "GET", &format!("{DOCS}/time/a"), json!({}));
+        assert_eq!(body[0]["results"], json!([left]));
         assert!(empty.get("fields").is_none(), "{empty}");
     }
 }

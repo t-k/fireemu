@@ -160,115 +160,88 @@ fn null() -> Eval {
     Eval::Value(Value::Null)
 }
 
-/// The operands as three-valued booleans (`None` is unknown: null or missing), or the error the
-/// first operand of another type gives. Under strict a wrong-typed operand beside one that
-/// decides the call (`false` for an `and`, `true` for an `or`) is unobserved: whether
-/// production fails or short-circuits was not recorded.
-fn tri_state(
+/// The result of a Kleene `and` or `or` read left to right: the operands are examined in order
+/// and the first one that decides the call (`decider`) ends it, so an operand of another type
+/// after it is never looked at, while one before it (or with no decider at all) fails the call
+/// (FS-ENT-ORACLE O-9 `ops-main`: `and(false, 1)` is false, `and(1, false)`, `and(true, 1)` and
+/// `and(null, 1)` fail; likewise `or(true, 1)` against `or(1, true)`, `or(false, 1)` and
+/// `or(null, 1)`). A null or missing operand is unknown. `None` is the unknown result.
+fn left_to_right(
     function: &'static str,
     args: &[Eval],
-    deciding: Option<bool>,
-    cx: Context,
-) -> Result<Vec<Option<bool>>, Eval> {
+    decider: bool,
+) -> Result<Option<bool>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
     }
-    let mut states = Vec::with_capacity(args.len());
-    let mut wrong = None;
+    let mut unknown = false;
     for arg in args {
         match arg {
-            Eval::Value(Value::Boolean(b)) => states.push(Some(*b)),
-            Eval::Value(Value::Null) | Eval::Absent => states.push(None),
-            Eval::Value(other) => {
-                wrong.get_or_insert(other);
-                states.push(None);
-            }
+            Eval::Value(Value::Boolean(b)) if *b == decider => return Ok(Some(decider)),
+            Eval::Value(Value::Boolean(_)) => {}
+            Eval::Value(Value::Null) | Eval::Absent => unknown = true,
+            Eval::Value(other) => return Err(wrong_type(function, "Boolean", other)),
             Eval::Error(_) => unreachable!("errors are returned above"),
         }
     }
-    if let Some(value) = wrong {
-        if cx.unrecorded == Unrecorded::Refuse
-            && deciding.is_some_and(|decider| states.contains(&Some(decider)))
-        {
-            return Err(unobserved(
-                function,
-                "an operand of another type beside one that decides the call",
-            ));
-        }
-        return Err(wrong_type(function, "Boolean", value));
+    Ok(if unknown { None } else { Some(!decider) })
+}
+
+/// The operands of `xor`, all of them boolean: `None` when one is null or missing, since the
+/// parity of an unknown is unknown (production answered null at any position, O-9 `ops-main`).
+fn all_booleans(function: &'static str, args: &[Eval]) -> Result<Vec<Option<bool>>, Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
     }
-    Ok(states)
+    args.iter()
+        .map(|arg| match arg {
+            Eval::Value(Value::Boolean(b)) => Ok(Some(*b)),
+            Eval::Value(Value::Null) | Eval::Absent => Ok(None),
+            Eval::Value(other) => Err(wrong_type(function, "Boolean", other)),
+            Eval::Error(_) => unreachable!("errors are returned above"),
+        })
+        .collect()
 }
 
 fn tri(state: Option<bool>) -> Eval {
     state.map_or_else(null, boolean)
 }
 
-fn or_of(states: &[Option<bool>]) -> Option<bool> {
-    if states.contains(&Some(true)) {
-        Some(true)
-    } else if states.contains(&None) {
-        None
-    } else {
-        Some(false)
-    }
-}
-
-fn eval_and(args: &[Eval], cx: Context) -> Eval {
-    match tri_state("and", args, Some(false), cx) {
-        Ok(states) => tri(if states.contains(&Some(false)) {
-            Some(false)
-        } else if states.contains(&None) {
-            None
-        } else {
-            Some(true)
-        }),
+fn eval_and(args: &[Eval], _cx: Context) -> Eval {
+    match left_to_right("and", args, false) {
+        Ok(state) => tri(state),
         Err(error) => error,
     }
 }
 
-/// `or`: production answered two operands, and only `and` with three (O-6
-/// `where-functions-truth#and3`); more operands of `or` are unobserved under strict, as for `xor`
-/// and `nor`.
-fn eval_or(args: &[Eval], cx: Context) -> Eval {
-    if cx.unrecorded == Unrecorded::Refuse && args.len() > 2 {
-        return unobserved("or", "more than two operands");
-    }
-    // Production failed an `or` with an operand of another type beside a `true` one (O-6
-    // `where-functions-non-boolean#or`): no short circuit past a type error.
-    match tri_state("or", args, None, cx) {
-        Ok(states) => tri(or_of(&states)),
+fn eval_or(args: &[Eval], _cx: Context) -> Eval {
+    match left_to_right("or", args, true) {
+        Ok(state) => tri(state),
         Err(error) => error,
     }
 }
 
-fn eval_not(args: &[Eval], cx: Context) -> Eval {
-    match tri_state("not", args, None, cx) {
+fn eval_not(args: &[Eval], _cx: Context) -> Eval {
+    match all_booleans("not", args) {
         Ok(states) => tri(states[0].map(|b| !b)),
         Err(error) => error,
     }
 }
 
-/// `xor`: unknown when any operand is, else whether an odd number is true. Production answered
-/// two operands; more are unobserved under strict.
-fn eval_xor(args: &[Eval], cx: Context) -> Eval {
-    if cx.unrecorded == Unrecorded::Refuse && args.len() > 2 {
-        return unobserved("xor", "more than two operands");
-    }
-    match tri_state("xor", args, None, cx) {
+/// `xor`: unknown when any operand is, else whether an odd number is true (two to five operands
+/// were recorded, O-6 and O-9).
+fn eval_xor(args: &[Eval], _cx: Context) -> Eval {
+    match all_booleans("xor", args) {
         Ok(states) if states.contains(&None) => null(),
         Ok(states) => boolean(states.iter().filter(|s| **s == Some(true)).count() % 2 == 1),
         Err(error) => error,
     }
 }
 
-/// `nor`: the negation of `or`.
-fn eval_nor(args: &[Eval], cx: Context) -> Eval {
-    if cx.unrecorded == Unrecorded::Refuse && args.len() > 2 {
-        return unobserved("nor", "more than two operands");
-    }
-    match tri_state("nor", args, Some(true), cx) {
-        Ok(states) => tri(or_of(&states).map(|b| !b)),
+/// `nor`: the negation of `or`, read left to right like it.
+fn eval_nor(args: &[Eval], _cx: Context) -> Eval {
+    match left_to_right("nor", args, true) {
+        Ok(state) => tri(state.map(|b| !b)),
         Err(error) => error,
     }
 }
@@ -327,9 +300,11 @@ fn eval_type(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// `is_type(x, "name")`: whether `x` is of the type; unknown for a missing `x`. A name outside
-/// the list is the adapter's refusal before any row. Production answered `null`, `array`,
-/// `string`, `int64`, `float64` and `number`; strict refuses the other names.
-fn eval_is_type(args: &[Eval], cx: Context) -> Eval {
+/// the list is the adapter's refusal before any row. Production answered every name of the list
+/// (FS-ENT-ORACLE O-9b `types-matrix`): a missing value gives null whatever the name (the name
+/// `null` included), a stored value gives true for its own type and false for every other, and
+/// the names no stored value has (`int32`, `decimal128`, `max_key`, ...) give false.
+fn eval_is_type(args: &[Eval], _cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -342,21 +317,7 @@ fn eval_is_type(args: &[Eval], cx: Context) -> Eval {
             TYPE_NAMES.join(", ")
         )));
     }
-    let recorded = matches!(
-        name.as_str(),
-        "null" | "array" | "string" | "int64" | "float64" | "number"
-    );
-    if cx.unrecorded == Unrecorded::Refuse && !recorded {
-        return unobserved("is_type", "this type name");
-    }
-    // A missing value has no type: production answered null for `null` (O-1
-    // `px1/select#is-type-x-null`) and dropped the row for the other names when the call is
-    // the whole condition of a `where` (O-6 `where-functions-kinds`, which shows no
-    // difference between null and false there). Strict answers nothing else.
     let Eval::Value(value) = &args[0] else {
-        if cx.unrecorded == Unrecorded::Refuse && !cx.condition && name != "null" {
-            return unobserved("is_type", "a missing value for this type name");
-        }
         return null();
     };
     boolean(match name.as_str() {
@@ -379,15 +340,18 @@ fn eval_is_type(args: &[Eval], cx: Context) -> Eval {
 }
 
 /// The array an array argument holds, or the answer for any other argument: a missing one is
-/// unknown, another type fails the call naming the type it got.
+/// unknown, another type fails the call naming the type it got. A null one is unknown too,
+/// which production answered for `array_contains` (first argument), `array_contains_any`
+/// (second) and `not_equal_any` (second) only (O-9 `ops-main`); strict refuses the others.
 fn array_argument<'a>(
     function: &'static str,
     arg: &'a Eval,
+    null_recorded: bool,
     cx: Context,
 ) -> Result<&'a [Value], Eval> {
     match arg {
         Eval::Value(Value::Array(values)) => Ok(values),
-        Eval::Value(Value::Null) if cx.unrecorded == Unrecorded::Refuse => {
+        Eval::Value(Value::Null) if cx.unrecorded == Unrecorded::Refuse && !null_recorded => {
             Err(unobserved(function, "a null array argument"))
         }
         Eval::Absent | Eval::Value(Value::Null) => Err(null()),
@@ -408,7 +372,7 @@ fn eval_array_contains(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    match array_argument("array_contains", &args[0], cx) {
+    match array_argument("array_contains", &args[0], true, cx) {
         Ok(values) => boolean(contains(values, &args[1])),
         Err(answer) => answer,
     }
@@ -418,11 +382,11 @@ fn eval_array_contains_all(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_all", &args[0], cx) {
+    let values = match array_argument("array_contains_all", &args[0], false, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
-    match array_argument("array_contains_all", &args[1], cx) {
+    match array_argument("array_contains_all", &args[1], false, cx) {
         Ok(wanted) => boolean(
             wanted
                 .iter()
@@ -436,11 +400,11 @@ fn eval_array_contains_any(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_any", &args[0], cx) {
+    let values = match array_argument("array_contains_any", &args[0], false, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
-    match array_argument("array_contains_any", &args[1], cx) {
+    match array_argument("array_contains_any", &args[1], true, cx) {
         Ok(wanted) => boolean(
             wanted
                 .iter()
@@ -456,22 +420,19 @@ fn eval_equal_any(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    match array_argument("eq_any", &args[1], cx) {
+    match array_argument("eq_any", &args[1], false, cx) {
         Ok(list) => boolean(contains(list, &args[0])),
         Err(answer) => answer,
     }
 }
 
-/// `not_equal_any(x, list)`: the opposite, true for a missing `x`. Production did not answer a
-/// list that is no array, so strict refuses it.
+/// `not_equal_any(x, list)`: the opposite, true for a missing `x`. Production named the failed
+/// call `eq_any` when the list was not an array, as for `equal_any` (O-9 `ops-main`).
 fn eval_not_equal_any(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    if cx.unrecorded == Unrecorded::Refuse && !matches!(args[1], Eval::Value(Value::Array(_))) {
-        return unobserved("not_equal_any", "a list that is no array");
-    }
-    match array_argument("not_eq_any", &args[1], cx) {
+    match array_argument("eq_any", &args[1], true, cx) {
         Ok(list) => boolean(!contains(list, &args[0])),
         Err(answer) => answer,
     }

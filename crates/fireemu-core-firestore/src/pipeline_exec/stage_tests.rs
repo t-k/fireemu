@@ -701,39 +701,36 @@ proptest! {
 
 #[test]
 fn a_value_that_is_not_a_boolean_fails_the_logical_call() {
-    for name in ["and", "or", "not"] {
-        let args = if name == "not" {
-            vec![Eval::Value(int(1))]
-        } else {
-            vec![Eval::Value(int(1)), Eval::Value(Value::Boolean(true))]
-        };
-        assert_eq!(
-            eval_function(name, args),
-            Eval::Error(EvalError::WrongType {
-                function: if name == "and" {
-                    "and"
-                } else if name == "or" {
-                    "or"
-                } else {
-                    "not"
+    let one = || Eval::Value(int(1));
+    let t = || Eval::Value(Value::Boolean(true));
+    for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let call = |name: &str, args: &[Eval]| {
+            (function(name).unwrap().eval)(
+                args,
+                Context {
+                    unrecorded,
+                    condition: false,
                 },
-                expected: "Boolean",
-                got: "LONG"
-            })
-        );
+            )
+        };
+        for (name, args) in [
+            ("and", vec![one(), t()]),
+            ("or", vec![one(), t()]),
+            ("not", vec![one()]),
+        ] {
+            let function = function(name).unwrap().name;
+            assert_eq!(
+                call(name, &args),
+                Eval::Error(EvalError::WrongType {
+                    function,
+                    expected: "Boolean",
+                    got: "LONG"
+                }),
+                "{name}"
+            );
+        }
     }
-    // Under strict a wrong operand beside one that decides the call is unobserved.
-    let strict = Context {
-        unrecorded: Unrecorded::Refuse,
-        condition: false,
-    };
-    let result = (function("and").unwrap().eval)(
-        &[Eval::Value(Value::Boolean(false)), Eval::Value(int(1))],
-        strict,
-    );
-    assert!(matches!(result, Eval::Error(EvalError::Unobserved { .. })));
 }
-
 #[test]
 fn existence_type_and_array_functions_answer_as_recorded() {
     let value = |v: Value| Eval::Value(v);
@@ -1020,67 +1017,77 @@ fn strict_refuses_what_it_cannot_attribute_inside_a_blocking_stage() {
 }
 
 #[test]
-fn xor_nor_and_or_of_more_than_two_operands_are_unobserved_under_strict_only() {
+fn or_xor_and_nor_of_more_than_two_operands_follow_the_recorded_tables() {
+    // FS-ENT-ORACLE O-9 `ops-main`: three-valued tables over three and four operands, xor as odd
+    // parity (three to five operands), nor true only when every operand is false, and a null or
+    // missing operand makes xor and nor of any position null.
     let t = || Eval::Value(Value::Boolean(true));
     let f = || Eval::Value(Value::Boolean(false));
-    // `and` of three operands was recorded (O-6 `where-functions-truth#and3`); `or` of three was
-    // not.
-    assert!(is_unobserved(&strict("or", &[f(), f(), t()])));
-    assert!(is_unobserved(&strict("or", &[f(), Eval::Absent, f()])));
-    assert_eq!(emulator("or", &[f(), f(), t()]), t());
-    assert_eq!(emulator("or", &[f(), f(), f()]), f());
-    assert_eq!(strict("or", &[f(), t()]), t());
-    assert_eq!(strict("or", &[f()]), f());
-    assert_eq!(strict("and", &[t(), t(), f()]), f());
-    assert!(is_unobserved(&strict("xor", &[t(), t(), t()])));
-    assert!(is_unobserved(&strict("nor", &[f(), f(), f()])));
-    assert_eq!(emulator("xor", &[t(), t(), t()]), t());
-    assert_eq!(emulator("xor", &[t(), t(), f(), t()]), t());
-    assert_eq!(emulator("xor", &[t(), f()]), t());
-    assert_eq!(emulator("xor", &[t(), t()]), f());
-    assert_eq!(emulator("nor", &[f(), f(), f()]), t());
-    assert_eq!(emulator("nor", &[f(), t(), f()]), f());
-    // Two operands stay answered under strict.
-    assert_eq!(strict("xor", &[t(), f()]), t());
-    assert_eq!(strict("nor", &[f(), f()]), t());
-}
-
-#[test]
-fn a_wrong_operand_beside_a_deciding_one_is_unobserved_under_strict_only() {
-    let t = || Eval::Value(Value::Boolean(true));
-    let f = || Eval::Value(Value::Boolean(false));
-    let one = || Eval::Value(int(1));
-    // strict: `and` with a false operand, `nor` with a true one
-    assert!(is_unobserved(&strict("and", &[f(), one()])));
-    assert!(is_unobserved(&strict("nor", &[t(), one()])));
-    // an `and` beside true, an `or` beside anything: production failed the call
-    assert!(matches!(
-        strict("and", &[t(), one()]),
-        Eval::Error(EvalError::WrongType {
-            function: "and",
-            ..
-        })
-    ));
-    assert!(matches!(
-        strict("or", &[t(), one()]),
-        Eval::Error(EvalError::WrongType { function: "or", .. })
-    ));
-    // the emulator profile fails the call in every case
-    for (name, args) in [
-        ("and", vec![f(), one()]),
-        ("nor", vec![t(), one()]),
-        ("or", vec![t(), one()]),
-    ] {
-        assert!(
-            matches!(
-                emulator(name, &args),
-                Eval::Error(EvalError::WrongType { .. })
-            ),
-            "{name}"
-        );
+    let n = || Eval::Value(Value::Null);
+    for call in [strict, emulator] {
+        assert_eq!(call("or", &[f(), f(), t()]), t());
+        assert_eq!(call("or", &[f(), f(), f()]), f());
+        assert_eq!(call("or", &[f(), n(), f()]), n());
+        assert_eq!(call("or", &[f(), Eval::Absent, f()]), n());
+        assert_eq!(call("or", &[n(), f(), t()]), t());
+        assert_eq!(call("and", &[t(), t(), f()]), f());
+        assert_eq!(call("and", &[t(), n(), t()]), n());
+        assert_eq!(call("xor", &[t(), t(), t()]), t());
+        assert_eq!(call("xor", &[t(), t(), f(), t()]), t());
+        assert_eq!(call("xor", &[t(), f(), f(), f(), f()]), t());
+        assert_eq!(call("xor", &[t(), t()]), f());
+        assert_eq!(call("xor", &[t(), n()]), n());
+        assert_eq!(call("xor", &[n(), t(), t()]), n());
+        assert_eq!(call("xor", &[t(), t(), Eval::Absent]), n());
+        assert_eq!(call("nor", &[f(), f(), f()]), t());
+        assert_eq!(call("nor", &[f(), t(), f()]), f());
+        assert_eq!(call("nor", &[f(), f(), n()]), n());
+        assert_eq!(call("nor", &[Eval::Absent, f()]), n());
     }
 }
-
+#[test]
+fn operands_are_read_left_to_right_and_the_first_deciding_one_ends_the_call() {
+    // FS-ENT-ORACLE O-9 `ops-main`: `and(false, 1)`, `or(true, 1)` and `nor(true, 1)` answer; the
+    // same operands the other way round, or beside no deciding operand, fail the call. A null is
+    // not deciding.
+    let t = || Eval::Value(Value::Boolean(true));
+    let f = || Eval::Value(Value::Boolean(false));
+    let n = || Eval::Value(Value::Null);
+    let one = || Eval::Value(int(1));
+    let wrong = |name: &'static str| {
+        Eval::Error(EvalError::WrongType {
+            function: name,
+            expected: "Boolean",
+            got: "LONG",
+        })
+    };
+    for call in [strict, emulator] {
+        assert_eq!(call("and", &[f(), one()]), f());
+        assert_eq!(call("or", &[t(), one()]), t());
+        assert_eq!(call("nor", &[t(), one()]), f());
+        for (name, args) in [
+            ("and", vec![one(), f()]),
+            ("and", vec![t(), one()]),
+            ("and", vec![n(), one()]),
+            ("or", vec![one(), t()]),
+            ("or", vec![f(), one()]),
+            ("or", vec![n(), one()]),
+            ("nor", vec![f(), one()]),
+            ("xor", vec![t(), one()]),
+        ] {
+            let function: &'static str = match name {
+                "and" => "and",
+                "or" => "or",
+                "nor" => "nor",
+                _ => "xor",
+            };
+            assert_eq!(call(name, &args), wrong(function), "{name} {args:?}");
+        }
+        // Later operands after a deciding one are never looked at, however many.
+        assert_eq!(call("and", &[t(), f(), one(), one()]), f());
+        assert_eq!(call("or", &[f(), t(), one()]), t());
+    }
+}
 fn sample_values() -> Vec<(Value, &'static str)> {
     vec![
         (Value::Null, "null"),
@@ -1136,46 +1143,37 @@ fn type_and_is_type_agree_for_every_kind_and_every_name() {
     }
 }
 
+/// `is_type` answers every name of the list for a stored value: true for its own type and false
+/// for every other name, never an error, under both profiles (O-9b `types-matrix`); the names no
+/// stored value has (`int32`, `decimal128`, ...) are false.
 #[test]
-fn strict_answers_only_the_type_names_production_recorded() {
-    let ask = |name: &str| {
-        strict(
-            "is_type",
-            &[
-                Eval::Value(int(1)),
-                Eval::Value(Value::String(name.to_owned())),
-            ],
-        )
-    };
-    for recorded in ["null", "array", "string", "int64", "float64", "number"] {
-        assert!(!is_unobserved(&ask(recorded)), "{recorded}");
+fn is_type_answers_every_name_for_a_stored_value_under_both_profiles() {
+    let kinds: [(Value, &[&str]); 6] = [
+        (Value::Null, &["null"]),
+        (Value::Boolean(true), &["boolean"]),
+        (int(1), &["int64", "number"]),
+        (Value::Double(1.5), &["float64", "number"]),
+        (Value::String("s".into()), &["string"]),
+        (Value::Array(vec![]), &["array"]),
+    ];
+    for (value, own) in kinds {
+        for name in TYPE_NAMES {
+            for call in [strict, emulator] {
+                assert_eq!(
+                    call(
+                        "is_type",
+                        &[
+                            Eval::Value(value.clone()),
+                            Eval::Value(Value::String(name.to_owned()))
+                        ]
+                    ),
+                    Eval::Value(Value::Boolean(own.contains(&name))),
+                    "{value:?} {name}"
+                );
+            }
+        }
     }
-    for unrecorded in [
-        "boolean",
-        "bytes",
-        "timestamp",
-        "geo_point",
-        "map",
-        "reference",
-        "vector",
-        "int32",
-    ] {
-        assert!(is_unobserved(&ask(unrecorded)), "{unrecorded}");
-    }
-    // A missing value is unknown for the name `null` only (the other names were recorded where
-    // the call is a whole `where` condition: see the test of the missing value); a name that is
-    // no constant string is unobserved.
-    assert_eq!(
-        strict(
-            "is_type",
-            &[Eval::Absent, Eval::Value(Value::String("null".into()))]
-        ),
-        Eval::Value(Value::Null)
-    );
-    assert!(is_unobserved(&strict(
-        "is_type",
-        &[Eval::Absent, Eval::Value(Value::String("string".into()))]
-    )));
+    // A name that is no constant string is unobserved.
     assert!(is_unobserved(&strict(
         "is_type",
         &[Eval::Value(int(1)), Eval::Absent]
@@ -1191,15 +1189,28 @@ fn strict_answers_only_the_type_names_production_recorded() {
         Eval::Error(EvalError::Invalid(_))
     ));
 }
-
 #[test]
-fn a_null_array_is_unknown_under_the_emulator_profile_and_unobserved_under_strict() {
+fn a_null_array_is_unknown_where_production_answered_it_and_unobserved_under_strict_elsewhere() {
     let null = || Eval::Value(Value::Null);
     let one = || Eval::Value(int(1));
-    for name in ["array_contains", "array_contains_all", "array_contains_any"] {
-        assert!(is_unobserved(&strict(name, &[null(), one()])), "{name}");
-        assert_eq!(emulator(name, &[null(), one()]), null(), "{name}");
-        assert_eq!(emulator(name, &[Eval::Absent, one()]), null(), "{name}");
+    let list = || Eval::Value(Value::Array(vec![int(1)]));
+    // Recorded (O-9 `ops-main`): `array_contains(null | missing, 1)`, `array_contains_any(list,
+    // null)` and `not_equal_any(1, null)` are null.
+    for call in [strict, emulator] {
+        assert_eq!(call("array_contains", &[null(), one()]), null());
+        assert_eq!(call("array_contains", &[Eval::Absent, one()]), null());
+        assert_eq!(call("array_contains_any", &[list(), null()]), null());
+        assert_eq!(call("not_equal_any", &[one(), null()]), null());
+    }
+    // Not recorded: the other null-array forms, null under the emulator profile only.
+    for (name, args) in [
+        ("array_contains_all", vec![null(), list()]),
+        ("array_contains_all", vec![list(), null()]),
+        ("array_contains_any", vec![null(), list()]),
+        ("equal_any", vec![one(), null()]),
+    ] {
+        assert!(is_unobserved(&strict(name, &args)), "{name}");
+        assert_eq!(emulator(name, &args), null(), "{name}");
     }
     // A search list that is no array fails the call, naming its type.
     assert!(matches!(
@@ -1213,33 +1224,38 @@ fn a_null_array_is_unknown_under_the_emulator_profile_and_unobserved_under_stric
         })
     ));
 }
-
 #[test]
-fn not_equal_any_of_a_list_that_is_no_array_is_unobserved_under_strict_only() {
+fn equal_any_and_not_equal_any_of_a_list_that_is_no_array_fail_naming_eq_any() {
+    // O-9 `ops-main`: production named `eq_any` for both functions and the type it got.
     let one = || Eval::Value(int(1));
     let list = || Eval::Value(Value::Array(vec![int(1)]));
-    assert!(is_unobserved(&strict("not_equal_any", &[one(), one()])));
-    assert!(matches!(
-        emulator("not_equal_any", &[one(), one()]),
-        Eval::Error(EvalError::WrongType {
-            function: "not_eq_any",
-            ..
-        })
-    ));
-    assert_eq!(
-        strict("not_equal_any", &[one(), list()]),
-        Eval::Value(Value::Boolean(false))
-    );
-    assert_eq!(
-        emulator("equal_any", &[one(), one()]),
-        Eval::Error(EvalError::WrongType {
-            function: "eq_any",
-            expected: "Array",
-            got: "LONG"
-        })
-    );
+    for call in [strict, emulator] {
+        for name in ["equal_any", "not_equal_any"] {
+            assert_eq!(
+                call(name, &[one(), one()]),
+                Eval::Error(EvalError::WrongType {
+                    function: "eq_any",
+                    expected: "Array",
+                    got: "LONG"
+                }),
+                "{name}"
+            );
+            assert_eq!(
+                call(name, &[one(), Eval::Value(Value::String("a".into()))]),
+                Eval::Error(EvalError::WrongType {
+                    function: "eq_any",
+                    expected: "Array",
+                    got: "STRING"
+                }),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            call("not_equal_any", &[one(), list()]),
+            Eval::Value(Value::Boolean(false))
+        );
+    }
 }
-
 #[test]
 fn the_registry_checks_the_replace_with_mode() {
     use crate::pipeline::{canonicalize, Arg, StageSpec};
@@ -1262,66 +1278,74 @@ fn the_registry_checks_the_replace_with_mode() {
     assert!(canonicalize(&[users(), replace(Some("sideways"))]).is_err());
 }
 
-/// `add_fields` of a nested alias whose value is missing: the official emulator keeps the parents
-/// as empty maps (probed 2026-10-27, a scalar parent included, as `select` does); production has
-/// not answered one (O-7 `fields-main` recorded a top-level missing source only), so strict
-/// refuses it as unobserved.
+/// `add_fields` of a missing value (FS-ENT-ORACLE O-9 `fields-main`, production): a nested alias
+/// creates its parents as empty maps and sets nothing (a scalar parent is replaced, a map parent
+/// keeps its members), a top-level alias removes the field, a present value is set at any depth.
+/// Both profiles answer alike (the official emulator keeps a top-level field).
 #[test]
-fn add_fields_of_a_nested_alias_with_a_missing_value_is_unobserved_under_strict() {
+fn add_fields_of_a_missing_value_follows_production() {
     let stage = |name: &str| vec![Stage::AddFields(vec![(alias(name), field("zz"))])];
-    let row = || vec![doc("a", &[("m", int(5)), ("v", int(1))])];
-    // The emulator profile follows the official emulator: parents become empty maps, a scalar
-    // parent is replaced, a top-level alias sets nothing.
-    let out = run(stage("nm.r"), row());
-    assert_eq!(out[0].fields["nm"], Value::Map(BTreeMap::new()));
-    assert!(!out[0].fields.contains_key("nm.r"));
-    let out = run(stage("m.r"), row());
-    assert_eq!(out[0].fields["m"], Value::Map(BTreeMap::new()));
-    let out = run(stage("a.b.c"), row());
-    assert_eq!(
-        out[0].fields["a"],
-        Value::Map(BTreeMap::from([(
-            "b".to_owned(),
-            Value::Map(BTreeMap::new())
-        )]))
-    );
-    assert_eq!(run(stage("nm"), row())[0].fields, row()[0].fields);
-    // Strict refuses the nested forms and still answers the top-level one.
-    for nested in ["nm.r", "m.r", "a.b.c"] {
-        let error = execute_rows_in(stage(nested), row(), Unrecorded::Refuse).unwrap_err();
-        assert!(
-            matches!(
-                error,
-                EvalError::Unobserved {
-                    function: "add_fields",
-                    ..
-                }
-            ),
-            "{nested}: {error:?}"
-        );
-    }
-    let out = execute_rows_in(stage("nm"), row(), Unrecorded::Refuse).unwrap();
-    assert_eq!(out[0].fields, row()[0].fields);
-    // A present value is set at any depth under both profiles.
+    let row = || {
+        vec![doc(
+            "a",
+            &[
+                ("m", int(5)),
+                ("v", int(1)),
+                ("q", Value::Map(BTreeMap::from([("k".to_owned(), int(1))]))),
+            ],
+        )]
+    };
+    let empty = || Value::Map(BTreeMap::new());
     for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let add = |name: &str| execute_rows_in(stage(name), row(), unrecorded).unwrap();
+        assert_eq!(add("nm.r")[0].fields["nm"], empty(), "{unrecorded:?}");
+        assert!(!add("nm.r")[0].fields.contains_key("nm.r"));
+        assert_eq!(add("m.r")[0].fields["m"], empty());
+        assert_eq!(
+            add("nm.p.q")[0].fields["nm"],
+            Value::Map(BTreeMap::from([("p".to_owned(), empty())]))
+        );
+        // A map parent keeps its members.
+        assert_eq!(add("q.r")[0].fields["q"], row()[0].fields["q"]);
+        // A top-level alias removes the field, whatever it held; a missing one stays missing.
+        for name in ["m", "q", "nm"] {
+            assert!(!add(name)[0].fields.contains_key(name), "{name}");
+        }
+        assert_eq!(add("m")[0].fields["v"], int(1));
+        // A present value is set at any depth; siblings beside a missing one survive.
         let out = execute_rows_in(
-            vec![Stage::AddFields(vec![(alias("x.y"), field("v"))])],
+            vec![Stage::AddFields(vec![
+                (alias("s.a"), field("zz")),
+                (alias("s.b"), field("v")),
+            ])],
             row(),
             unrecorded,
         )
         .unwrap();
         assert_eq!(
-            out[0].fields["x"],
-            Value::Map(BTreeMap::from([("y".to_owned(), int(1))]))
+            out[0].fields["s"],
+            Value::Map(BTreeMap::from([("b".to_owned(), int(1))]))
+        );
+        let out = execute_rows_in(
+            vec![Stage::AddFields(vec![(
+                alias("m.r"),
+                Expr::Constant(Value::Null),
+            )])],
+            row(),
+            unrecorded,
+        )
+        .unwrap();
+        assert_eq!(
+            out[0].fields["m"],
+            Value::Map(BTreeMap::from([("r".to_owned(), Value::Null)]))
         );
     }
 }
 
-/// `is_type` of a missing value: production answered `null` for the name `null` (O-1
-/// `px1/select#is-type-x-null`) and dropped the row for the others where the call is the whole
-/// condition of a `where` (O-6 `where-functions-kinds`), so strict answers nothing else.
+/// `is_type` of a missing value is null for every type name, `null` included, in any position
+/// (FS-ENT-ORACLE O-9b `types-matrix`).
 #[test]
-fn is_type_of_a_missing_value_is_unobserved_under_strict_beyond_the_recorded_forms() {
+fn is_type_of_a_missing_value_is_null_for_every_type_name() {
     let call = |name: &str, unrecorded, condition| {
         (function("is_type").unwrap().eval)(
             &[Eval::Absent, Eval::Value(Value::String(name.into()))],
@@ -1331,20 +1355,9 @@ fn is_type_of_a_missing_value_is_unobserved_under_strict_beyond_the_recorded_for
             },
         )
     };
-    for name in TYPE_NAMES.iter().copied() {
-        // The emulator profile and a `where` condition answer null (the row is dropped).
-        for (unrecorded, condition) in [
-            (Unrecorded::OfficialEmulator, false),
-            (Unrecorded::OfficialEmulator, true),
-            (Unrecorded::Refuse, true),
-        ] {
-            let recorded = matches!(
-                name,
-                "null" | "array" | "string" | "int64" | "float64" | "number"
-            );
-            if unrecorded == Unrecorded::Refuse && !recorded {
-                assert!(is_unobserved(&call(name, unrecorded, condition)), "{name}");
-            } else {
+    for name in TYPE_NAMES {
+        for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for condition in [false, true] {
                 assert_eq!(
                     call(name, unrecorded, condition),
                     Eval::Value(Value::Null),
@@ -1352,16 +1365,8 @@ fn is_type_of_a_missing_value_is_unobserved_under_strict_beyond_the_recorded_for
                 );
             }
         }
-        // Anywhere else strict answers only the name `null`.
-        let outside = call(name, Unrecorded::Refuse, false);
-        if name == "null" {
-            assert_eq!(outside, Eval::Value(Value::Null));
-        } else if matches!(name, "array" | "string" | "int64" | "float64" | "number") {
-            assert!(is_unobserved(&outside), "{name}");
-        }
     }
 }
-
 /// The adapter's `where` decoder treats a function without a signature as a comparison of two
 /// operands only when it returns a boolean and takes exactly two arguments, and as a value of
 /// another kind otherwise. The table keeps those two conditions interchangeable: a function

@@ -1652,10 +1652,12 @@ impl RestState {
             crate::pipeline::documents_input(&self.local, database, names, &*guard)
                 .map_err(refuse)?
         } else {
-            self.local
-                .run_query(&compiled.input, &*guard)
-                .map_err(refuse)?
-                .0
+            crate::pipeline::in_scan_order(
+                self.local
+                    .run_query(&compiled.input, &*guard)
+                    .map_err(refuse)?
+                    .0,
+            )
         };
         // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);

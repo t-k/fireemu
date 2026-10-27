@@ -35,14 +35,6 @@ const PENDING_PROGRAMS: &[&str] = &[
     "fs-ent-pipeline/o8c/timestamps-main",
     "fs-ent-pipeline/o8c/collections-main",
     "fs-ent-pipeline/o8d/stages-main",
-    "fs-ent-pipeline/o9/reps-main",
-    "fs-ent-pipeline/o9/fields-main",
-    "fs-ent-pipeline/o9/types-main",
-    "fs-ent-pipeline/o9/ops-main",
-    "fs-ent-pipeline/o9/cg-main",
-    "fs-ent-pipeline/o9/order-main",
-    "fs-ent-pipeline/o9b/types-matrix",
-    "fs-ent-pipeline/o9b/cg-parent",
 ];
 
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
@@ -66,10 +58,6 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
         "sqrt is outside the subset",
     ),
     (
-        "fs-ent-pipeline/results/metadata#limit",
-        "without a sort production returns another order than document names, so limit keeps other documents (PX2)",
-    ),
-    (
         "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
         "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
     ),
@@ -91,322 +79,39 @@ const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Rows whose answer is a sort whose ties come out in production's scan order, which is not
-/// reproduced (production orders a tie group differently for different limits). Only the order
-/// inside a group of rows tied on every sort key differs, so each answer is compared as a
-/// multiset and the order between the groups is pinned: the second member is the size of each
-/// group, in order, as `tie_groups` cuts the local and the production sequence (a cut falls
-/// where both have met the same rows). A regression in the order between groups moves a cut and
-/// fails the replay.
-const TIE_ORDER_ROWS: &[(&str, &[usize])] = &[
+/// Rows whose 200 answer holds other rows or another order than production's because the cut or
+/// the order depends on what production has not shown (see the reason); both profiles answer 200
+/// with the number of results pinned in the third member.
+const UNOBSERVED_ORDER_ROWS: &[(&str, &str, usize)] = &[
     (
-        "fs-ent-pipeline/o6/sort-kinds-cross#v-asc",
-        &[2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+        "a descending sort of 16 documents puts a null before a missing key where the scan order puts the missing one first, as 6- and 8-document sorts did not; the rule for the order of tied keys beyond the scan order is not observed",
+        16,
     ),
     (
-        "fs-ent-pipeline/o6/sort-kinds-within#sn-asc",
-        &[1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-kinds-within#sn-desc",
-        &[1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1],
-    ),
-    ("fs-ent-pipeline/o6/sort-missing-null#v-asc", &[2, 1, 2, 1]),
-    ("fs-ent-pipeline/o6/sort-missing-null#v-desc", &[1, 2, 2, 1]),
-    (
-        "fs-ent-pipeline/o6/sort-missing-null#wx-asc",
-        &[2, 1, 1, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-missing-null#wx-desc",
-        &[1, 1, 2, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-missing-null#through-scalar-asc",
-        &[6],
-    ),
-    ("fs-ent-pipeline/o6/sort-missing-null#v-asc-limit2", &[2]),
-    ("fs-ent-pipeline/o6/sort-ties#g-asc", &[1, 1, 1, 3, 1, 1]),
-    ("fs-ent-pipeline/o6/sort-ties#g-desc", &[1, 1, 3, 1, 1, 1]),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#ab-asc-asc",
-        &[2, 1, 1, 2, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#ab-asc-desc",
-        &[1, 2, 2, 1, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#ab-desc-asc",
-        &[1, 1, 1, 2, 2, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#ab-desc-desc",
-        &[1, 1, 2, 1, 1, 2],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#same-key-twice",
-        &[3, 3, 1, 1],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-multi-key#b-asc-a-asc",
-        &[1, 1, 2, 1, 1, 2],
-    ),
-    ("fs-ent-pipeline/o6/sort-expr-keys#equal-asc", &[2, 1, 1]),
-    ("fs-ent-pipeline/o6/sort-expr-keys#equal-desc", &[1, 1, 2]),
-    ("fs-ent-pipeline/o6/sort-expr-keys#constant-asc", &[1, 3]),
-    (
-        "fs-ent-pipeline/o6/sort-wire-errors#expression-string",
-        &[1, 2],
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#select-drop-desc-tied-none",
-        &[6],
+        "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+        "a limit after a sort cuts a group of rows tied on every sort key in an order other than the scan order (production orders a tie group differently for different limits)",
+        2,
     ),
     (
         "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort",
-        &[4],
-    ),
-];
-
-/// Rows whose 200 answer holds other rows than production's, because the cut depends on
-/// production's unsorted scan order (see the reason); both profiles answer 200 with the number
-/// of results pinned in the third member.
-const SCAN_ORDER_ROWS: &[(&str, &str, usize)] = &[
-    (
-        "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-ties#g-asc-limit4",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+        "the order of an aggregate's groups is production's own and unobserved, so a sort whose keys tie between groups differs",
         4,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-ties#g-asc-offset2-limit2",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-ties#g-desc-limit3",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#none-asc-tied-offset-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#select-alias-desc-tied-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#select-alias-desc-name-offset-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#select-drop-asc-unique-offset-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-combos#select-drop-desc-unique-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#limit-sort",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#limit-where",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#offset-where",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        4,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#limit-offset",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#limit-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#offset-offset",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#offset-select-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#where-limit-where",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/stage-order-relaxed#limit-select-offset",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/order-writes#limit3",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/order-writes#limit3-offset2",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/order-writes#offset5",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o6/order-batch#limit5",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        5,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-basic#around-limit-two-none",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
     ),
     (
         "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+        "the order of an aggregate's groups is production's own and unobserved, so a limit after the groups keeps other groups",
         2,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-basic#around-limit-none-sort",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        1,
     ),
     (
         "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+        "the order of an aggregate's groups is production's own and unobserved, so a limit after the groups keeps other groups",
         2,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-where",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        1,
     ),
     (
         "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
+        "the order of an aggregate's groups is production's own and unobserved, so an offset after the groups skips other groups",
         2,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#distinct-then-limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#distinct-then-offset",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        7,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#limit-then-distinct",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        3,
-    ),
-    (
-        "fs-ent-pipeline/o7/inputs-collection-group#limit",
-        "production's answer depends on the order of its unsorted scan (a limit or offset before a sort, a group or a distinct, a cut inside a tie, a group key's representative), which is neither name order nor write order and is not reproduced",
-        2,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-group-keys#by-g",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-group-keys#by-g-count-only",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        11,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-group-keys#by-h-g",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        11,
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-group-keys#alias-is-field",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#by-g",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#by-g-h",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        11,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#by-h-g",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        11,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#two-aliases-one-field",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#alias-is-field",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#where-then-distinct",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        7,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#distinct-then-sort",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#distinct-then-select",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        11,
-    ),
-    (
-        "fs-ent-pipeline/o7/distinct-main#distinct-then-distinct",
-        "a group key shows one of the group's own members, which production chose by its unsorted scan order (a mixed {-0, 0} group shows 0 there, where the first member met in name order is -0); the answer differs from production's only there",
-        9,
     ),
 ];
 
@@ -440,34 +145,6 @@ const EMULATOR_ONLY_DIFFERENCES: &[(&str, &str)] = &[
     (
         "fs-ent-pipeline/o8a/precedence-main#malformed-and-unknown-function",
         "the emulator profile answers the official emulator 1.22.0's one text, \"Payload isn't valid for request.\", for a body its transcoder rejects, where production names the field (strict answers production's text)",
-    ),
-];
-
-/// Rows that only the strict profile answers differently: the emulator profile matches.
-const STRICT_ONLY_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-and-1-true",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-array-contains-1-1",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-equal-any-1-1",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-and-1-true",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-array-contains-1-1",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-equal-any-1-1",
-        "strict refuses a failing call of constants before any row (ruling of 2026-10-21), where production answered the empty collection with no result",
     ),
 ];
 
@@ -598,6 +275,18 @@ fn message(text: &str) -> String {
                 .strip_suffix('.')
                 .is_some_and(|n| n.parse::<usize>().is_ok())
         });
+    // A full resource name in a path refusal (O-9 `cg-main#anc-full-name`) names the project and
+    // database of the run.
+    let path = text
+        .strip_prefix("Document path name \"")
+        .and_then(|rest| rest.split_once("\" lacks \"/\" at index "))
+        .filter(|(name, _)| name.starts_with("projects/"));
+    if let Some((name, index)) = path {
+        return format!(
+            "Document path name \"{}\" lacks \"/\" at index {index}",
+            relative(name)
+        );
+    }
     match parent {
         Some((name, _)) => format!(
             "Document parent name \"{}\" lacks \"/\" at index <n>.",
@@ -677,52 +366,6 @@ fn answer_in(status: u16, body: &Value, ordered: bool) -> Value {
         results.sort();
     }
     json!({"status": 200, "results": results})
-}
-
-/// The results of a 200 answer in the order given, each normalized.
-fn results_in_order(body: &Value) -> Vec<String> {
-    body.as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|element| element["results"].as_array().cloned().unwrap_or_default())
-        .map(|result| normalize(&result).to_string())
-        .collect()
-}
-
-/// The sizes of the consecutive groups into which two orders of the same rows cut: a cut falls
-/// wherever both orders have met the same rows, so only the order inside a group differs. A
-/// sort whose two answers differ only inside tie groups has the groups of its ties.
-fn tie_groups(local: &[String], production: &[String]) -> Vec<usize> {
-    let mut balance: BTreeMap<&str, i64> = BTreeMap::new();
-    let (mut sizes, mut start) = (Vec::new(), 0);
-    for (at, (l, p)) in local.iter().zip(production).enumerate() {
-        *balance.entry(l).or_default() += 1;
-        *balance.entry(p).or_default() -= 1;
-        balance.retain(|_, count| *count != 0);
-        if balance.is_empty() {
-            sizes.push(at + 1 - start);
-            start = at + 1;
-        }
-    }
-    if local.len() != production.len() || start != local.len() {
-        // The two answers do not hold the same rows.
-        sizes.push(usize::MAX);
-    }
-    sizes
-}
-
-#[test]
-fn tie_groups_cut_where_both_orders_have_met_the_same_rows() {
-    let rows = |text: &str| -> Vec<String> { text.chars().map(String::from).collect() };
-    // Only the order inside a group differs.
-    assert_eq!(tie_groups(&rows("abcd"), &rows("bacd")), [2, 1, 1]);
-    assert_eq!(tie_groups(&rows("abcd"), &rows("abcd")), [1, 1, 1, 1]);
-    // An order between groups that differs merges the cuts into one group.
-    assert_eq!(tie_groups(&rows("abc"), &rows("cba")), [3]);
-    assert_eq!(tie_groups(&rows("abcd"), &rows("acbd")), [1, 2, 1]);
-    // Answers holding other rows, or a different number of them, never cut cleanly.
-    assert_eq!(tie_groups(&rows("ab"), &rows("ac")), [1, usize::MAX]);
-    assert_eq!(tie_groups(&rows("abc"), &rows("ab")), [1, 1, usize::MAX]);
 }
 
 /// How an answer is cut into array elements: the number of results in each.
@@ -932,13 +575,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     // (`REGENERATE_O5_DEBT=<path>`; review the result before it replaces the committed file).
     let mut answers: BTreeMap<(bool, String), Value> = BTreeMap::new();
     for strict in [true, false] {
-        let s = state(strict);
         let mut differing = Vec::new();
         let mut not_replayable = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
+            // Each program runs on its own database, as the recorder cleans its collections
+            // between programs (several programs seed the same collection names).
+            let s = state(strict);
             for seed in program["seed"].as_array().unwrap() {
                 let (status, body) = call(
                     &s,
@@ -979,12 +624,23 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     )
                 };
                 let expected = &recorded[step_id];
-                // Only a pipeline with a sort has an order to compare.
+                // The order of every pipeline answer is compared: a read without a sort is in
+                // production's scan order (ascending CRC-32 of the document ID, O-9), which
+                // fireemu reproduces. The groups of an aggregate come in an order of their own
+                // (not the scan order, nor a sort of the keys: production's is unobserved), so
+                // such an answer is a multiset unless a `sort` follows the grouping.
+                let stages = step["body"]["structuredPipeline"]["pipeline"]["stages"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let grouped_at = stages.iter().position(|stage| {
+                    stage["name"] == "aggregate"
+                        && stage["args"][1]["mapValue"]["fields"]
+                            .as_object()
+                            .is_some_and(|groups| !groups.is_empty())
+                });
                 let ordered = rpc == "executePipeline"
-                    && step["body"]["structuredPipeline"]["pipeline"]["stages"]
-                        .as_array()
-                        .is_some_and(|stages| stages.iter().any(|stage| stage["name"] == "sort"))
-                    && !TIE_ORDER_ROWS.iter().any(|(tied, _)| *tied == row);
+                    && grouped_at.is_none_or(|at| stages[at..].iter().any(|s| s["name"] == "sort"));
                 assert!(!expected.is_null(), "{row} has no production row");
                 let matches = if rpc == "commit" {
                     u64::from(status) == expected["status"].as_u64().unwrap()
@@ -1005,26 +661,6 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 };
                 compared += 1;
                 seen.insert(row.clone());
-                if let Some((_, pinned)) = TIE_ORDER_ROWS.iter().find(|(tied, _)| *tied == row) {
-                    let groups = tie_groups(
-                        &results_in_order(&body),
-                        &results_in_order(&expected["body"]),
-                    );
-                    if let Ok(path) = std::env::var("DUMP_TIE_GROUPS") {
-                        use std::io::Write as _;
-                        let mut file = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(path)
-                            .unwrap();
-                        writeln!(file, "{strict} {row} {groups:?}").unwrap();
-                    }
-                    if groups != *pinned {
-                        failures.push(format!(
-                            "strict={strict} {row}: tie groups {groups:?}, pinned {pinned:?}"
-                        ));
-                    }
-                }
                 if rpc == "executePipeline" && matches && status == 200 {
                     // Production packs a small answer into one response (FS-ENT-ORACLE O-1,
                     // results/metadata): the number of array elements and the results each
@@ -1118,11 +754,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         );
         let known = |row: &str| {
             KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
-                || SCAN_ORDER_ROWS.iter().any(|(known, _, _)| row == *known)
-                || (strict
-                    && STRICT_ONLY_DIFFERENCES
-                        .iter()
-                        .any(|(known, _)| row == *known))
+                || UNOBSERVED_ORDER_ROWS
+                    .iter()
+                    .any(|(known, _, _)| row == *known)
                 || (!strict
                     && EMULATOR_ONLY_DIFFERENCES
                         .iter()
@@ -1164,9 +798,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 stale.push(json!({"row": known, "reason": reason}));
                 continue;
             };
-            let pinned = if *known == "fs-ent-pipeline/results/metadata#limit" {
-                got["status"] == 200 && got["results"].as_array().map(Vec::len) == Some(2)
-            } else if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
+            let pinned = if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
                 && !strict
             {
                 got["status"] == 400
@@ -1179,10 +811,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }
         }
-        // A scan-order row must still answer 200 and differ; a strict-only row must differ under
-        // strict (pinned 501) and match under the emulator profile; a tie-order row must match as
-        // a multiset.
-        for (known, reason, count) in SCAN_ORDER_ROWS {
+        // An unobserved-order row must still answer 200 with its pinned count and differ.
+        for (known, reason, count) in UNOBSERVED_ORDER_ROWS {
             match differing.iter().find(|(row, _, _)| row == known) {
                 Some((_, got, _))
                     if got["status"] == 200
@@ -1193,46 +823,14 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 None => stale.push(json!({"row": known, "reason": reason})),
             }
         }
-        for (known, reason) in STRICT_ONLY_DIFFERENCES {
-            let differs = differing.iter().find(|(row, _, _)| row == known);
-            match (strict, differs) {
-                (true, Some((_, got, _)))
-                    if got["status"] == 501
-                        && got["body"][0]["error"]["status"] == "UNIMPLEMENTED" => {}
-                (_, Some((_, got, _))) => {
-                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
-                }
-                (true, None) => stale.push(json!({"row": known, "reason": reason})),
-                (false, None) => {}
-            }
-        }
-        for (known, reason) in EMULATOR_ONLY_DIFFERENCES {
-            let differs = differing.iter().find(|(row, _, _)| row == known);
-            match (strict, differs) {
-                (false, Some((_, got, _)))
-                    if got["status"] == 400
-                        && got["body"][0]["error"]["message"]
-                            == "Payload isn't valid for request." => {}
-                (_, Some((_, got, _))) => {
-                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
-                }
-                (false, None) => stale.push(json!({"row": known, "reason": reason})),
-                (true, None) => {}
-            }
-        }
-        for (known, _) in TIE_ORDER_ROWS {
-            if differing.iter().any(|(row, _, _)| row == known) {
-                failures.push(format!(
-                    "strict={strict} {known}: differs as a multiset, so it is no tie-order row"
-                ));
-            }
-        }
         if !unexpected.is_empty() || !stale.is_empty() || !changed_known.is_empty() {
             failures.push(format!(
-                "strict={strict}: unexpected={}, stale={}, changedKnown={}",
+                "strict={strict}: unexpected={}, stale={}, changedKnown={}; stale rows {:?}; changed rows {:?}",
                 unexpected.len(),
                 stale.len(),
-                changed_known.len()
+                changed_known.len(),
+                stale.iter().map(|row| row["row"].clone()).collect::<Vec<_>>(),
+                changed_known.iter().map(|row| row["row"].clone()).collect::<Vec<_>>()
             ));
         }
     }

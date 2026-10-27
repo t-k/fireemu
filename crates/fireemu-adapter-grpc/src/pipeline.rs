@@ -311,6 +311,16 @@ fn pipeline_input<'a>(
                     "this collection_group input is unsupported locally",
                 ));
             };
+            if let Some(pb::value::ValueType::ReferenceValue(ancestor)) =
+                stage.args.first().and_then(|v| v.value_type.as_ref())
+            {
+                // The ancestor is validated as a document path and otherwise ignored; the empty
+                // reference is the root (FS-ENT-ORACLE O-9 `cg-main`).
+                if let Some(text) = documents_path_error(ancestor).filter(|_| !ancestor.is_empty())
+                {
+                    return Err(Status::invalid_argument(text));
+                }
+            }
             if let Some(text) = collection_group_id_error(id) {
                 return Err(Status::invalid_argument(text));
             }
@@ -384,13 +394,27 @@ fn collection_group_id_error(id: &str) -> Option<String> {
 /// Production's refusals of a path of `documents` (FS-ENT-ORACLE O-7 `inputs-documents#invalid-*`):
 /// a rooted document path of an even number of segments is none.
 fn documents_path_error(path: &str) -> Option<String> {
-    if path.ends_with('/') {
+    if path == "/" {
         return Some(format!(
             "Document path name \"{path}\" is invalid: Omit trailing \"/\"."
         ));
     }
+    // A trailing "/" after a name (`anc-trailing-slash`; the official emulator 1.22.0 alike).
+    if path.ends_with('/') {
+        return Some(format!(
+            "Document path name \"{path}\" has invalid trailing \"/\"."
+        ));
+    }
+    // A path without its leading "/" is refused at index 0 (FS-ENT-ORACLE O-9 `cg-main`
+    // `anc-no-leading-slash`, `anc-full-name`); one with an odd number of segments, a collection,
+    // at its end (`anc-collection-path`).
+    if !path.starts_with('/') {
+        return Some(format!(
+            "Document path name \"{path}\" lacks \"/\" at index 0."
+        ));
+    }
     let segments = path.trim_start_matches('/').split('/').count();
-    if !path.starts_with('/') || segments % 2 == 1 || path.contains("//") {
+    if segments % 2 == 1 || path.contains("//") {
         return Some(format!(
             "Document path name \"{path}\" lacks \"/\" at index {}.",
             path.encode_utf16().count()
@@ -676,46 +700,31 @@ pub fn compile_pipeline(
     compile_pipeline_in_order(req, parent, unrecorded, None)
 }
 
-/// Strict answers the references of an input stage only in the forms production was given
-/// (FS-ENT-ORACLE O-7 `inputs-collection-group`, `inputs-documents`): a `collection_group`
-/// ancestor that is empty (the root) or the document of a collection (`/cg/a`), and `documents`
-/// paths of the same two segments. Any other reference (a collection, a deeper document, a full
-/// resource name) is unobserved.
+/// Strict answers the `documents` paths only in the form production was given (FS-ENT-ORACLE
+/// O-7 `inputs-documents`): the document of a collection (`/dc/d1`, two segments). A deeper
+/// document path is unobserved. (The ancestor of `collection_group` was recorded in any valid
+/// document path form, O-9 `cg-main`.)
 fn unrecorded_input_path(stage: &pb::pipeline::Stage) -> Option<Status> {
-    let document = |path: &str| {
+    if stage.name != "documents" {
+        return None;
+    }
+    let two_segments = |path: &str| {
         path.strip_prefix('/').is_some_and(|rest| {
             let segments: Vec<&str> = rest.split('/').collect();
             segments.len() == 2 && segments.iter().all(|segment| !segment.is_empty())
         })
     };
-    let reference = |value: &pb::Value| match &value.value_type {
-        Some(pb::value::ValueType::ReferenceValue(path)) => Some(path.clone()),
-        _ => None,
-    };
-    let (input, unrecorded) = match stage.name.as_str() {
-        "collection_group" => (
-            "collection_group",
-            stage
-                .args
-                .first()
-                .and_then(reference)
-                .is_some_and(|path| !path.is_empty() && !document(&path)),
-        ),
-        "documents" => (
-            "documents",
-            stage
-                .args
-                .iter()
-                .filter_map(reference)
-                .any(|path| !document(&path)),
-        ),
-        _ => return None,
-    };
-    unrecorded.then(|| {
-        Status::unimplemented(format!(
-            "a {input} reference of this form is not observed locally"
-        ))
-    })
+    stage
+        .args
+        .iter()
+        .filter_map(|value| match &value.value_type {
+            Some(pb::value::ValueType::ReferenceValue(path)) => Some(path),
+            _ => None,
+        })
+        .any(|path| !two_segments(path))
+        .then(|| {
+            Status::unimplemented("a documents reference of this form is not observed locally")
+        })
 }
 
 /// [`compile_pipeline`] with the wire order of the request's maps, where the transport kept it
@@ -1037,6 +1046,60 @@ fn decode_operand(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Sta
     }
 }
 
+/// An operand as the official emulator 1.22.0 prints it in a refusal (probed 2026-10-27):
+/// integers as `1L`, doubles as `1.5D`, strings in quotes (unescaped), `true`, `false`, `null`,
+/// arrays as `[1L, 2L]`, maps as `{k=1L}` in key order, field references by path and calls as
+/// `name(arg, ...)`. `None` for the kinds not printed here (timestamps, bytes, references,
+/// vectors, variables, pipelines) and for a double Java prints in exponent form.
+fn expression_text(value: &pb::Value) -> Option<String> {
+    use pb::value::ValueType as V;
+    Some(match value.value_type.as_ref()? {
+        V::NullValue(_) => "null".to_owned(),
+        V::BooleanValue(b) => b.to_string(),
+        V::IntegerValue(n) => format!("{n}L"),
+        V::DoubleValue(d) => {
+            let magnitude = d.abs();
+            if !d.is_finite() || (magnitude != 0.0 && !(1e-3..1e7).contains(&magnitude)) {
+                return None;
+            }
+            // The official emulator stores a negative zero as zero.
+            let d = if *d == 0.0 { 0.0 } else { *d };
+            format!("{d:?}D")
+        }
+        V::StringValue(text) => format!("\"{text}\""),
+        V::FieldReferenceValue(path) => path.clone(),
+        V::ArrayValue(array) => format!(
+            "[{}]",
+            array
+                .values
+                .iter()
+                .map(expression_text)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
+        V::MapValue(map) => {
+            let mut keys: Vec<&String> = map.fields.keys().collect();
+            keys.sort();
+            let entries = keys
+                .into_iter()
+                .map(|key| Some(format!("{key}={}", expression_text(&map.fields[key])?)))
+                .collect::<Option<Vec<_>>>()?;
+            format!("{{{}}}", entries.join(", "))
+        }
+        V::FunctionValue(function) => format!(
+            "{}({})",
+            function.name,
+            function
+                .args
+                .iter()
+                .map(expression_text)
+                .collect::<Option<Vec<_>>>()?
+                .join(", ")
+        ),
+        _ => return None,
+    })
+}
+
 /// The refusal of a call that reads no field, evaluated once before any row (its answer is the
 /// same for every row): `None` when it answers a value.
 fn constant_call_error(expr: &Expr) -> Option<Status> {
@@ -1060,6 +1123,13 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
         std::collections::BTreeMap::new(),
     );
     match expr.eval_in(&row, Unrecorded::Refuse) {
+        // Production fails these calls per row and answered the empty collection with no result
+        // (FS-ENT-ORACLE O-1 `px1/static-refusals`), and with a row it refused them in the words
+        // of O-9 `ops-main`: they are executed, and the shape gate answers the failure.
+        pipeline_exec::Eval::Error(pipeline_exec::EvalError::WrongType {
+            function: "and" | "or" | "nor" | "xor" | "array_contains" | "eq_any",
+            ..
+        }) => None,
         pipeline_exec::Eval::Error(error) => Some(eval_status(&error)),
         _ => None,
     }
@@ -1141,6 +1211,28 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
             ];
             Expr::call(&function.name, placeholders, Placement::Value)
                 .map_err(|e| expr_status(e, unrecorded))?;
+            // `exists` and `is_absent` take a field reference, nothing else: production and the
+            // official emulator 1.22.0 refuse any other operand before any row, printing it
+            // (FS-ENT-ORACLE O-9 `types-main`: `is_absent(is_type(zz, "null"))`).
+            if matches!(function.name.as_str(), "exists" | "is_absent") {
+                if let Some(argument) = function.args.first().filter(|argument| {
+                    !matches!(argument.value_type, Some(V::FieldReferenceValue(_)))
+                }) {
+                    return Err(match expression_text(argument) {
+                        Some(text) => Status::invalid_argument(format!(
+                            "The argument {text} for function '{}' is required to be a constant field reference.",
+                            function.name
+                        )),
+                        None if unrecorded == Unrecorded::Refuse => Status::unimplemented(
+                            "this operand of exists or is_absent is not observed locally",
+                        ),
+                        None => Status::invalid_argument(format!(
+                            "The argument of function '{}' is required to be a constant field reference.",
+                            function.name
+                        )),
+                    });
+                }
+            }
             // The official emulator ignores function options; production has not answered
             // them, so strict refuses them as unobserved.
             if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
@@ -2269,9 +2361,12 @@ fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
                     other => expected(&format!("paths[{i}]"), "REFERENCE_VALUE", other),
                 })
         }
-        "collection_group" => match stage.args[1].value_type.as_ref() {
-            Some(V::StringValue(_)) => None,
-            other => expected("collection_id", "STRING_VALUE", other),
+        "collection_group" => match stage.args[0].value_type.as_ref() {
+            Some(V::ReferenceValue(_)) => match stage.args[1].value_type.as_ref() {
+                Some(V::StringValue(_)) => None,
+                other => expected("collection_id", "STRING_VALUE", other),
+            },
+            other => expected("ancestor", "REFERENCE_VALUE", other),
         },
         _ => None,
     }
@@ -2335,13 +2430,15 @@ fn decode_add_fields(
         }
         aliases.push((path, expr));
     }
-    // An alias inside another, or the same twice: unrecorded for this stage.
+    // An alias inside another is refused naming the alias set later in the request, in both
+    // orders and also when the parent's value is missing (FS-ENT-ORACLE O-9 `fields-main`).
     for (at, (path, _)) in aliases.iter().enumerate() {
-        if aliases[..at].iter().any(|(earlier, _)| {
-            earlier == path || earlier.is_prefix_of(path) || path.is_prefix_of(earlier)
-        }) {
-            return Err(Status::unimplemented(
-                "add_fields aliases that overlap are not observed locally",
+        if aliases[..at]
+            .iter()
+            .any(|(earlier, _)| earlier.is_prefix_of(path) || path.is_prefix_of(earlier))
+        {
+            return Err(crate::production_status::add_fields_overlapping_paths(
+                &path.canonical(),
             ));
         }
     }
@@ -3009,6 +3106,51 @@ pub fn documents_input(
             crate::local::BatchGetItem::Missing(_) => None,
         })
         .collect())
+}
+
+/// The CRC-32 (IEEE, as zlib computes it) of `bytes`.
+#[must_use]
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// The documents of a pipeline's input in the order production scans them (FS-ENT-ORACLE O-9
+/// `order-main`, O-9b `order-fresh`): a collection is read in ascending CRC-32 of the UTF-8
+/// bytes of the document ID (the last path segment), nothing else, so an unsorted answer, a
+/// `limit` or `offset` over it, the ties of a `sort` and the first member of a group all follow
+/// it; a collection group is read by parent path (the root first), and inside one parent by the
+/// same CRC-32. CRC-32 ties, which production has not shown, fall back to the name.
+#[must_use]
+pub fn in_scan_order(mut responses: Vec<pb::RunQueryResponse>) -> Vec<pb::RunQueryResponse> {
+    let key = |response: &pb::RunQueryResponse| {
+        let name = response
+            .document
+            .as_ref()
+            .map(|document| document.name.as_str())?;
+        let (collection, id) = name.rsplit_once('/')?;
+        // The parent document of the collection (the root for a top-level collection); every
+        // document of one collection has the same one, so it orders a collection group only.
+        let collection = collection
+            .split_once("/documents")
+            .map_or("", |(_, path)| path.trim_start_matches('/'));
+        let parent = collection
+            .rsplit_once('/')
+            .map_or(String::new(), |(document, _)| document.to_owned());
+        Some((parent, crc32(id.as_bytes()), name.to_owned()))
+    };
+    responses.sort_by_cached_key(key);
+    responses
 }
 
 /// A `RunQuery` result document as an executor row.
@@ -4230,6 +4372,240 @@ mod tests {
             let responses = pack_results(documents, Some(time));
             assert_eq!(responses.len(), 2);
             assert!(responses.iter().all(|r| r.execution_time == Some(time)));
+        }
+    }
+    mod scan_order {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn response(name: &str) -> pb::RunQueryResponse {
+            pb::RunQueryResponse {
+                document: Some(pb::Document {
+                    name: format!("projects/p/databases/(default)/documents/{name}"),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn names(responses: &[pb::RunQueryResponse]) -> Vec<String> {
+            responses
+                .iter()
+                .filter_map(|r| r.document.as_ref())
+                .map(|d| d.name.rsplit("/documents/").next().unwrap().to_owned())
+                .collect()
+        }
+
+        #[test]
+        fn crc32_is_the_zlib_checksum() {
+            // The check value of the CRC-32/ISO-HDLC catalogue entry, and zlib's own answers.
+            assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+            assert_eq!(crc32(b""), 0);
+            assert_eq!(crc32(b"a"), 3_904_355_907);
+            assert_eq!(crc32(b"d01"), 1_040_682_023);
+        }
+
+        #[test]
+        fn a_collection_is_read_in_ascending_crc_of_the_id() {
+            // O-9b: ids chosen so that the order differs from the name order.
+            let read = in_scan_order(["c/a", "c/b", "c/d15", "c/d01"].map(response).to_vec());
+            assert_eq!(names(&read), ["c/d15", "c/d01", "c/b", "c/a"]);
+        }
+
+        #[test]
+        fn a_collection_group_is_read_by_parent_document_then_crc_of_the_id() {
+            // O-9 `cg-main`: the root first, then cg/a, cg/a/items/x, cg/b, oth/p.
+            let read = in_scan_order(
+                [
+                    "oth/p/items/q",
+                    "cg/b/items/y",
+                    "items/z",
+                    "cg/a/items/x/items/w",
+                    "cg/a/items/x",
+                ]
+                .map(response)
+                .to_vec(),
+            );
+            assert_eq!(
+                names(&read),
+                [
+                    "items/z",
+                    "cg/a/items/x",
+                    "cg/a/items/x/items/w",
+                    "cg/b/items/y",
+                    "oth/p/items/q"
+                ]
+            );
+        }
+
+        #[test]
+        fn a_response_without_a_document_stays_first() {
+            let mut responses = vec![response("c/a"), pb::RunQueryResponse::default()];
+            responses.push(response("c/b"));
+            let read = in_scan_order(responses);
+            assert!(read[0].document.is_none());
+        }
+
+        proptest! {
+            /// The result is a permutation in ascending CRC-32 of the ids, whatever the input
+            /// order, and putting it in order twice changes nothing.
+            #[test]
+            fn the_scan_order_is_a_sorted_permutation(
+                ids in proptest::collection::btree_set("[a-zA-Z0-9_.-]{1,8}", 0..24),
+                shuffle in any::<u64>(),
+            ) {
+                let mut input: Vec<_> = ids.iter().map(|id| response(&format!("c/{id}"))).collect();
+                let len = input.len().max(1);
+                input.rotate_left(usize::try_from(shuffle).unwrap_or(0) % len);
+                let read = in_scan_order(input);
+                let keys: Vec<u32> = names(&read)
+                    .iter()
+                    .map(|name| crc32(name.rsplit('/').next().unwrap().as_bytes()))
+                    .collect();
+                prop_assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]));
+                prop_assert_eq!(read.len(), ids.len());
+                prop_assert_eq!(names(&in_scan_order(read.clone())), names(&read));
+            }
+        }
+    }
+    mod operand_text {
+        use super::*;
+
+        fn function(name: &str, args: Vec<pb::Value>) -> pb::Value {
+            pb::Value {
+                value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            }
+        }
+
+        fn field(path: &str) -> pb::Value {
+            pb::Value {
+                value_type: Some(pb::value::ValueType::FieldReferenceValue(path.to_owned())),
+            }
+        }
+
+        fn scalar(value: pb::value::ValueType) -> pb::Value {
+            pb::Value {
+                value_type: Some(value),
+            }
+        }
+
+        /// The texts the official emulator 1.22.0 and production print (probed 2026-10-27).
+        #[test]
+        fn an_operand_is_printed_as_the_official_emulator_prints_it() {
+            use pb::value::ValueType as V;
+            for (value, text) in [
+                (scalar(V::IntegerValue(1)), "1L"),
+                (scalar(V::IntegerValue(-5)), "-5L"),
+                (scalar(V::DoubleValue(1.5)), "1.5D"),
+                (scalar(V::DoubleValue(1.0)), "1.0D"),
+                (scalar(V::DoubleValue(-0.0)), "0.0D"),
+                (scalar(V::StringValue("s".into())), "\"s\""),
+                (scalar(V::StringValue("a\"b".into())), "\"a\"b\""),
+                (scalar(V::BooleanValue(true)), "true"),
+                (scalar(V::NullValue(0)), "null"),
+                (field("a.b"), "a.b"),
+                (
+                    function("equal", vec![field("v"), scalar(V::IntegerValue(1))]),
+                    "equal(v, 1L)",
+                ),
+                (
+                    function(
+                        "is_type",
+                        vec![field("zz"), scalar(V::StringValue("null".into()))],
+                    ),
+                    "is_type(zz, \"null\")",
+                ),
+                (function("array", vec![]), "array()"),
+                (
+                    scalar(V::ArrayValue(pb::ArrayValue {
+                        values: vec![scalar(V::IntegerValue(1))],
+                    })),
+                    "[1L]",
+                ),
+                (
+                    scalar(V::MapValue(pb::MapValue {
+                        fields: [("k".to_owned(), scalar(V::IntegerValue(1)))].into(),
+                    })),
+                    "{k=1L}",
+                ),
+            ] {
+                assert_eq!(expression_text(&value).as_deref(), Some(text));
+            }
+            // Doubles Java prints in exponent form, and kinds not printed here, have no text.
+            assert_eq!(expression_text(&scalar(V::DoubleValue(1e7))), None);
+            assert_eq!(expression_text(&scalar(V::DoubleValue(1e-4))), None);
+            assert_eq!(expression_text(&scalar(V::DoubleValue(f64::NAN))), None);
+            assert_eq!(
+                expression_text(&scalar(V::ReferenceValue("/a/b".into()))),
+                None
+            );
+        }
+
+        #[test]
+        fn exists_and_is_absent_take_a_field_reference_and_nothing_else() {
+            let call = |name: &str, argument: pb::Value, unrecorded| {
+                decode_operand_tree(&function(name, vec![argument]), unrecorded)
+            };
+            for unrecorded in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                for name in ["exists", "is_absent"] {
+                    assert!(call(name, field("a"), unrecorded).is_ok(), "{name}");
+                    let refused = call(
+                        name,
+                        function(
+                            "is_type",
+                            vec![
+                                field("zz"),
+                                scalar(pb::value::ValueType::StringValue("null".into())),
+                            ],
+                        ),
+                        unrecorded,
+                    )
+                    .unwrap_err();
+                    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+                    assert_eq!(
+                        refused.message(),
+                        format!(
+                            "The argument is_type(zz, \"null\") for function '{name}' is required to be a constant field reference."
+                        )
+                    );
+                }
+            }
+            // An operand with no printed form is unobserved under strict.
+            let reference = scalar(pb::value::ValueType::ReferenceValue("/a/b".into()));
+            let refused = call("exists", reference.clone(), Unrecorded::Refuse).unwrap_err();
+            assert_eq!(refused.code(), tonic::Code::Unimplemented);
+            let refused = call("exists", reference, Unrecorded::OfficialEmulator).unwrap_err();
+            assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+        }
+
+        #[test]
+        fn document_paths_are_refused_in_the_words_of_the_recordings() {
+            // O-9 `cg-main`, also the official emulator 1.22.0.
+            assert_eq!(documents_path_error("/cg/a"), None);
+            assert_eq!(documents_path_error("/cg/a/items/x"), None);
+            for (path, text) in [
+                ("/", "Document path name \"/\" is invalid: Omit trailing \"/\"."),
+                ("/cg", "Document path name \"/cg\" lacks \"/\" at index 3."),
+                (
+                    "/cg/a/items",
+                    "Document path name \"/cg/a/items\" lacks \"/\" at index 11.",
+                ),
+                (
+                    "/cg/a/",
+                    "Document path name \"/cg/a/\" has invalid trailing \"/\".",
+                ),
+                ("cg/a", "Document path name \"cg/a\" lacks \"/\" at index 0."),
+                (
+                    "projects/p/databases/d/documents/cg/a",
+                    "Document path name \"projects/p/databases/d/documents/cg/a\" lacks \"/\" at index 0.",
+                ),
+            ] {
+                assert_eq!(documents_path_error(path).as_deref(), Some(text), "{path}");
+            }
         }
     }
     mod unknown_stage {

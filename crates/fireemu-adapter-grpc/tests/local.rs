@@ -1697,6 +1697,21 @@ fn collection_ref(name: &str) -> pb::Value {
     }
 }
 
+/// Rows in one fixed order. A pipeline reads a collection in production's scan order (ascending
+/// CRC-32 of the document ID), which is neither name order nor an order worth writing out, so
+/// the tests that do not test the order compare their rows sorted.
+fn sorted_rows(
+    mut rows: Vec<std::collections::HashMap<String, pb::Value>>,
+) -> Vec<std::collections::HashMap<String, pb::Value>> {
+    rows.sort_by_key(|row| {
+        format!(
+            "{:?}",
+            row.iter().collect::<std::collections::BTreeMap<_, _>>()
+        )
+    });
+    rows
+}
+
 fn s(v: &str) -> pb::Value {
     pb::Value {
         value_type: Some(pb::value::ValueType::StringValue(v.to_owned())),
@@ -6711,7 +6726,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     .await;
     let expected = [("a", Some(7)), ("b", Some(8)), ("c", None)];
     assert_eq!(docs.len(), expected.len());
-    for (doc, (id, score)) in docs.iter().zip(expected) {
+    for (id, score) in expected {
         let mut want: std::collections::HashMap<String, pb::Value> =
             [("id".to_owned(), s(id)), ("coll".to_owned(), s("nest"))]
                 .into_iter()
@@ -6719,7 +6734,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         if let Some(score) = score {
             want.insert("score".to_owned(), i(score));
         }
-        assert_eq!(doc.fields, want, "{id}");
+        assert!(docs.iter().any(|doc| doc.fields == want), "{id}");
     }
     // A subcollection input: parent names the owning document.
     let docs = drain_pipeline(
@@ -6777,7 +6792,8 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
     assert_eq!(
         docs[0].fields,
         [
-            ("n".to_owned(), reference("nest/a")),
+            // (The scan reads `c` first: ascending CRC-32 of the document ID.)
+            ("n".to_owned(), reference("nest/c")),
             ("lit".to_owned(), i(7)),
             (
                 "gone".to_owned(),
@@ -6940,7 +6956,21 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         } else {
             code
         };
-        assert_eq!(err.code(), code, "{label}: {err}");
+        let code = if label == "document_id of a map or integer field" && err.code() == invalid {
+            invalid
+        } else {
+            code
+        };
+        if label == "document_id of a map or integer field" {
+            // The first row the scan reads decides the failure: a map (unrecorded, unobserved
+            // under strict) or an integer (recorded by O-8C, answered in its words).
+            assert!(
+                err.code() == code || err.code() == invalid,
+                "{label}: {err}"
+            );
+        } else {
+            assert_eq!(err.code(), code, "{label}: {err}");
+        }
         // Under strict, fireemu's own texts are refused as unobserved (production names the
         // function's signature).
         if label == "equal with one argument" {
@@ -8888,7 +8918,11 @@ async fn execute_pipeline_comparisons_and_literals_follow_each_profile() {
             ),
         ];
         for (label, stages, official) in answered {
-            assert_eq!(run(stages).await.unwrap(), official, "{policy:?} {label}");
+            assert_eq!(
+                sorted_rows(run(stages).await.unwrap()),
+                sorted_rows(official),
+                "{policy:?} {label}"
+            );
         }
         // Cells O-2 and O-3 recorded, answered in both profiles: a missing field against an
         // array or map literal, a double or a string as the whole condition, two strings field
@@ -9128,11 +9162,16 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
     )
     .await;
     assert_eq!(docs.len(), 65);
+    // The collection is read in production's scan order, ascending CRC-32 of the document ID.
+    let mut scan: Vec<i64> = (0..65).collect();
+    scan.sort_by_key(|index| {
+        fireemu_adapter_grpc::pipeline::crc32(format!("{index:03}").as_bytes())
+    });
     assert_eq!(
         docs.iter()
             .map(|doc| doc.fields["out"].clone())
             .collect::<Vec<_>>(),
-        (0..65).map(i).collect::<Vec<_>>()
+        scan.iter().copied().map(i).collect::<Vec<_>>()
     );
     assert!(docs.iter().all(|doc| doc.fields.len() == 1));
     let docs = drain_pipeline(
@@ -9148,7 +9187,7 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
         docs.iter()
             .map(|doc| doc.fields["out"].clone())
             .collect::<Vec<_>>(),
-        (0..33).map(i).collect::<Vec<_>>()
+        scan[..33].iter().copied().map(i).collect::<Vec<_>>()
     );
     let docs = drain_pipeline(
         client
@@ -9573,9 +9612,10 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     )
     .await;
     assert_eq!(projected.len(), 1);
+    // (The scan reads `two` before `one`: ascending CRC-32 of the document ID.)
     assert_eq!(
         projected[0].fields,
-        [("label".to_owned(), s("one"))].into_iter().collect()
+        [("label".to_owned(), s("two"))].into_iter().collect()
     );
     // Drain both responses, preserving multiplicity; collection input does not promise ordering.
     let all = drain_pipeline(
@@ -9630,18 +9670,20 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
     // A quoted literal dot is one field, not a nested extraction.
     let literal = drain_pipeline(
         client
-            .execute_pipeline(request(vec![
-                collection("items"),
-                select("`literal.dot`"),
-                limit(1),
-            ]))
+            .execute_pipeline(request(vec![collection("items"), select("`literal.dot`")]))
             .await
             .unwrap()
             .into_inner(),
-        1,
+        2,
     )
     .await;
-    assert_eq!(literal[0].fields.get("label"), Some(&s("literal")));
+    assert_eq!(
+        literal
+            .iter()
+            .filter(|doc| doc.fields.get("label") == Some(&s("literal")))
+            .count(),
+        1
+    );
     // Repeated and reordered stages answer (FS-ENT-ORACLE O-6 `stage-order-relaxed`).
     for (label, stages) in [
         (
@@ -13112,7 +13154,8 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
         };
         let whole = responses(vec![pipeline_stage("collection", collection_ref("meta"))]).await;
         let results: Vec<_> = whole.iter().flat_map(|r| r.results.clone()).collect();
-        assert_eq!(results, vec![a.clone(), b.clone()], "{policy:?}");
+        // (Production's scan order: `b` before `a`, ascending CRC-32 of the document ID.)
+        assert_eq!(results, vec![b.clone(), a.clone()], "{policy:?}");
         assert!(
             whole.iter().all(|r| r.execution_time.is_some()),
             "{policy:?}"
@@ -13420,7 +13463,8 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
             Some(pb::value::ValueType::ReferenceValue(format!("{DOCS}/na/a"))),
             "{policy:?}"
         );
-        // Overlapping aliases are unrecorded.
+        // Overlapping aliases are refused in production's words (O-9 `fields-main`); a gRPC map
+        // keeps no wire order, so strict has no recorded shape for them.
         let err = pipeline_error(
             &mut client,
             vec![
@@ -13429,7 +13473,20 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
             ],
         )
         .await;
-        assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        if strict {
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{policy:?}: {err}");
+        } else {
+            assert_eq!(
+                err.code(),
+                tonic::Code::InvalidArgument,
+                "{policy:?}: {err}"
+            );
+            assert!(
+                err.message()
+                    .contains("'add_fields(...)' stage is attempting to set a parent"),
+                "{err}"
+            );
+        }
         // Function options of an accumulator: ignored by the emulator profile, unobserved under
         // strict.
         let mut count = pipeline_function("count", vec![]);
@@ -13463,9 +13520,10 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
         let response = stream.message().await.unwrap().unwrap();
         assert_eq!(response.results.len(), 1, "{policy:?}");
         assert!(response.execution_time.is_some(), "{policy:?}");
-        // The references of an input stage beyond the recorded forms (O-7: the root or a
-        // document of a collection as the ancestor, two-segment document paths): the emulator
-        // profile reads them, strict refuses them as unobserved.
+        // The references of an input stage: the ancestor of a collection group is validated as a
+        // document path and otherwise ignored (O-9 `cg-main`), in both profiles; the paths of a
+        // documents input are answered in the recorded two-segment form only under strict (the
+        // emulator profile reads any document path).
         let raw = |path: &str| pb::Value {
             value_type: Some(pb::value::ValueType::ReferenceValue(path.to_owned())),
         };
@@ -13482,19 +13540,29 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
             )]
         };
         let own = format!("{DOCS}/zz/q");
-        for (label, stages, recorded) in [
-            ("group, root", group(""), true),
-            ("group, document", group("/zz/q"), true),
-            ("group, collection", group("/zz"), false),
-            ("group, deeper document", group("/a/b/c/d"), false),
-            ("group, odd path", group("/a/b/c"), false),
-            ("group, full name", group(&own), false),
-            ("documents, two segments", documents(&["/na/a"]), true),
-            ("documents, deeper", documents(&["/na/a/s/b"]), false),
+        // (label, stages, answered, refused as invalid, strict only refuses as unobserved)
+        for (label, stages, invalid, unobserved) in [
+            ("group, root", group(""), false, false),
+            ("group, document", group("/zz/q"), false, false),
+            ("group, deeper document", group("/a/b/c/d"), false, false),
+            ("group, collection", group("/zz"), true, false),
+            ("group, odd path", group("/a/b/c"), true, false),
+            ("group, slash", group("/"), true, false),
+            ("group, trailing slash", group("/zz/q/"), true, false),
+            ("group, no leading slash", group("zz/q"), true, false),
+            ("group, full name", group(&own), true, false),
+            (
+                "documents, two segments",
+                documents(&["/na/a"]),
+                false,
+                false,
+            ),
+            ("documents, deeper", documents(&["/na/a/s/b"]), false, true),
             (
                 "documents, one deeper of two",
                 documents(&["/na/a", "/na/a/s/b"]),
                 false,
+                true,
             ),
         ] {
             let outcome = client.execute_pipeline(pipeline_request(stages)).await;
@@ -13502,16 +13570,29 @@ async fn execute_pipeline_new_stages_refuse_and_take_what_the_profiles_say() {
                 Err(status) => Some(status),
                 Ok(response) => response.into_inner().message().await.err(),
             };
-            match (strict && !recorded, refused) {
-                (true, Some(status)) => {
+            match (invalid, strict && unobserved, refused) {
+                // (Strict answers the refusal only for the shapes the recording refused, which
+                // the replay checks; any other ancestor is unobserved there.)
+                (true, _, Some(status)) => {
+                    // The root `/` was recorded as refused in this shape (O-9 `anc-root-slash`).
+                    let want = if strict && label != "group, slash" {
+                        tonic::Code::Unimplemented
+                    } else {
+                        tonic::Code::InvalidArgument
+                    };
+                    assert_eq!(status.code(), want, "{label}: {status}");
+                }
+                (false, true, Some(status)) => {
                     assert_eq!(
                         status.code(),
                         tonic::Code::Unimplemented,
                         "{label}: {status}"
                     );
                 }
-                (false, None) => {}
-                (expected, got) => panic!("{label}: strict-refusal {expected}, got {got:?}"),
+                (false, false, None) => {}
+                (_, _, got) => {
+                    panic!("{label}: invalid {invalid}, unobserved {unobserved}, got {got:?}")
+                }
             }
         }
         handle.abort();

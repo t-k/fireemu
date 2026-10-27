@@ -1011,21 +1011,10 @@ impl Cursor {
                     for (alias, expr) in aliases {
                         match expr.eval_in(&row, self.unrecorded) {
                             Eval::Value(value) => values.push((alias, Some(value))),
-                            Eval::Absent if alias.segments().len() > 1 => {
-                                // As `select`: the official emulator keeps the parents of a
-                                // nested alias whose value is missing as empty maps (probed
-                                // 2026-10-27, a scalar parent replaced); production has not
-                                // answered one (O-7 `fields-main` recorded a top-level missing
-                                // source only).
-                                if self.unrecorded == Unrecorded::Refuse {
-                                    return Err(EvalError::Unobserved {
-                                        function: "add_fields",
-                                        reason: "a nested alias of a missing value",
-                                    });
-                                }
-                                values.push((alias, None));
-                            }
-                            Eval::Absent => {}
+                            // A missing value (FS-ENT-ORACLE O-9 `fields-main`): a nested
+                            // alias creates the parents as empty maps (a scalar parent is
+                            // replaced) and sets nothing; a top-level alias removes the field.
+                            Eval::Absent => values.push((alias, None)),
                             Eval::Error(error) => {
                                 refused = first_refusal(
                                     refused.as_ref(),
@@ -1042,7 +1031,10 @@ impl Cursor {
                     for (alias, value) in values {
                         match value {
                             Some(value) => set_path(&mut row.fields, alias, value),
-                            None => set_parents(&mut row.fields, alias),
+                            None if alias.segments().len() > 1 => {
+                                set_parents(&mut row.fields, alias);
+                            }
+                            None => remove_path(&mut row.fields, alias),
                         }
                     }
                 }

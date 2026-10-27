@@ -250,3 +250,58 @@ test("several owned trigger and topic pairs are each deleted by exact name, once
   );
   assert.equal(w.calls.filter((c) => c.method === "DELETE").length, 4);
 });
+
+// ---- generated: whatever is new after the run, only the owned names of the function records go ----
+
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+test("generated worlds: a delete is only ever sent to an owned, new trigger or topic, once", async () => {
+  const next = prng(0x1e71);
+  for (let round = 0; round < 200; round += 1) {
+    const baseline = { triggers: [], topics: [], functions: [], services: [], subscriptions: [] };
+    const w = world(baseline);
+    const before = await takeInventory(w.control, "inventory");
+    const owned = [];
+    const newOwned = new Set();
+    for (let i = 0; i < Math.floor(next() * 5); i += 1) {
+      const pair = {
+        trigger: `projects/${PROJECT}/locations/${REGION}/triggers/f${i}-1`,
+        topic: `projects/${PROJECT}/topics/eventarc-${REGION}-f${i}-1-1`,
+      };
+      owned.push(pair);
+      if (next() < 0.7) {
+        w.sets.triggers.add(pair.trigger);
+        newOwned.add(pair.trigger);
+      }
+      if (next() < 0.7) {
+        w.sets.topics.add(pair.topic);
+        newOwned.add(pair.topic);
+      }
+    }
+    const strangers = [];
+    for (let i = 0; i < Math.floor(next() * 3); i += 1) {
+      const name = `projects/${PROJECT}/topics/stranger-${i}`;
+      w.sets.topics.add(name);
+      strangers.push(name);
+    }
+    if (next() < 0.2) w.sets.services.add("projects/x/locations/l/services/leftover");
+    w.calls.length = 0;
+    const result = await removeLeftovers(w.control, before, owned, { sleep: noSleep });
+    const deletes = w.calls
+      .filter((c) => c.method === "DELETE")
+      .map((c) => c.url.replace(/^https:\/\/[^/]+\/v1\//u, ""));
+    assert.deepEqual(new Set(deletes), newOwned, "exactly the owned names that were new");
+    assert.equal(new Set(deletes).size, deletes.length, "each once");
+    for (const stranger of strangers) assert.ok(w.sets.topics.has(stranger));
+    assert.equal(result.ok, strangers.length === 0 && w.sets.services.size === 0);
+  }
+});

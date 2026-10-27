@@ -142,3 +142,62 @@ test("what cannot be used is counted by class, never thrown on", () => {
     assert.equal(empty.entries, 0);
   }
 });
+
+// ---- generated: whatever the log holds, the parser returns what it can use and counts the rest ----
+
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+test("generated entries: the parser never throws, every entry is counted once, and only own frames are kept", () => {
+  const next = prng(0x10c5);
+  const pick = (list) => list[Math.floor(next() * list.length)];
+  const names = FIXTURE_HANDLERS.map((h) => h.name);
+  for (let round = 0; round < 300; round += 1) {
+    const entries = [];
+    let expectedFrames = 0;
+    const ids = new Set();
+    for (let i = 0; i < Math.floor(next() * 12); i += 1) {
+      const name = pick(names);
+      const base = entryFor(name, { insertId: `i${Math.floor(next() * 6)}` });
+      const kind = pick([
+        "ok",
+        "ok",
+        "stranger",
+        "plain",
+        "broken",
+        "wrongGen",
+        "unknown",
+        "null",
+        "number",
+      ]);
+      let entry = base;
+      if (kind === "stranger") entry = { ...base, resource: { type: "x", labels: {} } };
+      if (kind === "plain") entry = { ...base, textPayload: "hello" };
+      if (kind === "broken") entry = { ...base, textPayload: `${FRAME_MARKER}{x` };
+      if (kind === "wrongGen")
+        entry = entryFor(name, { insertId: base.insertId }, { generation: 3 });
+      if (kind === "unknown")
+        entry = entryFor(name, { insertId: base.insertId }, { handler: "zzz" });
+      if (kind === "null") entry = null;
+      if (kind === "number") entry = 7;
+      entries.push(entry);
+      if (kind === "ok" && !ids.has(base.insertId)) {
+        ids.add(base.insertId);
+        expectedFrames += 1;
+      }
+    }
+    const result = parseEntries({ entries }, { readAt: "r" });
+    assert.equal(result.entries, entries.length);
+    assert.equal(result.frames.length, expectedFrames, JSON.stringify(entries));
+    const counted = Object.values(result.ignored).reduce((a, b) => a + b, 0);
+    assert.ok(counted + result.frames.length <= entries.length);
+  }
+});

@@ -605,9 +605,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
-    "toolCommit": "564871bfc1fdcd0f357d7b533faae9cf5b31291f",
-    "rustSourcesEqualTo": "origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+    "comparisonSha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
+    "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
+    "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
     "knownDifferences": [],
     "rows": {
      "MATCH": 4
@@ -650,9 +650,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
-    "toolCommit": "564871bfc1fdcd0f357d7b533faae9cf5b31291f",
-    "rustSourcesEqualTo": "origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+    "comparisonSha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
+    "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
+    "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
     "knownDifferences": [
      "/knownDifferences/longPollingIdleClose"
     ],
@@ -710,7 +710,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "sha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
+    "sha256": "3df3963925f39660f804c703197fc6006c1c8dd119f0d099ebc3cf19e84bd3cc",
     "rows": 8,
     "summary": {
      "match": true,
@@ -721,7 +721,7 @@
      },
      "timingWithinTolerance": true
     },
-    "binding": "the release binary built from origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a with RUSTC_WRAPPER empty (sha256 in the evidence file)"
+    "binding": "the release binary built from origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a with RUSTC_WRAPPER empty (sha256 in the evidence file)"
    }
   ],
   "productionRequests": 0,

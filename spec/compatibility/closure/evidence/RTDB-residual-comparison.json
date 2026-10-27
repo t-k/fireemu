@@ -48,7 +48,11 @@
   },
   {
    "path": "tools/sdk-smoke-database/rtdb-residual.mjs",
-   "sha256": "412cd45e0df2fd565bbc827c07376e4e1caeb4d90fe98687d28ec8796dcd17fb"
+   "sha256": "9701d81e7ff80f2e764da7c4443902ba8f24cf98d03c9f4f8c1fbee3015180d9"
+  },
+  {
+   "path": "tools/sdk-smoke-database/rtdb-admin.mjs",
+   "sha256": "f947b00861c3a2f34b8c6d7c321cd6843043b84c83d6ad89fd12ebc3ce530db8"
   },
   {
    "path": "tools/sdk-smoke-database/rtdb-residual-page.js",
@@ -66,8 +70,8 @@
  "command": "node tools/sdk-smoke-database/rtdb-residual.mjs local --fireemu <binary> --out <dir> --profile strict; node tools/sdk-smoke-database/rtdb-residual-fixture.mjs fixture <dir>/journal.json <fixture.json> --recording <id> --envelope <id> --recorded-on <date>; node tools/sdk-smoke-database/rtdb-residual-fixture.mjs summary tools/sdk-smoke-database/fixtures/production-rtdb-residual.json <fixture.json>",
  "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
  "binding": {
-  "toolCommit": "564871bfc1fdcd0f357d7b533faae9cf5b31291f",
-  "rustSourcesEqualTo": "origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
+  "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
+  "rustSourcesEqualTo": "origin/main d344943f7917b1c46a9c5082ff50ad2e416e229a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
   "binarySha256": "7df56bd97433b81a0e711bb61ecff2b5d2d13cbf381e3e4fc554ef27558163d9",
   "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",

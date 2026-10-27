@@ -16,7 +16,7 @@
   "decision": "APPROVED",
   "decidedOn": "2026-10-27",
   "decider": "project coordinator (delegated by the owner)",
-  "decisionRef": "docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
+  "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
   "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
   "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
@@ -83,7 +83,7 @@
    "status": "FROZEN",
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-27",
-   "decisionRef": "docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (M1: the coordinator's ruling of 2026-10-27 that R4 is decided); docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
+   "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27 RTDB closure-residual R4); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (M1); docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
   }
  ],
  "conditions": [

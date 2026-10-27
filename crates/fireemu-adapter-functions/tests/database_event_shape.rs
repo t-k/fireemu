@@ -167,3 +167,32 @@ fn a_database_event_id_is_a_stable_function_of_the_seed() {
         assert_eq!(database_event_id(seed), expected, "seed {seed:?}");
     }
 }
+
+#[test]
+fn only_a_first_gen_event_of_an_end_user_write_carries_the_auth_token() {
+    let mut user = commit("USER", Some("verified-user"));
+    user.auth = Some(json!({"uid": "verified-user", "token": {"role": "member"}}));
+    for shape in [DatabaseEventShape::Production, DatabaseEventShape::Official] {
+        let first = function(1);
+        let events = database_event_payloads_for(&user, &first.functions[0], shape);
+        assert_eq!(
+            events[0].1["auth"],
+            json!({"uid": "verified-user", "token": {"role": "member"}}),
+            "{shape:?}"
+        );
+        let second = function(2);
+        let events = database_event_payloads_for(&user, &second.functions[0], shape);
+        assert!(events[0].1.get("auth").is_none(), "{shape:?}");
+        let mut admin = commit("ADMIN", None);
+        admin.auth = user.auth.clone();
+        let events = database_event_payloads_for(&admin, &first.functions[0], shape);
+        assert!(events[0].1.get("auth").is_none(), "{shape:?}");
+    }
+}
+
+#[test]
+fn the_runtime_config_shows_its_database_event_shape() {
+    let config =
+        fireemu_adapter_functions::runtime::FunctionsConfig::for_tests(1000, "test".to_owned());
+    assert!(format!("{config:?}").contains("database_event_shape: Production"));
+}

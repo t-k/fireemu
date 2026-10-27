@@ -8,6 +8,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Realtime Database: production-5 (2026-10-27) now covers the web SDK's reconnect and event order (`goOffline`/`goOnline` with queued writes, the child and value events of two `orderByChild` windows with query-scoped unsubscribe and cancellation) and `onDisconnect` set, remove, update, cancel and re-register with server values and a Rules change before firing, so these recorded cases are part of the production comparison (`COMPAT_VERIFIED` for the recorded cases only). Everything beyond them stays unverified: other SDK child events and queries, `update`/`push` and multi-location updates beyond the recorded merge and the `onDisconnect` update, SDK server values beyond the `onDisconnect` update, and RTDB-triggered Functions delivery.
+- Realtime Database, scope of the 0.31.0 write-order entry: the order of a multi-path write is the official emulator's; production-5 confirmed it for one six-key `onDisconnect` set (`e6`, `e5`, `marker`, `e4`, `e3`, `e2`), not for other key sets.
+- Realtime Database, known difference: a long-polling client that goes offline without closing has its `onDisconnect` writes run when the idle connection is dropped, after 104.3 s to about 105 s in fireemu and 99.3 s to 104.0 s in the four production recordings.
+
 ## [0.31.0] - 2026-10-27
 
 ### Added

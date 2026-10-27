@@ -1,0 +1,166 @@
+{
+ "kind": "rtdb-production-comparison-v1",
+ "parent": "RTDB",
+ "comparison": "sdk-reconnect-and-ondisconnect-variants",
+ "conditions": [
+  "RTDB/sdk-reconnect-and-query-order",
+  "RTDB/sdk-ondisconnect-variants-and-rules"
+ ],
+ "production": {
+  "recording": "production-5",
+  "envelope": "RTDB-RESIDUAL-20261026-05",
+  "project": "fireemu-oracle-query",
+  "instance": "fireemu-q-rtdb2",
+  "recordedOn": "2026-10-27",
+  "profiles": 8,
+  "scenarios": {
+   "cv08": "reconnect, event and query-window order, query-scoped cancellation",
+   "cv10": "onDisconnect cancel, re-register, update/remove, server values, Rules change before firing"
+  },
+  "rowsPerProfile": {
+   "cv08": 52,
+   "cv10": 59
+  },
+  "recorderCommit": "b3798ef8b6083c855ed4c88e45e4dca4906692b5",
+  "closeRow": "owner-decisions.md REVOKED RTDB-RESIDUAL-20261026-05 (ledger 1827; sandbox-ledger line 1154; observationComplete, 0 unknown answers, baseline restored)",
+  "priorAttempts": [
+   "RTDB-RESIDUAL-20261026-01 and -02: stopped at the first Rules GET with 401 (the ADC login had lost userinfo.email); closed at baseline, no observation",
+   "RTDB-RESIDUAL-20261026-04: preflight ok, stopped at prefix-before with 423 disabled-by-owner right after the reenable; closed at baseline, no observation",
+   "RTDB-RESIDUAL-20261026-03: never sent"
+  ]
+ },
+ "fixture": {
+  "path": "tools/sdk-smoke-database/fixtures/production-rtdb-residual.json",
+  "sha256": "8f0aacdc33462e9dc903d776e2c3e5b27bbe674f65c12e846421779191697c80"
+ },
+ "localJournal": {
+  "path": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
+  "sha256": "0b4fddbcf4a7497f33a9621d4f46023d099bff3496261e41a0b8d23272f52c94"
+ },
+ "tool": [
+  {
+   "path": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
+   "sha256": "797370503dd056e4200a30a79694cb0450eda6ae2b8affc66826b450511ef6d0"
+  },
+  {
+   "path": "tools/sdk-smoke-database/rtdb-residual-judge.mjs",
+   "sha256": "c86a91ea4a9efac4c294a042ef33c431ef71b71ead889de22b269c3f6a7b8356"
+  },
+  {
+   "path": "tools/sdk-smoke-database/rtdb-residual.mjs",
+   "sha256": "9701d81e7ff80f2e764da7c4443902ba8f24cf98d03c9f4f8c1fbee3015180d9"
+  },
+  {
+   "path": "tools/sdk-smoke-database/rtdb-admin.mjs",
+   "sha256": "f947b00861c3a2f34b8c6d7c321cd6843043b84c83d6ad89fd12ebc3ce530db8"
+  },
+  {
+   "path": "tools/sdk-smoke-database/rtdb-residual-page.js",
+   "sha256": "8a32f5a7169c889d58eec557e78d7821ebe14c150b4f3f8b0329c0d869eb220b"
+  },
+  {
+   "path": "tools/sdk-smoke-database/adc-preflight.mjs",
+   "sha256": "461845ad6ca7b09d910f0bdc79cd4224e10fc8d0801f47ac81efb248f6502907"
+  },
+  {
+   "path": "tools/sdk-smoke-database/cv11-genuine-auth.mjs",
+   "sha256": "d11f99646d940533627c643834314dfa18c96f87293f0e98a3c34ca413b4b002"
+  }
+ ],
+ "command": "node tools/sdk-smoke-database/rtdb-residual.mjs local --fireemu <binary> --out <dir> --profile strict; node tools/sdk-smoke-database/rtdb-residual-fixture.mjs fixture <dir>/journal.json <fixture.json> --recording <id> --envelope <id> --recorded-on <date>; node tools/sdk-smoke-database/rtdb-residual-fixture.mjs summary tools/sdk-smoke-database/fixtures/production-rtdb-residual.json <fixture.json>",
+ "sdk": "firebase 12.18.0, playwright 1.62.1 (headless Chromium)",
+ "binding": {
+  "toolCommit": "3e4f461eaa982b88f176f90184283a5425cbe9c6",
+  "rustSourcesEqualTo": "built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version",
+  "binarySha256": "7df56bd97433b81a0e711bb61ecff2b5d2d13cbf381e3e4fc554ef27558163d9",
+  "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "host": "Darwin arm64",
+  "profile": "strict",
+  "productionRequests": 0,
+  "buildPath": ".worktree/rtdb-residual",
+  "buildPathNote": "the sha256 holds for this build path: built under another path the binary differs only in LC_UUID and the ad hoc code signature (review 2026-10-27, check 2)"
+ },
+ "localRun": {
+  "status": "closed",
+  "observationComplete": true,
+  "unknownAnswers": 0,
+  "profile": "strict"
+ },
+ "emulatorProfileRun": {
+  "verdict": "match",
+  "timingWithin": true,
+  "note": "the same recorder with --profile emulator against the same binary: MATCH 8/8; the two profiles share one code path for these writes"
+ },
+ "officialEmulatorReference": "The pinned official emulator jar 4.11.2 gives the same events as production in all 8 profiles (its long-polling idle close, 90.2 s and 97.2 s, is shorter than production's 99.3 s and 103.2 s); it is a reference, not evidence.",
+ "judging": "rtdb-residual-judge.mjs: per step, production's two rounds of a transport fix the strictness (ordered, or sorted where production itself delivered the same events in another order, or unsettled); here every step of every profile was ordered. Rows of the writer and of the observer connection are not compared with each other in order. A step that fireemu delivers in a different order between its own rounds would be needs-review. Fire time: WebSocket within 2 s; long polling within the production range plus or minus 5 s. Millisecond timings and transport counts are not compared.",
+ "fireSeconds": {
+  "production": {
+   "cv10/r1-ws": 0.2,
+   "cv10/r1-lp": 99.3,
+   "cv10/r2-ws": 0.2,
+   "cv10/r2-lp": 103.2
+  },
+  "local": {
+   "cv10/r1-ws": 0.1,
+   "cv10/r1-lp": 104.3,
+   "cv10/r2-ws": 0.1,
+   "cv10/r2-lp": 104.3
+  }
+ },
+ "lineage": "cv11-genuine-auth.mjs now imports adc-preflight.mjs and runs the ADC scope check before its first request (2026-10-27). Its production-2 recording (RTDB-CV11-LEAN-20261025-02) was made by the version pinned in RTDB-genuine-auth-comparison.json, before this edit; the v4 review found nothing that binds the file at HEAD. The committed local journal (fixtures/local-rtdb-residual.json) was produced by rtdb-residual.mjs 412cd45e, the version that also made production-5, on the binary above; the later lift of the administration helpers into rtdb-admin.mjs (52f7c0e25) is behaviour-preserving, and the lifted tools reproduce MATCH 8/8 in both profiles on the same binary (review 2026-10-27, delta check 4).",
+ "summary": {
+  "verdict": "match",
+  "match": true,
+  "rows": {
+   "MATCH": 8,
+   "DIFFERENCE": 0,
+   "NEEDS_REVIEW": 0
+  },
+  "profiles": [
+   {
+    "scenario": "cv08",
+    "name": "r1-ws",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv08",
+    "name": "r2-ws",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv08",
+    "name": "r1-lp",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv08",
+    "name": "r2-lp",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv10",
+    "name": "r1-ws",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv10",
+    "name": "r2-ws",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv10",
+    "name": "r1-lp",
+    "verdict": "match"
+   },
+   {
+    "scenario": "cv10",
+    "name": "r2-lp",
+    "verdict": "match"
+   }
+  ],
+  "timing": {
+   "within": true
+  }
+ }
+}

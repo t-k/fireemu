@@ -1,0 +1,121 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "functions-trigger-delivery",
+  "conditions": [
+    "RTDB/functions-trigger-delivery"
+  ],
+  "production": {
+    "recording": "cv14-stage2-v2",
+    "envelope": "CV14-RTDB-TRIGGERS-20261027-02",
+    "project": "fireemu-oracle-query",
+    "instance": "fireemu-q-rtdb2",
+    "region": "us-central1",
+    "recordedOn": "2026-10-27",
+    "functions": "firebase-functions 7.3.2, firebase-admin 14.3.0, Node 22 runtime, deployed with firebase-tools 15.28.2",
+    "handlers": 8,
+    "writes": 9,
+    "frames": 28,
+    "outcomeOfTheRun": "stopped-needs-review, residual false: the only reason was that the frames carried members the fixture had not named (1st gen context.domain; 2nd gen context, change, snapshot, traceparent). They are named now, per generation, event type and shape, from the recording itself (frames.mjs RECORDED_MEMBERS); judging the 28 recorded frames again gives no reason (recorded.test.mjs). The coordinator's observation decision is owner-decisions.md 1849: accepted with declared differences.",
+    "closeRow": "sandbox-ledger.jsonl line 1169 (8 targets cleaned, 4 public invokers revoked, 8 upload objects deleted, RTDB at baseline, 1 new IAM pair kept); packet REVOKED at owner-decisions.md 1850",
+    "priorAttempts": [
+      "CV14-RTDB-TRIGGERS-20261027-01: stopped at the first 2nd gen deploy (Eventarc service agent not yet provisioned); closed at baseline, no frame"
+    ]
+  },
+  "fixture": {
+    "path": "conformance/src/rtdb-functions/recorded/production-rtdb-triggers.json",
+    "sha256": "ba72a9483f7a9db8016aa8cbeaf631f6ecd3f93e17d6303a1cf345161ceef6c6"
+  },
+  "localRecordings": {
+    "strict": {
+      "path": "conformance/src/rtdb-functions/recorded/local-rtdb-triggers-strict.json",
+      "sha256": "1f9054b6591932c431448a938b4b1daf992dcca8ca7d64c4ffc1a8efab57be90"
+    },
+    "emulator": {
+      "path": "conformance/src/rtdb-functions/recorded/local-rtdb-triggers-emulator.json",
+      "sha256": "ff279841755e82867879b4b54e368ca86d18e47a12253faf78783d8fb55cb930"
+    }
+  },
+  "tool": [
+    {
+      "path": "conformance/src/rtdb-functions/mask-recording.mjs",
+      "sha256": "4ce861f7f3acdd5e1c2a5731ed89ead479aeba8217e81e06eb6fa17fa233df5c"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/local-run.mjs",
+      "sha256": "b2de091cfe64e63b71b57e84fb47ada2404854caf834da87b06ac427c21e17ca"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/compare-local.mjs",
+      "sha256": "1e951dbf0c9e3f936cb386d5207c3be58f6cb8f7f1267d4a32910a6b7248eeae"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/frames.mjs",
+      "sha256": "ac7b3de0bf0e36c0a4afe589872460fc9b1f3978c29719724d61bbd4aab92d04"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/judge.mjs",
+      "sha256": "70316ce6fa08057bb20fa1e70ff8870f8a4cb85c6421f51d89526e3faf21bc9f"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/sequence.mjs",
+      "sha256": "ae8b1e6ac644845b04a67e0cb8f9f9412424dddd77fc75e76cf427fa8fd3d614"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures/index.js",
+      "sha256": "6d447ac0621ffa0b9e723807127fac46aeefb4900ff25d0e276be7f996ae256a"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/fixtures/frames.js",
+      "sha256": "758086d2cd55437b1776af4fa2075d157e7a195023275976d81984793c663b12"
+    },
+    {
+      "path": "conformance/src/rtdb-functions/firebase.json",
+      "sha256": "55d0c9c1cc167b7eec811eb58120a0762577189816e3e5ca8ca9122b449270cf"
+    }
+  ],
+  "command": "node conformance/src/rtdb-functions/local-run.mjs --fireemu <binary> --profile strict|emulator --out <new dir>; node conformance/src/rtdb-functions/compare-local.mjs <dir>/frames.jsonl",
+  "binding": {
+    "toolCommit": "5dafdade28bdc89c1db48e248c304b943719a8e1",
+    "binarySha256": "3385153b069c4c5ad379f3ca7dd4e3c7dacd15e684f99f1a11dfe39f8d6b3cf5",
+    "buildCommand": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
+    "sourceCommit": "0158be06b1667414234015b3307ca51cb5a835a7",
+    "productionRequests": 0,
+    "note": "The release binary was built at sourceCommit; the only later changes through toolCommit are generated Quint evidence and these recorded local captures. Raw captures, successful write statuses and full comparisons were independently reviewed. Final combined-tree gates remain pending."
+  },
+  "rows": {
+    "perProfile": 72,
+    "writes": 9,
+    "handlers": 8,
+    "deliveries": 28,
+    "rowsWithoutDelivery": 44,
+    "nonDeliveryWrites": [
+      "s3 (a write of the same value: no handler fires)",
+      "s7 (a sibling path with no handler)"
+    ]
+  },
+  "strictProfile": {
+    "verdict": "MATCH",
+    "MATCH": 72,
+    "DIFFERENCE": 0,
+    "note": "every delivery matches in every member the fixture prints: ids and times by form, the rest exactly"
+  },
+  "emulatorProfile": {
+    "verdict": "DIFFERENCE (declared)",
+    "MATCH": 44,
+    "DIFFERENCE": 28,
+    "declaredDifferences": [
+      "id and context.eventId: a UUID instead of the base64 of twenty bytes",
+      "time and context.timestamp: nine fraction digits instead of three",
+      "source: the session's project instead of `_` (2nd gen)",
+      "datacontenttype: application/json instead of absent (2nd gen)",
+      "authType: admin or unauthenticated instead of unknown (2nd gen); the 2nd gen context therefore carries authType",
+      "no traceparent (2nd gen)"
+    ],
+    "note": "the emulator profile keeps the official emulator's event shape; production outranks it only in the strict profile"
+  },
+  "judging": "compare-local.mjs: one row per write and handler. A row without a delivery on both sides matches. Otherwise both frames are reduced (the id, the time and the traceparent to their form: base64 of 20 bytes, RFC 3339 UTC with three fraction digits, W3C traceparent) and compared member by member, the member lists as sets. Not compared: timing, the order of deliveries across handlers, the fixture's own sequence numbers. Also checked: one time per write across its deliveries, no id reused.",
+  "knownDifferences": [
+    "/knownDifferences/triggerEventShapeEmulatorProfile"
+  ]
+}

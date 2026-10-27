@@ -109,6 +109,7 @@ test("a 2nd gen handler prints one frame with the whole event and its before and
       firebaseDatabaseHost: "x.firebaseio.com",
       authType: "admin",
       authId: null,
+      traceparent: "00-abc",
       data: { before: snapshot(null), after: snapshot({ n: 1 }) },
     });
   } finally {
@@ -124,7 +125,14 @@ test("a 2nd gen handler prints one frame with the whole event and its before and
   assert.deepEqual(frame.event.data.before, { exists: false, key: "a", value: null });
   assert.deepEqual(frame.event.data.after, { exists: true, key: "a", value: { n: 1 } });
   // every member of the event outside the named ones is listed, not lost
-  assert.deepEqual(frame.event.extras.location, "us-central1");
+  // the members the pinned SDK builds for a 2nd gen database event are named and printed as values
+  assert.equal(frame.event.location, "us-central1");
+  assert.equal(frame.event.instance, "x");
+  assert.equal(frame.event.ref, "/cv14-rtdb/items/a");
+  assert.equal(frame.event.firebaseDatabaseHost, "x.firebaseio.com");
+  // anything else is listed by name and type
+  assert.deepEqual(frame.event.extras, { traceparent: "00-abc" });
+  assert.ok(frame.event.eventKeys.includes("traceparent"));
   assert.ok(Array.isArray(frame.event.eventKeys));
   assert.equal(typeof frame.seq, "number");
 });
@@ -156,7 +164,13 @@ test("a 1st gen handler prints the context and the snapshot or change", async ()
   assert.equal(frames[0].generation, 1);
   assert.equal(frames[0].event.context.eventId, "ctx-1");
   assert.deepEqual(frames[0].event.data, { exists: true, key: "a", value: { n: 1 } });
-  assert.equal(frames[0].event.context.extras.auth.type, "object");
+  // `auth` is a named member of a 1st gen context: printed as metadata, not listed as an extra
+  assert.deepEqual(frames[0].event.context.auth, { type: "object", keys: ["admin"] });
+  assert.deepEqual(frames[0].event.context.extras, {});
+  assert.equal(
+    "auth" in frames[1].event.context && frames[1].event.context.auth !== undefined,
+    false,
+  );
   assert.deepEqual(frames[1].event.data.after.value, { n: 2 });
   assert.equal(frames[1].seq > frames[0].seq, true);
 });

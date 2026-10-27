@@ -156,8 +156,8 @@ export function makeWorld(options = {}) {
           seenFrames.push(key);
           const frame = frameFor(handler, step);
           if (options.unnamedMember) {
-            if (frame.generation === 1) frame.event.context.contextKeys = ["eventId", "auth"];
-            else frame.event.eventKeys = ["id", "location"];
+            if (frame.generation === 1) frame.event.context.contextKeys = ["eventId", "domain"];
+            else frame.event.eventKeys = ["id", "traceparent"];
           }
           fresh.push(frame);
         }

@@ -224,6 +224,8 @@ export async function admitRun({ env, privateRoot, root, deps }) {
     [
       "status",
       "--porcelain",
+      // explicit: `status.showUntrackedFiles` in the user's git config would otherwise hide new files
+      "--untracked-files=all",
       "--",
       "conformance/functions-http",
       "conformance/src/shared",
@@ -237,7 +239,14 @@ export async function admitRun({ env, privateRoot, root, deps }) {
   // ignored file there would be deployed without showing in the status above.
   const ignored = (
     await deps.git(
-      ["status", "--porcelain", "--ignored", "--", "conformance/src/rtdb-functions/fixtures"],
+      [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+        "--ignored",
+        "--",
+        "conformance/src/rtdb-functions/fixtures",
+      ],
       root,
     )
   )

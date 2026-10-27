@@ -6,9 +6,18 @@
 const MARKER = "CV14_FRAME ";
 let counter = 0;
 
-const CONTEXT_MEMBERS = new Set(["eventId", "timestamp", "eventType", "resource", "params", "authType", "authId"]);
+// Members named by the fixture. Each one beyond the FUNCTIONS-EVENTS set cites the pinned firebase-functions
+// 7.3.2 source that builds it, and only for the generation that source builds it for:
+//   1st gen `auth`: lib/v1/cloud-functions.js:29-36 and 134-141 (set for a database trigger whose auth type
+//     is not ADMIN: null for UNAUTHENTICATED, deleted for ADMIN).
+//   2nd gen `firebaseDatabaseHost`, `instance`, `ref`, `location`: lib/v2/providers/database.d.ts:35-43
+//     (DatabaseEvent) and lib/v2/providers/database.js:106-117 and 122-137 (the event spread with the
+//     host member renamed), used again at database.js:107, 153 and 247.
+// Every other member of a context or an event is listed by name and type, never named.
+const CONTEXT_MEMBERS = new Set(["eventId", "timestamp", "eventType", "resource", "params", "authType", "authId", "auth"]);
 const EVENT_MEMBERS = new Set([
   "id", "time", "type", "source", "subject", "specversion", "datacontenttype", "params", "authType", "authId", "data",
+  "firebaseDatabaseHost", "instance", "ref", "location",
 ]);
 
 function describeMember(value) {
@@ -48,6 +57,7 @@ function v1Context(context) {
     params: context.params,
     authType: context.authType ?? null,
     authId: context.authId ?? null,
+    auth: "auth" in context ? describeMember(context.auth) : undefined,
     contextKeys: Object.keys(context).sort(),
     extras: otherMembers(context, CONTEXT_MEMBERS),
   };
@@ -66,6 +76,10 @@ function v2Event(event) {
     authType: event.authType ?? null,
     authId: event.authId ?? null,
     data: data(event.data),
+    firebaseDatabaseHost: describeMember(event.firebaseDatabaseHost ?? null),
+    instance: describeMember(event.instance ?? null),
+    ref: describeMember(event.ref ?? null),
+    location: describeMember(event.location ?? null),
     eventKeys: Object.keys(event).sort(),
     extras: otherMembers(event, EVENT_MEMBERS),
   };

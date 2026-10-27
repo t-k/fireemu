@@ -159,7 +159,10 @@ export async function checkWorld(world, label) {
           documentedFires(h.event, transitions[id].before, transitions[id].after),
       ),
     );
+  // every write that was sent and answered refused is a reason of its own
+  const refusedWrite = model.written.some((id) => world.fault.answers?.[id]?.outcome === "refused");
   const mustReview =
+    refusedWrite ||
     missingDelivery ||
     model.reasons ||
     residual ||

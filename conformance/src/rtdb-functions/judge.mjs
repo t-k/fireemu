@@ -24,19 +24,36 @@ function unnamedMembers(frame) {
   return [...found];
 }
 
-/** The reasons a run cannot be called recorded as it stands; an empty list means nothing to add. */
+/**
+ * The reasons a run cannot be called recorded as it stands; an empty list means there is nothing for the
+ * coordinator to decide. The frame, log and member checks run whatever the writes were answered: a run
+ * whose writes were all refused can still hold a stranger's frames or dropped entries.
+ */
 export function judgeRun({ report, frames, writes, ignored }) {
-  const answered = Object.values(writes).filter((w) => w?.outcome === "ok").length;
-  if (answered === 0) return [];
   const reasons = [];
+  const answered = Object.values(writes).filter((w) => w?.outcome === "ok").length;
 
-  if (frames.length === 0)
+  // Every write is designed to be answered ok (an admin write bypasses the Rules, and the unauthenticated
+  // ones carry the nonce the Rules ask for), so a refusal is a departure from the design. An unknown
+  // answer has its own reason in the flow.
+  for (const step of report.steps) {
+    const outcome = step.write?.outcome;
+    if (outcome !== undefined && outcome !== "ok" && outcome !== "unknown") {
+      reasons.push(
+        `write ${step.id} was not answered ok (${outcome}, status ${step.write.status})`,
+      );
+    }
+  }
+
+  if (answered > 0 && frames.length === 0) {
     reasons.push(`no frame was read although ${answered} write(s) were answered ok`);
+  }
 
   if (report.totals.unattributed > 0) {
     const byReason = {};
-    for (const entry of report.unattributed)
+    for (const entry of report.unattributed) {
       byReason[entry.reason] = (byReason[entry.reason] ?? 0) + 1;
+    }
     const detail = Object.entries(byReason)
       .toSorted()
       .map(([reason, count]) => `${reason}: ${count}`)
@@ -53,15 +70,35 @@ export function judgeRun({ report, frames, writes, ignored }) {
     );
   }
 
+  // What each write was documented to deliver against what came. A step whose answer is unknown is skipped
+  // (its frames may be real); a step that was refused or never sent expects nothing at all.
   const missing = [];
+  const repeated = [];
+  const unexpected = [];
   for (const step of report.steps) {
-    if (step.write?.outcome !== "ok") continue;
+    const outcome = step.write?.outcome ?? null;
+    if (outcome === "unknown") continue;
     for (const [handler, seen] of Object.entries(step.handlers)) {
-      if (seen.documented === 1 && seen.frames === 0) missing.push(`${step.id} ${handler}`);
+      const expected = outcome === "ok" && seen.documented === 1;
+      const label = `${step.id} ${handler}`;
+      if (expected && seen.frames === 0) missing.push(label);
+      else if (expected && (seen.duplicateFrames > 0 || seen.distinctEventIds > 1)) {
+        repeated.push(`${label} (${seen.frames} frames, ${seen.distinctEventIds} event ids)`);
+      } else if (!expected && seen.frames > 0) {
+        unexpected.push(`${label} (${seen.frames} frames)`);
+      }
     }
   }
   if (missing.length > 0)
     reasons.push(`a documented delivery received no frame: ${listed(missing)}`);
+  if (repeated.length > 0) {
+    reasons.push(
+      `a delivery came more than once (a repeat or a second event): ${listed(repeated)}`,
+    );
+  }
+  if (unexpected.length > 0) {
+    reasons.push(`a delivery came that the documentation does not expect: ${listed(unexpected)}`);
+  }
 
   const unnamed = new Set();
   for (const frame of frames) for (const member of unnamedMembers(frame)) unnamed.add(member);

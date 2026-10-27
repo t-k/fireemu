@@ -440,3 +440,30 @@ test("after a deploy the grants are read again, and the upload ledger is closed 
     await rm(none.runDir, { recursive: true, force: true });
   }
 });
+
+test("both status calls of the admission name the untracked files explicitly, whatever the git config says", async () => {
+  const statuses = [];
+  const run = admission({
+    deps: {
+      git: async (args) => {
+        if (args[0] === "rev-parse") return `${GIT}\n`;
+        statuses.push(args);
+        return args.includes("--ignored")
+          ? "!! conformance/src/rtdb-functions/fixtures/node_modules/\n"
+          : "";
+      },
+    },
+  });
+  await run.run();
+  assert.equal(statuses.length, 2);
+  for (const args of statuses) assert.ok(args.includes("--untracked-files=all"), args.join(" "));
+  assert.ok(statuses[1].includes("--ignored"));
+  // an untracked file the first call reports is refused
+  const untracked = admission({
+    deps: {
+      git: async (args) =>
+        args[0] === "rev-parse" ? GIT : "?? conformance/src/rtdb-functions/fixtures/.env\n",
+    },
+  });
+  await assert.rejects(() => untracked.run(), /clean reviewed commit/);
+});

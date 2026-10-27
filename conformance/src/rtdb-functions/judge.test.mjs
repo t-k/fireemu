@@ -75,12 +75,95 @@ test("a run with answered writes and no frame at all is a reason of its own", ()
     reasons.some((r) => /no frame was read/.test(r)),
     reasons.join("|"),
   );
-  // nothing was written: nothing to judge
+  // nothing answered ok, and nothing else wrong: nothing to report
   assert.deepEqual(run({ frames: [], writes: {} }), []);
   assert.deepEqual(
     run({ frames: [], writes: { s1: { outcome: "unknown", status: 0, answeredAtMs: null } } }),
     [],
   );
+});
+
+test("a run with no write answered ok still has its frames, its dropped entries and its members judged", () => {
+  const stranger = frameForTransition("rtdbWrittenV2", "a", { n: 9 }, { n: 10 }, { seq: 99 });
+  const reasons = run({ frames: [stranger], writes: {}, ignored: { foreignOrigin: 2 } });
+  assert.equal(reasons.length, 2, reasons.join("|"));
+  assert.match(
+    reasons.join("|"),
+    /1 frame\(s\) could not be attributed to a write \(no-match: 1\)/,
+  );
+  assert.match(reasons.join("|"), /foreignOrigin 2/);
+  const odd = frameForTransition("rtdbWrittenV2", "a", { n: 9 }, { n: 10 }, { seq: 98 });
+  odd.event.eventKeys = ["id", "traceparent"];
+  assert.match(run({ frames: [odd], writes: {} }).join("|"), /traceparent/);
+});
+
+test("every write that was not answered ok is a reason of its own, an unknown one aside (the flow reports that)", () => {
+  const refused = (status) => ({ outcome: "refused", status, answeredAtMs: 0 });
+  const reasons = run({
+    writes: { ...allOk, s8: refused(401), s9: refused(403) },
+    frames: frames(["s1", "s2", "s3", "s4", "s5", "s6", "s7"]),
+  });
+  assert.deepEqual(reasons, [
+    "write s8 was not answered ok (refused, status 401)",
+    "write s9 was not answered ok (refused, status 403)",
+  ]);
+  // all nine refused, nothing delivered: nine reasons and no "no frame" reason (nothing was answered ok)
+  const all = run({
+    writes: Object.fromEntries(STEPS.map((s) => [s.id, refused(401)])),
+    frames: [],
+  });
+  assert.equal(all.length, 9);
+  assert.ok(all.every((r) => /was not answered ok \(refused, status 401\)/.test(r)));
+  // an unexpected status is one too
+  const odd = run({
+    writes: { ...allOk, s7: { outcome: "moved", status: 302, answeredAtMs: 0 } },
+    frames: frames(["s1", "s2", "s3", "s4", "s5", "s6", "s8", "s9"]),
+  });
+  assert.deepEqual(odd, ["write s7 was not answered ok (moved, status 302)"]);
+  // an unknown answer is not reported here, and the frames of that step are not judged against the documentation
+  assert.deepEqual(
+    run({
+      writes: { s1: { outcome: "unknown", status: 0, answeredAtMs: null } },
+      frames: frames(["s1"]),
+    }),
+    [],
+  );
+});
+
+test("a frame on a write that was refused or never sent is a delivery nobody expected", () => {
+  const refused = { ...allOk, s1: { outcome: "refused", status: 401, answeredAtMs: 0 } };
+  const reasons = run({ writes: refused });
+  assert.equal(reasons.length, 2, reasons.join("|"));
+  assert.match(reasons[1], /does not expect: s1 /);
+  const unsent = run({ writes: { s1: ok }, frames: frames(["s1", "s2"]) });
+  assert.match(unsent.join("|"), /does not expect: s2 /);
+});
+
+test("a delivery on a step the documentation says delivers nothing, a repeat and a second event are reasons", () => {
+  // the no-op write s3 delivers nothing: a frame there is unexpected
+  const noop = frameForTransition("rtdbWrittenV2", "a", T.s3.before, T.s3.after, {
+    seq: 97,
+    eventId: "extra",
+  });
+  const extra = run({ frames: [...frames(), noop] });
+  assert.equal(extra.length, 1);
+  assert.match(extra[0], /does not expect: s3 rtdbWrittenV2 \(1 frames\)/);
+  // the same event printed twice
+  const base = frames();
+  const again = structuredClone(
+    base.find((f) => f.handler === "rtdbWrittenV1" && f.event.context.params.id === "a"),
+  );
+  const repeat = run({ frames: [...base, again] });
+  assert.equal(repeat.length, 1);
+  assert.match(
+    repeat[0],
+    /came more than once \(a repeat or a second event\): s1 rtdbWrittenV1 \(2 frames, 1 event ids\)/,
+  );
+  // two events for one write
+  const second = structuredClone(again);
+  second.event.context.eventId = "second-event";
+  const two = run({ frames: [...base, second] });
+  assert.match(two[0], /s1 rtdbWrittenV1 \(2 frames, 2 event ids\)/);
 });
 
 test("a documented delivery that received no frame is a reason that names the write and the handler", () => {
@@ -91,42 +174,43 @@ test("a documented delivery that received no frame is a reason that names the wr
   assert.equal(reasons.length, 1);
   assert.match(reasons[0], /documented delivery received no frame/);
   assert.match(reasons[0], /s1 rtdbCreatedV2/);
-  // a write that was refused or never sent expects nothing
-  const refused = { ...allOk, s1: { outcome: "refused", status: 401, answeredAtMs: 0 } };
-  const noS1 = frames(STEPS.map((s) => s.id).filter((id) => id !== "s1"));
-  assert.deepEqual(run({ writes: refused, frames: noS1 }), []);
   assert.deepEqual(run({ writes: { s2: ok }, frames: frames(["s2"]) }), []);
 });
 
-test("frames with a member the fixture did not name are a reason, whichever generation", () => {
-  const v2 = run({
-    frames: frames(undefined, (f) => {
-      if (f.generation === 2) f.event.eventKeys = [...(f.event.eventKeys ?? []), "location"];
-      return f;
-    }),
-  });
+test("frames with a member the fixture did not name are a reason, per generation", () => {
+  const withKeys = (generation, keys) =>
+    run({
+      frames: frames(undefined, (f) => {
+        if (f.generation !== generation) return f;
+        if (generation === 2) f.event.eventKeys = keys;
+        else f.event.context.contextKeys = keys;
+        return f;
+      }),
+    });
+  const v2 = withKeys(2, ["id", "traceparent"]);
   assert.equal(v2.length, 1);
-  assert.match(v2[0], /members the fixture did not name/);
-  assert.match(v2[0], /location/);
-  const v1 = run({
-    frames: frames(undefined, (f) => {
-      if (f.generation === 1) f.event.context.contextKeys = ["eventId", "auth"];
-      return f;
-    }),
-  });
-  assert.match(v1[0], /auth/);
+  assert.match(v2[0], /members the fixture did not name: traceparent/);
+  const v1 = withKeys(1, ["eventId", "domain"]);
+  assert.match(v1[0], /members the fixture did not name: domain/);
+  // a member named for one generation is not named for the other
+  assert.match(withKeys(2, ["id", "auth"])[0], /auth/);
+  for (const member of ["location", "ref", "instance", "firebaseDatabaseHost"]) {
+    assert.match(withKeys(1, ["eventId", member])[0], new RegExp(member), member);
+    assert.deepEqual(withKeys(2, ["id", member]), [], member);
+  }
+  assert.deepEqual(withKeys(1, ["eventId", "auth"]), []);
   const extras = run({
     frames: frames(undefined, (f) => {
-      if (f.generation === 2) f.event.extras = { ref: "/x" };
+      if (f.generation === 2) f.event.extras = { traceparent: "x" };
       return f;
     }),
   });
-  assert.match(extras[0], /ref/);
+  assert.match(extras[0], /traceparent/);
   // named members only, in any order, and missing ones, are fine
   const named = run({
     frames: frames(undefined, (f) => {
-      if (f.generation === 2) f.event.eventKeys = ["data", "id"];
-      else f.event.context.contextKeys = ["params"];
+      if (f.generation === 2) f.event.eventKeys = ["data", "id", "location"];
+      else f.event.context.contextKeys = ["params", "auth"];
       f.event.extras = {};
       return f;
     }),

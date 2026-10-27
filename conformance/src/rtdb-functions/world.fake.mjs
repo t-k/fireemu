@@ -9,7 +9,12 @@ import { uploadEventFromLine } from "../shared/gen2-source-uploads.mjs";
 import { PROJECT } from "../../functions-http/harness.mjs";
 import { targetResources } from "../../functions-http/production.mjs";
 import { FIXTURE_HANDLERS, FRAME_MARKER, LOCATION } from "./frames.mjs";
-import { fakeWorld as fakeRtdb, packet as rtdbPacket, P as RTDB_PROJECT } from "./rtdb.fake.mjs";
+import {
+  fakeWorld as fakeRtdb,
+  json as rtdbJson,
+  packet as rtdbPacket,
+  P as RTDB_PROJECT,
+} from "./rtdb.fake.mjs";
 import { createStage2Budget } from "./wiring.mjs";
 import { origin } from "./logs.mjs";
 import { CODEBASE, TARGETS } from "./targets.mjs";
@@ -460,7 +465,10 @@ export function createRehearsalEnvironment({
           "x-goog-user-project": RTDB_PROJECT,
         },
       }),
-    anonymousFetch: rtdbWorld.fetch,
+    // the Rules refuse a value without the nonce: every write without a token answers 401
+    anonymousFetch: options.anonymousRefuse
+      ? async () => rtdbJson(401, { error: "Permission denied" })
+      : rtdbWorld.fetch,
     budget,
     adcPath: "/adc",
     projectNumber: gcp.projectNumber,

@@ -282,3 +282,18 @@ test("a stranger's write to the public item is not taken for the run's own: its 
     await finish(env);
   }
 });
+
+test("the Rules refusing the unauthenticated writes is a reason for each of them, and everything is still cleaned up", async () => {
+  const env = await setup({ options: { anonymousRefuse: true } });
+  try {
+    const result = await run(env);
+    assert.equal(result.outcome, "stopped-needs-review");
+    assert.equal(result.residual, false, result.reasons.join("; "));
+    assert.ok(result.reasons.includes("write s8 was not answered ok (refused, status 401)"));
+    assert.ok(result.reasons.includes("write s9 was not answered ok (refused, status 401)"));
+    assert.equal(env.rtdbWorld.baseline(), true);
+    assert.equal(env.gcp.functions.size, 0);
+  } finally {
+    await finish(env);
+  }
+});

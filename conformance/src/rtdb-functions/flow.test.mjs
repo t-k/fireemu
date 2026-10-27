@@ -133,7 +133,7 @@ test("an unknown write answer ends the sequence without a second send and still 
   assert.ok(w.events.includes("rtdb-cleanup"));
 });
 
-test("a refused write is an observation: the sequence goes on", async () => {
+test("a refused write is kept in the report, the sequence goes on, and the run needs review with a reason for that write", async () => {
   const w = makeWorld({ answers: { s8: { outcome: "refused", status: 401 } } });
   const result = await runStage2(w.deps);
   assert.deepEqual(
@@ -141,7 +141,37 @@ test("a refused write is an observation: the sequence goes on", async () => {
     STEPS.map((s) => s.id),
   );
   assert.equal(result.report.steps.find((s) => s.id === "s8").write.status, 401);
-  assert.equal(result.outcome, "recorded", result.reasons.join(";"));
+  assert.equal(result.outcome, "stopped-needs-review");
+  assert.equal(result.residual, false);
+  assert.deepEqual(result.reasons, ["write s8 was not answered ok (refused, status 401)"]);
+});
+
+test("every write refused, with a stranger's frame in the log, is a reason per write and the frame's own reason", async () => {
+  const answers = Object.fromEntries(STEPS.map((s) => [s.id, { outcome: "refused", status: 401 }]));
+  const w = makeWorld({ answers, strangerFrame: true });
+  const result = await runStage2(w.deps);
+  assert.equal(result.outcome, "stopped-needs-review");
+  assert.equal(
+    result.reasons.filter((r) => /was not answered ok \(refused, status 401\)/.test(r)).length,
+    9,
+  );
+  assert.match(result.reasons.join(";"), /could not be attributed to a write/);
+  assert.equal(result.residual, false);
+});
+
+test("a stranger's frame with no write answered ok at all still ends the run needing review, with its own reason", async () => {
+  const w = makeWorld({
+    answers: { s1: { outcome: "unknown", status: 0 } },
+    strangerFrame: true,
+    ignoredCounts: { unparsed: 1 },
+  });
+  const result = await runStage2(w.deps);
+  assert.equal(result.outcome, "stopped-needs-review");
+  const text = result.reasons.join(";");
+  assert.match(text, /write s1 answer is unknown/);
+  assert.match(text, /1 frame\(s\) could not be attributed to a write \(no-match: 1\)/);
+  assert.match(text, /dropped by the parser: unparsed 1/);
+  assert.doesNotMatch(text, /no frame was read/);
 });
 
 test("a missing delivery is kept in the report and makes the run need review, not call it recorded", async () => {
@@ -166,7 +196,7 @@ test("the judge's findings each end the run needing review: unattributed frames,
     [{ ignoredCounts: { unknownHandler: 1 } }, /unknownHandler 1/],
     [{ ignoredCounts: { foreignOrigin: 4 } }, /foreignOrigin 4/],
     [{ silent: new Set(FIXTURE_HANDLERS.map((h) => h.name)) }, /no frame was read/],
-    [{ unnamedMember: true }, /members the fixture did not name: auth, location/],
+    [{ unnamedMember: true }, /members the fixture did not name: domain, traceparent/],
   ];
   for (const [options, pattern] of cases) {
     const result = await runStage2(makeWorld(options).deps);

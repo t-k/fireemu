@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 
 export const FIXTURE_PINS = Object.freeze({
   "firebase.json": "55d0c9c1cc167b7eec811eb58120a0762577189816e3e5ca8ca9122b449270cf",
-  "fixtures/frames.js": "e52a923c29603416d721ce1c556be662e82784b0e4e682227fb9a3029694df4a",
+  "fixtures/frames.js": "758086d2cd55437b1776af4fa2075d157e7a195023275976d81984793c663b12",
   "fixtures/index.js": "6d447ac0621ffa0b9e723807127fac46aeefb4900ff25d0e276be7f996ae256a",
   "fixtures/package-lock.json": "c492afe0fa1e5336d78be6f1fa76e594d357e0412cacfd9d963d2569389b7dea",
   "fixtures/package.json": "b5d6b04e164233bdbd88f5080a0b0294ffe6c60dd0840e1a04cf0103b67ed772",

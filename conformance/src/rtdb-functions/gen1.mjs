@@ -191,7 +191,8 @@ export async function cleanupGen1(
     }
     const after = await control("GET", url, undefined, "cleanup", [200, 404]);
     if (after.status !== 404) throw new Error("function remains after delete");
-    await assertNoGen1ImageResidue(control, spec, "cleanup");
+    // The upload ledger is settled first, as the 2nd gen path does: an image residue below then leaves
+    // the deploy's placeholder closed and the object it named deleted, not a case for acceptance.
     if (state.upload) {
       const uploads = await state.upload.finish({
         cliExited: state.deployTrack?.exited === true,
@@ -201,6 +202,7 @@ export async function cleanupGen1(
         state.uploadCleanupError = `source upload not cleaned: ${uploads.reasons.join(", ")}`;
       }
     }
+    await assertNoGen1ImageResidue(control, spec, "cleanup");
     if (state.uploadCleanupError) throw new Error(state.uploadCleanupError);
     state.cleaned = true;
   } catch (error) {

@@ -397,7 +397,9 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     if (options.failDeploy === name) {
       track.exited = true;
       track.exitCode = 1;
-      const failure = new Error("cliDeploy failed or attempted API enablement (exit 1)");
+      const failure = new Error(
+        options.failMessage ?? "cliDeploy failed or attempted API enablement (exit 1)",
+      );
       failure.indeterminate = true;
       const failKind = options.failDeployKind ?? "created";
       if (failKind === "refused") {

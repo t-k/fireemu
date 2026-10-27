@@ -356,3 +356,37 @@ test("the image packages of a 1st gen function are read by their exact names aft
     "rtdb_deleted_v1",
   );
 });
+
+test("the upload ledger is settled before the image residue is checked, so a residue does not leave the deploy's placeholder open", async () => {
+  const target = resolveGen1Target(spec());
+  const order = [];
+  const w = world({ packages: { [PACKAGE]: { versions: [`${PACKAGE}/versions/sha256:x`] } } });
+  const watched = async (method, url, ...rest) => {
+    if (url.includes("artifactregistry")) order.push("residue-read");
+    return w.control(method, url, ...rest);
+  };
+  const state = {
+    started: true,
+    cleaned: false,
+    target,
+    upload: { finish: async () => (order.push("finish"), { clean: true }) },
+    deployTrack: { exited: true, exitCode: 0 },
+  };
+  await cleanupGen1(watched, target, state, { log: async () => {}, sleep: noSleep });
+  assert.equal(state.cleaned, false);
+  assert.match(state.cleanupError, /owned image version remains/);
+  assert.equal(order[0], "finish", order.join(","));
+  assert.ok(order.includes("residue-read"));
+  // an unclean upload and a residue: both are cleanup errors, the residue is the one reported first
+  const both = {
+    started: true,
+    cleaned: false,
+    target,
+    upload: { finish: async () => ({ clean: false, reasons: ["unexplained-object:x"] }) },
+    deployTrack: { exited: true, exitCode: 0 },
+  };
+  await cleanupGen1(w.control, target, both, { log: async () => {}, sleep: noSleep });
+  assert.equal(both.cleaned, false);
+  assert.match(both.cleanupError, /owned image version remains/);
+  assert.match(both.uploadCleanupError, /unexplained-object:x/);
+});

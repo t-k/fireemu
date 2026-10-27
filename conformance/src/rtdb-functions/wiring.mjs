@@ -88,7 +88,8 @@ export function createLogReader({ control, now }) {
         }
         total.complete = false;
       } catch {
-        return { frames: [], entries: 0, ignored: {}, complete: false };
+        // the frames of the pages read so far are already marked seen: they are returned, not lost
+        return { ...total, complete: false };
       }
       return total;
     },

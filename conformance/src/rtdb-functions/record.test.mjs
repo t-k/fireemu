@@ -170,6 +170,31 @@ test("result.json says how each failed deploy ended", async () => {
   }
 });
 
+test("result.json that would hold a secret is withheld with a fallback, and the run is still summarised and exits for review", async () => {
+  const w = await rehearse({
+    options: {
+      failDeploy: "rtdbCreatedV2",
+      failMessage: "refused: Bearer abcdefghijklmnop was sent",
+    },
+  });
+  try {
+    const stored = JSON.parse(await readFile(join(w.runDir, "result.json"), "utf8"));
+    assert.match(stored.withheld, /result\.json holds a secret/);
+    assert.equal(stored.outcome, "stopped-needs-review");
+    assert.equal(typeof stored.residual, "boolean");
+    assert.deepEqual(Object.keys(stored.requests).includes("cliDeploy"), true);
+    assert.ok(!JSON.stringify(stored).includes("abcdefghijklmnop"));
+    assert.equal(w.summary.outcome, "stopped-needs-review");
+    // the other files of the run are there for the coordinator to read
+    const names = await readdir(w.runDir);
+    for (const file of ["journal.jsonl", "inventory.json", "owned-uploads.jsonl", "report.json"]) {
+      assert.ok(names.includes(file), file);
+    }
+  } finally {
+    await rm(w.runDir, { recursive: true, force: true });
+  }
+});
+
 test("a stored file is refused when it holds a secret", async () => {
   const w = await rehearse({ options: { secretInRecord: "test-token" } });
   try {

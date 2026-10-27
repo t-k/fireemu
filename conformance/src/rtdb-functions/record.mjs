@@ -187,21 +187,37 @@ export async function executeRun({ environment, runDir, packetPins, assemble = a
     requests,
     estimatedUsd: estimatedUsd(requests),
   };
-  await write(
-    "result.json",
-    json({
-      outcome: summary.outcome,
-      reasons: result.reasons,
-      residual: result.residual,
-      nonce: result.nonce ?? null,
-      deployed: result.deployed,
-      deploys: result.deploys,
-      cleanup: result.cleanup,
-      logs: result.logs,
-      requests,
-      estimatedUsd: summary.estimatedUsd,
-    }),
-  );
+  try {
+    await write(
+      "result.json",
+      json({
+        outcome: summary.outcome,
+        reasons: result.reasons,
+        residual: result.residual,
+        nonce: result.nonce ?? null,
+        deployed: result.deployed,
+        deploys: result.deploys,
+        cleanup: result.cleanup,
+        logs: result.logs,
+        requests,
+        estimatedUsd: summary.estimatedUsd,
+      }),
+    );
+  } catch (error) {
+    // a reason that quotes a secret-shaped error must not turn a complete run into exit 1 without a result
+    summary.outcome = "stopped-needs-review";
+    await writeFile(
+      join(runDir, "result.json"),
+      json({
+        withheld: error.message,
+        outcome: summary.outcome,
+        residual: summary.residual,
+        requests,
+        estimatedUsd: summary.estimatedUsd,
+      }),
+      { mode: 0o600 },
+    );
+  }
   return summary;
 }
 

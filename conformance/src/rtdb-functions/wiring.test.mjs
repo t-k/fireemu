@@ -480,3 +480,29 @@ test("the cleanup records whether it read the function present: function-deleted
     assert.equal("functionSeen" in state, false);
   }
 });
+
+test("a log read whose later page fails still returns the frames of the earlier pages, marked incomplete, and does not return them twice", async () => {
+  let call = 0;
+  const control = async () => {
+    call += 1;
+    if (call === 1)
+      return { status: 200, value: { entries: [entry("rtdbCreatedV1", 1)], nextPageToken: "p2" } };
+    if (call === 2) throw new Error("bounded logs REST POST returned 503");
+    return {
+      status: 200,
+      value: { entries: [entry("rtdbCreatedV1", 1), entry("rtdbCreatedV2", 1)] },
+    };
+  };
+  const reader = createLogReader({ control, now: () => "t" });
+  const first = await reader.read({ start: "a", end: "b" });
+  assert.equal(first.complete, false);
+  assert.equal(first.frames.length, 1, "page 1's frame is kept");
+  assert.equal(first.entries, 1);
+  const second = await reader.read({ start: "a", end: "b" });
+  assert.equal(second.complete, true);
+  assert.deepEqual(
+    second.frames.map((f) => f.handler),
+    ["rtdbCreatedV2"],
+    "the frame of page 1 is not returned again",
+  );
+});

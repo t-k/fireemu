@@ -1,0 +1,13 @@
+{
+  "name": "fireemu-rtdb-functions-oracle-fixtures",
+  "private": true,
+  "version": "1.0.0",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "14.3.0",
+    "firebase-functions": "7.3.2"
+  }
+}

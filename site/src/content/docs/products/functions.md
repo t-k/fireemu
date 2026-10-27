@@ -32,7 +32,7 @@ See the [Functions support inventory](https://github.com/t-k/fireemu/blob/main/d
 | Realtime Database | `database.ref()` and `database.instance().ref()` `onCreate`, `onUpdate`, `onDelete`, `onWrite` | `onValueCreated`, `Updated`, `Deleted`, `Written` |
 | Eventarc and alerts | | `onCustomEventPublished`, `onAlertPublished` |
 
-Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Their delivery has not been observed in production.
+Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Production observations cover a fixed sequence of administrator and unauthenticated writes; end-user writes and other delivery cases remain unverified.
 
 Storage archive events fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
 

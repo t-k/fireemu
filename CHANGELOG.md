@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-28
+
 ### Added
 
 - Pipelines run the string functions `concat`, `to_lower`, `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`, `trim`, `ltrim`, `rtrim` and `split` and the math functions `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` as the FS-ENT-ORACLE O-8B recordings (production, Enterprise, 2026-10-26) answered them: a null or missing argument gives null, an argument of the wrong type fails the request (`The function f(...) requires `T` but got `U`.`), integer arithmetic is checked, and an argument-count refusal lists the overloads. The strict profile answers an argument shape no recording covers with `UNIMPLEMENTED` (a null beside a wrong type, bytes where only strings were recorded, white space other than space, tab, line feed and no-break space for `trim`, a Greek sigma in a case mapping, a boolean string function as a whole `where` condition, the argument counts of `ltrim` and `rtrim`); the emulator profile follows the same rules, which the official emulator answered alike. `regex_contains`, `regex_match`, `regex_find`, `regex_find_all`, the timestamp and map functions and the rest of the math family remain unsupported.
@@ -988,7 +990,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/t-k/fireemu/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/t-k/fireemu/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/t-k/fireemu/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/t-k/fireemu/compare/v0.28.0...v0.29.0

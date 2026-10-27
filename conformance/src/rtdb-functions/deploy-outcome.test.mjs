@@ -65,6 +65,8 @@ test("everything but a definite 4xx on this function's own create is unknown", (
     ["408", line(url2(), 408), ended],
     ["429", line(url2(), 429), ended],
     ["499", line(url2(), 499), ended],
+    ["409, the function exists", line(url2(), 409), ended],
+    ["412", line(url2(), 412), ended],
     ["a 3xx", line(url2(), 302), ended],
     ["an error of another function's create", line(url2("rtdbUpdatedV2"), 400), ended],
     ["an error of another call of this function", line(`${url2()}x`, 400), ended],
@@ -181,7 +183,7 @@ const OWN_STATUS = {
   s503: 503,
   s302: 302,
 };
-const DEFINITE_4XX = new Set([400, 403, 409]);
+const DEFINITE_4XX = new Set([400, 403]);
 
 function classRowOutput([, own, extra, success, gen]) {
   const url = gen === "v1" ? url1 : url2();

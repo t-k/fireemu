@@ -4,6 +4,7 @@
 // (tools/sdk-smoke-database/rtdb-admin.mjs); this tests the wiring and what CV14 adds.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { PREFIX } from "./frames.mjs";
@@ -184,14 +185,19 @@ test("a transient 403 on a management read-back during the cleanup is retried wi
 
 // The recorded shape (CV14 run 2026-10-27, journal rows instance-before / instance-before-retry-1 and instance-disabled):
 // one 403 "Management API has not been used" on a GET of the instance, then the same GET answers 200.
-const FORBIDDEN = {
-  error: {
-    code: 403,
-    message:
-      "Firebase Realtime Database Management API has not been used in project before or it is disabled.",
-    status: "PERMISSION_DENIED",
-  },
-};
+// the body of both recorded refusals, 1896 bytes, the project number masked (the journal holds the project id only)
+const RECORDED_BODY = readFileSync(
+  new URL("./recorded-403-api-disabled.json", import.meta.url),
+  "utf8",
+);
+const FORBIDDEN = JSON.parse(RECORDED_BODY);
+
+test("the recorded refusal body is the 1896-byte answer of the run", () => {
+  assert.equal(Buffer.byteLength(RECORDED_BODY), 1896);
+  assert.equal(FORBIDDEN.error.code, 403);
+  assert.equal(FORBIDDEN.error.details[0].reason, "SERVICE_DISABLED");
+  assert.doesNotMatch(RECORDED_BODY, /\d{9,}/u);
+});
 
 test("the recorded 403-then-200 on the read-back right after the instance disable is retried in the cleanup", async () => {
   const w = fakeWorld();
@@ -211,7 +217,7 @@ test("the recorded 403-then-200 on the read-back right after the instance disabl
         refusals < 1
       ) {
         refusals += 1;
-        return json(403, FORBIDDEN);
+        return json(403, RECORDED_BODY);
       }
       return answer;
     },
@@ -241,7 +247,7 @@ test("the recorded 403-then-200 on the first instance read of the cleanup is ret
         refusals < 1
       ) {
         refusals += 1;
-        return json(403, FORBIDDEN);
+        return json(403, RECORDED_BODY);
       }
       return w.fetch(url, init);
     },

@@ -2186,7 +2186,7 @@
       "claims": [
         {
           "id": "UI-CLAIM-WORKFLOWS",
-          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, labels deferred and not-planned products, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
+          "statement": "The fireemu UI supports the scoped active-product workflows for Auth, Firestore, Storage, Functions, Rules diagnostics and Firebase alerts, and exposes the same Hub-discovered Logging endpoint used by the official UI Logs browser journey.",
           "capabilities": [],
           "evidence": {
             "integration": [

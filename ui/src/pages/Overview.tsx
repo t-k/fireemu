@@ -5,25 +5,6 @@ import { AsyncButton, Field, Section, FetchState } from "../components/common";
 import { getRules } from "../api/control";
 import { settle } from "../api/client";
 import { createScopedFetch } from "../lib/rules-state";
-import { productScope, statusLabelKey, type ProductStatus } from "../lib/products";
-
-/** Tailwind classes for a product-scope status badge. */
-const statusClass = (status: ProductStatus): string => {
-  switch (status) {
-    case "supported":
-      return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100";
-    case "deferred":
-      return "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100";
-    case "pendingBackend":
-      return "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100";
-    case "pendingUi":
-      return "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-100";
-    case "substituted":
-      return "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-100";
-    case "notPlanned":
-      return "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
-  }
-};
 
 /** A block of text with a copy button (clipboard, or select-all when denied). */
 const CopyBlock: Component<{ text: string; testId: string }> = (props) => {
@@ -197,33 +178,6 @@ const Overview: Component = () => {
           </table>
         </Section>
       </div>
-      <Section title={t("scope.title")}>
-        <p class="mb-3 text-sm text-zinc-500">{t("scope.intro")}</p>
-        <table class="table" data-testid="product-scope">
-          <thead>
-            <tr>
-              <th>{t("scope.product")}</th>
-              <th>{t("scope.status")}</th>
-              <th>{t("scope.note")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={productScope()}>
-              {(row) => (
-                <tr data-testid={`scope-${row.id}`}>
-                  <td>{t(row.nameKey)}</td>
-                  <td>
-                    <span class={`badge ${statusClass(row.status)}`} data-status={row.status}>
-                      {t(statusLabelKey(row.status))}
-                    </span>
-                  </td>
-                  <td class="text-xs text-zinc-500">{t(row.noteKey)}</td>
-                </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </Section>
       <Section title={t("overview.envVars")}>
         <p class="mb-2 text-sm text-zinc-500">
           {t("overview.envVarsFor", { session: appState.session(), project: appState.project() })}

@@ -529,51 +529,6 @@ export const en = {
   "alerts.publishButton": "Publish alert",
   "alerts.delivered": "Published: {count} handler(s) received the alert.",
   "alerts.badJson": "The payload is not valid JSON: {error}",
-  "scope.title": "Product scope",
-  "scope.intro":
-    "What a user of the official Emulator Suite UI can expect here. Deferred and not-planned products are named explicitly rather than shown as empty tabs.",
-  "scope.product": "Product",
-  "scope.status": "Status",
-  "scope.note": "Notes",
-  "scope.status.supported": "supported",
-  "scope.status.deferred": "deferred",
-  "scope.status.notPlanned": "not planned",
-  "scope.status.pendingBackend": "pending backend",
-  "scope.status.pendingUi": "pending UI",
-  "scope.status.substituted": "substituted",
-  "scope.auth": "Authentication",
-  "scope.authNote":
-    "Users, custom claims, second factors, email action and phone verification codes.",
-  "scope.firestore": "Cloud Firestore",
-  "scope.firestoreNote":
-    "Data browser with a typed field editor, named databases and live updates.",
-  "scope.functions": "Cloud Functions",
-  "scope.functionsNote":
-    "Registered triggers, invocation history, a live log stream, manual schedule runs and Pub/Sub publishes.",
-  "scope.storage": "Cloud Storage",
-  "scope.storageNote":
-    "Objects, uploads, downloads and metadata for the selected session's buckets.",
-  "scope.rules": "Security Rules",
-  "scope.rulesNote": "Firestore and Storage rulesets, editable at runtime.",
-  "scope.appCheck": "App Check",
-  "scope.appCheckNote":
-    "Registered apps, baseline modes, debug tokens and observation counters (when enabled).",
-  "scope.rtdb": "Realtime Database",
-  "scope.rtdbNote": "Deferred: fireemu does not implement the Realtime Database emulator yet.",
-  "scope.extensions": "Extensions",
-  "scope.extensionsNote": "Not planned: outside fireemu's scope.",
-  "scope.requests": "Firestore Requests",
-  "scope.requestsNote":
-    "Supported (UI-PARITY-03): the Rules page lists the requests Security Rules decided, newest first, each with its per-expression trace, read from the daemon's request-trace route.",
-  "scope.coverage": "Rules coverage",
-  "scope.coverageNote":
-    "Supported (UI-PARITY-03): the Rules page renders the official :ruleCoverage report -- every source position and the values it took, with the reached / total count.",
-  "scope.alerts": "Firebase alerts",
-  "scope.alertsNote":
-    "Supported (UI-PARITY-04): the Alerts page publishes a Firebase alert through the official Eventarc google-channel / publishEvents mechanism, firing every registered onAlertPublished handler. Parity, not a fireemu-only injection.",
-  "scope.logging": "Logging emulator (WebSocket, port 4500)",
-  "scope.loggingNote":
-    "Supported: the daemon serves the official Logging emulator WebSocket on port 4500 (loopback-only, bounded history). This UI additionally streams the same logs over server-sent events, filterable by level and text.",
 
   "functions.filter": "Filter",
   "functions.filterLevel": "Level",

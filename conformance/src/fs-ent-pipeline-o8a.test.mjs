@@ -711,3 +711,27 @@ test("the recorded O-8A programs are in the fixture with their own digests and e
   }
   for (const id of ["dotted", "quoted-alone", "plain-pair"]) assert.equal(dup[id].status, 200, id);
 });
+
+test("a row the recorder's own client failed to serialize is marked unknown, never a production answer", () => {
+  const fixture = readJson("fs-ent-pipeline-production.json");
+  const marked = [];
+  for (const [id, program] of Object.entries(fixture.programs)) {
+    for (const [step, row] of Object.entries(program.steps)) {
+      // gRPC code 13 with the client's serialization message is the recorder's failure.
+      const clientSide =
+        row.transport === "grpc" &&
+        row.code === 13 &&
+        /serialization failure/.test(row.message ?? "");
+      if (clientSide) {
+        assert.equal(typeof row.unknown, "string", `${id}#${step} is not marked unknown`);
+        marked.push(`${id}#${step}`);
+      } else {
+        assert.equal(row.unknown, undefined, `${id}#${step} is marked unknown`);
+      }
+    }
+  }
+  assert.deepEqual(marked, [
+    `${O8A_PREFIX}nesting-main#chain-48-grpc`,
+    `${O8A_PREFIX}nesting-main#chain-100-grpc`,
+  ]);
+});

@@ -58,6 +58,48 @@ For a test that only needs current work to settle, send `POST /v1/sessions/defau
 
 An export Fireemu cannot serve (a function whose options fail to resolve, or an event type it does not recognise) is skipped, and each one is a `warning:` on standard error at start, followed by a summary line. A function that production would deploy and run never runs here, so a test that asserts "no side effect" passes for the wrong reason; read the warnings. `functions.unservedTriggers` still refuses the products Fireemu does not serve.
 
+## Serving a fixed list of functions (`functions.manifest`)
+
+`functions.manifest` names a JSON file that replaces what discovery reports as the served set. It holds a `functions` array; each entry has a `name` and a `trigger` whose `type` is one of `http`, `firestore`, `database`, `storage`, `pubsub`, `schedule`, `auth`, `blockingAuth`, `tasks` or `eventarc`, with optional `region`, `generation`, `entryPoint`, `timeoutSeconds`, `retry` and `concurrency`. Fireemu still loads and discovers your codebase, so the runner starts and the code is checked, but the functions it serves, their trigger types and their options are the file's: an export the file leaves out is not served, and a function is served with the trigger the file gives it.
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "functions": { "manifest": "manifest.json" }
+}
+```
+
+```json
+{
+  "functions": [
+    { "name": "hello", "trigger": { "type": "http", "callable": false } },
+    {
+      "name": "ping",
+      "trigger": {
+        "type": "http",
+        "callable": true,
+        "enforceAppCheck": false,
+        "consumeAppCheckToken": "disabled"
+      }
+    }
+  ]
+}
+```
+
+For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker` (`onTaskDispatched`), this starts with `functions loaded: hello, ping`; `worker` is not served. Without the key, all three are.
+
+- The path is read from the working directory, whichever directory the configuration file is in (as the other file settings in a canonical file are; see [Configuration files](../../guides/configuration/)). A file that is missing, is not JSON or holds an invalid entry stops startup, naming the path or the function (`functions manifest manifest.json: No such file or directory`, `manifest: function "hello": unsupported trigger type "carrierpigeon"`). Under `strict`, a declaration production refuses is refused here too.
+- It applies to one codebase. A run that loads several refuses to start (`functions.manifest replaces discovery for one codebase, and this run loads 2 (a, b); name the one to load with --only functions:<codebase> or drop functions.manifest`).
+- The file cannot change what the code is. Blocking Auth functions in the file must match the ones discovery found, or startup is refused (`... invents Blocking Auth hook ... it must match codebase discovery`).
+- While [App Check](../app-check/) is active (the default under `strict`; `appCheck.enabled: true` under `emulator`; not when `appCheck.enabled` is `false`), the file also may not change how a callable is treated. These are refused at startup:
+  - a callable listed with `"callable": false`, or an `onRequest` function listed with `"callable": true`;
+  - a callable listed as a task queue, a blocking function or an event trigger (`... declares "ping" as a non-HTTP function, but the codebase declares it callable ...`, which says to list it as an http function with `callable: true` and the App Check options the code declares, remove it from the file, or export it with `onTaskDispatched` if it is meant to be a task queue);
+  - a callable whose `enforceAppCheck` or `consumeAppCheckToken` differs from the code;
+  - an HTTP function the codebase does not export.
+
+  With App Check off, these checks do not run; only the Blocking Auth match above applies.
+
 ## Scheduled functions
 
 Starting with v0.27.0, publishing a message to a first-generation schedule's `firebase-schedule-<function>-<region>` topic under `strict` also invokes the handler, preserving the original Pub/Sub data, attributes, ordering key and message ID. Normal scheduled occurrences and manual runs still invoke it once.

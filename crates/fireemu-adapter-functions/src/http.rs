@@ -1734,7 +1734,17 @@ async fn respond(
     };
     let streaming =
         !callable_preflight && streaming_callable && accepts_callable_stream(req.headers());
-    if callable && !callable_preflight && profile == FunctionsHttpProfile::Strict {
+    // An entry the daemon marked (a code-level callable that a configured manifest serves as an
+    // `onRequest` function, strict profile, no App Check) runs the callable's wrapper too, so
+    // its requests pass the same Bearer check. A preflight is the SDK's CORS handling and
+    // carries no credential check, as for a callable.
+    let code_callable = runtime
+        .manifest()
+        .get(function)
+        .is_some_and(|entry| entry.platform_options.strict_callable_ingress);
+    if profile == FunctionsHttpProfile::Strict
+        && ((callable && !callable_preflight) || (code_callable && method != "OPTIONS"))
+    {
         if let Some(denial) = strict_callable_bearer_refusal(&runtime, req.headers()) {
             drain_refused_body(req.into_body()).await;
             return Ok(denial);

@@ -3719,9 +3719,21 @@ async fn start_codebase(
                 }
                 if cfg.profile == CompatibilityProfile::Strict {
                     for name in mark_strict_callable_ingress(&mut manifest, &discovered) {
+                        let route = manifest.functions.iter().any(|f| {
+                            f.name == name
+                                && matches!(
+                                    f.trigger,
+                                    fireemu_core_functions::manifest::Trigger::Http { .. }
+                                )
+                        });
+                        let (served_as, sent) = if route {
+                            ("an onRequest function", "a request")
+                        } else {
+                            ("a non-HTTP function", "a task")
+                        };
                         eprintln!(
-                            "warning: the configured functions manifest serves {name:?} as a \
-                             task queue, but the codebase declares it callable; a task sent to \
+                            "warning: the configured functions manifest serves {name:?} as \
+                             {served_as}, but the codebase declares it callable; {sent} sent to \
                              it must carry no credential or a Bearer the Auth emulator verifies"
                         );
                     }
@@ -4432,14 +4444,16 @@ fn admin_app_check_note(label: &str, report: Option<&serde_json::Value>) -> Opti
     ))
 }
 
-/// Marks every entry of a configured manifest that serves as another trigger type an export the
-/// codebase's own discovery declares callable, and returns their names.
+/// Marks every entry of a configured manifest that serves as something other than a callable an
+/// export the codebase's own discovery declares callable (a task queue, another non-HTTP
+/// trigger, or an `onRequest` function), and returns their names.
 ///
 /// This is for the strict profile without App Check, where such a manifest still starts (see the
 /// gate in `start_codebase`). A request to a callable passes the daemon's Bearer check there; a
-/// task delivered to the same export through its queue entry would not, and the callable
+/// task or a plain HTTP request delivered to the same export would not, and the callable
 /// wrapper's own check under the Auth emulator does not verify signatures. The marker makes the
-/// task path apply the callable check (`PlatformOptions::strict_callable_ingress`).
+/// task path and the HTTP route apply the callable check
+/// (`PlatformOptions::strict_callable_ingress`).
 fn mark_strict_callable_ingress(
     configured: &mut fireemu_core_functions::manifest::FunctionManifest,
     discovered: &fireemu_core_functions::manifest::FunctionManifest,
@@ -4453,7 +4467,7 @@ fn mark_strict_callable_ingress(
     };
     let mut marked = Vec::new();
     for f in &mut configured.functions {
-        if !matches!(f.trigger, Trigger::Http { .. }) && callable_in_code(&f.name) {
+        if !matches!(f.trigger, Trigger::Http { callable: true, .. }) && callable_in_code(&f.name) {
             f.platform_options.strict_callable_ingress = true;
             marked.push(f.name.clone());
         }
@@ -14071,14 +14085,18 @@ module.exports = { tick, observer };
         let discovered = parse_manifest(&json!({
             "functions": [
                 {"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}},
-                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+                {"name": "asRoute", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "page", "generation": 2, "trigger": {"type": "http", "callable": false}}
             ]
         }))
         .expect("the fixture manifest parses");
         let mut configured = parse_manifest(&json!({
             "functions": [
                 {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "asRoute", "generation": 2, "trigger": {"type": "http", "callable": false}},
                 {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "page", "generation": 2, "trigger": {"type": "http", "callable": false}},
                 {"name": "ghostQueue", "generation": 2, "trigger": {"type": "tasks"}},
                 {"name": "onCreate", "generation": 2, "trigger": {"type": "pubsub", "topic": "t"}}
             ]
@@ -14086,7 +14104,7 @@ module.exports = { tick, observer };
         .expect("the fixture manifest parses");
         assert_eq!(
             super::mark_strict_callable_ingress(&mut configured, &discovered),
-            vec!["guarded".to_owned()]
+            vec!["guarded".to_owned(), "asRoute".to_owned()]
         );
         let marked: Vec<_> = configured
             .functions
@@ -14097,7 +14115,9 @@ module.exports = { tick, observer };
             marked,
             [
                 ("guarded", true),
+                ("asRoute", true),
                 ("worker", false),
+                ("page", false),
                 ("ghostQueue", false),
                 ("onCreate", false)
             ]

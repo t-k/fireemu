@@ -1929,7 +1929,7 @@ sleep 3"#
         // tell the two refusals apart).
         assert_eq!(
             stderr.contains(
-                "serves \"guarded\" as a task queue, but the codebase declares it callable"
+                "serves \"guarded\" as a non-HTTP function, but the codebase declares it callable"
             ),
             profile == "strict",
             "{profile} {queue}: {stderr}"
@@ -2038,6 +2038,118 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
             "{profile}: {stderr}"
         );
         assert!(!stderr.contains("Bearer eyJ"), "{profile}: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The route twin of the test above: a code-level callable that a configured manifest serves as
+/// an `onRequest` function. A request whose unsigned Bearer the Admin SDK's Auth-emulator
+/// verification accepts, but whose `iat` lies in the future, is refused with 401 by the strict
+/// daemon; the emulator profile lets the wrapper answer it.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_check_over_http() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-route-bearer");
+    let hits = dir.join("hits.txt");
+    let statuses = dir.join("statuses.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+exports.guarded = onCall((request) => {{
+  fs.appendFileSync({hits:?}, "guarded:" + request.data.kind + "\n");
+  return {{ ok: true }};
+}});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": false}}]}"#,
+    );
+    let script = format!(
+        r#"
+const project = "demo-manifest-route-bearer";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const host = (value) => (value.startsWith("http") ? value : "http://" + value);
+(async () => {{
+  const signUp = await fetch(
+    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+    {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ email: "ada@example.com", password: "secret-123", returnSecureToken: true }}) }},
+  );
+  const {{ localId }} = await signUp.json();
+  if (!localId) throw new Error("sign-up failed");
+  const now = Math.floor(Date.now() / 1000);
+  const token = (iat) =>
+    b64url({{ alg: "none", typ: "JWT" }}) + "." +
+    b64url({{ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: {{ identities: {{}}, sign_in_provider: "password" }} }}) + ".";
+  const lines = [];
+  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(now)], ["future", "Bearer " + token(now + 600)], ["malformed", "Bearer malformed"]]) {{
+    const headers = {{ "content-type": "application/json" }};
+    if (authorization) headers.authorization = authorization;
+    const response = await fetch(host(process.env.FIREEMU_FUNCTIONS_HOST) + "/" + project + "/us-central1/guarded", {{
+      method: "POST", headers, body: JSON.stringify({{ data: {{ kind }} }}),
+    }});
+    lines.push(kind + " " + response.status);
+  }}
+  require("fs").writeFileSync({statuses:?}, lines.join("\n") + "\n");
+}})().catch((error) => {{ console.error(String(error)); process.exit(1); }});
+"#,
+        statuses = statuses.display().to_string()
+    );
+    for profile in ["strict", "emulator"] {
+        let _ = std::fs::remove_file(&hits);
+        let _ = std::fs::remove_file(&statuses);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-route-bearer")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "node", "-e", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile}: {stderr}");
+        let seen = std::fs::read_to_string(&statuses).unwrap_or_default();
+        let status = |kind: &str| {
+            seen.lines()
+                .find_map(|line| line.strip_prefix(&format!("{kind} ")))
+                .unwrap_or("-")
+                .to_owned()
+        };
+        // What the strict daemon refuses: a Bearer that is not a user of the project, and a
+        // token only the daemon finds fault with. A request with no credential reaches the code.
+        let strict = profile == "strict";
+        assert_eq!(status("none"), "200", "{profile}: {seen} {stderr}");
+        assert_eq!(status("now"), "200", "{profile}: {seen} {stderr}");
+        assert_eq!(
+            status("future"),
+            if strict { "401" } else { "200" },
+            "{profile}: {seen} {stderr}"
+        );
+        assert_eq!(
+            status("malformed"),
+            "401",
+            "{profile}: the wrapper refuses it too: {seen} {stderr}"
+        );
+        let hit = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert_eq!(
+            hit.lines().any(|line| line == "guarded:future"),
+            !strict,
+            "{profile}: {hit:?}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -808,6 +808,338 @@
    "order": [
     "d:t"
    ]
+  },
+  {
+   "name": "review E4: cancel priority after split",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t"
+   ],
+   "order": [
+    "m:s{c}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F1",
+   "connections": [
+    [
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F2",
+   "connections": [
+    [
+     [
+      "o",
+      "x",
+      {
+       "a": 1
+      }
+     ],
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F3",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/c"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F4",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority"
+     ],
+     [
+      "o",
+      "s/n",
+      5
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "m:s{c,n}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F5",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "oc",
+      "s/.priority/x"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F6",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       ".priority": 1,
+       "b": 1,
+       "c": 2
+      }
+     ],
+     [
+      "oc",
+      "s/b"
+     ],
+     [
+      "o",
+      "s/.priority",
+      2
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
+  },
+  {
+   "name": "review F7",
+   "connections": [
+    [
+     [
+      "o",
+      "s",
+      {
+       "a": {
+        ".priority": 1,
+        "x": 1,
+        "y": 2
+       },
+       "k": 1
+      }
+     ],
+     [
+      "oc",
+      "s/a/x"
+     ],
+     [
+      "oc",
+      "s/a/.priority"
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": [
+    "m:s{a/y,k}",
+    "d:t"
+   ]
+  },
+  {
+   "name": "review F8",
+   "connections": [
+    [
+     [
+      "o",
+      "x/.priority",
+      1
+     ],
+     [
+      "o",
+      "x/a",
+      2
+     ],
+     [
+      "o",
+      "t",
+      1
+     ]
+    ]
+   ],
+   "listens": [
+    "s",
+    "t",
+    "a",
+    "a/s",
+    "u"
+   ],
+   "order": []
   }
  ]
 }

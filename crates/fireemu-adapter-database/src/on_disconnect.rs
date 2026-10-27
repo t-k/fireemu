@@ -22,10 +22,6 @@ pub(crate) struct Pending {
     value: Option<Json>,
     /// The paths below, when no value covers them.
     children: Children,
-    /// A value that carries a priority was split by a cancel below it. The official emulator keeps such a node
-    /// unusable (production confirmed it for one shape, RTDB-S5-20261027-01): while it stays, the connection's
-    /// whole update is dropped, and only a cancel or a new registration at this node or above removes it.
-    broken: bool,
 }
 
 /// The children of a node, in registration order, with what decides how they are listed.
@@ -93,9 +89,6 @@ impl Pending {
         if keys.is_empty() {
             self.value = Some(data);
             self.children.clear();
-            self.broken = false;
-        } else if self.broken {
-            // A registration below a broken node changes nothing (probed on the official emulator).
         } else if let Some(value) = self.value.take() {
             self.value = Some(update_child(value, keys, data));
         } else {
@@ -108,23 +101,13 @@ impl Pending {
         if keys.is_empty() {
             self.value = None;
             self.children.clear();
-            self.broken = false;
             return true;
-        }
-        if self.broken {
-            return false;
         }
         if let Some(value) = self.value.take() {
             // A leaf, and a value that holds nothing at the first key, stay as registered (probed on the
             // official emulator, which splits only when that key exists).
             if !holds(&value, &keys[0]) {
                 self.value = Some(value);
-                return false;
-            }
-            // Splitting a value that carries a priority breaks it, unless the cancel names the priority itself.
-            if keys[0] != PRIORITY && has_priority(&value) {
-                self.children.clear();
-                self.broken = true;
                 return false;
             }
             // The children that remain go in, in key order (integers first, by number). The child the
@@ -148,23 +131,11 @@ impl Pending {
         self.children.is_empty()
     }
 
-    /// Every registered value with its path, in the order the entries fire; none while a node is broken.
+    /// Every registered value with its path, in the order the entries fire.
     pub(crate) fn entries(&self) -> Vec<(Vec<String>, Json)> {
         let mut entries = Vec::new();
-        if self.is_broken() {
-            return entries;
-        }
         self.collect(&mut Vec::new(), &mut entries);
         entries
-    }
-
-    fn is_broken(&self) -> bool {
-        self.broken
-            || self
-                .children
-                .items
-                .iter()
-                .any(|(_, child)| child.is_broken())
     }
 
     fn collect(&self, prefix: &mut Vec<String>, entries: &mut Vec<(Vec<String>, Json)>) {
@@ -220,23 +191,17 @@ fn holds(value: &Json, key: &str) -> bool {
     }
 }
 
-/// Whether `value` is an object that carries a priority.
-fn has_priority(value: &Json) -> bool {
-    matches!(value, Json::Object(map) if map.contains_key(PRIORITY))
-}
-
 /// Whether cancelling `keys` below `value` leaves nothing of it.
 fn vanishes(value: &Json, keys: &[String]) -> bool {
     let Some((key, rest)) = keys.split_first() else {
         return true;
     };
-    // A value with a priority is broken by the cancel, not emptied.
-    if !holds(value, key) || (key != PRIORITY && has_priority(value)) {
+    if !holds(value, key) {
         return false;
     }
     match value {
         Json::Object(map) => {
-            let mut children = map.iter().filter(|(name, _)| *name != PRIORITY);
+            let mut children = map.iter();
             match (children.next(), children.next()) {
                 (Some((name, child)), None) => name == key && vanishes(child, rest),
                 _ => false,
@@ -246,10 +211,10 @@ fn vanishes(value: &Json, keys: &[String]) -> bool {
     }
 }
 
-/// The children of a value that is not a leaf, without its priority.
+/// The children of a value that is not a leaf, including its priority.
 fn children_of(value: Json) -> Vec<(String, Json)> {
     match value {
-        Json::Object(map) => map.into_iter().filter(|(key, _)| key != PRIORITY).collect(),
+        Json::Object(map) => map.into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -396,10 +361,10 @@ mod tests {
         pending.remember(&keys("x/y"), json("1"));
         assert!(pending.forget(&keys("x/y")));
         assert!(pending.entries().is_empty());
-        // A value with a priority that a cancel splits is broken: nothing fires until it is cancelled.
+        // A split retains the priority as an entry.
         pending.remember(&keys("a"), json(r#"{"b":1,"c":2,".priority":3}"#));
         assert!(!pending.forget(&keys("a/b")));
-        assert!(pending.entries().is_empty());
+        assert_eq!(entries(&pending).len(), 2);
         assert!(pending.forget(&keys("a")));
         pending.remember(&keys("a"), json(r#"{"b":1,"c":2}"#));
         assert!(!pending.forget(&keys("a/b")));
@@ -665,58 +630,25 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_node_drops_every_entry_until_it_is_cancelled_or_registered_again() {
-        // Probed on the official emulator (production-1 of RTDB-S5-20261027-01 recorded the first step).
+    fn a_split_retains_later_writes_until_priority_is_cancelled() {
         let mut pending = Pending::default();
         pending.remember(&keys("s"), json(r#"{".priority":1,"b":1,"c":2}"#));
         pending.remember(&keys("t"), json("1"));
-        assert!(!pending.forget(&keys("s/b")));
-        assert!(
-            pending.entries().is_empty(),
-            "the unrelated write registered before is dropped too"
-        );
-        pending.remember(&keys("u"), json("2"));
-        assert!(pending.entries().is_empty(), "and the one registered after");
-        pending.remember(&keys("s/n"), json("5"));
-        assert!(
-            !pending.forget(&keys("s/b")),
-            "a registration or a cancel below a broken node changes nothing"
-        );
-        assert!(!pending.forget(&keys("s/c")));
-        assert!(pending.entries().is_empty());
-        assert!(!pending.forget(&keys("s/zz")));
-        assert!(pending.entries().is_empty());
-        // Registering the node again heals it and the rest fires.
-        pending.remember(&keys("s"), json(r#"{"z":1}"#));
-        assert_eq!(
-            entries(&pending),
-            vec![
-                ("s".to_owned(), r#"{"z":1}"#.to_owned()),
-                ("t".to_owned(), "1".to_owned()),
-                ("u".to_owned(), "2".to_owned()),
-            ]
-        );
-        // So does a cancel of the node, or of an ancestor.
-        pending.remember(&keys("s"), json(r#"{".priority":1,"b":1}"#));
         pending.forget(&keys("s/b"));
-        assert!(pending.entries().is_empty());
-        pending.forget(&keys("s"));
+        pending.remember(&keys("s/n"), json("5"));
+        pending.forget(&keys("s/.priority"));
         assert_eq!(
             entries(&pending),
             vec![
+                ("s/c".to_owned(), "2".to_owned()),
+                ("s/n".to_owned(), "5".to_owned()),
                 ("t".to_owned(), "1".to_owned()),
-                ("u".to_owned(), "2".to_owned())
             ]
         );
-        pending.remember(&keys("a/s"), json(r#"{".priority":1,"b":1}"#));
-        pending.forget(&keys("a/s/b"));
-        assert!(pending.entries().is_empty());
-        pending.forget(&keys("a"));
-        assert_eq!(pending.entries().len(), 2);
     }
 
     #[test]
-    fn a_cancel_of_the_priority_or_of_a_missing_key_does_not_break_a_prioritized_value() {
+    fn a_cancel_of_the_priority_or_of_a_missing_key_preserves_other_children() {
         for cancel in ["s/.priority", "s/zz", "s/zz/x"] {
             let mut pending = Pending::default();
             pending.remember(&keys("s"), json(r#"{".priority":1,"b":1,"c":2}"#));
@@ -727,24 +659,26 @@ mod tests {
     }
 
     #[test]
-    fn a_nested_value_with_a_priority_breaks_when_the_cancel_would_have_emptied_it() {
+    fn a_nested_split_retains_priority_when_the_cancel_removes_its_last_child() {
         // Probed: `{a: {.priority: 1, x: 1}, k: 1}` then a cancel of `s/a/x` drops the update, it does not prune `a`.
         let mut pending = Pending::default();
         pending.remember(&keys("s"), json(r#"{"a":{".priority":1,"x":1},"k":1}"#));
         pending.remember(&keys("t"), json("1"));
         assert!(!pending.forget(&keys("s/a/x")));
-        assert!(pending.entries().is_empty());
+        assert!(entries(&pending)
+            .iter()
+            .any(|(path, _)| path == "s/a/.priority"));
     }
 
     proptest! {
-        /// A cancel breaks a registered value exactly when the value carries a priority and the cancel names one of its
-        /// children (not the priority and not a missing key); cancelling the node heals it, and nothing breaks without a priority.
+        /// A split retains its priority and later operations until the priority is cancelled.
         #[test]
-        fn a_cancel_breaks_a_prioritized_value_exactly_when_it_names_a_child(
+        fn a_split_retains_priority_exactly_when_a_child_is_cancelled(
             children in prop::collection::btree_set(prop::sample::select(vec!["a", "b", "c", "9", "10", "-1"]), 1..5),
             priority in prop::option::of(0i64..3),
             cancel in prop::sample::select(vec!["a", "b", "c", "9", "10", "-1", "zz", ".priority"]),
             other in 0i64..3,
+            follow in 0u8..3,
         ) {
             let mut value = children.iter().map(|k| ((*k).to_owned(), Json::int(1))).collect::<std::collections::BTreeMap<_, _>>();
             if let Some(p) = priority {
@@ -755,12 +689,73 @@ mod tests {
             pending.remember(&keys("t"), Json::int(other));
             pending.forget(&["s".to_owned(), cancel.to_owned()]);
             let names_child = children.contains(cancel);
-            let broken = priority.is_some() && names_child;
-            prop_assert_eq!(pending.entries().is_empty(), broken);
-            if broken {
-                pending.forget(&keys("s"));
-                prop_assert_eq!(pending.entries().len(), 1, "the unrelated write fires once the node is cancelled");
+            let retains_priority = priority.is_some() && names_child;
+            prop_assert_eq!(entries(&pending).iter().any(|(path, _)| path == "s/.priority"), retains_priority);
+            if retains_priority {
+                if follow == 1 { pending.remember(&keys("s/new"), Json::int(5)); }
+                if follow == 2 { pending.forget(&keys("s/a")); }
+                pending.forget(&keys("s/.priority"));
+                let paths: Vec<String> = entries(&pending).into_iter().map(|(path, _)| path).collect();
+                prop_assert!(paths.contains(&"t".to_owned()));
+                prop_assert!(!paths.contains(&"s/.priority".to_owned()));
+                if follow == 1 { prop_assert!(paths.contains(&"s/new".to_owned())); }
             }
+        }
+    }
+
+    #[test]
+    fn pict_split_followup_combinations() {
+        // Pairwise rows and required regression seeds.
+        let cases = [
+            (true, "b", "priority_cancel"),
+            (true, "b", "child_write"),
+            (true, "b", "child_cancel"),
+            (false, "zz", "child_write"),
+            (false, ".priority", "priority_cancel"),
+            (true, "zz", "child_cancel"),
+            (true, ".priority", "child_write"),
+            (false, ".priority", "child_cancel"),
+            (false, "b", "priority_cancel"),
+            (false, "zz", "priority_cancel"),
+        ];
+        for (priority, cancel, follow) in cases {
+            let mut pending = Pending::default();
+            let value = if priority {
+                json(r#"{".priority":1,"b":1,"c":2}"#)
+            } else {
+                json(r#"{"b":1,"c":2}"#)
+            };
+            pending.remember(&keys("s"), value);
+            pending.forget(&keys(&format!("s/{cancel}")));
+            match follow {
+                "priority_cancel" => {
+                    pending.forget(&keys("s/.priority"));
+                }
+                "child_write" => pending.remember(&keys("s/n"), json("5")),
+                _ => {
+                    pending.forget(&keys("s/c"));
+                }
+            }
+            let mut rebuilt = Json::Null;
+            for (path, value) in pending.entries() {
+                set_at(&mut rebuilt, &path, value);
+            }
+            let mut model = if priority {
+                json(r#"{".priority":1,"b":1,"c":2}"#)
+            } else {
+                json(r#"{"b":1,"c":2}"#)
+            };
+            model = without(&model, &[cancel]);
+            match follow {
+                "priority_cancel" => model = without(&model, &[".priority"]),
+                "child_write" => set_at(&mut model, &keys("n"), json("5")),
+                _ => model = without(&model, &["c"]),
+            }
+            assert_eq!(
+                rebuilt,
+                Json::object([("s", model)]),
+                "{priority} {cancel} {follow}"
+            );
         }
     }
 

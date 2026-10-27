@@ -2,7 +2,7 @@
 //! cancel (order review S5). Production (RTDB-S5-20261027-01, two rounds, 2026-10-27) answered that nothing fires: the
 //! whole update of the connection is dropped, the unrelated write registered next to it included. The other cases are
 //! what the official emulator (firebase-database-emulator v4.11.2) does for the same raw realtime frames, probed
-//! offline: the split leaves the connection's registrations broken until the value is cancelled or registered again.
+//! offline: the split retains the priority as a child and later operations can remove it.
 
 use fireemu_adapter_database::realtime::{Opened, Session};
 use fireemu_adapter_database::rest::{Database, RestOptions};
@@ -129,7 +129,7 @@ fn cases() -> serde_json::Value {
 fn every_recorded_case_fires_what_the_official_emulator_fired() {
     let cases = cases();
     let all = cases["cases"].as_array().unwrap();
-    assert!(all.len() >= 22, "{} cases", all.len());
+    assert!(all.len() >= 31, "{} cases", all.len());
     for (n, case) in all.iter().enumerate() {
         let connections: Vec<Vec<(String, String, Option<serde_json::Value>)>> = case
             ["connections"]

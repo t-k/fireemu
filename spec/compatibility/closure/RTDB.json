@@ -694,8 +694,7 @@
    "cases": [
     "an onDisconnect value that carries a priority (setWithPriority({b:1,10:2,9:3}, 1)), a cancel of its child b and an unrelated write registered next to it: when the connection ends nothing fires, the whole onDisconnect update is dropped (production, two WebSocket rounds); fireemu does the same in both profiles",
     "control in the same recording: the same value without a priority is split by the cancel (s = {9:3,10:2}) and the unrelated write fires",
-    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires",
-    "beyond the recorded shape fireemu follows the official emulator, recorded offline and not observed in production: the node stays broken until it is cancelled or registered again, other connections still fire, a string or a nested priority breaks too, and a cancel of the priority itself does not break"
+    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires"
    ],
    "status": "VERIFIED",
    "evidence": {
@@ -830,7 +829,7 @@
    "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
   },
   "prioritizedSplitBeyondTheRecordedShape": {
-   "statement": "The broken-node rule around the recorded S5 shape follows the official emulator and was not observed in production: that the node stays broken until it is cancelled or registered again, that a registration or a cancel below it changes nothing, that other connections still fire, and that a string or a nested priority breaks it too. Production observed one shape: a numeric priority on the registered value and a cancel of one of its children."
+   "statement": "Beyond the recorded S5 shape, healing, nested and string priorities follow the official emulator and are unobserved in production. The offline probes show that a split retains the priority as a child, later registrations below it are kept, and a cancel of that priority removes it. Production observed one shape: a numeric priority on the registered value and a cancel of one of its children."
   }
  },
  "outOfScope": [

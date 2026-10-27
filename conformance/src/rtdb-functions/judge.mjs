@@ -100,6 +100,20 @@ export function judgeRun({ report, frames, writes, ignored }) {
     reasons.push(`a delivery came that the documentation does not expect: ${listed(unexpected)}`);
   }
 
+  // This run makes no user writes, so a 1st gen context never carries a user's auth: the SDK sets `auth`
+  // to null for an unauthenticated write and removes it for an admin one (lib/v1/cloud-functions.js:29-36,
+  // 134-141). Any other value means the write context was not what the run sent.
+  const withAuth = new Set();
+  for (const frame of frames) {
+    const auth = frame.generation === 1 ? frame.event?.context?.auth : undefined;
+    if (auth !== undefined && auth !== null) withAuth.add(frame.handler);
+  }
+  if (withAuth.size > 0) {
+    reasons.push(
+      `a 1st gen frame carries an auth other than null although the run makes no user writes: ${listed([...withAuth].toSorted())}`,
+    );
+  }
+
   const unnamed = new Set();
   for (const frame of frames) for (const member of unnamedMembers(frame)) unnamed.add(member);
   if (unnamed.size > 0) {

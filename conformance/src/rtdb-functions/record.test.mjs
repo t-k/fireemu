@@ -2,8 +2,9 @@
 // packet, the token provider, and a run's private output. A run itself is exercised on the fakes.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -264,7 +265,10 @@ function admission(over = {}) {
     FIREEMU_CV14_PACKET: `${PRIVATE}/packet.md`,
     ...over.env,
   };
-  return { run: () => admitRun({ env, privateRoot: PRIVATE, root: "/repo", deps }), calls };
+  return {
+    run: () => admitRun({ env, privateRoot: PRIVATE, root: over.root ?? "/repo", deps }),
+    calls,
+  };
 }
 
 test("an admission needs private paths, a clean tree, the approval, the pins, the sources and a usable ADC token, in that order", async () => {
@@ -456,8 +460,11 @@ test("both status calls of the admission name the untracked files explicitly, wh
   });
   await run.run();
   assert.equal(statuses.length, 2);
-  for (const args of statuses) assert.ok(args.includes("--untracked-files=all"), args.join(" "));
+  // the clean-tree call lists every untracked file; the ignored-file call keeps an ignored directory as one entry
+  assert.ok(statuses[0].includes("--untracked-files=all"), statuses[0].join(" "));
+  assert.ok(statuses[1].includes("--untracked-files=normal"), statuses[1].join(" "));
   assert.ok(statuses[1].includes("--ignored"));
+  assert.ok(!statuses[0].includes("--ignored"));
   // an untracked file the first call reports is refused
   const untracked = admission({
     deps: {
@@ -466,4 +473,85 @@ test("both status calls of the admission name the untracked files explicitly, wh
     },
   });
   await assert.rejects(() => untracked.run(), /clean reviewed commit/);
+});
+
+// ---- admission against real git (a fake that checks for a flag cannot show what git prints) ----
+
+const FIXTURES = "conformance/src/rtdb-functions/fixtures";
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.com",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.com",
+};
+const realGit = (args, cwd) => execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" });
+
+/** A throwaway repository (no signing configuration: it is not the project) with a committed fixture directory. */
+async function fixtureRepo() {
+  const root = await mkdtemp(join(tmpdir(), "cv14-git-"));
+  realGit(["init", "-q", "."], root);
+  await mkdir(join(root, FIXTURES), { recursive: true });
+  await writeFile(join(root, ".gitignore"), "node_modules/\n.env\n");
+  await writeFile(join(root, FIXTURES, "index.js"), "module.exports = {};\n");
+  await writeFile(join(root, FIXTURES, "package.json"), "{}\n");
+  realGit(["add", "-A"], root);
+  realGit(["commit", "-q", "-m", "fixture"], root);
+  return root;
+}
+const installDependencies = async (root) => {
+  for (const name of ["firebase-functions", "firebase-admin"]) {
+    const dir = join(root, FIXTURES, "node_modules", name, "lib");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "index.js"), "x\n");
+    await writeFile(join(root, FIXTURES, "node_modules", name, "package.json"), "{}\n");
+  }
+};
+const realGitAdmission = (root) =>
+  admission({
+    root,
+    deps: { git: async (args, cwd) => (args[0] === "rev-parse" ? `${GIT}\n` : realGit(args, cwd)) },
+  });
+
+test("with real git: an installed node_modules is allowed, an untracked or other ignored fixture file is refused, whatever status.showUntrackedFiles says", async () => {
+  const root = await fixtureRepo();
+  try {
+    await installDependencies(root);
+    // many files in an ignored directory: git must show one entry for it
+    assert.deepEqual(await realGitAdmission(root).run(), {
+      gitSha: GIT,
+      packetPins: { baselineRulesSha256: SHA },
+    });
+    for (const setting of [undefined, "no"]) {
+      if (setting) realGit(["config", "status.showUntrackedFiles", setting], root);
+      await writeFile(join(root, FIXTURES, "new.js"), "x\n");
+      await assert.rejects(
+        () => realGitAdmission(root).run(),
+        /clean reviewed commit/,
+        `untracked, ${setting}`,
+      );
+      await rm(join(root, FIXTURES, "new.js"));
+      await mkdir(join(root, FIXTURES, "sub"), { recursive: true });
+      await writeFile(join(root, FIXTURES, "sub", "deep.js"), "x\n");
+      await assert.rejects(
+        () => realGitAdmission(root).run(),
+        /clean reviewed commit/,
+        `nested, ${setting}`,
+      );
+      await rm(join(root, FIXTURES, "sub"), { recursive: true });
+      await writeFile(join(root, FIXTURES, ".env"), "SECRET=1\n");
+      await assert.rejects(
+        () => realGitAdmission(root).run(),
+        /files git does not track: 1 entry/,
+        `ignored .env, ${setting}`,
+      );
+      await rm(join(root, FIXTURES, ".env"));
+    }
+    // and it is allowed again once the stray files are gone
+    assert.equal((await realGitAdmission(root).run()).gitSha, GIT);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -235,3 +235,28 @@ test("the counts per reason are counts, and a long list of missing deliveries is
   assert.match(missing, /and \d+ more/);
   assert.equal(missing.split(", ").length, 8 + 0, missing);
 });
+
+test("a 1st gen auth other than absent or null is a reason, because the run makes no user writes", () => {
+  const withAuth = (value) =>
+    run({
+      frames: frames(undefined, (f) => {
+        if (f.generation === 1 && f.event.context.params.id === "c") f.event.context.auth = value;
+        return f;
+      }),
+    });
+  assert.deepEqual(withAuth(null), []);
+  assert.deepEqual(withAuth(undefined), []);
+  for (const value of [{ type: "object", keys: ["token", "uid"] }, "x", 0, false, {}]) {
+    const reasons = withAuth(value);
+    assert.equal(reasons.length, 1, JSON.stringify(value));
+    assert.match(reasons[0], /auth other than null.*rtdbCreatedV1, rtdbDeletedV1, rtdbWrittenV1/);
+  }
+  // a 2nd gen event has no such member to check
+  const v2 = run({
+    frames: frames(undefined, (f) => {
+      if (f.generation === 2) f.event.auth = { uid: "u" };
+      return f;
+    }),
+  });
+  assert.deepEqual(v2, []);
+});

@@ -242,7 +242,10 @@ export async function admitRun({ env, privateRoot, root, deps }) {
       [
         "status",
         "--porcelain",
-        "--untracked-files=all",
+        // `normal`, not `all`: `all` lists every file inside an ignored node_modules, `normal` keeps the
+        // directory as one entry; both override `status.showUntrackedFiles=no`, which would otherwise
+        // hide even the ignored entries
+        "--untracked-files=normal",
         "--ignored",
         "--",
         "conformance/src/rtdb-functions/fixtures",

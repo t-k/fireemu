@@ -56,6 +56,11 @@ export const AREAS = {
 		title: 'Enterprise full-text search',
 		covers: 'Search stage membership and result order by score and by creation time, recorded search refusals and response frames, and the text index lifecycle, failed builds and repair state.',
 	},
+	'FS-PIPELINE': {
+		product: 'Cloud Firestore',
+		title: 'Enterprise pipelines',
+		covers: 'Pipeline queries on an Enterprise database under the strict profile: sort, aggregate, distinct, add_fields, remove_fields, the collection group and documents inputs, the logical and recorded functions, the order of a read without a sort and the recorded refusals. The string, math, timestamp, map and array functions and union, unnest and sample are recorded but not claimed.',
+	},
 	'AUTH-ACCOUNT': {
 		product: 'Authentication',
 		title: 'Accounts',

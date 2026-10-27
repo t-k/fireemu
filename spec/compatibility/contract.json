@@ -1023,7 +1023,7 @@
         },
         {
           "id": "FS-CLAIM-PIPELINE",
-          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: a collection, collection_group or documents input, then where, select, sort, add_fields, remove_fields, distinct, aggregate, offset and limit stages in any order and number (expressions: field references, literals, comparisons, logical, existence, type and membership functions, array, map and document functions). Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored; production execution, ordering and exact production error parity are unobserved.",
+          "statement": "ExecutePipeline validates the documented stage registry and executes a finite Enterprise local latest-read subset: a collection, collection_group or documents input, then where, select, sort, add_fields, remove_fields, distinct, aggregate, offset and limit stages in any order and number (expressions: field references, literals, comparisons, logical, existence, type and membership functions, array, map and document functions). Offset skips matching rows once before limit while reusing the existing paged stream. Unsupported execution stages, expressions and consistency selectors are refused rather than ignored. Under the strict profile, the answers match the production Enterprise recordings FS-ENT-ORACLE O-1 to O-9b (2026-10-19 to 2026-10-27) row by row for the rows that spec/compatibility/closure/FS-PIPELINE.json lists as VERIFIED, including the order of a read without a sort (ascending CRC-32 of the UTF-8 document ID; a collection group by parent path, then that order). Not verified: the order of the groups of an aggregate, the order of rows tied on every sort key under a limit, the framing of answers larger than 50 small documents, non-ASCII document IDs and CRC-32 ties, gRPC-only refusal codes and the 32-level expression limit over gRPC, REST base64 forms outside the recorded controls, and every recorded shape that the strict profile answers UNIMPLEMENTED.",
           "capabilities": [
             {
               "id": "FS-PIPE-RPC-1",
@@ -1041,7 +1041,10 @@
             ],
             "integration": [
               "crates/fireemu-core-firestore/tests/validation_only.rs",
-              "crates/fireemu-adapter-grpc/tests/local.rs"
+              "crates/fireemu-adapter-grpc/tests/local.rs",
+              "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs",
+              "conformance/src/fs-pipeline-closure.test.mjs",
+              "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json"
             ],
             "conformance": []
           },
@@ -1054,7 +1057,7 @@
           ],
           "productionOnly": [],
           "preview": [
-            "ExecutePipeline / StructuredPipeline is a preview Firestore surface; the pinned official emulator does not serve it either, so there is no oracle for its execution semantics"
+            "ExecutePipeline / StructuredPipeline is a preview Firestore surface; the pinned official emulator does not serve it, the production oracle is the FS-ENT-ORACLE recordings named by the FS-PIPELINE closure"
           ]
         },
         {

@@ -220,10 +220,13 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 stage("sort", vec![func("ascending", vec![field("i")])]),
                 stage("limit", vec![string("x")]),
             ],
-            strict: None,
+            strict: Some((
+                400,
+                "Expected ordering[0] to be MAP_VALUE, but was FUNCTION_VALUE.",
+            )),
             emulator: (
                 400,
-                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+                "Expected ordering[0] to be MAP_VALUE, but was FUNCTION_VALUE.",
             ),
         },
         Case {
@@ -248,8 +251,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 ),
                 empty(),
             ],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "Value type is not supported: FIELD_REFERENCE_VALUE")),
+            emulator: (400, "Value type is not supported: FIELD_REFERENCE_VALUE"),
         },
         Case {
             label: "aggregate {c: sum(n)} by {} then select {}",
@@ -260,7 +263,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         // Recorded orders stay answered under strict (O-4 `o4/stages#*`).
@@ -345,14 +348,14 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                     ("direction", json!({"stringValue": "ascending"})),
                 ])],
             )],
-            strict: None,
-            emulator: (501, "pipeline stage \"sort\" is unsupported locally"),
+            strict: Some((200, "")),
+            emulator: (200, ""),
         },
         Case {
             label: "add_fields {a: nope_fn()} only",
             stages: vec![add_unknown()],
             strict: None,
-            emulator: (501, "pipeline stage \"add_fields\" is unsupported locally"),
+            emulator: (501, "function \"nope_fn\" is unsupported locally"),
         },
         Case {
             label: "a one-argument aggregate of an unknown function",
@@ -1010,7 +1013,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                     map(vec![("", func("document_id", vec![int(1)]))]),
                 ],
             )],
-            strict: None,
+            strict: Some((400, "Invalid empty property path string.")),
             emulator: (400, "Invalid empty property path string."),
         },
         // A failing call inside an array literal, beside the literal's own recorded refusal.
@@ -1484,7 +1487,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "add_fields {__x__: top}",
             stages: vec![stage("add_fields", vec![map(vec![("__x__", field("top"))])])],
-            strict: None,
+            strict: Some((400, "Stage 'add_fields': field name '__x__' is reserved.")),
             emulator: (400, "Stage 'add_fields': field name '__x__' is reserved."),
         },
         Case {
@@ -1493,7 +1496,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
                 "aggregate",
                 vec![map(vec![("v", func("count", vec![]))]), map(vec![("v", field("top"))])],
             )],
-            strict: None,
+            strict: Some((400, "The 'aggregate(...)' stage cannot have overlapping field names: [v]")),
             emulator: (400, "The 'aggregate(...)' stage cannot have overlapping field names: [v]"),
         },
         // Two refusals whose order production has not answered.
@@ -1637,8 +1640,8 @@ fn the_round_four_checks_hold_in_every_position() {
         Case {
             label: "add_fields {__name__: __name__} is no overwrite",
             stages: vec![stage("add_fields", vec![map(vec![("__name__", field("__name__"))])])],
-            strict: None,
-            emulator: (501, "pipeline stage \"add_fields\" is unsupported locally"),
+            strict: Some((200, "")),
+            emulator: (200, ""),
         },
         Case {
             label: "add_fields {__x__: __name__}",
@@ -1999,17 +2002,29 @@ const NAME_D: &str = "projects/demo-app/databases/(default)/documents/c/d";
 
 /// `select` of `__name__` as itself: the official emulator 1.22.0 answers the document name in
 /// the result (probed 2026-10-26, alone, quoted either way, beside other aliases, before a
-/// limit) and refuses `__name__` set from any other value. Production answered the alone,
-/// unquoted form with the name only (FS-ENT-ORACLE O5, `appendix#proposed-select-name-field`),
-/// so strict answers that form and refuses the others as unobserved.
+/// limit) and refuses `__name__` set from any other value. Production answered the alone form
+/// with the name only (FS-ENT-ORACLE O5, `appendix#proposed-select-name-field`) and, in O-8A
+/// (`names-main`), the quoted alias, the quoted value, the name beside another alias, a second
+/// alias holding the name, a following `limit` and a following `where`; strict answers those
+/// and refuses the unrecorded combination (both sides quoted) as unobserved.
 #[test]
 fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile() {
-    let quoted = json!({ "mapValue": { "fields": {
+    let quoted_alias = json!({ "mapValue": { "fields": {
+        "`__name__`": field("__name__"),
+    } } });
+    let quoted_value = json!({ "mapValue": { "fields": {
+        "__name__": field("`__name__`"),
+    } } });
+    let both_quoted = json!({ "mapValue": { "fields": {
         "`__name__`": field("`__name__`"),
     } } });
     let beside = map(vec![("__name__", field("__name__")), ("a", field("i"))]);
-    // The strict status: 501 for the unobserved identity select, 200 for the neighbour that
-    // selects the name under another alias (production answered that one).
+    let second = map(vec![
+        ("__name__", field("__name__")),
+        ("nm", field("__name__")),
+    ]);
+    // The strict status: 200 for the recorded forms, 501 for the identity select with both
+    // sides quoted, which production was not given.
     let named = |cases: Vec<(&str, Vec<Value>, Value, u16)>| {
         let (strict, emulator) = (seeded(true), seeded(false));
         for (label, stages, expected, strict_status) in cases {
@@ -2019,6 +2034,9 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             assert!(body[0]["executionTime"].is_string(), "{label}");
             let (status, body) = run(&strict, &stages);
             assert_eq!(status, strict_status, "strict {label}: {body}");
+            if strict_status == 200 {
+                assert_eq!(body[0]["results"], expected, "strict {label}");
+            }
         }
     };
     named(vec![
@@ -2032,8 +2050,20 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             200,
         ),
         (
+            "quoted alias",
+            vec![stage("select", vec![quoted_alias])],
+            json!([{ "name": NAME_D }]),
+            200,
+        ),
+        (
+            "quoted value",
+            vec![stage("select", vec![quoted_value])],
+            json!([{ "name": NAME_D }]),
+            200,
+        ),
+        (
             "quoted alias and value",
-            vec![stage("select", vec![quoted])],
+            vec![stage("select", vec![both_quoted])],
             json!([{ "name": NAME_D }]),
             501,
         ),
@@ -2041,13 +2071,34 @@ fn select_of_the_document_name_as_itself_keeps_the_name_in_the_emulator_profile(
             "beside another alias",
             vec![stage("select", vec![beside.clone()])],
             json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
-            501,
+            200,
+        ),
+        (
+            "a second alias for the name",
+            vec![stage("select", vec![second])],
+            json!([{ "name": NAME_D, "fields": { "nm": { "referenceValue": NAME_D } } }]),
+            200,
         ),
         (
             "before a limit",
             vec![stage("select", vec![beside]), stage("limit", vec![int(1)])],
             json!([{ "name": NAME_D, "fields": { "a": int(1) } }]),
-            501,
+            200,
+        ),
+        (
+            "before a where on the name",
+            vec![
+                stage("select", vec![map(vec![("__name__", field("__name__"))])]),
+                stage(
+                    "where",
+                    vec![func(
+                        "equal",
+                        vec![field("__name__"), json!({ "referenceValue": NAME_D })],
+                    )],
+                ),
+            ],
+            json!([{ "name": NAME_D }]),
+            200,
         ),
         (
             "another alias holding the name keeps the document out of the name",
@@ -2089,41 +2140,42 @@ fn select_of_the_document_name_from_another_value_or_overlapping_is_still_refuse
     );
 }
 
-/// Strict answers `UNIMPLEMENTED`, not fireemu's own stage-registry text, for the argument
-/// checks of stages fireemu does not run: no production row holds `sort("bogus")` or
-/// `remove_fields(1)` (issue strict-pipeline-answers-own-validator-texts-for-unsupported-stages,
-/// probes P6 and P7). The emulator profile does not run those stages either.
+/// Strict answers a stage's argument refusal only for a request of the shape production refused
+/// (FS-ENT-ORACLE O-6 `sort-wire-errors`, O-7 `fields-main`) and `UNIMPLEMENTED` for any other
+/// shape; the emulator profile answers production's wording alike (issue
+/// strict-pipeline-answers-own-validator-texts-for-unsupported-stages, probes P6 and P7).
 #[test]
-fn strict_does_not_answer_fireemus_own_argument_texts_for_stages_it_does_not_run() {
+fn strict_answers_a_stage_argument_refusal_only_for_the_recorded_shape() {
     let empty = || stage("select", vec![map(vec![])]);
     let sort_bogus = || stage("sort", vec![string("bogus")]);
     let remove_one = || stage("remove_fields", vec![int(1)]);
-    let sort_unrun = "pipeline stage \"sort\" is unsupported locally";
-    let remove_unrun = "pipeline stage \"remove_fields\" is unsupported locally";
+    let sort_text = "Expected ordering[0] to be MAP_VALUE, but was STRING_VALUE.";
+    let remove_text = "Expected fields[0] to be FIELD_REFERENCE_VALUE, but was INTEGER_VALUE.";
     check(vec![
         Case {
             label: "sort(\"bogus\")",
             stages: vec![sort_bogus()],
-            strict: None,
-            emulator: (501, sort_unrun),
+            strict: Some((400, sort_text)),
+            emulator: (400, sort_text),
         },
+        // The same refusal after `select {}` is a request production was not given.
         Case {
             label: "sort(\"bogus\") then select {}",
             stages: vec![sort_bogus(), empty()],
             strict: None,
-            emulator: (501, sort_unrun),
+            emulator: (400, sort_text),
         },
         Case {
             label: "remove_fields(1)",
             stages: vec![remove_one()],
-            strict: None,
-            emulator: (501, remove_unrun),
+            strict: Some((400, remove_text)),
+            emulator: (400, remove_text),
         },
         Case {
             label: "select {} then remove_fields(1)",
             stages: vec![empty(), remove_one()],
             strict: None,
-            emulator: (501, remove_unrun),
+            emulator: (400, remove_text),
         },
     ]);
 }

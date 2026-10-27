@@ -20,15 +20,15 @@ const OPS: [&str; 6] = [
 ];
 
 fn row(fields: Vec<(String, Value)>) -> Row {
-    Row {
-        path: DocumentPath::parse(
+    Row::document(
+        DocumentPath::parse(
             &ProjectId::try_new("p").unwrap(),
             &DatabaseId::try_new("(default)").unwrap(),
             "c/d",
         )
         .unwrap(),
-        fields: fields.into_iter().collect(),
-    }
+        fields.into_iter().collect(),
+    )
 }
 
 fn field(p: &str) -> Expr {
@@ -374,7 +374,7 @@ fn both_profiles_answer_what_production_answered() {
             assert_eq!(kept(field(dropped)), 0, "{dropped}");
         }
         // `__name__` compares with a reference.
-        let name = Value::Reference(r.path.resource_name());
+        let name = Value::Reference(r.path.as_ref().unwrap().resource_name());
         assert_eq!(
             call("equal", vec![field("__name__"), c(name)]).eval_in(&r, unrecorded),
             boolean(true)
@@ -560,7 +560,7 @@ fn comparisons_in_where_and_select() {
                     )
                     .unwrap(),
                 ),
-                Stage::Select(vec![(
+                Stage::select(vec![(
                     FieldPath::parse("big").unwrap(),
                     call(
                         "greater_than",
@@ -686,13 +686,15 @@ fn documents(stored: &[Option<Value>]) -> Vec<Row> {
     stored
         .iter()
         .enumerate()
-        .map(|(index, value)| Row {
-            path: document(index),
-            fields: value
-                .iter()
-                .map(|v| ("f".to_owned(), v.clone()))
-                .chain([("k".to_owned(), Value::Integer(index as i64))])
-                .collect(),
+        .map(|(index, value)| {
+            Row::document(
+                document(index),
+                value
+                    .iter()
+                    .map(|v| ("f".to_owned(), v.clone()))
+                    .chain([("k".to_owned(), Value::Integer(index as i64))])
+                    .collect(),
+            )
         })
         .collect()
 }
@@ -711,7 +713,7 @@ fn classic_keeps(op: &str, stored: &[Option<Value>], literal: &Value) -> Option<
             .commit(
                 &[Write {
                     op: WriteOp::Set {
-                        path: row.path,
+                        path: row.path.unwrap(),
                         fields: row.fields,
                         update_mask: None,
                     },

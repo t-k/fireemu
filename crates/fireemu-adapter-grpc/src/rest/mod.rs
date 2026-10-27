@@ -1664,35 +1664,39 @@ impl RestState {
                     .collect(),
             )));
         }
-        let (responses, _warnings) = self
-            .local
-            .run_query(&compiled.input, &*guard)
-            .map_err(refuse)?;
-        // Without a select a result is the source document itself; every element carries the
-        // input snapshot's read time as its execution time.
-        let whole_documents =
-            fireemu_core_firestore::pipeline_exec::referenced_fields(&compiled.stages).is_none();
+        let responses = if let Some(names) = &compiled.documents {
+            crate::pipeline::documents_input(&self.local, database, names, &*guard)
+                .map_err(refuse)?
+        } else {
+            crate::pipeline::in_scan_order(
+                self.local
+                    .run_query(&compiled.input, &*guard)
+                    .map_err(refuse)?
+                    .0,
+            )
+        };
+        // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);
-        let keeps_name = compiled.select_keeps_name;
         let mut cursor =
             fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
-        let mut results = Vec::new();
+        let mut rows = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {
                 break;
             }
             let row = crate::pipeline::document_row(document).map_err(refuse)?;
-            let fields = cursor
-                .push(row)
-                .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?;
-            if let Some(fields) = fields {
-                results.push(if whole_documents {
-                    document.clone()
-                } else {
-                    crate::pipeline::selected_result(&fields, &document.name, keeps_name)
-                });
-            }
+            rows.extend(
+                cursor
+                    .push(row)
+                    .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?,
+            );
         }
+        rows.extend(
+            cursor
+                .finish()
+                .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?,
+        );
+        let results = rows.iter().map(crate::pipeline::row_document).collect();
         // Production packs a small answer into one array element (FS-ENT-ORACLE O-1).
         let out = crate::pipeline::pack_results(results, execution_time)
             .iter()

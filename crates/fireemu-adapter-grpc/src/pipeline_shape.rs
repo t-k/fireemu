@@ -127,7 +127,8 @@ pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
     }
     let body = body.as_object()?;
     let mut out = String::new();
-    if let Some(structured) = body.get("structuredPipeline") {
+    // A null message is the unset one, as production's parser reads it (O-8A `precedence-main`).
+    if let Some(structured) = body.get("structuredPipeline").filter(|v| !v.is_null()) {
         let structured = structured.as_object()?;
         if let Some(pipeline) = structured.get("pipeline") {
             let pipeline = pipeline.as_object()?;
@@ -169,12 +170,21 @@ pub fn shape_of_json(body: &Value, order: &KeyOrder) -> Option<String> {
     Some(out)
 }
 
+/// The shape of a body that is no JSON: the body itself, since only an exact recorded text was
+/// refused with a recorded answer.
+#[must_use]
+pub fn raw_shape(body: &[u8]) -> String {
+    format!("raw:{}", String::from_utf8_lossy(body))
+}
+
 /// The shape of a gRPC request, whose maps carry no wire order.
 #[must_use]
 pub fn shape_of_request(request: &pb::ExecutePipelineRequest) -> Option<String> {
     if let Some(key) = text_key_of(request, true) {
         return Some(key);
     }
+    // A request naming no pipeline was recorded over REST only (O-8A `precedence-main`).
+    request.pipeline_type.as_ref()?;
     let mut out = String::new();
     if let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &request.pipeline_type
@@ -771,8 +781,18 @@ fn recorded_refusals(requests: &str, production: &str) -> HashMap<String, HashSe
             let Some(message) = element["error"]["message"].as_str() else {
                 continue;
             };
-            let body_order = order.rebased(&format!("/programs/{p}/steps/{s}/body"), "");
-            if let Some(shape) = shape_of_json(&step["body"], &body_order) {
+            // A body sent as written (O-8A `rawBody`) is the shape of its parsed JSON, or, when
+            // it is no JSON, its own text: only that exact body was refused with that text.
+            let shape = if let Some(raw) = step["rawBody"].as_str() {
+                match json_syntax::parse_with_key_order(raw.as_bytes()) {
+                    Ok((body, order)) => shape_of_json(&body, &order),
+                    Err(_) => Some(raw_shape(raw.as_bytes())),
+                }
+            } else {
+                let body_order = order.rebased(&format!("/programs/{p}/steps/{s}/body"), "");
+                shape_of_json(&step["body"], &body_order)
+            };
+            if let Some(shape) = shape {
                 table
                     .entry(shape)
                     .or_default()

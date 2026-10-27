@@ -28,14 +28,6 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// Rows the emulator profile accepts or refuses unlike the official emulator, with why.
 const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "r3 O12 aggregate{c: count(n) opts} by {}",
-        "aggregate is a stage fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
-    ),
-    (
-        "N17 aggregate{c: count(n)} by {g: top}",
-        "aggregate is a stage fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
-    ),
-    (
         "o5/function-names#fn-current_document",
         "current_document is a function fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
     ),
@@ -57,7 +49,11 @@ fn recorded_refusals() -> BTreeMap<String, Vec<String>> {
         let id = program["id"].as_str().unwrap();
         for (n, step) in program["steps"].as_array().unwrap().iter().enumerate() {
             let answer = &production["programs"][id]["steps"][step["id"].as_str().unwrap()];
-            if step["rpc"] != "executePipeline" || answer["status"] != 400 {
+            // A body sent as written (O-8A) has no shape to match.
+            if step["rpc"] != "executePipeline"
+                || answer["status"] != 400
+                || step.get("rawBody").is_some()
+            {
                 continue;
             }
             let element = answer["body"].as_array().map_or(&answer["body"], |a| &a[0]);

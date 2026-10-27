@@ -26,6 +26,27 @@ export function recordedPrograms(programs = PROGRAMS, fixture = FIXTURE) {
   return programs.filter((program) => recorded[program.id] !== undefined);
 }
 
+/** How many arrays and objects a value nests (a scalar is 0). */
+export function bodyDepth(value) {
+  if (value === null || typeof value !== "object") return 0;
+  return 1 + Math.max(0, ...Object.values(value).map(bodyDepth));
+}
+
+/**
+ * The deepest body the export keeps as an object. The Rust tests read the whole export through
+ * the REST body parser, which stops at 100 levels, and a step sits five levels down in it. A
+ * deeper body (an O-8A nesting probe) is exported as the text of its JSON, which nests nothing.
+ */
+export const EXPORT_BODY_DEPTH = 90;
+
+/** One exported step: its body as written when it is a text or too deep to export as an object. */
+export function exportStep({ id, rpc, body, parent, rawBody }) {
+  if (body !== undefined && bodyDepth(body) > EXPORT_BODY_DEPTH) {
+    return { id, rpc, parent, rawBody: JSON.stringify(body) };
+  }
+  return { id, rpc, body, parent, rawBody };
+}
+
 /** The export's text: every recorded program's seed and REST steps, gRPC steps left out. */
 export function exportText(programs = recordedPrograms()) {
   const out = {
@@ -33,9 +54,7 @@ export function exportText(programs = recordedPrograms()) {
     programs: programs.map((program) => ({
       id: program.id,
       seed: program.seed ?? [],
-      steps: program.steps
-        .filter((step) => (step.transport ?? "rest") === "rest")
-        .map(({ id, rpc, body, parent }) => ({ id, rpc, body, parent })),
+      steps: program.steps.filter((step) => (step.transport ?? "rest") === "rest").map(exportStep),
     })),
   };
   return `${JSON.stringify(out)}\n`;

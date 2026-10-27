@@ -1992,12 +1992,14 @@ const host = (value) => (value.startsWith("http") ? value : "http://" + value);
   );
   const { localId } = await signUp.json();
   if (!localId) throw new Error("sign-up failed");
+  // Issued a little in the past: the daemon runs on its own clock and refuses a token issued in
+  // its future, so a token issued "now" can be refused by a daemon whose second lags.
   const now = Math.floor(Date.now() / 1000);
   const token = (iat) =>
     b64url({ alg: "none", typ: "JWT" }) + "." +
-    b64url({ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now, iat, exp: now + 3600, firebase: { identities: {}, sign_in_provider: "password" } }) + ".";
+    b64url({ iss: "https://securetoken.google.com/" + project, aud: project, sub: localId, user_id: localId, auth_time: now - 30, iat, exp: now + 3600, firebase: { identities: {}, sign_in_provider: "password" } }) + ".";
   let n = 0;
-  for (const [kind, iat] of [["now", now], ["future", now + 600]]) {
+  for (const [kind, iat] of [["now", now - 30], ["future", now + 600]]) {
     const body = Buffer.from(JSON.stringify({ data: { kind } })).toString("base64");
     await fetch(host(process.env.CLOUD_TASKS_EMULATOR_HOST) + "/projects/" + project + "/locations/us-central1/queues/guarded/tasks", {
       method: "POST",

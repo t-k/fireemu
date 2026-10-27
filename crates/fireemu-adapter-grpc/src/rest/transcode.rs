@@ -704,11 +704,14 @@ enum Segment<'a> {
     Field(&'a str),
     /// An element of a repeated field (`[3]`).
     Index(usize),
-    /// An entry of a map field, by its position in the object (`[0].value`): production's
-    /// transcoder names the entry's index and then its `value` (FS-ENT-ORACLE O-8A
-    /// `precedence-main`, firestore-production-matrix). Only the first entry is recorded; a
-    /// body with several is a shape strict does not answer, and the position here is the
-    /// object's key order, not the wire order.
+    /// An entry of a map field, named by its index (`[0].value`): production's transcoder
+    /// names the entry's index and then its `value` (FS-ENT-ORACLE O-8A `precedence-main`,
+    /// firestore-production-matrix). Only index 0 is recorded. The index here is the entry's
+    /// position among the object's keys in sorted order (`serde_json` keeps no insertion
+    /// order), which is not the wire order production counts in, so a body with several entries
+    /// can name another index than production does. Strict answers such a body with
+    /// `UNIMPLEMENTED` (a shape with several map entries is not recorded); the emulator profile
+    /// never shows this text. (Issue rest-transcoder-map-entry-index-is-alphabetical.)
     Entry(usize),
 }
 

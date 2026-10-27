@@ -28,8 +28,6 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// differ are named in the lists below, each with its reason. `nesting-main` is not listed:
 /// every nesting probe this surface can take matches production.)
 const PENDING_PROGRAMS: &[&str] = &[
-    "fs-ent-pipeline/o8a/dupquote-main",
-    "fs-ent-pipeline/o8a/base64-main",
     "fs-ent-pipeline/o8b/strings-main",
     "fs-ent-pipeline/o8b/math-main",
     "fs-ent-pipeline/o8c/timestamps-main",
@@ -112,6 +110,151 @@ const UNOBSERVED_ORDER_ROWS: &[(&str, &str, usize)] = &[
         "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
         "the order of an aggregate's groups is production's own and unobserved, so an offset after the groups skips other groups",
         2,
+    ),
+];
+
+/// Rows of recorded programs whose production answer fireemu does not give, each pinned by the
+/// status it answers now under strict and under the emulator profile (so a change in either
+/// shows): the HTTP 500 faults of `dupquote-main` and the base64 forms production refuses in
+/// `base64-main`.
+const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-1",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-2",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#same-3",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#different-values",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/dupquote-main#swapped-order",
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
+        501,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-cr",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-cr",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mime-76",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mime-76",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mime-76-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mixed-plus-underscore",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-mixed-minus-slash",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#write-proto-name",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        400,
+        400,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#get-proto-name",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        404,
+        404,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#cursor-lf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
+    ),
+    (
+        "fs-ent-pipeline/o8a/base64-main#cursor-crlf",
+        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
+        200,
+        200,
     ),
 ];
 
@@ -754,6 +897,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         );
         let known = |row: &str| {
             KNOWN_DIFFERENCES.iter().any(|(known, _)| row == *known)
+                || UNMODELLED_PRODUCTION_ROWS
+                    .iter()
+                    .any(|(known, _, _, _)| row == *known)
                 || UNOBSERVED_ORDER_ROWS
                     .iter()
                     .any(|(known, _, _)| row == *known)
@@ -812,6 +958,20 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             }
         }
         // An unobserved-order row must still answer 200 with its pinned count and differ.
+        for (known, reason, strict_status, emulator_status) in UNMODELLED_PRODUCTION_ROWS {
+            let want = if strict {
+                strict_status
+            } else {
+                emulator_status
+            };
+            match differing.iter().find(|(row, _, _)| row == known) {
+                Some((_, got, _)) if got["status"] == *want => {}
+                Some((_, got, _)) => {
+                    changed_known.push(json!({"row": known, "reason": reason, "local": got}));
+                }
+                None => stale.push(json!({"row": known, "reason": reason})),
+            }
+        }
         for (known, reason, count) in UNOBSERVED_ORDER_ROWS {
             match differing.iter().find(|(row, _, _)| row == known) {
                 Some((_, got, _))

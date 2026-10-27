@@ -440,6 +440,8 @@ impl Parser<'_> {
         let mut i = start + 1;
         loop {
             let Some(&byte) = self.body.get(i) else {
+                // Reported at the end of the body with no context, as recorded for a short
+                // string (O-8A `precedence-main#truncated`); the same for a long one is assumed.
                 self.stop_first_pass(self.body.len());
                 return Err(self.fail("Closing quote expected in string.", self.body.len()));
             };
@@ -851,8 +853,9 @@ mod tests {
             "Invalid JSON payload received. Unexpected end of string. Expected , or ] after array value.\n1\n ^"
         );
         // An unterminated string is reported at the end of the body with no context
-        // (FS-ENT-ORACLE O-8A `precedence-main#truncated`, recorded for a short string; a long
-        // one is read alike).
+        // (FS-ENT-ORACLE O-8A `precedence-main#truncated`, recorded for one short string). That
+        // a long string is read alike is an assumption, not a recording; strict answers this
+        // text only for the exact recorded body.
         assert_eq!(
             refusal("{\"structuredPipeline\":{\"pipeline\":{\"stag"),
             "Invalid JSON payload received. Closing quote expected in string.\n\n^"

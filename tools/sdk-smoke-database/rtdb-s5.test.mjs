@@ -153,7 +153,7 @@ test('the packet pins every source this recorder is made of', () => {
   assert.throws(() => verifyPacket(undefined, undefined), /--packet/);
   const [file] = write(real);
   assert.throws(() => verifyPacket(file, 'f'.repeat(64)), /packet SHA-256/);
-  assert.deepEqual(SOURCES.slice(0, 3), ['rtdb-s5.mjs', 'rtdb-s5-page.js', 'rtdb-s5-judge.mjs']);
+  assert.deepEqual(SOURCES, ['rtdb-s5.mjs', 'rtdb-s5-page.js', 'rtdb-s5-judge.mjs', 'rtdb-admin.mjs', 'rtdb-residual.mjs', 'adc-preflight.mjs', 'cv11-genuine-auth.mjs']);
   for (const s of SOURCES) {
     const bad = { ...real, [s]: '0'.repeat(64) };
     assert.throws(() => verifyPacket(...write(bad)), new RegExp(`source pin differs: ${s.replace('.', '\\.')}`), s);

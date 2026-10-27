@@ -64,7 +64,7 @@ Object.assign(window.__stub, {
     setTimeout(() => {
       if (kase === 'main') {
         if (this.answer === 'A') return;
-        if (this.answer === 'B') { split(); fireT(); } else if (this.answer === 'C') { whole(); fireT(); } else if (this.answer === 'D') fireT();
+        if (this.answer === 'B' && this.late) { fireT(); setTimeout(split, 20); } else if (this.answer === 'B') { split(); fireT(); } else if (this.answer === 'C') { whole(); fireT(); } else if (this.answer === 'D') fireT();
         return;
       }
       if (this.controls === 'broken') return;
@@ -120,6 +120,12 @@ for (const answer of ['A', 'B', 'C', 'D']) {
     assert.deepEqual(kinds(r.rows, 'timeout').map((x) => x.label), [], 'no bound was hit');
   });
 }
+
+test('the observer waits out a quiet period after the unrelated write fired, so a late split is still read', { skip, timeout: 60000 }, async (t) => {
+  const r = await run(t, `{ answer: 'B', late: true }`);
+  if (!r) return;
+  assert.equal(classify(r.rows).outcome, 'B', 'the split lands 20 ms after t; the final reads come after the quiet period');
+});
 
 test('the page registers each case on its own writer connection and takes the writers offline one by one', { skip, timeout: 60000 }, async (t) => {
   const r = await run(t);

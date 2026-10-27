@@ -27,6 +27,7 @@ import {
   EXCLUDED_KINDS,
   EXCLUDED_PARTS,
   FUNCTIONS_HTTP_LOCK_SUCCESSORS,
+  FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS,
   RUNS,
   runEntry,
   assertNoOutboundNetwork,
@@ -39,6 +40,7 @@ import {
   judgeFsDataWriteHistorical as judgeHistorical,
   historicalRawObservation,
   collectHistoricalReplay,
+  functionsHttpRecordedKindsSha256,
   judgeFunctionsHttp,
   localSetupDifferences,
   packagedRunnerError,
@@ -48,6 +50,7 @@ import {
   readReleaseJson,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
+import { createBudget } from "../functions-http/harness.mjs";
 import { historicalProductionSummary } from "./firestore-probe/run.mjs";
 import { COMPARISONS } from "./auth-federation/compare.mjs";
 
@@ -1019,6 +1022,95 @@ test("the FUNCTIONS-HTTP stand-in accepts only the listed successor of the recor
       assert.match(item.sha256, /^[0-9a-f]{64}$/);
       assert.ok(item.reason.length > 20);
     }
+  }
+});
+
+const RECORDED_STRICT = "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f";
+const sha256Text = (text) => createHash("sha256").update(text).digest("hex");
+const recorderBytes = (output) => `${JSON.stringify(output, null, 2)}\n`;
+
+test("the FUNCTIONS-HTTP recorder's request snapshot lists the recorded kinds first", () => {
+  // The release job hashes the whole local recording, the budget snapshot included: a recorder
+  // change that renames, reorders or drops a recorded kind changes the bytes for good.
+  const strict = functionsHttp().runs.find((run) => run.profile === "strict");
+  assert.equal(strict.recordingSha256, RECORDED_STRICT);
+  const kinds = FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[strict.recordingSha256];
+  assert.ok(Array.isArray(kinds), "the recorded strict digest names its request kinds");
+  const names = Object.keys(createBudget().snapshot());
+  assert.deepEqual(names.slice(0, kinds.length), kinds);
+});
+
+test("a FUNCTIONS-HTTP recording with added unspent request kinds stands in for the recorded one", () => {
+  const kinds = FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[RECORDED_STRICT];
+  const recordings = passingFunctions().output.recordings;
+  const spent = Object.fromEntries(kinds.map((name, index) => [name, index + 1]));
+  const recorded = { recordings, requests: spent };
+  const current = { recordings, requests: { ...spent, token: 0, upload: 0 } };
+  const recordedSha = sha256Text(recorderBytes(recorded));
+  assert.notEqual(sha256Text(recorderBytes(current)), recordedSha);
+  assert.equal(functionsHttpRecordedKindsSha256(current, kinds), recordedSha);
+  assert.equal(functionsHttpRecordedKindsSha256(recorded, kinds), recordedSha);
+  const refused = {
+    "a spent added kind": { recordings, requests: { ...spent, token: 0, upload: 1 } },
+    "a reordered kind": {
+      recordings,
+      requests: Object.fromEntries(Object.entries(spent).reverse()),
+    },
+    "a dropped kind": {
+      recordings,
+      requests: Object.fromEntries(Object.entries(spent).slice(1)),
+    },
+    "another top-level field": { recordings, requests: spent, extra: 1 },
+    "no snapshot": { recordings },
+    "an array": [],
+  };
+  for (const [name, output] of Object.entries(refused)) {
+    assert.notEqual(functionsHttpRecordedKindsSha256(output, kinds), recordedSha, name);
+  }
+  assert.notEqual(functionsHttpRecordedKindsSha256(undefined, kinds), recordedSha);
+
+  // The judge: register the synthetic digest for the duration of the test only.
+  const evidence = functionsHttp();
+  const strict = evidence.runs.find((run) => run.profile === "strict");
+  strict.recordingSha256 = recordedSha;
+  const observed = {
+    ...passingFunctions(),
+    outputSha256: sha256Text(recorderBytes(current)),
+    output: current,
+  };
+  // Not registered: the bytes must match.
+  assert.notDeepEqual(judgeFunctionsHttp(evidence, observed), []);
+  FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[recordedSha] = kinds;
+  try {
+    assert.deepEqual(judgeFunctionsHttp(evidence, observed), []);
+    for (const [name, output] of Object.entries(refused)) {
+      if (!Array.isArray(output) && output.recordings === undefined) continue;
+      const broken = {
+        ...observed,
+        output,
+        outputSha256: sha256Text(recorderBytes(output)),
+      };
+      assert.notDeepEqual(judgeFunctionsHttp(evidence, broken), [], name);
+    }
+    // Other recordings under the same snapshot fail.
+    const other = structuredClone(current);
+    other.recordings[0]["functions-http/http/request-shape"]["case-0"].status = 500;
+    other.recordings[1]["functions-http/http/request-shape"]["case-0"].status = 500;
+    assert.notDeepEqual(
+      judgeFunctionsHttp(evidence, {
+        ...observed,
+        output: other,
+        outputSha256: sha256Text(recorderBytes(other)),
+      }),
+      [],
+    );
+  } finally {
+    delete FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[recordedSha];
+  }
+  // Inherited property names are not recorded digests.
+  for (const key of ["constructor", "__proto__", "toString"]) {
+    strict.recordingSha256 = key;
+    assert.notDeepEqual(judgeFunctionsHttp(evidence, observed), [], key);
   }
 });
 

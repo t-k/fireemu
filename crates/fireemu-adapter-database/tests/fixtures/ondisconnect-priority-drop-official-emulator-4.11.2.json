@@ -1,5 +1,5 @@
 {
- "provenance": "Recorded against firebase-database-emulator v4.11.2 (the jar firebase-tools 15.28.2 runs) with raw realtime frames by docs.local/runs/rtdb-s5/probes/record-priority-drop.mjs, 2026-10-27. Review E4 is in the independent review table; F1–F8 were recorded separately by docs.local/runs/rtdb-s5/probes/review-diff-probe.mjs. Production (RTDB-S5-20261027-01, two rounds) confirmed the first case only: the whole onDisconnect update is dropped.",
+ "provenance": "Recorded against firebase-database-emulator v4.11.2 (the jar firebase-tools 15.28.2 runs) with raw realtime frames by docs.local/runs/rtdb-s5/probes/record-priority-drop.mjs, 2026-10-27. Review E4 and F1–F8 were recorded separately against the pinned jar. Production (RTDB-S5-20261027-01, two rounds) confirmed the first case only: the whole onDisconnect update is dropped.",
  "cases": [
   {
    "name": "production shape: value with a priority, cancel of a child, another write",

@@ -96,7 +96,7 @@ test("an instance step whose answer is a lie leaves the RTDB not closed", async 
 });
 
 test("the caps of the admin client bound the requests, and the anonymous client cannot write more than twice", async () => {
-  assert.deepEqual(CAPS, { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation: 12 });
+  assert.deepEqual(CAPS, { observe: 80, cleanup: 40, mutations: 40, pollsPerOperation: 12 });
   const w = fakeWorld();
   const rtdb = make(w);
   await rtdb.setup();
@@ -165,18 +165,80 @@ test("a log row that cannot be written for an unauthenticated write leaves the R
   assert.equal(closed.closed, false);
 });
 
-test("a refusal that looks like propagation is not waited out during the cleanup of a setup that failed", async () => {
-  // the Rules PUT of the install is a lie, so the setup stops while propagation retries are still on
-  const w = fakeWorld([{ method: "PUT", path: /\.settings\/rules/u, kind: "lie" }]);
+const INSTANCE_GET = /instances\/fireemu-q-rtdb2$/u;
+
+test("a transient 403 on a management read-back during the cleanup is retried with the setup's backoff, and the RTDB closes", async () => {
+  // CV14 run 2026-10-27: the read-back after instance-disable answered 403 "Management API has not been used"
+  // although the API was enabled; the same refusal at instance-before had passed on a retry
+  const w = fakeWorld();
   const slept = [];
   const rtdb = make(w, { sleep: async (ms) => slept.push(ms) });
-  await assert.rejects(() => rtdb.setup(), /./u);
+  await rtdb.setup();
   slept.length = 0;
-  // from now on every read of the Rules is refused with a 403
-  w.forbid = { path: /\.settings\/rules/u, remaining: 1000 };
+  w.forbid = { path: INSTANCE_GET, remaining: 2 };
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.closed, true, JSON.stringify(closed));
+  assert.deepEqual(slept, [2000, 4000]);
+  assert.equal(w.baseline(), true);
+});
+
+test("a read-back that keeps being refused is retried within 120 s in all and then leaves the RTDB not closed", async () => {
+  const w = fakeWorld();
+  const slept = [];
+  const rtdb = make(w, { sleep: async (ms) => slept.push(ms) });
+  await rtdb.setup();
+  slept.length = 0;
+  w.forbid = { path: INSTANCE_GET, remaining: 1000 };
   const closed = await rtdb.cleanup();
   assert.equal(closed.closed, false);
-  assert.deepEqual(slept, [], "no retry wait in the cleanup");
+  assert.equal(
+    slept.reduce((a, b) => a + b, 0),
+    120_000,
+  );
+  assert.deepEqual(slept, [2000, 4000, 8000, 16_000, 30_000, 30_000, 30_000]);
+  assert.ok(closed.counts.admin.cleanup <= CAPS.cleanup, "inside the cleanup cap");
+  assert.equal(closed.state.instance, "ours");
+  assert.deepEqual(closed.unresolved, [], "a refusal is an answer, nothing unknown was sent");
+});
+
+test("the cleanup has its own 120 s of retries even when the setup used some of them", async () => {
+  const w = fakeWorld();
+  w.forbid = { path: INSTANCE_GET, remaining: 4 };
+  const slept = [];
+  const rtdb = make(w, { sleep: async (ms) => slept.push(ms) });
+  await rtdb.setup();
+  // (the 5 s are the wait for the API-enable operation, not a retry)
+  assert.deepEqual(
+    slept.filter((ms) => ms !== 5000),
+    [2000, 4000, 8000, 16_000],
+    "30 s of the setup's budget are gone",
+  );
+  slept.length = 0;
+  w.forbid = { path: INSTANCE_GET, remaining: 1000 };
+  await rtdb.cleanup();
+  assert.equal(
+    slept.reduce((a, b) => a + b, 0),
+    120_000,
+  );
+});
+
+test("a retry in the cleanup is for a GET only: a refused mutation is not sent again", async () => {
+  const w = fakeWorld();
+  let disables = 0;
+  const rtdb = make(w, {
+    sleep: async () => {},
+    fetchImpl: async (url, init) => {
+      if (init.method === "POST" && url.endsWith(":disable")) {
+        disables += 1;
+        return json(403, { error: "denied" });
+      }
+      return w.fetch(url, init);
+    },
+  });
+  await rtdb.setup();
+  const closed = await rtdb.cleanup();
+  assert.equal(closed.closed, false);
+  assert.equal(disables, 1);
 });
 
 test("a log row that cannot be written for an admin write leaves the RTDB not closed", async () => {

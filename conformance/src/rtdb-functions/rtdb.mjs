@@ -11,7 +11,7 @@ import { INSTANCE, LOCATION, PREFIX } from "./frames.mjs";
 export { Stop };
 
 // observe/cleanup: admin requests per phase; mutations: admin writes overall (the residual recorder's table).
-export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation: 12 };
+export const CAPS = { observe: 80, cleanup: 40, mutations: 40, pollsPerOperation: 12 };
 // The two writes without a token: nothing else is ever sent without one.
 export const ANON_CAPS = { observe: 2, cleanup: 0, mutations: 2 };
 const PROPAGATION_MS = 120_000;
@@ -84,8 +84,14 @@ export function createRtdb({
     },
     /** Prefix delete, Rules restore, instance retire, API disable, each read back; `closed` only for an exact baseline. */
     async cleanup() {
-      run.propagation = false;
+      // A management read-back right after a change can answer a transient 403 "API has not been used"
+      // (CV14 run 2026-10-27: instance-disabled, minutes after the same refusal at instance-before had passed
+      // on a retry). The read-backs of the cleanup retry the way the setup's do, within a fresh 120 s;
+      // retries are for GETs only, a refused mutation is never sent again.
+      run.propagation = true;
+      run.propagationWaited = 0;
       await fns.cleanup(run, options, sleep);
+      run.propagation = false;
       const restored = Object.values(run.state).every((state) => state === "baseline");
       const accounted =
         admin.counts.logFailures === 0 &&

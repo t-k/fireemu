@@ -210,6 +210,10 @@ test("a complete run: preflight, inventory, RTDB up, eight deploys, nine writes,
   assert.ok(idx("inventory-clean") > order.findLastIndex((e) => e.startsWith("cleanup")));
   assert.ok(idx("rtdb-cleanup") > idx("inventory-clean"));
   assert.equal(result.deployed, 8);
+  assert.deepEqual(
+    Object.keys(result.records),
+    FIXTURE_HANDLERS.map((h) => h.name),
+  );
   assert.equal(result.report.totals.unattributed, 0);
   assert.equal(result.report.steps.length, 9);
   for (const step of result.report.steps) {

@@ -1,0 +1,44 @@
+// The reviewed sources of the CV14 run: the digest of each fixture file is fixed in the code, so a run
+// refuses a fixture that was changed after it was reviewed. The packet repeats the digests.
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+
+import { FIXTURE_PINS, requiredStage2Sources } from "./pins.mjs";
+
+const here = (file) => new URL(`./${file}`, import.meta.url);
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+test("the pinned digests are those of the files in the repository", async () => {
+  assert.deepEqual(Object.keys(FIXTURE_PINS), [
+    "firebase.json",
+    "fixtures/frames.js",
+    "fixtures/index.js",
+    "fixtures/package-lock.json",
+    "fixtures/package.json",
+  ]);
+  for (const [file, expected] of Object.entries(FIXTURE_PINS)) {
+    assert.equal(sha256(await readFile(here(file))), expected, file);
+  }
+  await assert.doesNotReject(() => requiredStage2Sources());
+});
+
+test("a changed file, or another Firebase CLI version, is refused", async () => {
+  const real = async (file) => readFile(here(file));
+  const cli = (version) => async (file) =>
+    file.endsWith("firebase-tools/package.json")
+      ? Buffer.from(JSON.stringify({ version }))
+      : real(file);
+  await assert.doesNotReject(() => requiredStage2Sources(cli("15.28.2")));
+  await assert.rejects(() => requiredStage2Sources(cli("15.28.1")), /15\.28\.2/);
+  for (const file of Object.keys(FIXTURE_PINS)) {
+    const changed = async (name) =>
+      name === file ? Buffer.concat([await real(name), Buffer.from(" ")]) : cli("15.28.2")(name);
+    await assert.rejects(
+      () => requiredStage2Sources(changed),
+      new RegExp(`reviewed source changed: ${file.replace(/[./]/gu, "\\$&")}`),
+    );
+  }
+});

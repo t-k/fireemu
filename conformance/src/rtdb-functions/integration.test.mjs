@@ -12,43 +12,22 @@ import { PROJECT } from "../../functions-http/harness.mjs";
 import { FIXTURE_HANDLERS } from "./frames.mjs";
 import { runStage2 } from "./flow.mjs";
 import { assembleStage2 } from "./assemble.mjs";
-import { STAGE2_KINDS, STAGE2_LIMITS, createStage2Budget } from "./wiring.mjs";
-import { fakeWorld as fakeRtdb, packet, P } from "./rtdb.fake.mjs";
-import { createGcpWorld } from "./world.fake.mjs";
+import { STAGE2_KINDS, STAGE2_LIMITS } from "./wiring.mjs";
+import { createRehearsalEnvironment } from "./world.fake.mjs";
 import { STEPS } from "./sequence.mjs";
 
-async function setup({ options = {}, rtdbFaults = [], abort = { stopped: false } } = {}) {
+async function setup(arg = {}) {
   const dir = await mkdtemp(join(tmpdir(), "cv14-integration-"));
-  let nowMs = Date.parse("2026-10-27T00:00:00.000Z");
-  const clock = {
-    now: () => nowMs,
-    sleep: async (ms) => {
-      nowMs += ms;
-    },
-  };
-  const budget = createStage2Budget();
-  const gcp = createGcpWorld({ budget, clock, options });
-  const rtdbWorld = fakeRtdb(rtdbFaults, { onItemChange: gcp.deliver });
+  const rehearsal = createRehearsalEnvironment(arg);
+  const { environment } = rehearsal;
   const journal = [];
   const assembled = assembleStage2({
-    control: gcp.control,
-    runCli: gcp.runCli,
-    adminFetch: (url, init) =>
-      rtdbWorld.fetch(url, {
-        ...init,
-        headers: { ...init.headers, authorization: "Bearer test-token", "x-goog-user-project": P },
-      }),
-    anonymousFetch: rtdbWorld.fetch,
-    packet: { ...packet, projectNumber: "000000000000" },
-    budget,
+    ...environment,
+    packet: environment.rtdbPacket,
     runDir: dir,
-    adcPath: "/adc",
-    projectNumber: gcp.projectNumber,
-    clock,
-    abort,
     log: async (action, detail) => journal.push([action, detail]),
   });
-  return { dir, gcp, rtdbWorld, budget, journal, assembled, abort, clock };
+  return { dir, ...rehearsal, journal, assembled };
 }
 
 const run = (env) => runStage2(env.assembled.deps);

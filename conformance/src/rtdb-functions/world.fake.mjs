@@ -13,6 +13,8 @@ import { uploadEventFromLine } from "../shared/gen2-source-uploads.mjs";
 import { PROJECT } from "../../functions-http/harness.mjs";
 import { targetResources } from "../../functions-http/production.mjs";
 import { FIXTURE_HANDLERS, FRAME_MARKER, LOCATION } from "./frames.mjs";
+import { fakeWorld as fakeRtdb, packet as rtdbPacket, P as RTDB_PROJECT } from "./rtdb.fake.mjs";
+import { createStage2Budget } from "./wiring.mjs";
 import { origin } from "./logs.mjs";
 import { CODEBASE, TARGETS } from "./targets.mjs";
 import { documentedFires } from "./sequence.mjs";
@@ -91,6 +93,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
         uri: `https://${lowerOf(name)}-xei277hwaa-uc.a.run.app`,
       },
       labels: { "deployment-tool": "cli-firebase", "firebase-functions-codebase": CODEBASE },
+      ...(options.secretInRecord ? { annotations: { leak: options.secretInRecord } } : {}),
       eventTrigger: {
         trigger: triggerOf(name),
         triggerRegion: LOCATION,
@@ -107,6 +110,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       entryPoint: spec.entryPoint,
       runtime: spec.runtime,
       labels: { "firebase-functions-codebase": CODEBASE, "deployment-tool": "cli-firebase" },
+      ...(options.secretInRecord ? { annotations: { leak: options.secretInRecord } } : {}),
       eventTrigger: {
         eventType: "providers/google.firebase.database/eventTypes/ref.write",
         resource: "projects/_/instances/x/refs/cv14-rtdb/items/{id}",
@@ -121,6 +125,8 @@ export function createGcpWorld({ budget, clock, options = {} }) {
   const serviceOf = (name) => `${REGION_PATH}/services/${lowerOf(name)}`;
 
   function removeFunction(name) {
+    // the platform answers the delete, and the function stays (a failure the read-back must catch)
+    if (options.keepFunction === name) return;
     const entry = w.functions.get(name);
     w.functions.delete(name);
     w.deleted.push(name);
@@ -393,4 +399,50 @@ export function createGcpWorld({ budget, clock, options = {} }) {
 
   w.projectNumber = FAKE_PROJECT_NUMBER;
   return w;
+}
+
+/**
+ * Everything a run needs from its environment, as fakes: the fake of the Google APIs, the fake RTDB that
+ * turns an item change into the frames the handlers would print, the CLI, a clock that sleeps instantly.
+ */
+export function createRehearsalEnvironment({
+  options = {},
+  rtdbFaults = [],
+  abort = { stopped: false },
+} = {}) {
+  let nowMs = Date.parse("2026-10-27T00:00:00.000Z");
+  const clock = {
+    now: () => nowMs,
+    sleep: async (ms) => {
+      nowMs += ms;
+    },
+  };
+  const budget = createStage2Budget();
+  const gcp = createGcpWorld({ budget, clock, options });
+  const rtdbWorld = fakeRtdb(rtdbFaults, { onItemChange: gcp.deliver });
+  const environment = {
+    control: gcp.control,
+    runCli: gcp.runCli,
+    adminFetch: (url, init) =>
+      rtdbWorld.fetch(url, {
+        ...init,
+        headers: {
+          ...init.headers,
+          authorization: "Bearer test-token",
+          "x-goog-user-project": RTDB_PROJECT,
+        },
+      }),
+    anonymousFetch: rtdbWorld.fetch,
+    budget,
+    adcPath: "/adc",
+    projectNumber: gcp.projectNumber,
+    projectId: RTDB_PROJECT,
+    // the fake RTDB answers for the project number of its own fixture
+    rtdbPacket: { ...rtdbPacket, projectNumber: "000000000000" },
+    clock,
+    abort,
+    stop: {},
+    secrets: ["test-token"],
+  };
+  return { environment, gcp, rtdbWorld, clock, budget };
 }

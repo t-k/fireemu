@@ -36,6 +36,7 @@ export async function runStage2(deps) {
     residual: false,
     deployed: 0,
     report: null,
+    records: {},
     frames: [],
     logs: { reads: 0, entries: 0, incomplete: false },
     cleanup: { targets: {}, inventory: null, rtdb: null },
@@ -95,6 +96,7 @@ export async function runStage2(deps) {
       const state = states.get(spec.key);
       await opsOf(spec).deploy(spec, state);
       await opsOf(spec).read(spec, state);
+      result.records[spec.key] = state.record ?? null;
       result.deployed += 1;
     }
 

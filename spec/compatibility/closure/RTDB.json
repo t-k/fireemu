@@ -605,9 +605,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
-    "toolCommit": "900e9d1d343f79a1fcad4d00762e986fa54c221b",
-    "rustSourcesEqualTo": "work/rtdb-ondisconnect-order 3cdcb534fc3f19db43d737970aa1c5bfde5d8282 (origin/main ac1726cd0 plus the multi-path order fix; PROVISIONAL: rebind to the merged main and its release build)",
+    "comparisonSha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
+    "toolCommit": "564871bfc1fdcd0f357d7b533faae9cf5b31291f",
+    "rustSourcesEqualTo": "origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
     "knownDifferences": [],
     "rows": {
      "MATCH": 4
@@ -632,7 +632,7 @@
     "remove; update with a null and a kept field; update with increment and serverTimestamp",
     "cancel at a parent cancels the registrations below it",
     "a Rules change that denies a path between registration and firing: the write is not made; registering under denying Rules is refused with PERMISSION_DENIED",
-    "the writes of one connection fire in the order of production (e6, e5, marker, e4, e3, e2 for the six recorded keys), which is the Scala map order of the official emulator: registration order up to four entries, key hash order from five",
+    "the writes of one connection fire in the order of production (e6, e5, marker, e4, e3, e2 for the six recorded keys), which is the Scala map order of the official emulator: registration order up to four entries, key hash order from five; fireemu matches it in every recorded step (no known difference in the order)",
     "WebSocket: the writes fire at once (0.2 s); long polling: after the idle close (99.3 s and 103.2 s in production, about 104 s in fireemu)"
    ],
    "status": "VERIFIED",
@@ -650,9 +650,9 @@
     "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-residual.json",
     "comparisonTool": "tools/sdk-smoke-database/rtdb-residual-fixture.mjs",
     "comparisonPath": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "comparisonSha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
-    "toolCommit": "900e9d1d343f79a1fcad4d00762e986fa54c221b",
-    "rustSourcesEqualTo": "work/rtdb-ondisconnect-order 3cdcb534fc3f19db43d737970aa1c5bfde5d8282 (origin/main ac1726cd0 plus the multi-path order fix; PROVISIONAL: rebind to the merged main and its release build)",
+    "comparisonSha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
+    "toolCommit": "564871bfc1fdcd0f357d7b533faae9cf5b31291f",
+    "rustSourcesEqualTo": "origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a (the order fix; this branch adds no file under crates/, Cargo.toml, Cargo.lock or rust-toolchain.toml)",
     "knownDifferences": [
      "/knownDifferences/longPollingIdleClose"
     ],
@@ -710,7 +710,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
-    "sha256": "b69f7222091ad1743a25f15167284ae61a252eacabab7a62fc20bc35f6a1fc21",
+    "sha256": "d1286b51ecc7656e57eaa74d0a8658db3ebcf638beba48ebcb6759cc7153954d",
     "rows": 8,
     "summary": {
      "match": true,
@@ -721,7 +721,7 @@
      },
      "timingWithinTolerance": true
     },
-    "binding": "PROVISIONAL: bound to the local evidence build of work/rtdb-ondisconnect-order, not to the final release binary"
+    "binding": "the release binary built from origin/main 00abe06b4d1df72deecbdfd08295965e3831b53a with RUSTC_WRAPPER empty (sha256 in the evidence file)"
    }
   ],
   "productionRequests": 0,
@@ -755,6 +755,9 @@
   },
   "browserRunsOnOlderBinaries": {
    "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
+  },
+  "onDisconnectPrioritizedSplit": {
+   "statement": "Not claimed: an onDisconnect value that carries `.priority`, followed by a cancel of one of its children (not of the priority itself). The official emulator accepts every request and then drops the whole disconnect update (no frame, the data stays null, even a write registered next to it); production was not observed; fireemu fires the remaining children. Tracked in docs.local/issues/open/rtdb-ondisconnect-split-of-a-prioritized-value-drops-the-whole-update.md."
   }
  },
  "outOfScope": [

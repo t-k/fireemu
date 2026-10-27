@@ -496,12 +496,6 @@
     },
     {
      "step": "top-off",
-     "type": "ack",
-     "actor": "w",
-     "label": "w-a-score"
-    },
-    {
-     "step": "top-off",
      "type": "value",
      "actor": "o",
      "label": "items",
@@ -530,6 +524,12 @@
      "actor": "o",
      "label": "win-v",
      "shape": "[[\"b\",{\"score\":2}],[\"c\",{\"score\":3}]]"
+    },
+    {
+     "step": "top-off",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-a-score"
     },
     {
      "step": "offline-writes",
@@ -702,6 +702,12 @@
     },
     {
      "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
      "type": "value",
      "actor": "o",
      "label": "items",
@@ -730,12 +736,6 @@
      "actor": "o",
      "label": "win-v",
      "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
-    },
-    {
-     "step": "after-reconnect",
-     "type": "ack",
-     "actor": "w",
-     "label": "w-g"
     },
     {
      "step": "after-reconnect",
@@ -1460,6 +1460,12 @@
     },
     {
      "step": "after-reconnect",
+     "type": "ack",
+     "actor": "w",
+     "label": "w-g"
+    },
+    {
+     "step": "after-reconnect",
      "type": "value",
      "actor": "o",
      "label": "items",
@@ -1488,12 +1494,6 @@
      "actor": "o",
      "label": "win-v",
      "shape": "[[\"e\",{\"score\":0}],[\"g\",{\"score\":0.25}]]"
-    },
-    {
-     "step": "after-reconnect",
-     "type": "ack",
-     "actor": "w",
-     "label": "w-g"
     },
     {
      "step": "after-reconnect",

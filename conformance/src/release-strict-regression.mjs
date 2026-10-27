@@ -1082,16 +1082,66 @@ export const FUNCTIONS_HTTP_LOCK_SUCCESSORS = {
   ],
 };
 
+/**
+ * The request kinds, in order, of the budget snapshot (`requests`) in the FUNCTIONS-HTTP strict
+ * recording the lane compared with production, keyed by that recording's digest. The snapshot is
+ * the recorder's own bookkeeping, not a recorded answer, and the recorder later gained kinds a
+ * local run never spends (upload in ae7d15397, token in 9bd3af0f5). A local recording with other
+ * bytes stands in only when its snapshot lists these kinds first, every added kind is 0, and the
+ * recording re-serialized with only these kinds is the recorded bytes. Anything else is refused.
+ */
+export const FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS = {
+  "92e9ea008073ae16897015e552ae7b58cb1560d2d55de14092c3ca71e8fea39f": [
+    "invocation",
+    "control",
+    "cleanup",
+    "auth",
+    "cliDeploy",
+    "cliDelete",
+  ],
+};
+
+/**
+ * The digest of a local FUNCTIONS-HTTP recording re-serialized the way run.mjs writes it, with the
+ * budget snapshot cut to `kinds`; a string naming the problem when the cut would drop anything.
+ */
+export function functionsHttpRecordedKindsSha256(output, kinds) {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return "no local recording";
+  if (!isDeepStrictEqual(Object.keys(output), ["recordings", "requests"]))
+    return "the local recording has other top-level fields";
+  const requests = output.requests;
+  if (!requests || typeof requests !== "object" || Array.isArray(requests))
+    return "the local recording has no request snapshot";
+  const names = Object.keys(requests);
+  if (!isDeepStrictEqual(names.slice(0, kinds.length), kinds))
+    return "the request snapshot does not start with the recorded kinds";
+  const added = names.slice(kinds.length).filter((name) => requests[name] !== 0);
+  if (added.length > 0) return `the request snapshot spent unrecorded kinds: ${added.join(", ")}`;
+  const cut = Object.fromEntries(kinds.map((name) => [name, requests[name]]));
+  return sha256Bytes(
+    Buffer.from(`${JSON.stringify({ recordings: output.recordings, requests: cut }, null, 2)}\n`),
+  );
+}
+
 /** The FUNCTIONS-HTTP stand-in: the local strict recording is the lane's bytes. */
 export function judgeFunctionsHttp(expected, observed) {
   const differences = [];
   expectEqual(differences, "check-local exit code", 0, observed.exitCode);
   const strict = expected.runs.find((run) => run.profile === "strict");
+  const recordedKinds =
+    typeof strict?.recordingSha256 === "string" &&
+    Object.hasOwn(FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS, strict.recordingSha256)
+      ? FUNCTIONS_HTTP_RECORDED_REQUEST_KINDS[strict.recordingSha256]
+      : undefined;
+  const standsIn =
+    observed.outputSha256 !== strict?.recordingSha256 &&
+    recordedKinds !== undefined &&
+    functionsHttpRecordedKindsSha256(observed.output, recordedKinds) === strict.recordingSha256;
   expectEqual(
     differences,
     "strict recording sha256",
     strict?.recordingSha256,
-    observed.outputSha256,
+    standsIn ? strict.recordingSha256 : observed.outputSha256,
   );
   expectEqual(differences, "Functions runtime Node", expected.nodeVersion, observed.nodeVersion);
   expectEqual(

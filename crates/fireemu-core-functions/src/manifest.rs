@@ -71,6 +71,11 @@ pub struct PlatformOptions {
     pub labels: BTreeMap<String, String>,
     /// Secret environment variable names bound to this function.
     pub secrets: Vec<String>,
+    /// Set by the daemon, strict profile only, on a configured-manifest entry that serves as a
+    /// task queue an export the codebase's own discovery declares callable (App Check not
+    /// active: with it such a manifest is refused). A task delivered to it passes the Bearer
+    /// check a strict callable request passes. Never read from a manifest.
+    pub strict_callable_ingress: bool,
 }
 
 /// Firestore document event kinds (`google.cloud.firestore.document.v1.*`).

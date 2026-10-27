@@ -16,7 +16,7 @@
   "decision": "APPROVED",
   "decidedOn": "2026-10-27",
   "decider": "project coordinator (delegated by the owner)",
-  "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review)",
+  "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review); docs.local/instructions/owner-decisions.md (lines 1862 and 1863, conditional candidate integration)",
   "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
   "submittedFinalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
   "finalArtifactSha256": "f3cb6d1762893ac4dd018b798dfc1dd556fff139e3c53b1d8724727ef7faee8d",
@@ -38,9 +38,39 @@
     "reportSha256": "32767226df6f81a79fc991398a477be88f657032a1fc0041983e4b493f19a84e",
     "reviewedCommit": "1170d27ce1388ffaed8199e89caccb0b0e391ee7",
     "outcome": "Opus independent closure review of the CV08/CV10 update (production-5): APPROVE of dd90111a2 and of the delta 1170d27ce, Must 0 against the lane; M1 was the coordinator's closing step (R4 decided, this entry, closure_records --write); Should S1 to S5, DS1 and DS2 addressed in the closing commit"
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-27-rtdb-s5-drop-review.md",
+    "reportSha256": "ba97e3d3589f4903f909487f15b3f6e5d10ecbd2daeab983843950a8c367706d",
+    "reviewedCommit": "9893ad00b07d16a6259345aa64a9dc0ad8f9f11f",
+    "outcome": "Independent S5 review: CHANGES REQUESTED; retained-child model and scope corrections required."
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-28-rtdb-s5-sol.md",
+    "reportSha256": "8abc812be741646bc270da9aedeb5893a42fa46c6eb55de4a589d488125621aa",
+    "reviewedCommit": "a08d338545af1b202e020a1b03403c82da14c9c1",
+    "outcome": "Independent S5 source delta review: APPROVED for bounded source delta; final evidence and closure review remain pending."
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-28-rtdb-s5-final-sol.md",
+    "reportSha256": "580fb4c71853debffcb330f8be2021d971ba12eb2f32234ada4b9f0d344c143d",
+    "reviewedCommit": "7a59dfcb23bb74ed30ed1350e324333056227121",
+    "outcome": "Independent S5 final evidence review: reviewed replay and scope; binding metadata correction required."
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-28-rtdb-s5-binding-sol.md",
+    "reportSha256": "4be9ca83f07230624bdf594535dfd02a0bb6b4884b381b7c1d23c5ddd9c512aa",
+    "reviewedCommit": "aad414175f7e205a30b158c384555c2e4e51933e",
+    "outcome": "Independent S5 binding correction review: APPROVED, Must 0."
+   },
+   {
+    "reportPath": "docs.local/reviews/2026-10-28-cv14-final-sol.md",
+    "reportSha256": "56da53303d93aa10378fee338372ffa4ec0679e9edbc8f8749a1eddc1263ec81",
+    "reviewedCommit": "5dafdade28bdc89c1db48e248c304b943719a8e1",
+    "outcome": "Independent CV14 final artifact review: candidate R6 suitable, conditional on mutation, current bindings and final CI."
    }
   ],
-  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17."
+  "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17. S5 and CV14 source and capture reviews are accepted for candidate integration; final mutation, combined-tree CI and current binding gates remain pending before main integration and publication."
  },
  "scopeDecisions": [
   {
@@ -54,12 +84,11 @@
   },
   {
    "id": "R2",
-   "decision": "UNVERIFIED and outside this closure (not observed in production): reconnect/resume, child-event and query ordering across goOffline/goOnline, and query-scoped listener cancellation (CV08); REST POST/push ids, DELETE, server values (.sv timestamp and increment), shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout and writeSizeLimit; Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims and .indexOn enforcement texts beyond the recorded query; SDK child events, SDK queries, update/push and multi-location updates and SDK server values; onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); RTDB-triggered Cloud Functions v1/v2 delivery (CV14, implemented locally but never observed in production); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
-   "rationale": "None of these was observed in production: the CV08/CV10 local gap actors never produced a result and no RTDB trigger was ever deployed (CV14). fireemu's behaviour there follows the official emulator and is provisional. Each needs its own production observation before it can join the closure.",
+   "decision": "UNVERIFIED and outside this closure (not observed in production): reconnect/resume, child-event and query ordering across goOffline/goOnline, and query-scoped listener cancellation (CV08); REST POST/push ids, DELETE, server values (.sv timestamp and increment), shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout and writeSizeLimit; Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims and .indexOn enforcement texts beyond the recorded query; SDK child events, SDK queries, update/push and multi-location updates and SDK server values; onDisconnect register/cancel/re-register and a Rules change between registration and firing (CV10); Firebase ID token expiry, tampered signatures, revocation, tenants and wrong-project tokens; latency, throughput, quotas, billing, multi-region and instance management APIs; Android, Apple, Unity and the Java/Python Admin SDKs (owner 1471 Q8); the Node Admin SDK beyond the official-emulator smokes in tools/sdk-smoke-database.",
+   "rationale": "None of these was observed in production: the CV08/CV10 local gap actors never produced a result. fireemu's behaviour there follows the official emulator and is provisional. Each needs its own production observation before it can join the closure.",
    "followUp": [
     "docs.local/issues/open/rtdb-reconnect-ordering-production-observation.md (CV08)",
-    "docs.local/issues/open/rtdb-ondisconnect-cancel-reregister-production-observation.md (CV10)",
-    "docs.local/issues/open/rtdb-functions-trigger-delivery-production-observation.md (CV14)"
+    "docs.local/issues/open/rtdb-ondisconnect-cancel-reregister-production-observation.md (CV10)"
    ],
    "status": "FROZEN",
    "decidedBy": "coordinator",
@@ -84,6 +113,25 @@
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-27",
    "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27 RTDB closure-residual R4); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (M1); docs.local/runs/rtdb-residual/production-5-comparison.md; docs.local/runs/rtdb-ondisconnect-order/status.md"
+  },
+  {
+   "id": "R5",
+   "decision": "R4 is amended for one more recorded shape. An onDisconnect value that carries a priority, split by a cancel of one of its children, is observed in production (production-1 of RTDB-S5-20261027-01, 2026-10-27, two rounds: the connection's whole onDisconnect update is dropped) and compared with fireemu in both profiles: RTDB/ondisconnect-prioritized-split, for the recorded shape only. The other cases of the official emulator's behaviour around it (healing, nested and string priorities, other connections) are probed offline and stay unobserved in production.",
+   "rationale": "The official emulator drops the update and fireemu fired the remaining children; production decided which of the two is right, and it sided with the official emulator.",
+   "amends": "R4",
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
+   "decidedOn": "2026-10-27",
+   "decisionRef": "docs.local/instructions/owner-decisions.md (lines 1854 and 1857, 2026-10-27 RTDB S5 prioritized split and scope R5); docs.local/reviews/2026-10-27-rtdb-s5-drop-review.md"
+  },
+  {
+   "id": "R6",
+   "decision": "R2 is amended for RTDB-triggered Cloud Functions v1/v2 delivery (CV14): observed in production on 2026-10-27 for the recorded handlers and writes (28 deliveries, both generations), compared on the strict profile (72 of 72 rows MATCH) and on the emulator profile (declared differences). Other trigger shapes stay UNVERIFIED (/knownGaps/triggerUserAuthContext, /knownGaps/triggerBreadth).",
+   "decisionRef": "docs.local/instructions/owner-decisions.md (line 1849, the observation decision of run CV14-RTDB-TRIGGERS-20261027-02; line 1850, REVOKED); docs.local/instructions/owner-decisions.md (line 1863, candidate integration; final gates pending); docs.local/reviews/2026-10-28-cv14-final-sol.md",
+   "amends": "R2",
+   "status": "FROZEN",
+   "decidedBy": "coordinator",
+   "decidedOn": "2026-10-28"
   }
  ],
  "conditions": [
@@ -674,6 +722,101 @@
     ],
     "scope": "cv10 profiles r1-ws, r1-lp, r2-ws, r2-lp of the comparison"
    }
+  },
+  {
+   "conditionId": "RTDB/ondisconnect-prioritized-split",
+   "coverageLedgerRows": [
+    "RTDB-CV-10"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "an onDisconnect value that carries a priority (setWithPriority({b:1,10:2,9:3}, 1)), a cancel of its child b and an unrelated write registered next to it: when the connection ends nothing fires, the whole onDisconnect update is dropped (production, two WebSocket rounds); fireemu does the same in both profiles",
+    "control in the same recording: the same value without a priority is split by the cancel (s = {9:3,10:2}) and the unrelated write fires",
+    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "production-1",
+      "envelope": "RTDB-S5-20261027-01",
+      "recordedOn": "2026-10-27",
+      "project": "fireemu-oracle-query",
+      "rounds": 2
+     }
+    ],
+    "fixture": "tools/sdk-smoke-database/fixtures/production-rtdb-s5.json",
+    "localJournal": "tools/sdk-smoke-database/fixtures/local-rtdb-s5.json",
+    "comparisonTool": "tools/sdk-smoke-database/rtdb-s5-fixture.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
+    "comparisonSha256": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
+    "toolCommit": "a08d338545af1b202e020a1b03403c82da14c9c1",
+    "rustSourcesEqualTo": "Runtime Rust sources at ebf18e152ddd2100596ebbcc0a5e1b07c902fbb6; later commits through a08d338545af1b202e020a1b03403c82da14c9c1 change only documentation, fixture provenance and Txn-04 evidence.",
+    "knownDifferences": [],
+    "rows": {
+     "MATCH": 2
+    },
+    "tests": [
+     "tools/sdk-smoke-database/rtdb-s5-judge.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5-page.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5.test.mjs",
+     "tools/sdk-smoke-database/rtdb-s5-fixture.test.mjs",
+     "crates/fireemu-adapter-database/tests/on_disconnect_priority_drop.rs",
+     "crates/fireemu-adapter-database/src/on_disconnect.rs#tests"
+    ],
+    "scope": "the two rounds r1-ws and r2-ws of the S5 recording; the recorded shape only"
+   }
+  },
+  {
+   "conditionId": "RTDB/functions-trigger-delivery",
+   "coverageLedgerRows": [
+    "RTDB-CV-14"
+   ],
+   "source": "spec/compatibility/contract.json#database",
+   "cases": [
+    "1st gen database.ref().onCreate/onUpdate/onDelete/onWrite and 2nd gen onValueCreated/onValueUpdated/onValueDeleted/onValueWritten on /cv14-rtdb/items/{id}: for nine writes (create, child update, a write of the same value, delete, create with a nested object, nested child update, a sibling path with no handler, an unauthenticated create and an unauthenticated delete) the same 28 deliveries as production, each exactly once, and none for the same-value write and the sibling path",
+    "1st gen context: eventId (base64 of twenty bytes), timestamp (three fraction digits), eventType google.firebase.database.ref.<create|update|delete|write>, resource {service: firebaseio.com, name: projects/_/instances/<instance>/refs/<path>}, params, authType ADMIN for an admin write and UNAUTHENTICATED for an unauthenticated one (auth absent for ADMIN, null for UNAUTHENTICATED), domain firebaseio.com",
+    "2nd gen event: id, time (three fraction digits), type google.firebase.database.ref.v1.<created|updated|deleted|written>, source //firebasedatabase.googleapis.com/projects/_/locations/<region>/instances/<instance>, subject refs/<path>, no datacontenttype, authType unknown and authId null for admin and unauthenticated writes, firebaseDatabaseHost, instance, ref, location, params; the SDK's compatibility members context (without authType), change (updated, written) or snapshot (created, deleted), and a W3C traceparent",
+    "event data: before and after snapshots (exists, key, value) for updated and written; the value for created and deleted; the same-value write fires nothing"
+   ],
+   "status": "VERIFIED",
+   "evidence": {
+    "productionRecordings": [
+     {
+      "recording": "cv14-stage2-v2",
+      "envelope": "CV14-RTDB-TRIGGERS-20261027-02",
+      "recordedOn": "2026-10-27",
+      "project": "fireemu-oracle-query",
+      "handlers": 8,
+      "writes": 9,
+      "frames": 28
+     }
+    ],
+    "fixture": "conformance/src/rtdb-functions/recorded/production-rtdb-triggers.json",
+    "localRecordings": {
+     "strict": "conformance/src/rtdb-functions/recorded/local-rtdb-triggers-strict.json",
+     "emulator": "conformance/src/rtdb-functions/recorded/local-rtdb-triggers-emulator.json"
+    },
+    "comparisonTool": "conformance/src/rtdb-functions/compare-local.mjs",
+    "comparisonPath": "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json",
+    "comparisonSha256": "ff564dcd7534a365c4b07013e89bc1c2d8ee156e7ed115082f5662ef9c9d7fae",
+    "toolCommit": "5dafdade28bdc89c1db48e248c304b943719a8e1",
+    "rows": {
+     "MATCH": 72,
+     "profile": "strict",
+     "note": "the emulator profile: 44 MATCH, 28 declared DIFFERENCE"
+    },
+    "knownDifferences": [
+     "/knownDifferences/triggerEventShapeEmulatorProfile"
+    ],
+    "tests": [
+     "conformance/src/rtdb-functions/recorded.test.mjs",
+     "conformance/src/rtdb-functions/recorded-local.test.mjs",
+     "conformance/src/rtdb-functions/compare-local.test.mjs",
+     "crates/fireemu-adapter-functions/tests/database_event_shape.rs",
+     "crates/fireemu-adapter-functions/tests/database_events.rs"
+    ]
+   }
   }
  ],
  "integratedRegression": {
@@ -729,11 +872,32 @@
     },
     "binding": "the release binary 7df56bd9 built from origin/main 00abe06b4 (the order fix, manifests at v0.30.0). The branch base d344943f7 differs from it only in #[cfg(test)] code of scala_map.rs and on_disconnect.rs, and a rebuild at d344943f7 under the same path is byte-identical. The v0.31.0 release commit a04c831f0 changes no file under crates/ and only the version strings of Cargo.toml and Cargo.lock, so the released binary differs from the compared one in the embedded version (RUSTC_WRAPPER empty, build path .worktree/rtdb-residual; sha256 in the evidence file)",
     "buildPath": ".worktree/rtdb-residual"
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
+    "sha256": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
+    "rows": 2,
+    "summary": {
+     "match": true,
+     "production": "A",
+     "local": "A"
+    },
+    "binding": "the release binary a18a612eed72139bb4bd052d2f5e741dfec9695892b7e8fc990a007a9900eff4 built with runtime Rust sources at ebf18e152ddd2100596ebbcc0a5e1b07c902fbb6 and RUSTC_WRAPPER empty (build path .worktree/rtdb-s5-drop; sha256 in the evidence file)"
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json",
+    "sha256": "ff564dcd7534a365c4b07013e89bc1c2d8ee156e7ed115082f5662ef9c9d7fae",
+    "rows": 72,
+    "summary": {
+     "strict": "72 MATCH",
+     "emulator": "44 MATCH, 28 declared DIFFERENCE"
+    },
+    "binding": "Reviewed release binary 3385153b069c4c5ad379f3ca7dd4e3c7dacd15e684f99f1a11dfe39f8d6b3cf5 built at source 0158be06b1667414234015b3307ca51cb5a835a7; tool commit 5dafdade28bdc89c1db48e248c304b943719a8e1."
    }
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
-  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences."
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences. The S5 comparison (production-1 of RTDB-S5-20261027-01) is bound to its own release binary, built from the commit named in its evidence."
  },
  "knownDifferences": {
   "restMemberOrder": {
@@ -754,6 +918,10 @@
   },
   "googleSignedTokens": {
    "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."
+  },
+  "triggerEventShapeEmulatorProfile": {
+   "statement": "The emulator profile delivers an RTDB trigger event in the official emulator's shape, not production's: a UUID event id instead of the base64 of twenty bytes, the full-precision time (nine fraction digits) instead of three, the session's project instead of `_` in a 2nd gen `source`, `datacontenttype: application/json`, and authType admin or unauthenticated (with the matching 2nd gen `context.authType`) where production says unknown; it sends no `traceparent`. The strict profile matches production in all 72 rows. Compared on 28 deliveries of the 8 handlers over 9 writes (recorded 2026-10-27, CV14-RTDB-TRIGGERS-20261027-02).",
+   "evidence": "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json"
   }
  },
  "knownGaps": {
@@ -763,17 +931,23 @@
   "browserRunsOnOlderBinaries": {
    "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
   },
-  "onDisconnectPrioritizedSplit": {
-   "statement": "Not claimed: an onDisconnect value that carries `.priority`, followed by a cancel of one of its children (not of the priority itself). The official emulator accepts every request and then drops the whole disconnect update (no frame, the data stays null, even a write registered next to it); production was not observed; fireemu fires the remaining children. Tracked in docs.local/issues/open/rtdb-ondisconnect-split-of-a-prioritized-value-drops-the-whole-update.md."
+  "prioritizedSplitBeyondTheRecordedShape": {
+   "statement": "Beyond the recorded S5 shape, healing, nested and string priorities follow the official emulator and are unobserved in production. The offline probes show that a split retains the priority as a child, later registrations below it are kept, and a cancel of that priority removes it. Production observed one shape: a numeric priority on the registered value and a cancel of one of its children."
+  },
+  "triggerUserAuthContext": {
+   "statement": "Not claimed: the event of a write made by an end user (a Firebase ID token). The recording holds only admin writes (the ADC token) and unauthenticated writes. The 2nd gen `authType` of a user's write is not recorded: production may say unknown there too, as it does for the two recorded kinds; the strict profile still names it `app_user` with the uid, and a 1st gen `context.auth` still carries the token claims. Needs an Auth user and a client SDK write path (R3)."
+  },
+  "triggerBreadth": {
+   "statement": "One recording of eight handlers on one path pattern (/cv14-rtdb/items/{id}, one instance, one region) and nine writes. Not claimed: wildcard instances, nested wildcard patterns, a trigger on a path that a parent write creates or deletes (an ancestor write fanning out to several children), multi-path updates, writes made by the web SDK, delivery latency (1 to 3 seconds were seen, not compared), redelivery after a failed invocation, and event ordering across handlers."
   }
  },
  "outOfScope": [
   "UNVERIFIED REST POST/push ids, DELETE, server values, shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout, writeSizeLimit",
   "UNVERIFIED Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims, .indexOn enforcement texts beyond the recorded query",
   "UNVERIFIED SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge and onDisconnect update, SDK server values beyond the onDisconnect update",
-  "UNVERIFIED RTDB-CV-14 RTDB-triggered Cloud Functions delivery (local implementation exists, production not observed)",
   "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",
   "latency, throughput, quotas, billing, instance management",
-  "Android, Apple, Unity, Java and Python SDKs"
+  "Android, Apple, Unity, Java and Python SDKs",
+  "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (an end user's write context, wildcard and ancestor-write fanout, latency, redelivery): see /knownGaps/triggerUserAuthContext and /knownGaps/triggerBreadth"
  ]
 }

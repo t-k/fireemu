@@ -80,13 +80,35 @@ fn table_lists_exactly_the_recorded_functions() {
             "array_contains_any",
             "equal_any",
             "not_equal_any",
+            "concat",
+            "to_lower",
+            "to_upper",
+            "starts_with",
+            "ends_with",
+            "string_contains",
+            "char_length",
+            "substring",
+            "trim",
+            "ltrim",
+            "rtrim",
+            "split",
+            "add",
+            "subtract",
+            "multiply",
+            "divide",
+            "mod",
+            "abs",
+            "round",
+            "floor",
+            "ceil",
+            "pow",
         ]
     );
     assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
     }
-    for name in ["eq", "between", "abs", "AND", "", "Equal"] {
+    for name in ["eq", "between", "sqrt", "regex_match", "AND", "", "Equal"] {
         assert!(function(name).is_none(), "{name}");
     }
 }
@@ -94,11 +116,11 @@ fn table_lists_exactly_the_recorded_functions() {
 #[test]
 fn call_refuses_unknown_misplaced_and_misarity_functions() {
     assert!(matches!(
-        Expr::call("abs", vec![field("a")], Placement::Value),
-        Err(ExprError::Unsupported(m)) if m.contains("abs")
+        Expr::call("sqrt", vec![field("a")], Placement::Value),
+        Err(ExprError::Unsupported(m)) if m.contains("sqrt")
     ));
     assert!(matches!(
-        Expr::call("abs", vec![field("a")], Placement::Condition),
+        Expr::call("sqrt", vec![field("a")], Placement::Condition),
         Err(ExprError::Unsupported(_))
     ));
     // A comparison stands anywhere; a value function is no whole where condition.

@@ -732,6 +732,19 @@ async fn start_with_env(
     profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
     default_entry: bool,
 ) -> Harness {
+    start_with_env_marking(trusted, env, profile, default_entry, &[]).await
+}
+
+/// [`start_with_env`] with the named functions marked the way the daemon marks an entry of a
+/// configured manifest that serves a code-level callable as something else
+/// (`PlatformOptions::strict_callable_ingress`).
+async fn start_with_env_marking(
+    trusted: bool,
+    env: Vec<(String, String)>,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    default_entry: bool,
+    marked: &[&str],
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
@@ -742,8 +755,13 @@ async fn start_with_env(
     let runner = Runner::spawn_spec(&spec)
         .await
         .expect("the fake runner starts");
-    let manifest =
+    let mut manifest =
         parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
+    for function in &mut manifest.functions {
+        if marked.contains(&function.name.as_str()) {
+            function.platform_options.strict_callable_ingress = true;
+        }
+    }
     let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
     let runtime = FunctionsRuntime::new(
         manifest,
@@ -1759,6 +1777,91 @@ async fn strict_callable_ingress_checks_bearer_when_app_check_is_not_selected() 
     assert_eq!(h.request("POST", "add", &[]).await.status, 200);
     assert_eq!(
         h.request("POST", "add", &[("authorization", &valid)])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+}
+
+/// A code-level callable that a configured manifest serves as an `onRequest` function (the
+/// daemon marks the entry in the strict profile without App Check) passes the Bearer check a
+/// callable request passes: the code that runs is the callable's wrapper, whose own check under
+/// the Auth emulator verifies no signature. The recorded refusal is for a single Bearer that
+/// is not a user of the project, so that is all that is refused here; an unmarked onRequest
+/// function and the emulator profile are not touched.
+#[tokio::test]
+async fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_check() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile::{Emulator, Strict};
+    let marked = |profile| {
+        start_with_env_marking(
+            false,
+            vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+            profile,
+            false,
+            &["echo"],
+        )
+    };
+    let h = marked(Strict).await;
+    let (_, valid) = h.user("onrequest@example.com");
+    let refused = h
+        .request("POST", "echo", &[("authorization", "Bearer malformed")])
+        .await;
+    assert_eq!(refused.status, 401);
+    assert_eq!(
+        response_header(&refused, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert_eq!(
+        h.request("POST", "echo", &[("authorization", &format!("{valid}x"))])
+            .await
+            .status,
+        401
+    );
+    for authorization in [
+        Some(valid.as_str()),
+        Some("Basic YQ=="),
+        Some("Bearer "),
+        None,
+    ] {
+        let headers: Vec<(&str, &str)> = authorization
+            .map(|value| vec![("authorization", value)])
+            .unwrap_or_default();
+        assert_eq!(
+            h.request("POST", "echo", &headers).await.status,
+            200,
+            "{authorization:?}"
+        );
+    }
+    // A preflight reaches the SDK's CORS handling whatever it carries.
+    assert_eq!(
+        h.request("OPTIONS", "echo", &[("authorization", "Bearer malformed")])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+
+    // The same function unmarked, which is an onRequest function that is not a callable.
+    let h = start_with_env_marking(
+        false,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), "disabled".to_owned())],
+        Strict,
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        h.request("POST", "echo", &[("authorization", "Bearer malformed")])
+            .await
+            .status,
+        200
+    );
+    h.stop().await;
+
+    let h = marked(Emulator).await;
+    assert_eq!(
+        h.request("POST", "echo", &[("authorization", "Bearer malformed")])
             .await
             .status,
         200

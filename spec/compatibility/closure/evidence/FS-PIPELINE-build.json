@@ -1,16 +1,16 @@
 {
-  "sourceCommit": "ffa0644a9e898a6bd936d22046caf8db7338e198",
+  "sourceCommit": "42f9aa89d2268f7638aef01d792b57e82e78b3bd",
   "command": "RUSTC_WRAPPER= cargo build --release --locked -p fireemu --bin fireemu",
-  "binarySha256": "d02ea203cedaa8d8a0574f0b18e92050d40a493d7331ccb5868a167d063e7e04",
+  "binarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
   "profile": "release",
   "locked": true,
   "rustcWrapper": "empty",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "host": "Darwin arm64",
-  "builtOn": "2026-10-27T14:48:53Z",
-  "buildSeconds": 486,
-  "buildPath": ".worktree/pipeline-o6-post2 (target/release/fireemu in that worktree)",
+  "builtOn": "2026-10-27T16:47:26Z",
+  "buildSeconds": 214,
+  "buildPath": ".worktree/pipeline-functions (target/release/fireemu in that worktree)",
   "workTree": "clean at the start of the build (git status --porcelain empty); the head is the integration commit",
-  "rustSourcesNote": "The commits after the integration commit add only the closure record, its comparison, tests and docs, the release-regression run entry and contract.json; none is an input of the binary.",
+  "rustSourcesNote": "The following evidence commit changes only closure records, tests and documentation, not binary inputs.",
   "reproducibility": "Not compared with a second build."
 }

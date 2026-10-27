@@ -312,6 +312,8 @@ pub struct FunctionsConfig {
     pub subscription_naming: crate::events::SubscriptionNaming,
     /// How the writer of a Firestore event with auth context is named: by profile.
     pub auth_context: crate::events::AuthContextNaming,
+    /// How a Realtime Database trigger event is shaped, by profile.
+    pub database_event_shape: crate::events::DatabaseEventShape,
 }
 
 impl FunctionsConfig {
@@ -335,6 +337,7 @@ impl FunctionsConfig {
             clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
+            database_event_shape: crate::events::DatabaseEventShape::default(),
         }
     }
 }
@@ -359,6 +362,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
+            .field("database_event_shape", &self.database_event_shape)
             .finish()
     }
 }
@@ -2524,6 +2528,7 @@ impl FunctionsRuntime {
                 crate::events::visit_database_event_payloads(
                     commit,
                     function,
+                    self.config.database_event_shape,
                     |reference, mut payload| {
                         let event_type = payload["type"]
                             .as_str()
@@ -2538,10 +2543,13 @@ impl FunctionsRuntime {
                             )
                             .and_then(|value| value.checked_add(1))
                             .ok_or(SourceEventAdmissionError::Capacity)?;
-                        payload["id"] = json!(crate::events::event_id_uuid(&format!(
-                            "{}-{ordinal}",
-                            self.config.session.value()
-                        )));
+                        let seed = format!("{}-{ordinal}", self.config.session.value());
+                        payload["id"] = json!(match self.config.database_event_shape {
+                            crate::events::DatabaseEventShape::Production =>
+                                crate::events::database_event_id(&seed),
+                            crate::events::DatabaseEventShape::Official =>
+                                crate::events::event_id_uuid(&seed),
+                        });
                         if !self.database_invoke_frame_fits(
                             function,
                             &payload,
@@ -3233,6 +3241,38 @@ impl FunctionsRuntime {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<ProxiedResponse, HttpInvokeError> {
+        // A callable that a configured manifest serves as a queue, in the strict profile: the
+        // task passes the Bearer check a callable request passes, so the wrapper's own
+        // verification (signature-less under the Auth emulator) is not the only one.
+        if self
+            .manifest()
+            .get(&target.function)
+            .is_some_and(|entry| entry.platform_options.strict_callable_ingress)
+        {
+            let presented: Vec<String> = headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.clone())
+                .collect();
+            if crate::http::strict_callable_bearer_unverified(self, &presented) {
+                // The refusal never reaches the runner, so nothing else records it; the dispatch
+                // fails and is retried under the queue's policy. The credential is not logged.
+                eprintln!(
+                    "[functions] a task for {:?} was refused by the strict Bearer check (401): its \
+                     Authorization is not a Bearer for a user of this project, and the function is \
+                     callable; the dispatch fails and is retried under the queue's retry policy",
+                    target.function
+                );
+                return Ok(ProxiedResponse {
+                    status: 401,
+                    headers: vec![(
+                        "content-type".to_owned(),
+                        "text/html; charset=UTF-8".to_owned(),
+                    )],
+                    body: Vec::new(),
+                });
+            }
+        }
         self.invoke_http_classified(
             target,
             "POST",
@@ -9817,6 +9857,7 @@ mod schedule_capacity_tests {
                 clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),
+                database_event_shape: crate::events::DatabaseEventShape::default(),
             },
             clock.clone(),
             Arc::new(runner),

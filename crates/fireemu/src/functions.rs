@@ -64,6 +64,19 @@ pub fn auth_context_naming(
     }
 }
 
+/// How the strict and the emulator profile shape a Realtime Database trigger event: the strict profile as
+/// production delivered it (CV14, recorded 2026-10-27), the emulator profile as it always was.
+#[must_use]
+pub fn database_event_shape(
+    profile: CompatibilityProfile,
+) -> fireemu_adapter_functions::events::DatabaseEventShape {
+    use fireemu_adapter_functions::events::DatabaseEventShape;
+    match profile {
+        CompatibilityProfile::Strict => DatabaseEventShape::Production,
+        CompatibilityProfile::Emulator => DatabaseEventShape::Official,
+    }
+}
+
 /// The buckets the Storage triggers of a manifest name explicitly. A trigger without a bucket
 /// listens on the project's default buckets, which always exist. The strict profile counts these
 /// buckets as existing even when empty: production needs the bucket to deploy the trigger.
@@ -2809,6 +2822,41 @@ fn launch_codebases(
         .collect()
 }
 
+/// The runtime configuration of the Functions backend for this run: the project, the location, the
+/// limits and, by profile, how events are named and shaped.
+fn functions_config(
+    cfg: &RuntimeConfig,
+    functions_host: Option<String>,
+    runner_secret: &str,
+) -> FunctionsConfig {
+    FunctionsConfig {
+        project: cfg.auth_project.clone(),
+        default_bucket: format!("{}.appspot.com", cfg.auth_project),
+        location: match cfg.profile {
+            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
+            CompatibilityProfile::Emulator => "nam5".to_owned(),
+        },
+        session: SessionId::new(u128::from(cfg.seed)),
+        max_running: cfg.functions_max_running,
+        debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
+        retry_attempts: cfg.events_max_attempts,
+        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
+        runner_secret: runner_secret.to_owned(),
+        overlap: overlap_policy_for(cfg.profile, cfg.scheduler_overlap.as_deref()),
+        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
+            .unwrap_or_default(),
+        functions_host,
+        clock_policy: cfg.functions_clock,
+        // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
+        // once, so only the strict profile waits.
+        honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
+        clock_start_pinned: cfg.clock_start_pinned,
+        subscription_naming: subscription_naming(cfg.profile),
+        auth_context: auth_context_naming(cfg.profile),
+        database_event_shape: database_event_shape(cfg.profile),
+    }
+}
+
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
@@ -2868,31 +2916,7 @@ pub async fn start(
     }
     let started: Vec<fireemu_adapter_functions::runtime::CodebaseSpec> =
         outcomes.into_iter().filter_map(Result::ok).collect();
-    let config = FunctionsConfig {
-        project: cfg.auth_project.clone(),
-        default_bucket: format!("{}.appspot.com", cfg.auth_project),
-        location: match cfg.profile {
-            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
-            CompatibilityProfile::Emulator => "nam5".to_owned(),
-        },
-        session: SessionId::new(u128::from(cfg.seed)),
-        max_running: cfg.functions_max_running,
-        debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
-        retry_attempts: cfg.events_max_attempts,
-        max_catch_up_runs: cfg.scheduler_max_catch_up_runs,
-        runner_secret: runner_secret.to_owned(),
-        overlap: overlap_policy_for(cfg.profile, cfg.scheduler_overlap.as_deref()),
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
-            .unwrap_or_default(),
-        functions_host: hosts.functions.clone(),
-        clock_policy: cfg.functions_clock,
-        // Cloud Tasks holds a task until its scheduleTime; the official emulator dispatches at
-        // once, so only the strict profile waits.
-        honour_task_schedule_time: cfg.profile == CompatibilityProfile::Strict,
-        clock_start_pinned: cfg.clock_start_pinned,
-        subscription_naming: subscription_naming(cfg.profile),
-        auth_context: auth_context_naming(cfg.profile),
-    };
+    let config = functions_config(cfg, hosts.functions.clone(), runner_secret);
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
     let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
@@ -3702,12 +3726,41 @@ async fn start_codebase(
             };
             serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
+            // Only the trusted protocol turns on `skipTokenVerification`, so only there can a
+            // mislabelled callable reach a wrapper that trusts unverified credentials, and the
+            // daemon strips the auth override fields from every request it forwards, tasks
+            // included. Without App Check the wrapper's token check is the Auth emulator's, as
+            // for any `onTaskDispatched` function reached by a task; the strict profile adds the
+            // daemon's Bearer check for a task sent to such a queue (`mark_strict_callable_ingress`).
+            // firebase-tools does not compare a configured manifest with the code at all, so the
+            // emulator profile must not refuse it (see `runner_debug_features`).
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
                 clear_on_request_consumption(&mut manifest);
             } else {
                 for warning in reconcile_consumption_without_app_check(&mut manifest, &discovered) {
                     eprintln!("warning: {warning}");
+                }
+                if cfg.profile == CompatibilityProfile::Strict {
+                    for name in mark_strict_callable_ingress(&mut manifest, &discovered) {
+                        let route = manifest.functions.iter().any(|f| {
+                            f.name == name
+                                && matches!(
+                                    f.trigger,
+                                    fireemu_core_functions::manifest::Trigger::Http { .. }
+                                )
+                        });
+                        let (served_as, sent) = if route {
+                            ("an onRequest function", "a request")
+                        } else {
+                            ("a non-HTTP function", "a task")
+                        };
+                        eprintln!(
+                            "warning: the configured functions manifest serves {name:?} as \
+                             {served_as}, but the codebase declares it callable; {sent} sent to \
+                             it must carry no credential or a Bearer the Auth emulator verifies"
+                        );
+                    }
                 }
             }
         }
@@ -4413,6 +4466,37 @@ fn admin_app_check_note(label: &str, report: Option<&serde_json::Value>) -> Opti
         "functions[{label}]: getAppCheck().verifyToken() is not verified by the daemon ({state}); the \
          SDK keeps its own check and rejects fireemu App Check tokens"
     ))
+}
+
+/// Marks every entry of a configured manifest that serves as something other than a callable an
+/// export the codebase's own discovery declares callable (a task queue, another non-HTTP
+/// trigger, or an `onRequest` function), and returns their names.
+///
+/// This is for the strict profile without App Check, where such a manifest still starts (see the
+/// gate in `start_codebase`). A request to a callable passes the daemon's Bearer check there; a
+/// task or a plain HTTP request delivered to the same export would not, and the callable
+/// wrapper's own check under the Auth emulator does not verify signatures. The marker makes the
+/// task path and the HTTP route apply the callable check
+/// (`PlatformOptions::strict_callable_ingress`).
+fn mark_strict_callable_ingress(
+    configured: &mut fireemu_core_functions::manifest::FunctionManifest,
+    discovered: &fireemu_core_functions::manifest::FunctionManifest,
+) -> Vec<String> {
+    use fireemu_core_functions::manifest::Trigger;
+    let callable_in_code = |name: &str| {
+        discovered
+            .functions
+            .iter()
+            .any(|d| d.name == name && matches!(d.trigger, Trigger::Http { callable: true, .. }))
+    };
+    let mut marked = Vec::new();
+    for f in &mut configured.functions {
+        if !matches!(f.trigger, Trigger::Http { callable: true, .. }) && callable_in_code(&f.name) {
+            f.platform_options.strict_callable_ingress = true;
+            marked.push(f.name.clone());
+        }
+    }
+    marked
 }
 
 /// Reconciles a configured manifest's `consumeAppCheckToken` with the code when App Check is
@@ -7369,6 +7453,30 @@ root	unchanged	small	firstGen";
             serde_json::from_str::<serde_json::Value>(features).unwrap(),
             json!({"skipTokenVerification": true})
         );
+    }
+
+    /// `check_manifest_agrees_on_callables` runs only under the callable trusted protocol because
+    /// that is the only configuration in which the runner honours unverified credentials
+    /// (`skipTokenVerification` makes `firebase-functions` read the `x-callable-context-auth` /
+    /// `x-original-auth` override fields and decode tokens without checking them). If another
+    /// profile or switch ever enabled it, a manifest could route a callable around the daemon
+    /// without App Check and the guard would have to move.
+    #[test]
+    fn token_skipping_is_enabled_only_by_the_callable_trusted_protocol() {
+        for profile in [
+            crate::config::CompatibilityProfile::Emulator,
+            crate::config::CompatibilityProfile::Strict,
+        ] {
+            for trusted in [false, true] {
+                let skips =
+                    super::runner_debug_features(profile, trusted).is_some_and(|features| {
+                        serde_json::from_str::<serde_json::Value>(features).unwrap()
+                            ["skipTokenVerification"]
+                            == json!(true)
+                    });
+                assert_eq!(skips, trusted, "{profile:?}, trusted: {trusted}");
+            }
+        }
     }
 
     #[test]
@@ -12664,6 +12772,71 @@ exports.add = onCall({{}}, observe("add"));
         assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
     }
 
+    /// The daemon hands the profile to the Functions runtime: a regression here would silently give the
+    /// emulator profile production's event shapes, or the strict profile the official emulator's.
+    #[test]
+    fn the_functions_config_carries_the_profile_choices_of_the_daemon() {
+        use fireemu_adapter_functions::events::{
+            AuthContextNaming, DatabaseEventShape, SubscriptionNaming,
+        };
+        for (profile, shape, naming, subscriptions, location, honours_schedule) in [
+            (
+                "strict",
+                DatabaseEventShape::Production,
+                AuthContextNaming::Production,
+                SubscriptionNaming::default(),
+                "us-central1",
+                true,
+            ),
+            (
+                "emulator",
+                DatabaseEventShape::Official,
+                AuthContextNaming::Official,
+                SubscriptionNaming::EmulatorTopic,
+                "nam5",
+                false,
+            ),
+        ] {
+            let cfg = crate::config::RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "profile": profile, "firestore": {"location": "us-central1"}
+            }))
+            .unwrap();
+            let config = super::functions_config(&cfg, Some("127.0.0.1:5001".to_owned()), "secret");
+            assert_eq!(config.database_event_shape, shape, "{profile}");
+            assert_eq!(config.auth_context, naming, "{profile}");
+            assert_eq!(config.subscription_naming, subscriptions, "{profile}");
+            assert_eq!(config.location, location, "{profile}");
+            assert_eq!(
+                config.honour_task_schedule_time, honours_schedule,
+                "{profile}"
+            );
+            assert_eq!(config.project, cfg.auth_project);
+            assert_eq!(config.functions_host.as_deref(), Some("127.0.0.1:5001"));
+            assert_eq!(config.runner_secret, "secret");
+            assert!(!config.debug_mode, "{profile}");
+            let mut inspected = cfg.clone();
+            inspected.functions_inspect_dynamic = true;
+            assert!(super::functions_config(&inspected, None, "s").debug_mode);
+            let mut inspected = cfg.clone();
+            inspected.functions_inspect_port = Some(9229);
+            assert!(super::functions_config(&inspected, None, "s").debug_mode);
+        }
+    }
+
+    #[test]
+    fn the_profile_chooses_how_a_database_trigger_event_is_shaped() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        assert_eq!(
+            super::database_event_shape(CompatibilityProfile::Strict),
+            DatabaseEventShape::Production
+        );
+        assert_eq!(
+            super::database_event_shape(CompatibilityProfile::Emulator),
+            DatabaseEventShape::Official
+        );
+    }
+
     #[test]
     fn the_profile_chooses_how_the_writer_of_an_auth_context_event_is_named() {
         use crate::config::CompatibilityProfile;
@@ -12884,6 +13057,8 @@ exports.add = onCall({{}}, observe("add"));
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
                 auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                database_event_shape:
+                    fireemu_adapter_functions::events::DatabaseEventShape::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -13991,6 +14166,58 @@ module.exports = { tick, observer };
         .expect("the fixture manifest parses");
         super::check_manifest_agrees_on_callables(&honest, &discovered)
             .expect("a task queue that is not a callable loads");
+    }
+
+    /// Without App Check the strict profile still starts a manifest that serves a callable as a
+    /// queue, and marks that entry so a task sent to it passes the callable's Bearer check. A real
+    /// queue, a queue the code does not export and the callable's own entry are not marked.
+    #[test]
+    fn a_callable_served_as_a_queue_is_marked_for_the_strict_bearer_check() {
+        let discovered = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "asRoute", "generation": 2, "trigger": {"type": "http", "callable": true}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "page", "generation": 2, "trigger": {"type": "http", "callable": false}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        let mut configured = parse_manifest(&json!({
+            "functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "asRoute", "generation": 2, "trigger": {"type": "http", "callable": false}},
+                {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "page", "generation": 2, "trigger": {"type": "http", "callable": false}},
+                {"name": "ghostQueue", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "onCreate", "generation": 2, "trigger": {"type": "pubsub", "topic": "t"}}
+            ]
+        }))
+        .expect("the fixture manifest parses");
+        assert_eq!(
+            super::mark_strict_callable_ingress(&mut configured, &discovered),
+            vec!["guarded".to_owned(), "asRoute".to_owned()]
+        );
+        let marked: Vec<_> = configured
+            .functions
+            .iter()
+            .map(|f| (f.name.as_str(), f.platform_options.strict_callable_ingress))
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                ("guarded", true),
+                ("asRoute", true),
+                ("worker", false),
+                ("page", false),
+                ("ghostQueue", false),
+                ("onCreate", false)
+            ]
+        );
+        let mut honest_callable = parse_manifest(&json!({
+            "functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": true}}]
+        }))
+        .expect("the fixture manifest parses");
+        assert!(super::mark_strict_callable_ingress(&mut honest_callable, &discovered).is_empty());
     }
 
     #[test]

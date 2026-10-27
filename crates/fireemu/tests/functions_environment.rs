@@ -1852,3 +1852,374 @@ exports.guarded = onCall(() => ({ ok: true }));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Without App Check a configured manifest may serve a callable as a task queue (see the test
+/// below). In the strict profile a task sent to such a queue passes the Bearer check a callable
+/// request passes, because the wrapper's own verification under the Auth emulator does not check
+/// signatures; the emulator profile, and a queue the code really exports with `onTaskDispatched`,
+/// deliver whatever the task's `Authorization` says.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_task_sent_to_a_callable_served_as_a_queue_passes_the_strict_bearer_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-task-bearer");
+    let hits = dir.join("hits.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+const {{ onTaskDispatched }} = require("firebase-functions/v2/tasks");
+const hit = (name) => fs.appendFileSync({hits:?}, name + "\n");
+exports.guarded = onCall(() => {{ hit("guarded"); return {{ ok: true }}; }});
+exports.worker = onTaskDispatched(() => {{ hit("worker"); }});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [
+            {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+            {"name": "worker", "generation": 2, "trigger": {"type": "tasks"}}
+        ]}"#,
+    );
+    for (profile, queue, authorization, delivered) in [
+        ("strict", "guarded", Some("Bearer malformed"), false),
+        ("strict", "guarded", None, true),
+        ("strict", "worker", Some("Bearer malformed"), true),
+        // The emulator profile adds no check of its own: the callable wrapper (not the daemon)
+        // answers a task that carries no credential.
+        ("emulator", "guarded", None, true),
+        ("emulator", "worker", Some("Bearer malformed"), true),
+    ] {
+        let _ = std::fs::remove_file(&hits);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let headers = authorization.map_or_else(String::new, |value| {
+            format!(r#","headers":{{"Authorization":"{value}"}}"#)
+        });
+        let script = format!(
+            r#"H="$CLOUD_TASKS_EMULATOR_HOST"; case "$H" in http*) ;; *) H="http://$H" ;; esac
+curl -s --max-time 10 -o /dev/null -X POST -H 'content-type: application/json' \
+  -d '{{"task":{{"name":"projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks/t1","httpRequest":{{"url":"","body":"eyJkYXRhIjp7fX0="{headers}}}}}}}' \
+  "$H/projects/demo-manifest-task-bearer/locations/us-central1/queues/{queue}/tasks"
+i=0; while [ $i -lt 80 ] && [ "{wait}" = yes ] && ! grep -q '^{queue}$' "{hits}" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+sleep 1.5"#,
+            wait = if delivered { "yes" } else { "no" },
+            hits = hits.display()
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-task-bearer")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "/bin/sh", "-c", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile} {queue}: {stderr}");
+        // The daemon says which entry it marked, in the strict profile only; the Bearer check
+        // itself is exercised against a fake runner in `tests/strict_task_bearer.rs` (the
+        // callable wrapper also refuses a malformed Bearer, so a missing hit alone could not
+        // tell the two refusals apart).
+        assert_eq!(
+            stderr.contains(
+                "serves \"guarded\" as a non-HTTP function, but the codebase declares it callable"
+            ),
+            profile == "strict",
+            "{profile} {queue}: {stderr}"
+        );
+        let seen = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert_eq!(
+            seen.lines().any(|line| line == queue),
+            delivered,
+            "{profile} {queue} {authorization:?}: hits {seen:?}\n{stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The previous test shows the daemon marks the entry; this one shows the mark reaches the task
+/// dispatch. A callable served as a queue gets two tasks whose Bearer the Admin SDK's
+/// Auth-emulator verification accepts (an unsigned token of a real user): one the strict daemon
+/// verifies too, one whose `iat` lies in the future, which only the daemon refuses. The emulator
+/// profile delivers both, which shows the wrapper alone would have run the second.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn the_strict_mark_reaches_the_task_dispatch_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-task-mark");
+    let hits = dir.join("hits.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+exports.guarded = onCall((request) => {{
+  fs.appendFileSync({hits:?}, "guarded:" + request.data.kind + ":" + (request.auth ? "auth" : "anonymous") + "\n");
+  return {{ ok: true }};
+}});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}}]}"#,
+    );
+    let script = r#"
+const fs = require("fs");
+const HITS = process.env.HITS_FILE;
+const project = "demo-manifest-task-mark";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const host = (value) => (value.startsWith("http") ? value : "http://" + value);
+(async () => {
+  const signUp = await fetch(
+    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "ada@example.com", password: "secret-123", returnSecureToken: true }) },
+  );
+  const { localId, idToken } = await signUp.json();
+  if (!localId) throw new Error("sign-up failed");
+  // The claims the daemon itself issued (so its clock agrees with them), re-issued unsigned: the
+  // Admin SDK's Auth-emulator verification accepts an unsigned token, and the strict daemon
+  // refuses one whose `iat` is in its future.
+  const claims = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString());
+  const token = (iat) => b64url({ alg: "none", typ: "JWT" }) + "." + b64url({ ...claims, iat }) + ".";
+  let n = 0;
+  for (const [kind, iat] of [["now", claims.iat], ["future", claims.iat + 600]]) {
+    const body = Buffer.from(JSON.stringify({ data: { kind } })).toString("base64");
+    await fetch(host(process.env.CLOUD_TASKS_EMULATOR_HOST) + "/projects/" + project + "/locations/us-central1/queues/guarded/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task: { name: "projects/" + project + "/locations/us-central1/queues/guarded/tasks/t" + (n++), httpRequest: { url: "", body, headers: { Authorization: "Bearer " + token(iat) } } } }),
+    });
+    // A delivered task is waited for (a loaded machine can be slow); a refused one is given
+    // time to show up.
+    for (let i = 0; i < 80; i++) {
+      await sleep(250);
+      if (kind === "now" && fs.existsSync(HITS) && fs.readFileSync(HITS, "utf8").includes("guarded:now:")) break;
+    }
+    await sleep(kind === "future" ? 1000 : 0);
+  }
+})().catch((error) => { console.error(String(error)); process.exit(1); });
+"#;
+    for profile in ["strict", "emulator"] {
+        let _ = std::fs::remove_file(&hits);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-task-mark")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "node", "-e", script])
+            .env("HITS_FILE", &hits)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile}: {stderr}");
+        let seen = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert!(
+            seen.lines().any(|line| line == "guarded:now:auth"),
+            "{profile}: the token the daemon verifies is delivered: hits {seen:?}\n{stderr}"
+        );
+        assert_eq!(
+            seen.lines().any(|line| line == "guarded:future:auth"),
+            profile == "emulator",
+            "{profile}: hits {seen:?}\n{stderr}"
+        );
+        // The refusal leaves a line naming the function and the reason, never the credential.
+        assert_eq!(
+            stderr.contains("a task for \"guarded\" was refused by the strict Bearer check (401)"),
+            profile == "strict",
+            "{profile}: {stderr}"
+        );
+        assert!(!stderr.contains("Bearer eyJ"), "{profile}: {stderr}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Node script of the test below: sign up a user, then POST the callable four times with
+/// different Bearers and write `<kind> <status>` lines to `statuses`.
+fn route_bearer_script(statuses: &Path) -> String {
+    format!(
+        r#"
+const project = "demo-manifest-route-bearer";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+const host = (value) => (value.startsWith("http") ? value : "http://" + value);
+(async () => {{
+  const signUp = await fetch(
+    host(process.env.FIREBASE_AUTH_EMULATOR_HOST) + "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=x",
+    {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ email: "ada@example.com", password: "secret-123", returnSecureToken: true }}) }},
+  );
+  const {{ localId, idToken }} = await signUp.json();
+  if (!localId) throw new Error("sign-up failed");
+  // The claims the daemon itself issued, re-issued unsigned (see the task test).
+  const claims = JSON.parse(Buffer.from(idToken.split(".")[1], "base64url").toString());
+  const token = (iat) => b64url({{ alg: "none", typ: "JWT" }}) + "." + b64url({{ ...claims, iat }}) + ".";
+  const lines = [];
+  for (const [kind, authorization] of [["none", null], ["now", "Bearer " + token(claims.iat)], ["future", "Bearer " + token(claims.iat + 600)], ["malformed", "Bearer malformed"]]) {{
+    const headers = {{ "content-type": "application/json" }};
+    if (authorization) headers.authorization = authorization;
+    const response = await fetch(host(process.env.FIREEMU_FUNCTIONS_HOST) + "/" + project + "/us-central1/guarded", {{
+      method: "POST", headers, body: JSON.stringify({{ data: {{ kind }} }}),
+    }});
+    lines.push(kind + " " + response.status);
+  }}
+  require("fs").writeFileSync({statuses:?}, lines.join("\n") + "\n");
+}})().catch((error) => {{ console.error(String(error)); process.exit(1); }});
+"#,
+        statuses = statuses.display().to_string()
+    )
+}
+
+/// The route twin of the test above: a code-level callable that a configured manifest serves as
+/// an `onRequest` function. A request whose unsigned Bearer the Admin SDK's Auth-emulator
+/// verification accepts, but whose `iat` lies in the future, is refused with 401 by the strict
+/// daemon; the emulator profile lets the wrapper answer it.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_callable_served_as_an_onrequest_function_passes_the_strict_bearer_check_over_http() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = scratch_codebase("manifest-route-bearer");
+    let hits = dir.join("hits.txt");
+    let statuses = dir.join("statuses.txt");
+    write(
+        &dir,
+        "index.js",
+        &format!(
+            r#"
+const fs = require("fs");
+const {{ onCall }} = require("firebase-functions/v2/https");
+exports.guarded = onCall((request) => {{
+  fs.appendFileSync({hits:?}, "guarded:" + request.data.kind + "\n");
+  return {{ ok: true }};
+}});
+"#,
+            hits = hits.display().to_string()
+        ),
+    );
+    write(
+        &dir,
+        "manifest.json",
+        r#"{"functions": [{"name": "guarded", "generation": 2, "trigger": {"type": "http", "callable": false}}]}"#,
+    );
+    let script = route_bearer_script(&statuses);
+    for profile in ["strict", "emulator"] {
+        let _ = std::fs::remove_file(&hits);
+        let _ = std::fs::remove_file(&statuses);
+        write(
+            &dir,
+            "fireemu.test.json",
+            &format!(
+                r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                dir.join("manifest.json").display()
+            ),
+        );
+        let out = fireemu_exec(&dir, "demo-manifest-route-bearer")
+            .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+            .args(["--", "node", "-e", &script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{profile}: {stderr}");
+        let seen = std::fs::read_to_string(&statuses).unwrap_or_default();
+        let status = |kind: &str| {
+            seen.lines()
+                .find_map(|line| line.strip_prefix(&format!("{kind} ")))
+                .unwrap_or("-")
+                .to_owned()
+        };
+        // What the strict daemon refuses: a Bearer that is not a user of the project, and a
+        // token only the daemon finds fault with. A request with no credential reaches the code.
+        let strict = profile == "strict";
+        assert_eq!(status("none"), "200", "{profile}: {seen} {stderr}");
+        assert_eq!(status("now"), "200", "{profile}: {seen} {stderr}");
+        assert_eq!(
+            status("future"),
+            if strict { "401" } else { "200" },
+            "{profile}: {seen} {stderr}"
+        );
+        assert_eq!(
+            status("malformed"),
+            "401",
+            "{profile}: the wrapper refuses it too: {seen} {stderr}"
+        );
+        let hit = std::fs::read_to_string(&hits).unwrap_or_default();
+        assert_eq!(
+            hit.lines().any(|line| line == "guarded:future"),
+            !strict,
+            "{profile}: {hit:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The refusal above is deliberately tied to the callable trusted protocol. Without App Check the
+/// runner is not given `skipTokenVerification` and the daemon strips the auth-override fields
+/// from every request it forwards, so none reaches the callable wrapper that a mislabelled entry
+/// points at; its token check is the Auth emulator's, as for an `onTaskDispatched` function.
+/// (Strict adds the daemon's Bearer check for a task sent to such a queue; see the test above.)
+/// `functions.manifest` is a fireemu
+/// setting and firebase-tools 15.28.2 loads a contradicting `functions.yaml` without comparing it
+/// with the code, so refusing here would only make the emulator profile refuse more than it does.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_mislabelled_callable_in_a_configured_manifest_still_starts_without_app_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "manifest-mislabel-no-app-check",
+        r#"
+const { onCall } = require("firebase-functions/v2/https");
+exports.guarded = onCall(() => ({ ok: true }));
+"#,
+    );
+    for profile in ["strict", "emulator"] {
+        for trigger in [
+            r#"{"type": "tasks"}"#,
+            r#"{"type": "http", "callable": false}"#,
+        ] {
+            write(
+                &dir,
+                "manifest.json",
+                &format!(
+                    r#"{{"functions": [{{"name": "guarded", "generation": 2, "trigger": {trigger}}}]}}"#
+                ),
+            );
+            write(
+                &dir,
+                "fireemu.test.json",
+                &format!(
+                    r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                    dir.join("manifest.json").display()
+                ),
+            );
+            let out = fireemu_exec(&dir, "demo-manifest-mislabel-off")
+                .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+                .args(["--", "true"])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{profile}, {trigger}: {stderr}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

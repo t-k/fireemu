@@ -840,6 +840,7 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
             functions_host: None,
             subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
             auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            database_event_shape: fireemu_adapter_functions::events::DatabaseEventShape::default(),
         },
         clock,
         Arc::new(runner),

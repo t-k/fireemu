@@ -7030,6 +7030,49 @@ fn seed_nest(s: &RestState) {
     }
 }
 
+/// A constant call of a string or math function fails per row (O-8B recorded its failures with a
+/// row), so the empty collection answers no row and no error, on both profiles; the same call
+/// nested inside another function fails the same way.
+#[test]
+fn rest_execute_pipeline_constant_scalar_call_fails_per_row() {
+    let overflow = json!({"functionValue": {"name": "add", "args": [
+        {"integerValue": "9223372036854775807"}, {"integerValue": "1"}]}});
+    let nested = json!({"functionValue": {"name": "equal", "args": [
+        overflow.clone(), {"integerValue": "1"}]}});
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        for (call_expr, strict_status) in [(&overflow, 400), (&nested, 501)] {
+            let run = |collection: &str| {
+                let (status, body) = call(
+                    &s,
+                    "POST",
+                    &format!("{DOCS}:executePipeline"),
+                    pipeline_body(&json!([
+                        {"name": "collection", "args": [{"referenceValue": collection}]},
+                        {"name": "select", "args": [{"mapValue": {"fields": {"v": call_expr.clone()}}}]},
+                    ])),
+                );
+                without_execution_time(status, body)
+            };
+            let (status, body) = run("/nothing");
+            assert_eq!(status, 200, "strict={strict} {body}");
+            assert_eq!(body, json!([{}]), "strict={strict}");
+            let (status, body) = run("/nest");
+            // Strict answers the unrecorded nested shape of this failure as unobserved.
+            assert_eq!(
+                status,
+                if strict { strict_status } else { 400 },
+                "strict={strict} {body}"
+            );
+            assert!(
+                body.to_string().contains("overflow"),
+                "strict={strict} {body}"
+            );
+        }
+    }
+}
+
 /// The REST route executes the same finite subset as gRPC, on both profiles, with one array
 /// element per result (the first element of an empty answer carries no result).
 #[test]

@@ -1,10 +1,10 @@
 {
   "kind": "fs-ent-pipeline-comparison-v1",
-  "artifactSha256": "d02ea203cedaa8d8a0574f0b18e92050d40a493d7331ccb5868a167d063e7e04",
+  "artifactSha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
   "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
   "summary": {
-    "MATCH": 998,
-    "MISMATCH": 924,
+    "MATCH": 1270,
+    "MISMATCH": 652,
     "MISSING_FIXTURE": 27,
     "UNKNOWN": 2
   },
@@ -1690,13 +1690,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-arity",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-type",
@@ -1724,23 +1718,11 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-arity-then-select-unknown",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-arity-before-unknown",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-unknown-before-arity",
@@ -1764,13 +1746,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#arity-around-unknown-argument",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#unknown-in-array-literal",
@@ -2309,13 +2285,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-add",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2b",
@@ -2329,23 +2299,11 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-subtract",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-multiply",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2a",
@@ -2359,13 +2317,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-divide",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2f",
@@ -2379,13 +2331,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-mod",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u25",
@@ -2469,53 +2415,23 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-abs",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-ceil",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-floor",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-round",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-pow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-sqrt",
@@ -2975,13 +2891,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-concat",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-length",
@@ -3433,33 +3343,15 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-to_lower",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-to_upper",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-char_length",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-byte_length",
@@ -3473,23 +3365,11 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-starts_with",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-ends_with",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-string_reverse",
@@ -3533,33 +3413,15 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-substring",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-string_contains",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-trim",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-ltrim",
@@ -3583,13 +3445,7 @@
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-split",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-string_index_of",
@@ -6007,13 +5863,7 @@
     },
     {
       "row": "fs-ent-pipeline/o7/aggregate-args#sum-of-add",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o7/aggregate-args#after-select",
@@ -6960,1350 +6810,535 @@
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-two",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-fields",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-empty",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-arrays",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-string-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-string-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#concat-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-ok",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-dotted-capital-i",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-empty",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-lower-two",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-ok",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-sharp-s",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-empty",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#to-upper-two",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-true",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-false",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-empty-prefix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-empty-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-prefix-longer",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-case",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-null-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-null-prefix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-absent-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-absent-prefix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-int-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-int-prefix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#starts-with-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-true",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-false",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-empty-suffix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-suffix-longer",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-null-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-null-suffix",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-int-value",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ends-with-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-true",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-false",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-empty-substring",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-case",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#string-contains-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-ok",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-empty",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-unicode-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-emoji",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-combining",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#char-length-two",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-from",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-with-length",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-negative-position",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-position-beyond",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-zero-length",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-negative-length",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-huge-length",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-double-position",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-null-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-null-position",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-absent-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-int-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-bytes-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#substring-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-default",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-custom-chars",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-multi-char-set",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-empty",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-only-spaces",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-tabs-newlines",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-no-break-space",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#trim-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ltrim-default",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ltrim-custom-chars",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ltrim-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ltrim-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#ltrim-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#rtrim-default",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#rtrim-custom-chars",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#rtrim-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#rtrim-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#rtrim-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-comma",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-empty-delimiter",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-not-found",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-empty-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-consecutive",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-one-argument",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-multi-char",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-unicode",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-null-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-null-delimiter",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#split-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/strings-main#regex-contains-match",
@@ -8712,1154 +7747,459 @@
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-ints",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-doubles",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-mixed",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-zero",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-overflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-underflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-inf-ninf",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-negative-zeros",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-bool",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#add-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-ints",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-doubles",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-mixed",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-underflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-overflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-inf-inf",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#subtract-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-ints",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-doubles",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-mixed",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-overflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-min-times-minus-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-zero-times-inf",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-negative-zero",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#multiply-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-exact",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-inexact",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-doubles",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-zero-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-zero-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-zero-by-zero",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-min-by-minus-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#divide-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-ints",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-negative-dividend",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-negative-divisor",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-doubles",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-zero-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-zero-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-min-by-minus-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#mod-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-positive",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-min",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-negative-zero",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-inf",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#abs-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-half-up",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-half-down",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-half-small",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-places",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-negative-places",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-int-negative-places",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-huge-places",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-double-places",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#round-three",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-positive",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#floor-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-positive",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-nan",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#ceil-none",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-ints",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-zero-zero",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-negative-exponent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-fractional-exponent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-negative-base-fraction",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-overflow",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-int-result-type",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-absent",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8b/math-main#pow-one",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok",

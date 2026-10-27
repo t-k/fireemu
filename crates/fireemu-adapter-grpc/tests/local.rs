@@ -6498,7 +6498,7 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             vec![expression(
                 "equal",
                 vec![
-                    pipeline_function("abs", vec![pipeline_field("score")]),
+                    pipeline_function("sqrt", vec![pipeline_field("score")]),
                     i(7),
                 ],
             )],
@@ -6508,7 +6508,7 @@ async fn execute_pipeline_where_equal_refusals_preserve_status_context_and_docum
             "expression right",
             vec![pipeline_equal(
                 "score",
-                pipeline_function("abs", vec![i(7)]),
+                pipeline_function("sqrt", vec![i(7)]),
             )],
             unsupported,
         ),

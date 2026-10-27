@@ -32,7 +32,7 @@ See the [Functions support inventory](https://github.com/t-k/fireemu/blob/main/d
 | Realtime Database | `database.ref()` and `database.instance().ref()` `onCreate`, `onUpdate`, `onDelete`, `onWrite` | `onValueCreated`, `Updated`, `Deleted`, `Written` |
 | Eventarc and alerts | | `onCustomEventPublished`, `onAlertPublished` |
 
-Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Their delivery has not been observed in production.
+Local Realtime Database instances are in `us-central1`, so a 2nd-gen database trigger in another region does not fire, and a warning at load says so. [Local Functions triggers](../realtime-database/#local-functions-triggers) describes how a write and its events are admitted. Production observations cover a fixed sequence of administrator and unauthenticated writes; end-user writes and other delivery cases remain unverified.
 
 Storage archive events fire only for a bucket whose versioning was turned on (`PATCH /storage/v1/b/{bucket}` with `{"versioning":{"enabled":true}}`), and their shape is unrecorded.
 
@@ -98,7 +98,7 @@ For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker
   - a callable whose `enforceAppCheck` or `consumeAppCheckToken` differs from the code;
   - an HTTP function the codebase does not export.
 
-  With App Check off, these checks do not run; only the Blocking Auth match above applies.
+  With App Check off, these checks do not run; only the Blocking Auth match above applies. No override reaches the callable wrapper that a mislabelled entry points at: the runner is not told to skip token verification (only the App Check protocol does that), and the daemon strips the emulator-internal auth override fields (`x-callable-context-auth`, `x-original-auth`) from every request it forwards, task dispatch included. The wrapper's token check is the Auth emulator's, exactly as for an `onTaskDispatched` function reached by a task; under `strict` a task sent to such a queue, or a request to a callable that the file lists as an `onRequest` function (`"callable": false`), also passes the Bearer check a callable request passes (a preflight and a request with no credential do not), so a Bearer that is not one of the project's users is answered 401 before the code runs. For a task that is a failed dispatch, retried under the queue's retry policy until it gives up; each refusal prints a line naming the function (never the credential), and startup prints a warning naming it too. The 401 HTML body for a callable deployed as an `onRequest` function is provisional: that deployment shape has not been observed in production. The official emulator does not compare a `functions.yaml` with the code either.
 
 ## Scheduled functions
 

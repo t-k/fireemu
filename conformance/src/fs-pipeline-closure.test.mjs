@@ -97,6 +97,8 @@ test("the FS-PIPELINE record holds no placeholder and its digests are the files'
 
 test("every claimed row is a MATCH row of the comparison, once, and each condition's counts add up", () => {
   const claimed = new Set();
+  const unclaimedMatches = closure.knownDifferences.notClaimed_newly_matching.matchingRows;
+  assert.equal(new Set(unclaimedMatches).size, unclaimedMatches.length);
   for (const condition of closure.conditions) {
     assert.equal(condition.status, "VERIFIED", condition.conditionId);
     const mine = [];
@@ -112,10 +114,14 @@ test("every claimed row is a MATCH row of the comparison, once, and each conditi
       ),
     );
     const matching = family.filter((row) => status.get(row) === "MATCH");
-    assert.deepEqual(mine.toSorted(), matching.toSorted(), condition.conditionId);
+    assert.deepEqual(
+      mine.toSorted(),
+      matching.filter((row) => !unclaimedMatches.includes(row)).toSorted(),
+      condition.conditionId,
+    );
     assert.deepEqual(condition.evidence.rows, {
-      MATCH: matching.length,
-      NOT_CLAIMED: family.length - matching.length,
+      MATCH: mine.length,
+      NOT_CLAIMED: family.length - mine.length,
     });
     assert.equal(condition.evidence.comparisonSha256, sha256(condition.evidence.comparisonPath));
     assert.equal(condition.evidence.fixtureSha256, sha256(condition.evidence.fixturePath));
@@ -125,7 +131,10 @@ test("every claimed row is a MATCH row of the comparison, once, and each conditi
   const unclaimed = [...status].filter(([row]) => !claimed.has(row));
   const notRun = ["o8b/", "o8c/", "o8d/"];
   const nonClaimed = unclaimed.filter(
-    ([row, s]) => s !== "MISSING_FIXTURE" && !notRun.some((p) => row.includes(`/${p}`)),
+    ([row, s]) =>
+      s !== "MISSING_FIXTURE" &&
+      !unclaimedMatches.includes(row) &&
+      !notRun.some((p) => row.includes(`/${p}`)),
   );
   const mismatching = nonClaimed.filter(([, s]) => s !== "MISMATCH" && s !== "UNKNOWN");
   assert.deepEqual(
@@ -137,9 +146,9 @@ test("every claimed row is a MATCH row of the comparison, once, and each conditi
     [...status.values()].filter((s) => s === "MATCH").length,
     claimed.size + [...status].filter(([row, s]) => s === "MATCH" && !claimed.has(row)).length,
   );
-  // No MATCH row is left unclaimed, except the controls of the families recorded but not claimed.
+  // The explicitly pinned matching rows remain unclaimed until independently reviewed.
   const leftover = [...status].filter(([row, s]) => s === "MATCH" && !claimed.has(row));
-  assert.deepEqual(leftover, []);
+  assert.deepEqual(leftover.map(([row]) => row).toSorted(), unclaimedMatches.toSorted());
 });
 
 test("the comparison covers the committed corpus and the lane's rows add up", () => {

@@ -539,7 +539,7 @@ export const EXCLUDED_KINDS = [
   {
     kind: "rtdb-production-comparison-v1",
     reason:
-      "the three RTDB comparisons (REST replay, SDK onDisconnect, SDK genuine Auth) were run on the closure binary named by the closure with the committed tools/sdk-smoke-database replays and fixtures; the tools have no installed-binary check and export-comparison mode yet, and the onDisconnect and genuine-Auth replays drive headless Chromium (the onDisconnect replay also waits about 3.5 minutes for the long-polling idle close)",
+      "the six RTDB comparisons were run against their recorded release binaries with the committed replays and fixtures; they do not yet support an installed-binary release replay, and several SDK replays require headless Chromium and long idle-close waits",
     issue: "rtdb-comparisons-need-release-replay.md",
   },
 ];

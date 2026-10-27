@@ -85,14 +85,37 @@ export function uploadEventFromLine(line) {
   if (put) return { type: "put-status", bucket: put[1], object: put[2], status: Number(put[3]) };
   const match = GENERATE_LINE.exec(line);
   if (!match) return null;
-  let source;
+  let body;
   try {
-    source = JSON.parse(match[1]).storageSource;
+    body = JSON.parse(match[1]);
   } catch {
     return null;
   }
-  if (typeof source?.bucket !== "string" || typeof source.object !== "string") return null;
-  return { type: "receipt", bucket: source.bucket, object: source.object };
+  const source = body?.storageSource;
+  if (typeof source?.bucket === "string" && typeof source.object === "string") {
+    return { type: "receipt", bucket: source.bucket, object: source.object };
+  }
+  return externalUpload(body?.uploadUrl);
+}
+
+/**
+ * A 1st gen `generateUploadUrl` answer names only the signed `uploadUrl`, of a bucket outside the
+ * project (firebase-tools 15.28.2, FE v4 debug log: `uploads-<other number>.<region>.cloudfunctions.appspot.com`).
+ * It is no receipt: nothing in the project's own bucket is made. The event keeps the bucket and object
+ * name and never the query string with the signature.
+ */
+function externalUpload(uploadUrl) {
+  if (typeof uploadUrl !== "string") return null;
+  let url;
+  try {
+    url = new URL(uploadUrl);
+  } catch {
+    return null;
+  }
+  const [bucket, object, ...rest] = url.pathname.split("/").filter((part) => part !== "");
+  if (url.host !== "storage.googleapis.com" || rest.length > 0) return null;
+  if (typeof bucket !== "string" || !validObject(object)) return null;
+  return { type: "external-upload", bucket, object };
 }
 
 export function uploadEventsFromCliOutput(text) {
@@ -152,6 +175,11 @@ export function openSourceUploads({
   }
   const state = openOwnership({ path: ledgerPath, runId });
   const started = new Set();
+  // The receipts of every deploy of this run, by the exact object each one named: a deploy that finishes
+  // later than its siblings started finds their objects in the bucket. Such an object is explained only
+  // while the sibling's own PUT is not a definite refusal (a refused create made nothing, so an object
+  // that is there anyway belongs to nobody). Deleting stays with the deploy whose receipt named it.
+  const claimed = new Map();
 
   async function dispatch(method, url) {
     let reply;
@@ -199,8 +227,11 @@ export function openSourceUploads({
     return { names, complete: false };
   }
 
-  async function beginDeploy(key) {
+  // `generation` is the function generation the CLI deploys. A 1st gen upload goes to a bucket outside
+  // the project, so such a deploy is not expected to show a receipt.
+  async function beginDeploy(key, { generation = 2 } = {}) {
     if (typeof key !== "string" || key === "") throw new Error("a deploy needs a key");
+    if (generation !== 1 && generation !== 2) throw new Error("deploy generation must be 1 or 2");
     if (started.has(key)) throw new Error(`deploy ${key} was already started in this run`);
     const placeholder = `deploy:${key}`;
     if (closureReport(state).reasons.some((reason) => reason.endsWith(`:${placeholder}`))) {
@@ -215,7 +246,12 @@ export function openSourceUploads({
     }
     started.add(key);
     const ticket = beginCreate(state, { name: placeholder, transport: "accounting" });
-    return createDeploy({ placeholder, ticket, baseline: baseline.names });
+    return createDeploy({
+      placeholder,
+      ticket,
+      baseline: baseline.names,
+      deployGeneration: generation,
+    });
   }
 
   /**
@@ -230,7 +266,7 @@ export function openSourceUploads({
     return statuses.length > 0 && statuses.every(definite) ? "refused" : "unknown";
   }
 
-  function createDeploy({ placeholder, ticket, baseline }) {
+  function createDeploy({ placeholder, ticket, baseline, deployGeneration }) {
     const receipts = new Map();
     const faults = new Set();
     let finished = false;
@@ -258,11 +294,13 @@ export function openSourceUploads({
       }
       const name = `${bucket}/${candidate.object}`;
       try {
-        receipts.set(candidate.object, {
+        const entry = {
           name,
           statuses: [],
           ticket: beginCreate(state, { name, transport: "rest" }),
-        });
+        };
+        receipts.set(candidate.object, entry);
+        claimed.set(candidate.object, entry);
       } catch {
         faults.add("receipt-not-journaled");
       }
@@ -370,8 +408,10 @@ export function openSourceUploads({
       const reasons = [...faults];
       // A CLI that was killed before any receipt was seen may have an upload in flight; a deploy that
       // ended well without one used an upload path this helper does not see (or printed no debug line).
-      if (!cliExited && receipts.size === 0) reasons.push("killed-without-receipt");
-      if (cliExited && exitCode === 0 && receipts.size === 0) reasons.push("no-receipt");
+      if (deployGeneration === 2) {
+        if (!cliExited && receipts.size === 0) reasons.push("killed-without-receipt");
+        if (cliExited && exitCode === 0 && receipts.size === 0) reasons.push("no-receipt");
+      }
       const need = UPLOAD_BOUNDS.maxPages + 3 * receipts.size;
       if (requestsLeft() < need) {
         reasons.push("upload-budget");
@@ -387,7 +427,8 @@ export function openSourceUploads({
         }
         for (const name of [...after.names].toSorted()) {
           const entry = receipts.get(name);
-          const explained = entry !== undefined && putClass(entry.statuses) !== "refused";
+          const holder = entry ?? claimed.get(name);
+          const explained = holder !== undefined && putClass(holder.statuses) !== "refused";
           if (!baseline.has(name) && !explained) reasons.push(`unexplained-object:${name}`);
         }
         // Bookkeeping only: this name is no resource, so the answer is not a production status.

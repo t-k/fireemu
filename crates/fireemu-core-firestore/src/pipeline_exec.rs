@@ -20,7 +20,7 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
@@ -163,6 +163,8 @@ pub enum Arity {
     Pairs,
     /// At least this many.
     AtLeast(usize),
+    /// From the first number to the second, both included (a function with overloads).
+    Between(usize, usize),
 }
 
 /// What a function sees besides its arguments.
@@ -185,6 +187,10 @@ pub struct Function {
     /// The signature production names in its argument-count refusal (empty where fireemu
     /// answers its own wording).
     pub signature: &'static str,
+    /// For a function with several overloads, production's argument-count refusal lists them:
+    /// each is its signature with the fewest and the most arguments it takes. Empty for a
+    /// function with one signature.
+    pub overloads: &'static [(&'static str, usize, usize)],
     eval: fn(&[Eval], Context) -> Eval,
 }
 
@@ -211,6 +217,7 @@ const fn comparison(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> F
         arity: Arity::Exact(2),
         returns_boolean: true,
         signature: "",
+        overloads: &[],
         eval,
     }
 }
@@ -222,6 +229,7 @@ const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eva
         arity: Arity::Exact(1),
         returns_boolean: false,
         signature: "",
+        overloads: &[],
         eval,
     }
 }
@@ -251,6 +259,7 @@ const FUNCTIONS: &[Function] = &[
         arity: Arity::Any,
         returns_boolean: false,
         signature: "",
+        overloads: &[],
         eval: eval_array,
     },
     Function {
@@ -258,6 +267,7 @@ const FUNCTIONS: &[Function] = &[
         arity: Arity::Pairs,
         returns_boolean: false,
         signature: "",
+        overloads: &[],
         eval: eval_map,
     },
     document_function("document_id", eval_document_id),
@@ -278,6 +288,28 @@ const FUNCTIONS: &[Function] = &[
     logic::ARRAY_CONTAINS_ANY,
     logic::EQUAL_ANY,
     logic::NOT_EQUAL_ANY,
+    scalar::CONCAT,
+    scalar::TO_LOWER,
+    scalar::TO_UPPER,
+    scalar::STARTS_WITH,
+    scalar::ENDS_WITH,
+    scalar::STRING_CONTAINS,
+    scalar::CHAR_LENGTH,
+    scalar::SUBSTRING,
+    scalar::TRIM,
+    scalar::LTRIM,
+    scalar::RTRIM,
+    scalar::SPLIT,
+    scalar::ADD,
+    scalar::SUBTRACT,
+    scalar::MULTIPLY,
+    scalar::DIVIDE,
+    scalar::MOD,
+    scalar::ABS,
+    scalar::ROUND,
+    scalar::FLOOR,
+    scalar::CEIL,
+    scalar::POW,
 ];
 
 /// Looks a function up in the static table.
@@ -342,12 +374,26 @@ impl Expr {
             Arity::Any => true,
             Arity::Pairs => args.len() % 2 == 0,
             Arity::AtLeast(n) => args.len() >= n,
+            Arity::Between(low, high) => (low..=high).contains(&args.len()),
         };
+        if !fits && !function.overloads.is_empty() {
+            // Production lists the signatures that would have taken the call.
+            let got = args.len();
+            let mut options = String::new();
+            for (signature, low, high) in function.overloads {
+                let _ = write!(options, "\n- {signature} with [{low}..{high}] argument(s).");
+            }
+            return Err(ExprError::Arity(format!(
+                "The function '{name}' does not accept {got} argument(s). Valid options are:{options}"
+            )));
+        }
         if !fits && !function.signature.is_empty() {
             let range = match function.arity {
                 Arity::Exact(n) => format!("[{n}..{n}]"),
                 Arity::AtLeast(n) => format!("[{n}..+\u{221e})"),
-                Arity::Any | Arity::Pairs => unreachable!("these have no signature"),
+                Arity::Any | Arity::Pairs | Arity::Between(..) => {
+                    unreachable!("these have no single signature")
+                }
             };
             let got = args.len();
             return Err(ExprError::Arity(format!(
@@ -366,6 +412,7 @@ impl Expr {
             let expected = match function.arity {
                 Arity::Exact(n) => format!("{n} argument(s)"),
                 Arity::Any => "any number of arguments".to_owned(),
+                Arity::Between(low, high) => format!("{low} to {high} argument(s)"),
                 Arity::Pairs | Arity::AtLeast(_) => unreachable!("answered above"),
             };
             return Err(ExprError::Invalid(format!(
@@ -1531,11 +1578,15 @@ pub fn execute_rows_in(
 }
 
 mod logic;
+pub mod scalar;
 
 pub use logic::TYPE_NAMES;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod scalar_tests;
 
 #[cfg(test)]
 mod compare_tests;

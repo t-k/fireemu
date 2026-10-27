@@ -42,6 +42,11 @@ export function traceForm(value) {
 /** A frame with its per-delivery values reduced to their forms; the rest is untouched. */
 export function normalizeFrame(frame) {
   const copy = structuredClone(frame.event);
+  // the member lists are compared as sets: a missing or an added member is one difference, not a shifted list
+  const asSet = (keys) =>
+    Object.fromEntries((Array.isArray(keys) ? keys : []).map((key) => [key, true]));
+  if (frame.generation === 1) copy.context.contextKeys = asSet(copy.context.contextKeys);
+  else copy.eventKeys = asSet(copy.eventKeys);
   if (frame.generation === 1) {
     copy.context.eventId = idForm(copy.context.eventId);
     copy.context.timestamp = timeForm(copy.context.timestamp);

@@ -170,13 +170,37 @@ test('deadline during page navigation closes context and browser', async () => {
   assert.deepEqual(harness.calls, ['context', 'browser']);
 });
 
-test('late browser launch is closed and awaited before returning failure', async () => {
-  let closed = false;
+test('late browser launch is closed and awaited before returning failure', async t => {
+  // The deadline timer is the test's to fire, and the fake browser's launch and close are promises the test releases:
+  // no real timer decides the order (the old version raced a 5 ms deadline against the bundle reads, which on a loaded
+  // machine could elapse before launch was ever called). Waits are bounded by turns of the event loop, not by time,
+  // so a mutant that never calls launch or close fails the test instead of hanging it.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = [];
+  let resolveLaunch, finishClose;
+  const playwright = { chromium: { launch: () => { calls.push('launch'); return new Promise(resolve => { resolveLaunch = resolve; }); } } };
+  const browser = { close: () => { calls.push('close'); return new Promise(done => { finishClose = () => { calls.push('closed'); done(); }; }); } };
   const c = config();
-  c.deadlineMs = 5;
-  const playwright = { chromium: { launch: () => new Promise(resolve => setTimeout(() => resolve({ close: () => new Promise(done => setTimeout(() => { closed = true; done(); }, 15)) }), 15)) } };
-  await assert.rejects(runProductionLiveProbe({ playwright, config: c, bundlePaths: bundles, record() {} }), /deadline/);
-  assert.equal(closed, true);
+  const probe = runProductionLiveProbe({ playwright, config: c, bundlePaths: bundles, record() {} });
+  let outcome;
+  probe.then(() => { outcome = 'resolved'; }, error => { outcome = error; });
+  const turns = async (until, what) => {
+    for (let i = 0; i < 2000 && !until(); i++) await new Promise(resolve => setImmediate(resolve));
+    assert.ok(until(), what);
+  };
+  const quiet = async () => { for (let i = 0; i < 50; i++) await new Promise(resolve => setImmediate(resolve)); };
+  await turns(() => calls.includes('launch'), 'launch is called');
+  t.mock.timers.tick(c.deadlineMs); // the deadline fires while the launch is still pending
+  await quiet();
+  assert.equal(outcome, undefined, 'the failure is not returned while the launch is outstanding');
+  resolveLaunch(browser); // the browser arrives after the deadline
+  await turns(() => calls.includes('close'), 'the late browser is closed');
+  await quiet();
+  assert.equal(outcome, undefined, 'the failure is not returned while the late browser is closing');
+  assert.deepEqual(calls, ['launch', 'close']);
+  finishClose();
+  await assert.rejects(probe, /deadline/);
+  assert.deepEqual(calls, ['launch', 'close', 'closed']);
 });
 
 test('HTTP URL payload consumes outgoing budget before opening a request', async () => {

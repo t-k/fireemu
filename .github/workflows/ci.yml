@@ -254,6 +254,30 @@ jobs:
       - name: Functions runner Node tests
         run: node --test tools/runner-node/*.test.mjs
 
+  # tools/sdk-smoke-database: the tests of the Realtime Database smokes and of the production recorders built
+  # on them (the committed CV11 journal against its production fixture, the REST/CV07/CV11/rtdb-residual judges
+  # and their near misses, the ADC preflight). They run offline against fakes: no Google endpoint, no
+  # credential, no official emulator jar, no fireemu binary. One file (rtdb-residual-page.test.mjs) drives
+  # headless Chromium against a stub SDK, so the browser is installed first and FIREEMU_REQUIRE_BROWSER makes
+  # a browser that cannot start fail that file instead of skipping its ten tests.
+  sdk-smoke-database:
+    name: database smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FIREEMU_REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: the pinned SDKs for the database smoke tests
+        run: npm ci --prefix tools/sdk-smoke-database --ignore-scripts
+      - name: Chromium for the residual page tests
+        run: npx --prefix tools/sdk-smoke-database playwright install --with-deps chromium
+      - name: database smoke tests
+        run: npm test --prefix tools/sdk-smoke-database
+
   # The packages a release would publish, built from this commit and installed the way a user
   # installs them: offline, from the packed tarballs, under a path with a space and non-ASCII
   # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a

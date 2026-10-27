@@ -10,8 +10,8 @@
   "oracle": "official Local Emulator Suite, pinned in ORACLE.md",
   "summary": {
     "parity": 0,
-    "documented-divergence": 2,
-    "debt": 1,
+    "documented-divergence": 3,
+    "debt": 0,
     "pending": 0
   },
   "steps": [
@@ -72,7 +72,7 @@
     },
     {
       "id": "runQuery-with-an-unknown-operator",
-      "status": "debt",
+      "status": "documented-divergence",
       "oracle": {
         "body": {
           "error": {
@@ -88,13 +88,26 @@
           {
             "error": {
               "code": 400,
-              "message": "unknown field filter operator",
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"NOT_A_REAL_OPERATOR\"",
+                      "field": "structured_query.where.field_filter.op"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"NOT_A_REAL_OPERATOR\"",
               "status": "INVALID_ARGUMENT"
             }
           }
         ],
         "status": 400
-      }
+      },
+      "documents": "conformance/FIRESTORE-PRODUCTION-MATRIX.md; CHANGELOG.md [Unreleased]",
+      "reason": "Production refuses a REST runQuery with an unknown field-filter operator with a 400 INVALID_ARGUMENT whose message is `Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"<name>\"` (recorded 2026-09-07 and 2026-09-24); the 2026-09-24 recording also shows the BadRequest detail and the error in a one-element array. The official emulator answers `Payload isn't valid for request.`. fireemu follows production in both profiles."
     },
     {
       "id": "get-a-missing-document",

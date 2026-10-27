@@ -1852,3 +1852,53 @@ exports.guarded = onCall(() => ({ ok: true }));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The refusal above is deliberately tied to the callable trusted protocol. Without App Check the
+/// runner is not given `skipTokenVerification`, so the callable wrapper that a mislabelled entry
+/// reaches verifies ID tokens itself and never reads the auth-override fields; it answers as it
+/// would to any request whose token production would reject. `functions.manifest` is a fireemu
+/// setting and firebase-tools 15.28.2 loads a contradicting `functions.yaml` without comparing it
+/// with the code, so refusing here would only make the emulator profile refuse more than it does.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_mislabelled_callable_in_a_configured_manifest_still_starts_without_app_check() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "manifest-mislabel-no-app-check",
+        r#"
+const { onCall } = require("firebase-functions/v2/https");
+exports.guarded = onCall(() => ({ ok: true }));
+"#,
+    );
+    for profile in ["strict", "emulator"] {
+        for trigger in [
+            r#"{"type": "tasks"}"#,
+            r#"{"type": "http", "callable": false}"#,
+        ] {
+            write(
+                &dir,
+                "manifest.json",
+                &format!(
+                    r#"{{"functions": [{{"name": "guarded", "generation": 2, "trigger": {trigger}}}]}}"#
+                ),
+            );
+            write(
+                &dir,
+                "fireemu.test.json",
+                &format!(
+                    r#"{{"schemaVersion": 1, "profile": "{profile}", "appCheck": {{"enabled": false}}, "functions": {{"manifest": "{}"}}}}"#,
+                    dir.join("manifest.json").display()
+                ),
+            );
+            let out = fireemu_exec(&dir, "demo-manifest-mislabel-off")
+                .args(["--config", dir.join("fireemu.test.json").to_str().unwrap()])
+                .args(["--", "true"])
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{profile}, {trigger}: {stderr}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -98,7 +98,7 @@ For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker
   - a callable whose `enforceAppCheck` or `consumeAppCheckToken` differs from the code;
   - an HTTP function the codebase does not export.
 
-  With App Check off, these checks do not run; only the Blocking Auth match above applies.
+  With App Check off, these checks do not run; only the Blocking Auth match above applies. That is safe because the runner is then not told to skip token verification: the callable wrapper checks ID tokens itself, as it does in production, and ignores the emulator-internal auth override fields that only the App Check protocol enables, so a callable listed as a task queue gets no more trust than any other request. The official emulator does not compare a `functions.yaml` with the code either.
 
 ## Scheduled functions
 

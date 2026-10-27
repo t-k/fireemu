@@ -64,6 +64,19 @@ pub fn auth_context_naming(
     }
 }
 
+/// How the strict and the emulator profile shape a Realtime Database trigger event: the strict profile as
+/// production delivered it (CV14, recorded 2026-10-27), the emulator profile as it always was.
+#[must_use]
+pub fn database_event_shape(
+    profile: CompatibilityProfile,
+) -> fireemu_adapter_functions::events::DatabaseEventShape {
+    use fireemu_adapter_functions::events::DatabaseEventShape;
+    match profile {
+        CompatibilityProfile::Strict => DatabaseEventShape::Production,
+        CompatibilityProfile::Emulator => DatabaseEventShape::Official,
+    }
+}
+
 /// The buckets the Storage triggers of a manifest name explicitly. A trigger without a bucket
 /// listens on the project's default buckets, which always exist. The strict profile counts these
 /// buckets as existing even when empty: production needs the bucket to deploy the trigger.
@@ -2892,6 +2905,7 @@ pub async fn start(
         clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
+        database_event_shape: database_event_shape(cfg.profile),
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -12665,6 +12679,20 @@ exports.add = onCall({{}}, observe("add"));
     }
 
     #[test]
+    fn the_profile_chooses_how_a_database_trigger_event_is_shaped() {
+        use crate::config::CompatibilityProfile;
+        use fireemu_adapter_functions::events::DatabaseEventShape;
+        assert_eq!(
+            super::database_event_shape(CompatibilityProfile::Strict),
+            DatabaseEventShape::Production
+        );
+        assert_eq!(
+            super::database_event_shape(CompatibilityProfile::Emulator),
+            DatabaseEventShape::Official
+        );
+    }
+
+    #[test]
     fn the_profile_chooses_how_the_writer_of_an_auth_context_event_is_named() {
         use crate::config::CompatibilityProfile;
         use fireemu_adapter_functions::events::AuthContextNaming;
@@ -12884,6 +12912,8 @@ exports.add = onCall({{}}, observe("add"));
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
                 auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                database_event_shape:
+                    fireemu_adapter_functions::events::DatabaseEventShape::default(),
             },
             clock.clone(),
             Arc::new(runner),

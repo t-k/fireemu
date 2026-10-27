@@ -126,6 +126,17 @@ while True:
 ";
 
 async fn runtime(fail_once: bool) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
+    runtime_shaped(
+        fail_once,
+        fireemu_adapter_functions::events::DatabaseEventShape::default(),
+    )
+    .await
+}
+
+async fn runtime_shaped(
+    fail_once: bool,
+    shape: fireemu_adapter_functions::events::DatabaseEventShape,
+) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualClock>>) {
     let runner = Runner::spawn_spec(&SpawnSpec {
         command: vec![
             "python3".to_owned(),
@@ -147,6 +158,7 @@ async fn runtime(fail_once: bool) -> (Arc<FunctionsRuntime>, Arc<Mutex<VirtualCl
         FunctionsConfig {
             project: "demo-db".to_owned(),
             location: "us-central1".to_owned(),
+            database_event_shape: shape,
             ..FunctionsConfig::for_tests(1000, "test".to_owned())
         },
         clock.clone(),
@@ -573,4 +585,47 @@ async fn retry_reuses_immutable_source_snapshot_and_its_causal_parent() {
     assert_eq!(entries[0]["parent"], "database-commit:app-first@5");
     runtime.shutdown().await;
     dispatch.await.unwrap();
+}
+
+#[tokio::test]
+async fn the_event_id_the_function_receives_follows_the_profile_shape() {
+    use fireemu_adapter_functions::events::DatabaseEventShape;
+    for (shape, production) in [
+        (DatabaseEventShape::Production, true),
+        (DatabaseEventShape::Official, false),
+    ] {
+        let (runtime, _) = runtime_shaped(false, shape).await;
+        runtime
+            .reserve_database_events(&commit())
+            .unwrap()
+            .publish();
+        let dispatch = tokio::spawn(runtime.clone().dispatch_loop());
+        runtime.await_idle(Duration::from_secs(5)).await.unwrap();
+        let logs = runtime.runner().logs_since(None);
+        let events: Vec<_> = logs
+            .lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.message()).ok())
+            .collect();
+        assert_eq!(events.len(), 2, "{shape:?}");
+        for event in &events {
+            let id = event["id"].as_str().unwrap();
+            if production {
+                assert_eq!(id.len(), 28, "{id}");
+                assert!(id.ends_with('='), "{id}");
+                assert_eq!(
+                    event["source"].as_str().unwrap().split('/').nth(4),
+                    Some("_")
+                );
+                assert!(event.get("datacontenttype").is_none());
+            } else {
+                assert_eq!(id.len(), 36, "{id}");
+                assert_eq!(id.matches('-').count(), 4, "{id}");
+                assert_eq!(event["datacontenttype"], "application/json");
+            }
+        }
+        assert_ne!(events[0]["id"], events[1]["id"]);
+        runtime.shutdown().await;
+        dispatch.await.unwrap();
+    }
 }

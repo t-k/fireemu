@@ -312,6 +312,8 @@ pub struct FunctionsConfig {
     pub subscription_naming: crate::events::SubscriptionNaming,
     /// How the writer of a Firestore event with auth context is named: by profile.
     pub auth_context: crate::events::AuthContextNaming,
+    /// How a Realtime Database trigger event is shaped, by profile.
+    pub database_event_shape: crate::events::DatabaseEventShape,
 }
 
 impl FunctionsConfig {
@@ -335,6 +337,7 @@ impl FunctionsConfig {
             clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
+            database_event_shape: crate::events::DatabaseEventShape::default(),
         }
     }
 }
@@ -359,6 +362,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
+            .field("database_event_shape", &self.database_event_shape)
             .finish()
     }
 }
@@ -2524,6 +2528,7 @@ impl FunctionsRuntime {
                 crate::events::visit_database_event_payloads(
                     commit,
                     function,
+                    self.config.database_event_shape,
                     |reference, mut payload| {
                         let event_type = payload["type"]
                             .as_str()
@@ -2538,10 +2543,13 @@ impl FunctionsRuntime {
                             )
                             .and_then(|value| value.checked_add(1))
                             .ok_or(SourceEventAdmissionError::Capacity)?;
-                        payload["id"] = json!(crate::events::event_id_uuid(&format!(
-                            "{}-{ordinal}",
-                            self.config.session.value()
-                        )));
+                        let seed = format!("{}-{ordinal}", self.config.session.value());
+                        payload["id"] = json!(match self.config.database_event_shape {
+                            crate::events::DatabaseEventShape::Production =>
+                                crate::events::database_event_id(&seed),
+                            crate::events::DatabaseEventShape::Official =>
+                                crate::events::event_id_uuid(&seed),
+                        });
                         if !self.database_invoke_frame_fits(
                             function,
                             &payload,
@@ -9817,6 +9825,7 @@ mod schedule_capacity_tests {
                 clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),
+                database_event_shape: crate::events::DatabaseEventShape::default(),
             },
             clock.clone(),
             Arc::new(runner),

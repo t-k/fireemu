@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FS-PIPELINE",
-  "parentStatus": "IN_PROGRESS",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -13,8 +13,20 @@
   },
   "scopeAuthority": "docs.local/instructions/owner-decisions.md (ledger 1794, option A of docs.local/reviews/2026-10-26-fs-pipeline-scope-inventory.md; ledger 1792, entpipe1 kept until the end of FS-PIPELINE observation)",
   "closureReview": {
-    "decision": "PENDING",
-    "note": "The first closure review (docs.local/reviews/2026-10-27-fs-pipeline-closure-review.md) requested changes; this record answers them. A delta review follows; the parent stays IN_PROGRESS until it approves."
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-28",
+    "decider": "project coordinator under owner decision1858",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (line1859)",
+    "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-28-pipeline-closure-sol.md",
+        "reportSha256": "a3b87e2de8f352d7eb5807b17359237410b66a00f2d867f4088ca91ebc752a60",
+        "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
+        "outcome": "Independent Sol review: APPROVE, Must 0; nonblocking clock mutation coverage remains outside the verified scope."
+      }
+    ],
+    "note": "The closing change records the independent approval and parent status only. The release binary, comparisons, 998 claimed rows and explicit exclusions are unchanged. R21 replays the comparison on the published release candidate."
   },
   "scopeDecisions": [
     {
@@ -1705,7 +1717,7 @@
       "statement": "Not claimed: gRPC-only differences are out of scope (owner 1794): the claimed rows include 26 gRPC rows that match, and the gRPC rows that differ are listed in the comparison."
     },
     "parentScope": {
-      "statement": "FS-PIPELINE covers the Firestore Enterprise option-A read subset only (ledger 1794), under the strict profile, and becomes COMPAT_VERIFIED only for the 998 comparison rows its conditions list, when the closure review approves. Of the 1951 recorded rows, 953 are not claimed: 616 belong to the string, math, timestamp, map and array function families and to union, unnest and sample, which answer UNIMPLEMENTED under strict (they are not run locally), 27 are the large-answer framing steps kept as a summary, and the rest are listed in the statements above."
+      "statement": "FS-PIPELINE covers the Firestore Enterprise option-A read subset only (ledger 1794), under the strict profile, and is COMPAT_VERIFIED only for the 998 comparison rows its conditions list. Of the 1951 recorded rows, 953 are not claimed: 616 belong to the string, math, timestamp, map and array function families and to union, unnest and sample, which answer UNIMPLEMENTED under strict (they are not run locally), 27 are the large-answer framing steps kept as a summary, and the rest are listed in the statements above."
     }
   },
   "integratedRegression": {

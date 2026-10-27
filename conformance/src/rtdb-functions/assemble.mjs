@@ -14,6 +14,7 @@ import {
 } from "../../functions-http/production.mjs";
 import { openSourceUploads } from "../shared/gen2-source-uploads.mjs";
 import { STAGE2_WINDOWS } from "./flow.mjs";
+import { diffPairs, readProjectIam } from "./iam.mjs";
 import { ownedEventarcNames, removeLeftovers, takeInventory } from "./inventory.mjs";
 import { createRtdb } from "./rtdb.mjs";
 import { TARGETS } from "./targets.mjs";
@@ -73,7 +74,12 @@ export function assembleStage2({
     sleep: clock.sleep,
     now: clock.now,
   });
-  const grants = { before: null, after: null, changes: [] };
+  const grants = {
+    before: null,
+    after: null,
+    changes: [],
+    iam: { before: null, after: null, added: [], removed: [] },
+  };
   const deps = {
     targets: TARGETS,
     ops,
@@ -82,6 +88,7 @@ export function assembleStage2({
       spec.generation === "gcfv2" ? ownedEventarcNames(record, spec) : null,
     preflight: async () => {
       grants.before = await preflightStage2({ control, projectNumber });
+      grants.iam.before = await readProjectIam(control, projectNumber);
     },
     inventory: {
       take: () => takeInventory(control, "inventory"),
@@ -107,6 +114,8 @@ export function assembleStage2({
     async readGrantsAfter() {
       grants.after = await readServiceAgentGrants(control, projectNumber);
       grants.changes = serviceAgentGrantChanges(grants.before, grants.after);
+      grants.iam.after = await readProjectIam(control, projectNumber);
+      Object.assign(grants.iam, diffPairs(grants.iam.before, grants.iam.after));
       return grants;
     },
   };

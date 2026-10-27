@@ -70,6 +70,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     deploys: [],
     deleted: [],
     bindings: new Map(),
+    iamBindings: [...(options.iamBindings ?? [])],
     opN: 0,
     insertN: 0,
     eventN: 0,
@@ -172,7 +173,9 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       });
     }
     if (u.host === "firebase.googleapis.com") return reply(200, { projectId: PROJECT });
-    if (u.host === "cloudresourcemanager.googleapis.com") return reply(200, { bindings: [] });
+    if (u.host === "cloudresourcemanager.googleapis.com") {
+      return reply(200, { bindings: w.iamBindings });
+    }
     if (u.host === "logging.googleapis.com")
       return reply(200, { entries: w.logEntries.slice(0, 200) });
     if (u.host === "eventarc.googleapis.com") {
@@ -329,6 +332,7 @@ export function createGcpWorld({ budget, clock, options = {} }) {
       throw new Error(`unexpected CLI call ${args.join(" ")}`);
     }
     w.deploys.push(name);
+    if (options.iamRemovedByDeploy) w.iamBindings.length = 0;
     const lines = [];
     if (spec.generation === "gcfv2") {
       const object = `${String(++w.uploadN).padStart(8, "0")}-1111-4222-8333-444444444444.zip`;
@@ -360,6 +364,16 @@ export function createGcpWorld({ budget, clock, options = {} }) {
     }
     w.functions.set(name, { gen: spec.generation === "gcfv2" ? 2 : 1 });
     if (spec.generation === "gcfv2") {
+      // the CLI grants the default compute service account the Eventarc receiver role for a trigger
+      if (
+        options.iamAddedByDeploy &&
+        !w.iamBindings.some((b) => b.role === "roles/eventarc.eventReceiver")
+      ) {
+        w.iamBindings.push({
+          role: "roles/eventarc.eventReceiver",
+          members: [`serviceAccount:${FAKE_PROJECT_NUMBER}-compute@developer.gserviceaccount.com`],
+        });
+      }
       w.packages.set(name, true);
       w.triggers.add(triggerOf(name));
       w.topics.add(topicOf(name));

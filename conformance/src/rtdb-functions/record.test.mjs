@@ -93,6 +93,35 @@ async function rehearse(arg) {
   return { runDir, summary, ...rehearsal };
 }
 
+test("IAM bindings a deploy added are reported masked; one that disappeared is a reason", async () => {
+  const added = await rehearse({ options: { iamAddedByDeploy: true } });
+  try {
+    assert.equal(added.summary.outcome, "recorded");
+    const grants = JSON.parse(await readFile(join(added.runDir, "grants.json"), "utf8"));
+    assert.deepEqual(grants.iam.added, [
+      "roles/eventarc.eventReceiver|serviceAccount:123456789012-compute@developer.gserviceaccount.com",
+    ]);
+    assert.deepEqual(grants.iam.removed, []);
+  } finally {
+    await rm(added.runDir, { recursive: true, force: true });
+  }
+  const removed = await rehearse({
+    options: {
+      iamBindings: [{ role: "roles/viewer", members: ["user:someone"] }],
+      iamRemovedByDeploy: true,
+    },
+  });
+  try {
+    assert.equal(removed.summary.outcome, "stopped-needs-review");
+    assert.match(
+      JSON.parse(await readFile(join(removed.runDir, "result.json"), "utf8")).reasons.join(";"),
+      /binding\(s\) disappeared/,
+    );
+  } finally {
+    await rm(removed.runDir, { recursive: true, force: true });
+  }
+});
+
 test("a stored file is refused when it holds a secret", async () => {
   const w = await rehearse({ options: { secretInRecord: "test-token" } });
   try {

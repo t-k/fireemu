@@ -120,7 +120,11 @@ export async function executeRun({ environment, runDir, packetPins }) {
   }
   if (environment.budget.snapshot().cliDeploy > 0) {
     try {
-      await assembled.readGrantsAfter();
+      const grants = await assembled.readGrantsAfter();
+      if (grants.iam.removed.length > 0) {
+        result.reasons.push(`${grants.iam.removed.length} project IAM binding(s) disappeared`);
+        result.residual = true;
+      }
     } catch (error) {
       result.reasons.push(`service-agent grant readback: ${error.message}`);
       result.residual = true;

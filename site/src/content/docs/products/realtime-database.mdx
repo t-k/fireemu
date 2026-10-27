@@ -59,6 +59,8 @@ A database instance is a namespace. Requests choose one with the `ns` query para
 - Security Rules (below), `/.settings/rules.json`, `/.inspect/databases.json`, and `disableTriggers` on writes.
 - Export, import and session snapshots (below).
 
+The entries of one multi-path write (a REST `PATCH`, an SDK `update()`, and the `onDisconnect` writes of a connection that ends) reach a connection's listens in the official emulator's order: up to four entries in the order they were sent or registered, from five on in the order of the hash of their keys. A listen at or above the written location hears first. One production recording agrees for a set of six keys; the other forms follow the official emulator and have not been observed in production.
+
 `tools/sdk-smoke-database` in the repository drives these through the pinned `firebase` and `firebase-admin` SDKs and compares the results with a recording of the official emulator.
 
 ## Security Rules

@@ -67,7 +67,7 @@ const snapshot = (value, key = "a") => ({
 
 test("the fixture declares the eight handlers on the run prefix of the one instance", () => {
   const { exports } = loadFixture();
-  assert.deepEqual(Object.keys(exports).sort(), FIXTURE_HANDLERS.map((h) => h.name).sort());
+  assert.deepEqual(Object.keys(exports).toSorted(), FIXTURE_HANDLERS.map((h) => h.name).toSorted());
   for (const handler of FIXTURE_HANDLERS) {
     const trigger = exports[handler.name];
     assert.equal(trigger.generation, handler.generation, handler.name);

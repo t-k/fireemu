@@ -232,7 +232,7 @@ type RegistryEntry = (
 /// The documented stage registry.
 const REGISTRY: &[RegistryEntry] = &[
     ("collection", StageRole::Input, 1, Some(1), &[]),
-    ("collection_group", StageRole::Input, 1, Some(1), &[]),
+    ("collection_group", StageRole::Input, 2, Some(2), &[]),
     ("database", StageRole::Input, 0, Some(0), &[]),
     ("documents", StageRole::Input, 1, None, &[]),
     (
@@ -330,53 +330,13 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
             Arg::String(p) | Arg::Reference(p) if segments_ok(p, false) => Ok(()),
             other => Err(argument(name, 0, "a collection path", other)),
         },
-        "collection_group" => match &args[0] {
-            Arg::String(id) if !id.is_empty() && !id.contains('/') => Ok(()),
-            other => Err(argument(name, 0, "a collection ID", other)),
-        },
-        "documents" => args.iter().enumerate().try_for_each(|(i, a)| match a {
-            Arg::String(p) | Arg::Reference(p) if segments_ok(p, true) => Ok(()),
-            other => Err(argument(name, i, "a document path", other)),
-        }),
         "select" | "add_fields" => alias_map(name, 0, &args[0], "a map of aliases to expressions"),
-        "remove_fields" => args.iter().enumerate().try_for_each(|(i, a)| match a {
-            Arg::Field(_) => Ok(()),
-            other => Err(argument(name, i, "a field reference", other)),
-        }),
         "where" => match &args[0] {
             condition if condition.is_expression() => Ok(()),
             other => Err(argument(name, 0, "a boolean expression", other)),
         },
-        "sort" => args.iter().enumerate().try_for_each(|(i, a)| match a {
-            Arg::Function { name: f, args }
-                if (f == "ascending" || f == "descending")
-                    && args.len() == 1
-                    && args[0].is_expression() =>
-            {
-                Ok(())
-            }
-            other => Err(argument(
-                name,
-                i,
-                "ascending(expr) or descending(expr)",
-                other,
-            )),
-        }),
-        "distinct" => args.iter().enumerate().try_for_each(|(i, a)| match a {
-            Arg::Field(_) | Arg::Function { .. } => Ok(()),
-            Arg::Map(_) => alias_map(name, i, a, "a map of aliases to expressions"),
-            other => Err(argument(name, i, "a field, expression or alias map", other)),
-        }),
-        // The official emulator answers its arity text for a one-argument aggregate before
-        // any check of the accumulators; the adapter answers it per profile.
-        "aggregate" if args.len() == 1 => Ok(()),
-        "aggregate" => {
-            alias_map(name, 0, &args[0], "a map of aliases to aggregate functions")?;
-            match args.get(1) {
-                None => Ok(()),
-                Some(groups) => alias_map(name, 1, groups, "a map of aliases to expressions"),
-            }
-        }
+        // A `sort` ordering is a map of a direction and an expression; production's texts for
+        // a malformed one are the adapter's to answer.
         "find_nearest" => {
             match &args[0] {
                 Arg::Field(_) | Arg::Function { .. } => {}
@@ -438,7 +398,9 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 )),
             }
         }
-        // limit and offset among them: their argument's type and sign are the adapter's to
+        // `distinct`, `aggregate`, `remove_fields`, `collection_group` and `documents` among
+        // them: production's texts for their arguments are the adapter's to answer (FS-ENT-ORACLE
+        // O-7); limit and offset too: their argument's type and sign are the adapter's to
         // answer per profile, in stage order (the official emulator names the type it got, or
         // the negative value).
         _ => Ok(()),
@@ -553,7 +515,8 @@ mod tests {
         assert!(canonicalize(&[users(), stage("limit", vec![Arg::String("text".into())])]).is_ok());
         let bad_skip = canonicalize(&[users(), stage("sample", vec![Arg::String("x".into())])]);
         assert!(bad_skip.is_err(), "{bad_skip:?}");
-        assert!(canonicalize(&[users(), stage("distinct", vec![Arg::Integer(1)])]).is_err());
+        // A `distinct` argument is the adapter's to check (production's texts).
+        assert!(canonicalize(&[users(), stage("distinct", vec![Arg::Integer(1)])]).is_ok());
         assert!(canonicalize(&[stage("collection", vec![Arg::Null])]).is_err());
         assert!(
             canonicalize(&[stage("collection", vec![Arg::String("/users/u1".into())])]).is_err()
@@ -562,7 +525,9 @@ mod tests {
         // constant `true` condition keeps); a nested pipeline is none.
         assert!(canonicalize(&[users(), stage("where", vec![Arg::String("x".into())])]).is_ok());
         assert!(canonicalize(&[users(), stage("where", vec![Arg::Pipeline])]).is_err());
-        assert!(canonicalize(&[users(), stage("sort", vec![Arg::Field("age".into())])]).is_err());
+        // A sort ordering is the adapter's to check (production's texts).
+        assert!(canonicalize(&[users(), stage("sort", vec![Arg::Field("age".into())])]).is_ok());
+        assert!(canonicalize(&[users(), stage("sort", vec![])]).is_err());
         // Empty aliases and empty alias maps are left to the adapter, which answers them per
         // profile; a value that is no expression stays a validator refusal.
         let empty_alias = || Arg::Map(vec![(String::new(), Arg::Field("age".into()))]);
@@ -590,15 +555,16 @@ mod tests {
             )
         ])
         .is_err());
-        // A one-argument aggregate is left to the adapter's arity answer, whatever it holds;
-        // with its groups the accumulators must be functions.
+        // An aggregate's accumulators are the adapter's to check (production's texts, FS-ENT-ORACLE
+        // O-7 `aggregate-args`): a field is refused there with "Field references are only allowed
+        // in a scalar expression."
         let field_accumulator = || Arg::Map(vec![("c".into(), Arg::Field("age".into()))]);
         assert!(canonicalize(&[users(), stage("aggregate", vec![field_accumulator()])]).is_ok());
         assert!(canonicalize(&[
             users(),
             stage("aggregate", vec![field_accumulator(), Arg::Map(Vec::new())])
         ])
-        .is_err());
+        .is_ok());
         assert!(canonicalize(&[
             users(),
             stage(

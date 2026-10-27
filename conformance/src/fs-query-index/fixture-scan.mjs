@@ -7,7 +7,23 @@ import { readFile } from "node:fs/promises";
 const TOKEN = /\bya29\.[A-Za-z0-9_-]{10,}/;
 /** A numeric project name, as ErrorInfo `consumer` and quota messages carry it. */
 const PROJECT_NUMBER = /projects\/\d{6,}|project_number\W{0,3}\d{6,}/;
-const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
+/** The domain of an email address: dot-separated labels, at least two. */
+const DOMAIN = /[\w-]+(?:\.[\w-]+)+/y;
+const LOCAL_CHAR = /[\w.+-]/;
+
+/**
+ * Whether the text holds `local@domain.tld`, as `/[\w.+-]+@[\w-]+(\.[\w-]+)+/` finds it. That
+ * pattern retries every start of a long word run, so a megabyte document took minutes; here each
+ * `@` is looked at once, with the character before it and the domain after it.
+ */
+export function hasEmail(text) {
+  for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
+    if (at === 0 || !LOCAL_CHAR.test(text[at - 1])) continue;
+    DOMAIN.lastIndex = at + 1;
+    if (DOMAIN.test(text)) return true;
+  }
+  return false;
+}
 
 function encodings(secret) {
   const bytes = Buffer.from(secret, "latin1");
@@ -46,7 +62,7 @@ export async function loadCommittedFixture(path) {
 export function scanFixture(text, secrets) {
   if (TOKEN.test(text)) throw new Error("fixture contains an access token");
   if (PROJECT_NUMBER.test(text)) throw new Error("fixture contains a numeric project name");
-  if (EMAIL.test(text)) throw new Error("fixture contains an email address");
+  if (hasEmail(text)) throw new Error("fixture contains an email address");
   for (const secret of secrets.filter(Boolean)) {
     for (const form of encodings(String(secret))) {
       if (text.includes(form)) throw new Error("fixture contains a private value");

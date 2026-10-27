@@ -7066,17 +7066,14 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
             {"name": "offset", "args": [{"integerValue": "1"}]},
             {"name": "limit", "args": [{"integerValue": "5"}]},
         ]));
-        if strict {
-            // Production recorded no offset of 1; strict does not infer its acceptance.
-            assert_eq!(status, 501, "{body}");
-        } else {
-            assert_eq!(status, 200, "strict={strict} {body}");
-            assert_eq!(
-                body,
-                json!([{"results": [{"fields": {"id": {"stringValue": "b"}, "coll": {"stringValue": "nest"}}}]}]),
-                "strict={strict}"
-            );
-        }
+        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`). The scan reads
+        // `b` before `a` (ascending CRC-32 of the document ID), so the offset leaves `a`.
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(
+            body,
+            json!([{"results": [{"fields": {"id": {"stringValue": "a"}, "coll": {"stringValue": "nest"}}}]}]),
+            "strict={strict}"
+        );
         let (status, body) = run(json!([
             {"name": "collection", "args": [{"referenceValue": "/nest/a/sub"}]},
             {"name": "select", "args": [{"mapValue": {"fields": {
@@ -7098,6 +7095,7 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
 /// stages `UNIMPLEMENTED`, malformed pipelines `INVALID_ARGUMENT`, a run-time refusal under
 /// strict UNIMPLEMENTED; a refusal answers no partial results over REST.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn rest_execute_pipeline_refusals_keep_their_codes() {
     for strict in [true, false] {
         let s = enterprise_state(strict, None);
@@ -7113,6 +7111,25 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                 pipeline_body(
                     &json!([collection, {"name": "explode", "args": [{"stringValue": "x"}]}]),
                 ),
+                // The official emulator refuses a name that is no stage in production's words
+                // (`Unsupported stage: explode`); strict answers only the name production was
+                // given (O-8A `precedence-main#unknown-stage`).
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
+            ),
+            (
+                "the unknown stage name production was given",
+                pipeline_body(&json!([collection, {"name": "nope_stage", "args": []}])),
+                400,
+                "INVALID_ARGUMENT",
+            ),
+            (
+                "a stage only the official emulator runs",
+                pipeline_body(&json!([collection, {"name": "let", "args": []}])),
                 501,
                 "UNIMPLEMENTED",
             ),
@@ -7141,10 +7158,19 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                     "INVALID_ARGUMENT"
                 },
             ),
-            // fireemu's own text, in no shape production refused.
+            // Production's words for a request that names no pipeline (O-8A `precedence-main`:
+            // `{}`, a null `structuredPipeline`), in both profiles.
+            ("no pipeline", json!({}), 400, "INVALID_ARGUMENT"),
             (
-                "no pipeline",
-                json!({}),
+                "null pipeline",
+                json!({"structuredPipeline": null}),
+                400,
+                "INVALID_ARGUMENT",
+            ),
+            // The same words for a body that also names a transaction selector were never given.
+            (
+                "no pipeline with a transaction",
+                json!({"autoCommitTransaction": true}),
                 if strict { 501 } else { 400 },
                 if strict {
                     "UNIMPLEMENTED"
@@ -7683,7 +7709,9 @@ fn rest_execute_pipeline_results_carry_document_metadata_without_select() {
         ]));
         assert_eq!(status, 200, "{body}");
         let element = &body[0];
-        assert_eq!(element["results"], json!([stored]), "strict={strict}");
+        // The scan reads `b` before `a` (ascending CRC-32 of the document ID).
+        let (_, first) = call(&s, "GET", &format!("{DOCS}/nest/b"), json!({}));
+        assert_eq!(element["results"], json!([first]), "strict={strict}");
         assert!(
             element["executionTime"].is_string(),
             "strict={strict} {body}"
@@ -7798,11 +7826,12 @@ fn rest_execute_pipeline_execution_time_is_the_snapshot_read_time() {
                 {"name": "offset", "args": [{"integerValue": "1"}]},
             ])),
         );
-        // Production recorded no offset of 1; strict does not infer its acceptance.
-        assert_eq!(status, if strict { 501 } else { 200 }, "{body}");
-        if !strict {
-            assert_eq!(body[0]["results"], json!([empty]));
-        }
+        // Production answered an offset of 1 (FS-ENT-ORACLE O-6 `sort-ties`).
+        assert_eq!(status, 200, "{body}");
+        // The scan reads `b` before `a` (ascending CRC-32 of the document ID): the offset
+        // leaves `a`.
+        let (_, left) = call(&s, "GET", &format!("{DOCS}/time/a"), json!({}));
+        assert_eq!(body[0]["results"], json!([left]));
         assert!(empty.get("fields").is_none(), "{empty}");
     }
 }

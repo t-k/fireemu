@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -18,7 +19,7 @@ import {
   NUMBER_CONDITIONS,
   NUMBER_DOC,
   NUMBER_EXPRESSIONS,
-  PROGRAMS,
+  PROGRAMS as ALL_PROGRAMS,
   PROBE_DOC,
   SELECT_EXPRESSIONS,
   STATIC_REFUSALS,
@@ -36,10 +37,15 @@ import {
   guardRestRequest,
   validateCorpus,
 } from "./fs-ent-pipeline/harness.mjs";
+import { SUMMARY_ONLY } from "./fs-ent-pipeline/o8a-corpus.mjs";
 import * as queryHarness from "./fs-query-index/harness.mjs";
 import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
+
+// The two O-8A framing programs are not in the fixture at all: their answers are kept as a
+// summary (fs-ent-pipeline-framing.json).
+const PROGRAMS = ALL_PROGRAMS.filter((program) => !SUMMARY_ONLY.has(program.id));
 
 const production = (database = lane.database) =>
   createContext({
@@ -142,9 +148,9 @@ test("contexts name their database and refuse any other", () => {
 
 test("the corpus validates, stays within its budget and only reads pipelines or writes its own collection", () => {
   const requests = validateCorpus(PROGRAMS, "fs-ent-pipeline");
-  assert.equal(requests, 694);
+  assert.equal(requests, 1924);
   const rpcs = new Set(PROGRAMS.flatMap((p) => p.steps.map((s) => s.rpc)));
-  assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get"]);
+  assert.deepEqual([...rpcs].toSorted(), ["commit", "executePipeline", "get", "runQuery"]);
   // The only writes are single-document commits into the program's own collection: the order
   // program's into `ord`, and the O-4 geo rows into `geo4`, each read back by a get of that
   // document.
@@ -153,12 +159,16 @@ test("the corpus validates, stays within its budget and only reads pipelines or 
     "fs-ent-pipeline/o4/documents": /^\{docs\}\/geo4\/[a-z-]+$/,
   };
   for (const program of PROGRAMS) {
+    // The O-6 and O-8A programs write their own collections too (vector seeds, ordering writes,
+    // base64 writes); their commits are checked in fs-ent-pipeline-o6.test.mjs and -o8a.test.mjs.
+    if (/^fs-ent-pipeline\/(o6|o8a)\//.test(program.id)) continue;
     for (const step of program.steps.filter((s) => s.rpc === "commit")) {
       assert.ok(own[program.id], program.id);
       assert.equal(step.body.writes.length, 1);
       assert.match(step.body.writes[0].update.name, own[program.id]);
     }
     for (const step of program.steps.filter((s) => s.rpc === "get")) {
+      if (program.id === "fs-ent-pipeline/o8a/base64-main") continue;
       assert.equal(program.id, "fs-ent-pipeline/o4/documents");
       assert.match(step.parent, /^geo4\/[a-z-]+$/);
     }
@@ -201,7 +211,7 @@ test("O-2 records typed numbers and the select width alone, leaving the O-1 prog
       await import("node:fs/promises")
     ).readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   );
-  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/o[2345]\//.test(p.id));
+  const o1 = PROGRAMS.filter((p) => !/^fs-ent-pipeline\/(o[2-7]|o8[abcd]|o9b?)\//.test(p.id));
   assert.equal(o1.length, 6);
   for (const program of o1) {
     assert.equal(recorded.programs[program.id].corpusDigest, programDigest(program), program.id);
@@ -553,7 +563,7 @@ test("the committed REST request export is the corpus's", async () => {
   );
   const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 28);
+  assert.equal(recordedPrograms.length, 74);
   assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
   assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
@@ -907,7 +917,7 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
   }
   const earlier = Object.fromEntries(
     Object.entries(recorded)
-      .filter(([id]) => !id.startsWith("fs-ent-pipeline/o5/"))
+      .filter(([id]) => !/^fs-ent-pipeline\/(o[567]|o8[abcd]|o9b?)\//.test(id))
       .sort(([a], [b]) => a.localeCompare(b)),
   );
   assert.equal(Object.keys(earlier).length, 20);
@@ -1004,4 +1014,38 @@ test("the O5 captured INTERNAL response remains an explicit unknown", async () =
     },
   ]);
   assert.equal(isUnknownRow(`${rows[0].row} ${rows[0].value.status}`), true);
+});
+
+test("the request export keeps a body as an object unless it is too deep for the Rust parser", async () => {
+  const { EXPORT_BODY_DEPTH, bodyDepth, exportStep } =
+    await import("./fs-ent-pipeline/export-requests.mjs");
+  const nest = (levels) => {
+    let value = 1;
+    for (let i = 0; i < levels; i += 1) value = { k: [value] };
+    return value;
+  };
+  assert.equal(bodyDepth(1), 0);
+  assert.equal(bodyDepth({}), 1);
+  assert.equal(bodyDepth(nest(3)), 6);
+  const shallow = { id: "s", rpc: "executePipeline", body: nest(EXPORT_BODY_DEPTH / 2) };
+  assert.equal(bodyDepth(shallow.body), EXPORT_BODY_DEPTH);
+  assert.deepEqual(exportStep(shallow), { ...shallow, parent: undefined, rawBody: undefined });
+  const deep = { id: "d", rpc: "executePipeline", body: nest(EXPORT_BODY_DEPTH / 2 + 1) };
+  assert.deepEqual(exportStep(deep), {
+    id: "d",
+    rpc: "executePipeline",
+    parent: undefined,
+    rawBody: JSON.stringify(deep.body),
+  });
+  // A body that is already a text is kept as it is, and a step without a body stays without one.
+  assert.equal(exportStep({ id: "r", rpc: "commit", rawBody: "x" }).rawBody, "x");
+  assert.equal(exportStep({ id: "g", rpc: "get", parent: "a/b" }).body, undefined);
+  // The recorded O-8A nesting probes deeper than the bound are exported as text.
+  const exported = JSON.parse(
+    readFileSync(new URL("../fs-ent-pipeline-requests.json", import.meta.url), "utf8"),
+  );
+  const nesting = exported.programs.find((p) => p.id === "fs-ent-pipeline/o8a/nesting-main");
+  const asText = nesting.steps.filter((s) => s.rawBody !== undefined).map((s) => s.id);
+  assert.deepEqual(asText, ["chain-32", "chain-33", "chain-47", "chain-48", "chain-100"]);
+  for (const s of nesting.steps) assert.ok(bodyDepth(s.body ?? {}) <= EXPORT_BODY_DEPTH, s.id);
 });

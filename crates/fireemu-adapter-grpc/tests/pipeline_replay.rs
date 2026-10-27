@@ -1351,6 +1351,47 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         "a string"
     );
     assert!(!clock_ok(&json!({"doubleValue": 1.5}), now), "a double");
+    // Exactly one result with exactly one field, and a 200 status.
+    let extra_field = json!([{"results": [{"fields": {"v": integer(now), "w": integer(now)}}]}]);
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &extra_field,
+        now
+    ));
+    let two_results = json!([{"results": [
+        {"fields": {"v": integer(now)}},
+        {"fields": {"v": integer(now)}}
+    ]}]);
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &two_results,
+        now
+    ));
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &json!([]),
+        now
+    ));
+    assert!(satisfies(
+        &Nondeterministic::ClockSeconds,
+        200,
+        &clock(&integer(now)),
+        now
+    ));
+    assert!(!satisfies(
+        &Nondeterministic::ClockSeconds,
+        400,
+        &clock(&integer(now)),
+        now
+    ));
+    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
+    assert!(
+        !satisfies(&two, 400, &named(&["e", "a"]), 0),
+        "a refusal with a body"
+    );
     // The replay judges against the clock of its own server.
     assert!(clock_ok(
         &integer(REPLAY_CLOCK_SECONDS + 5),

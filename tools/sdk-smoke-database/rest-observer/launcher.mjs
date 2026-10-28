@@ -20,7 +20,7 @@ export async function launch({packet,digest,out},{mint:mintImpl=mint,fetchImpl=f
  const p=await verifyPacket(packet,digest);await check(p);for(const k of Object.keys(process.env))if(k==='GOOGLE_APPLICATION_CREDENTIALS'||k==='FIREBASE_TOKEN'||k==='PYTHONPATH'||k==='PYTHONHOME'||k==='NODE_OPTIONS'||k.startsWith('DYLD_')||k.startsWith('LD_')||k.startsWith('CLOUDSDK_'))throw Error('credential environment refused');
  await claimCheck();
  await mkdir(out,{mode:0o700});const token=await mintImpl(p);if(typeof token!=='string'||! /^[\x21-\x7e]{20,4096}$/.test(token))throw Error('credential invalid');
- const sandbox=makeWire({instance:p.instance,token,fetchImpl,serviceOnly:p.mode==='api-recovery'}),auth=authWire(token,fetchImpl);const wire=(r,h)=>r.step==='auth-preflight'?auth(r,h):sandbox(r,h);
+ const sandbox=makeWire({instance:p.instance,project:p.project,token,fetchImpl,serviceOnly:p.mode==='api-recovery'}),auth=authWire(token,fetchImpl);const wire=(r,h)=>r.step==='auth-preflight'?auth(r,h):sandbox(r,h);
  const counted=await createTransport({file:join(out,'requests.jsonl'),max:p.maxRequests,reserve:p.cleanupReserve,wire});
  try{const pre=await counted({step:'auth-preflight',method:'POST',url:TOKENINFO,phase:'normal'});if(JSON.parse(pre.body).ok!==true)return 'auth-refused';if(p.mode==='api-recovery')return await recoverApi(counted,p);const prefix=`rnext1_${randomBytes(12).toString('hex')}`;return await runPacket({packet,digest,prefix,transport:counted});}finally{await counted.close();}
 }

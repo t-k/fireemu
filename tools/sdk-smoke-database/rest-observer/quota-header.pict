@@ -1,0 +1,3 @@
+Principal: admin, probe, corpus
+Result: success, refused, incomplete
+Method: GET, PUT

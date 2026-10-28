@@ -56,7 +56,7 @@
     },
     {
       "path": "transport.mjs",
-      "sha256": "e609df7daa74349123b8db87c993fbd926092e37bdfd341841ffd26b4aaf578e"
+      "sha256": "9d8781cbee212c9a393f955c8939db093991e47fb2566adb0fc0f9a4a41db0c3"
     },
     {
       "path": "orchestrator.mjs",
@@ -68,7 +68,7 @@
     },
     {
       "path": "launcher.mjs",
-      "sha256": "927dfec57f26ac78280635dc9ddf5fa7d0924e97588bb9b1b93a51e24c840ed4"
+      "sha256": "2cd5a80023384839890662951c45afc3f74ccb89d928c1ccbf4a3e050497c284"
     },
     {
       "path": "provider.mjs",

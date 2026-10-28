@@ -19,12 +19,12 @@ export async function waitForInstanceList(probe,sleep,project){
 
 // io must provide counted, durable and sticky-unknown request semantics.
 export async function lifecycle(io, p, corpus) {
- if(p.mode==='priority-observation'&&typeof p.listReadiness!=='function')throw Error('instance readiness missing');
+ if(['priority-observation','server-values'].includes(p.mode)&&typeof p.listReadiness!=='function')throw Error('instance readiness missing');
  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(p.prefix) || !/^[a-f0-9]{64}$/.test(p.baselineHash)) throw Error('invalid lifecycle packet');
  const instance = (v, state) => v?.name === p.instanceName && v.type === 'USER_DATABASE' && v.state === state;
  const read = async (step, path, accept) => { const v=await io(step,'GET',path); if (!accept(v)) throw Error(`${step}: guard`); return v; };
  const mutate = async (step, method, path, body, accept) => { const v=await io(step,method,path,body); if (!accept(v)) throw Error(`${step}: unknown mutation outcome`); return v; };
- const rules=p.mode==='priority-observation'?(await import('./priority-corpus.mjs')).priorityRules(p.prefix):p.mode==='query-bounds'?(await import('./query-bounds.mjs')).boundsRules(p.prefix):p.mode==='query-rules'?(await import('./query-rules.mjs')).queryRules(p.prefix):p.mode==='rules-observation'?(await import('./rules-corpus.mjs')).buildRules(p.prefix):{rules:{[p.prefix]:{'.read':true,'.write':true,r1:{query:{'.indexOn':['h']}},r2:{query:{'.indexOn':['h']}}}}};
+ const rules=p.mode==='server-values'?(await import('./server-values.mjs')).serverValueRules(p.prefix):p.mode==='priority-observation'?(await import('./priority-corpus.mjs')).priorityRules(p.prefix):p.mode==='query-bounds'?(await import('./query-bounds.mjs')).boundsRules(p.prefix):p.mode==='query-rules'?(await import('./query-rules.mjs')).queryRules(p.prefix):p.mode==='rules-observation'?(await import('./rules-corpus.mjs')).buildRules(p.prefix):{rules:{[p.prefix]:{'.read':true,'.write':true,r1:{query:{'.indexOn':['h']}},r2:{query:{'.indexOn':['h']}}}}};
  const state = (want) => v => v?.state === want && v?.name === p.serviceName;
  const op = v => validOperation(v?.name) && !v.error;
  const finishOp = async (step, initial) => { let current=initial; for(let i=0;i<10 && current.done!==true;i++) { await (p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))))(5000); current=await read(`${step}-poll-${i}`,initial.name,v=>op(v)&&v.name===initial.name); } if(current.done!==true) throw Error(`${step}: operation unresolved`); };
@@ -33,7 +33,7 @@ export async function lifecycle(io, p, corpus) {
  await finishOp('api-enable',await mutate('api-enable','POST','service:enable',{},op));
  await read('api-enabled','service',state('ENABLED'));
  await read('instance-before','instance',v=>instance(v,'DELETED'));
- if(p.mode==='priority-observation'){const list=await waitForInstanceList(p.listReadiness,p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))),p.project);if(!empty(list))throw Error('active-before: guard');}else await read('active-before','instances',empty);
+ if(['priority-observation','server-values'].includes(p.mode)){const list=await waitForInstanceList(p.listReadiness,p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))),p.project);if(!empty(list))throw Error('active-before: guard');}else await read('active-before','instances',empty);
  const restored=await mutate('undelete','POST','instance:undelete',undefined,v=>instance(v,'ACTIVE')||instance(v,'DISABLED'));
  if(instance(restored,'DISABLED')) await mutate('reenable','POST','instance:reenable',undefined,v=>instance(v,'ACTIVE'));
  await read('instance-active','instance',v=>instance(v,'ACTIVE'));

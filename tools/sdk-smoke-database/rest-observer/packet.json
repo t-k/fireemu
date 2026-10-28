@@ -1,0 +1,82 @@
+{
+  "project": "demo-project",
+  "projectNumber": "123456",
+  "instance": "demo-observer",
+  "location": "us-central1",
+  "maxRequests": 100,
+  "cleanupReserve": 24,
+  "adcAcquisitions": 1,
+  "baselineRulesSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "anchors": {
+    "r1": {
+      "patch": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      },
+      "query": {
+        "status": 200,
+        "bodyText": "{\"a\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    "r2": {
+      "patch": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      },
+      "query": {
+        "status": 200,
+        "bodyText": "{\"a\":{\"h\":2}}",
+        "etag": null
+      }
+    }
+  },
+  "runtime": {
+    "node": {
+      "path": "/nonexistent",
+      "realpath": "/nonexistent",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "gcloud": {
+      "path": "/nonexistent",
+      "realpath": "/nonexistent",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "sources": [
+    {
+      "path": "runner.mjs",
+      "sha256": "9b0be4e5a791b16ba0932d3fd74b0a07dd98dead4b20e0b6b2c054fc8ed2c465"
+    },
+    {
+      "path": "lifecycle.mjs",
+      "sha256": "ce8f2ac9cdf16e27a90bb4a9d7412ee2e8815d0f9ed3de741d85d9ea3f04126b"
+    },
+    {
+      "path": "transport.mjs",
+      "sha256": "9d2a31fabb92a6f395985b96cd038fc55e2fd80052fe0759e2c7a832c1e8a662"
+    },
+    {
+      "path": "orchestrator.mjs",
+      "sha256": "e41e2620a9a81be843f538a038d3b849e5c48b4e4a5d606a481ed33b3de33b56"
+    },
+    {
+      "path": "packet-gate.mjs",
+      "sha256": "7e38beb06c7f2cea56a82c0f758ae24435198dfc838fb82275f75d2358b05fe4"
+    },
+    {
+      "path": "launcher.mjs",
+      "sha256": "31917246f86ea388bc4451fad87d43b7f8100462a8a0011c28bf17f194abe916"
+    },
+    {
+      "path": "provider.mjs",
+      "sha256": "c452719222e2d5371826a0ef3b47b09f3136ad3b0948f5353661576b48807a1e"
+    },
+    {
+      "path": "adc-preflight.mjs",
+      "sha256": "461845ad6ca7b09d910f0bdc79cd4224e10fc8d0801f47ac81efb248f6502907"
+    }
+  ]
+}

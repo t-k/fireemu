@@ -237,3 +237,22 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
     [[run.id]],
   );
 });
+
+test("v0.34 preserves the complete comparison and keeps the controlled clock separate", () => {
+  assert.deepEqual(comparison.summary, {
+    MATCH: 1685,
+    MISMATCH: 252,
+    INDETERMINATE: 12,
+    UNKNOWN: 2,
+  });
+  assert.equal(status.get("fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now"), "MISMATCH");
+  const clock = json(closure.integratedRegression.clockDiffControlPath);
+  assert.equal(
+    sha256(closure.integratedRegression.clockDiffControlPath),
+    closure.integratedRegression.clockDiffControlSha256,
+  );
+  assert.equal(clock.recipe, "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now");
+  assert.equal(clock.binarySha256, comparison.artifactSha256);
+  assert.equal(clock.derivedSeconds, "1927857906");
+  assert.equal(clock.response[0].results[0].fields.v.integerValue, clock.derivedSeconds);
+});

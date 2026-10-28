@@ -104,7 +104,7 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 | An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
 
-Unsupported functions and stages, including the remaining math functions, `union`, `unnest`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
+Unsupported functions and stages, including the remaining math functions, `union`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
 
 ## Composite indexes
 

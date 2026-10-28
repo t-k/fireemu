@@ -1418,3 +1418,221 @@ fn a_failing_operand_beside_a_deciding_one_is_unobserved_under_strict() {
         assert_eq!(emulator(name, &args), failing(), "{name}");
     }
 }
+
+#[test]
+fn unnest_expands_arrays_preserves_rows_and_stops_at_downstream_limit() {
+    let source = doc(
+        "x",
+        &[
+            ("tags", Value::Array(vec![int(1), int(2), int(3)])),
+            ("keep", int(8)),
+        ],
+    );
+    let stages = vec![
+        Stage::Unnest {
+            expression: field("tags"),
+            alias: alias("v"),
+            index_field: Some(alias("idx")),
+        },
+        Stage::Limit(2),
+    ];
+    let mut cursor = Cursor::new_in(stages, Unrecorded::Refuse);
+    let rows = cursor.push(source.clone()).unwrap();
+    assert_eq!(rows.len(), 2);
+    for (index, row) in rows.iter().enumerate() {
+        assert_eq!(row.path, source.path);
+        assert_eq!(row.times, source.times);
+        assert_eq!(row.fields["keep"], int(8));
+        assert_eq!(row.fields["v"], int(i64::try_from(index).unwrap() + 1));
+        assert_eq!(row.fields["idx"], int(i64::try_from(index).unwrap()));
+    }
+    assert!(cursor.is_exhausted());
+}
+
+#[test]
+fn unnest_pict_generated_cases() {
+    let cases = [
+        ("array", "new", "present", "none", "strict"),
+        ("empty", "new", "none", "none", "strict"),
+        ("null", "new", "none", "none", "strict"),
+        ("scalar", "overwrite", "none", "where", "strict"),
+        ("absent", "new", "none", "offset", "emulator"),
+        ("array", "overwrite", "present", "limit", "strict"),
+        ("array", "new", "none", "sort", "emulator"),
+        ("null", "overwrite", "present", "sort", "emulator"),
+        ("empty", "overwrite", "present", "offset", "strict"),
+        ("empty", "new", "none", "limit", "emulator"),
+        ("null", "new", "present", "where", "emulator"),
+        ("absent", "overwrite", "present", "where", "strict"),
+        ("empty", "overwrite", "none", "where", "emulator"),
+        ("null", "overwrite", "none", "limit", "emulator"),
+        ("array", "overwrite", "present", "offset", "emulator"),
+        ("scalar", "overwrite", "present", "none", "emulator"),
+        ("scalar", "new", "none", "limit", "emulator"),
+        ("scalar", "overwrite", "present", "offset", "emulator"),
+        ("scalar", "new", "none", "sort", "strict"),
+        ("array", "overwrite", "none", "where", "emulator"),
+        ("null", "overwrite", "present", "offset", "strict"),
+        ("absent", "new", "none", "none", "strict"),
+        ("empty", "new", "present", "sort", "strict"),
+        ("absent", "new", "none", "sort", "strict"),
+        ("absent", "new", "present", "limit", "emulator"),
+    ];
+    for (input, alias_mode, index, downstream, profile) in cases {
+        let mut source = doc("x", &[("keep", int(8)), ("target", int(9))]);
+        match input {
+            "array" => {
+                source
+                    .fields
+                    .insert("v".into(), Value::Array(vec![int(1), int(2)]));
+            }
+            "empty" => {
+                source.fields.insert("v".into(), Value::Array(vec![]));
+            }
+            "null" => {
+                source.fields.insert("v".into(), Value::Null);
+            }
+            "scalar" => {
+                source.fields.insert("v".into(), int(7));
+            }
+            _ => {}
+        }
+        let dest = if alias_mode == "overwrite" {
+            "target"
+        } else {
+            "out"
+        };
+        let mut stages = vec![Stage::Unnest {
+            expression: field("v"),
+            alias: alias(dest),
+            index_field: if index == "present" {
+                Some(alias("idx"))
+            } else {
+                None
+            },
+        }];
+        match downstream {
+            "where" => stages.push(Stage::Where(Expr::Constant(Value::Boolean(true)))),
+            "limit" => stages.push(Stage::Limit(1)),
+            "offset" => stages.push(Stage::Offset(1)),
+            "sort" => stages.push(Stage::Sort(vec![ascending(field(dest))])),
+            _ => {}
+        }
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let result = execute_rows_in(stages, vec![source.clone()], mode);
+        if index == "present" && matches!(input, "null" | "scalar" | "absent") {
+            assert!(matches!(result, Err(EvalError::Unobserved { .. })));
+            continue;
+        }
+        let result = result.unwrap();
+        let initial: usize = match input {
+            "array" => 2,
+            "empty" => 0,
+            _ => 1,
+        };
+        let count = match downstream {
+            "limit" => initial.min(1),
+            "offset" => initial.saturating_sub(1),
+            _ => initial,
+        };
+        assert_eq!(
+            result.len(),
+            count,
+            "{input}/{alias_mode}/{index}/{downstream}/{profile}"
+        );
+        for row in result {
+            assert_eq!(row.path, source.path);
+            assert_eq!(row.fields["keep"], int(8));
+        }
+    }
+}
+
+#[test]
+fn unnest_cartesian_product_and_limit_before_stage() {
+    let row = doc("x", &[("v", Value::Array(vec![int(1), int(2)]))]);
+    let stage = |name| Stage::Unnest {
+        expression: field("v"),
+        alias: alias(name),
+        index_field: None,
+    };
+    let rows = run(vec![Stage::Limit(1), stage("a"), stage("b")], vec![row]);
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.fields["a"].clone(), row.fields["b"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            (int(1), int(1)),
+            (int(1), int(2)),
+            (int(2), int(1)),
+            (int(2), int(2))
+        ]
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn unnest_preserves_array_order_and_indices(items in proptest::collection::vec(-100_i64..100, 0..32)) {
+        let row = doc("x", &[("v", Value::Array(items.iter().copied().map(int).collect())), ("keep", int(8))]);
+        let rows = run(vec![Stage::Unnest { expression: field("v"), alias: alias("out"), index_field: Some(alias("idx")) }], vec![row.clone()]);
+        prop_assert_eq!(rows.len(), items.len());
+        for (i, (actual, expected)) in rows.iter().zip(items).enumerate() {
+            prop_assert_eq!(&actual.path, &row.path);
+            prop_assert_eq!(&actual.fields["keep"], &int(8));
+            prop_assert_eq!(&actual.fields["out"], &int(expected));
+            prop_assert_eq!(&actual.fields["idx"], &int(i64::try_from(i).unwrap()));
+        }
+    }
+}
+
+#[test]
+fn unnest_overwrite_is_seen_by_where_and_limit_zero_emits_nothing() {
+    let row = doc("x", &[("v", Value::Array(vec![int(1), int(2), int(3)]))]);
+    let unnest = || Stage::Unnest {
+        expression: field("v"),
+        alias: alias("v"),
+        index_field: None,
+    };
+    let condition = Expr::call(
+        "equal",
+        vec![field("v"), Expr::Constant(int(2))],
+        Placement::Condition,
+    )
+    .unwrap();
+    let rows = run(vec![unnest(), Stage::Where(condition)], vec![row.clone()]);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].fields["v"], int(2));
+    assert!(run(vec![unnest(), Stage::Limit(0)], vec![row]).is_empty());
+}
+
+#[test]
+fn unnest_preserves_nonempty_metadata_and_runtime_context() {
+    let mut row = doc("x", &[("keep", int(8))]);
+    row.times = Some(RowTimes {
+        created: Timestamp::new(1, 0).unwrap(),
+        updated: Timestamp::new(2, 0).unwrap(),
+    });
+    let timestamp = Timestamp::new(10, 123_000).unwrap();
+    let expression = Expr::call("current_timestamp", vec![], Placement::Value).unwrap();
+    let mut cursor = Cursor::new_in_with_runtime(
+        vec![Stage::Unnest {
+            expression,
+            alias: alias("out"),
+            index_field: None,
+        }],
+        Unrecorded::Refuse,
+        RuntimeContext {
+            request_timestamp: Some(timestamp),
+            ..RuntimeContext::default()
+        },
+    );
+    let rows = cursor.push(row.clone()).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].times, row.times);
+    assert_eq!(rows[0].path, row.path);
+    assert_eq!(rows[0].fields["out"], Value::Timestamp(timestamp));
+}

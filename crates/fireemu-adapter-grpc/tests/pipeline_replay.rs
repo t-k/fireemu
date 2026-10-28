@@ -2550,3 +2550,121 @@ fn map_set_odd_count_near_shape_remains_refused_by_strict_routes() {
         );
     }
 }
+
+#[test]
+fn recorded_unnest_sixteen_cases_replay_in_both_profiles() {
+    let production = read("fs-ent-pipeline-production.json");
+    let ids = [
+        "unnest-tags",
+        "unnest-empty-array",
+        "unnest-null",
+        "unnest-string",
+        "unnest-absent",
+        "unnest-index-field",
+        "unnest-alias-is-field",
+        "unnest-alias-is-other-field",
+        "unnest-dotted-alias",
+        "unnest-reserved-alias",
+        "unnest-index-is-alias",
+        "unnest-literal-array",
+        "unnest-then-where",
+        "unnest-twice",
+        "unnest-one-argument",
+        "unnest-three-arguments",
+    ];
+    let mut failures = Vec::new();
+    for strict in [true, false] {
+        for id in ids {
+            let (status, body) = internal_case(strict, "o8d/stages-main", id, false);
+            let expected = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id];
+            let expected_status = u16::try_from(expected["status"].as_u64().unwrap()).unwrap();
+            if answer_in(status, &body, true) != answer_in(expected_status, &expected["body"], true)
+                || framing(&body) != framing(&expected["body"])
+            {
+                failures.push(format!(
+                    "strict={strict} {id}: got {} expected {}",
+                    answer_in(status, &body, true),
+                    answer_in(expected_status, &expected["body"], true)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_unnest_grpc_preserves_rows_order_and_errors() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8d/stages-main")
+        .unwrap();
+    for strict in [true, false] {
+        for id in ["unnest-tags", "unnest-index-field"] {
+            let state = state(strict);
+            for seed in program["seed"].as_array().unwrap() {
+                let (status, body) = call(
+                    &state,
+                    "PATCH",
+                    &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                    &json!({"fields": fill(&seed[1])}),
+                );
+                assert_eq!(status, 200, "{body}");
+            }
+            let step = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["id"] == id)
+                .unwrap();
+            let body = fill(&step["body"]);
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let responses = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.next().await {
+                    out.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                        &response.unwrap(),
+                    ));
+                }
+                Value::Array(out)
+            });
+            let expected =
+                &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id]["body"];
+            assert_eq!(
+                answer_in(200, &responses, true),
+                answer_in(200, expected, true),
+                "{id} strict={strict}"
+            );
+            assert_eq!(framing(&responses), framing(expected));
+        }
+        for id in [
+            "unnest-dotted-alias",
+            "unnest-reserved-alias",
+            "unnest-index-is-alias",
+            "unnest-one-argument",
+            "unnest-three-arguments",
+        ] {
+            let (status, _) = internal_case(strict, "o8d/stages-main", id, true);
+            assert_eq!(status, 400, "{id} strict={strict}");
+        }
+    }
+}

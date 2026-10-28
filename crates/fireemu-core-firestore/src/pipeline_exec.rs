@@ -1851,6 +1851,15 @@ pub enum Stage {
     /// Removes the fields from the row; a missing field is ignored. Removing `__name__` drops
     /// the row's name.
     RemoveFields(Vec<FieldPath>),
+    /// Expands an expression into rows, assigning each element to an alias.
+    Unnest {
+        /// The value to expand.
+        expression: Expr,
+        /// Destination field.
+        alias: FieldPath,
+        /// Optional array element index destination.
+        index_field: Option<FieldPath>,
+    },
     /// Drops the first rows.
     Offset(u64),
     /// Keeps at most this many rows.
@@ -1942,7 +1951,8 @@ impl Cursor {
                 Stage::Where(_)
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
-                | Stage::RemoveFields(_) => StageState::Idle,
+                | Stage::RemoveFields(_)
+                | Stage::Unnest { .. } => StageState::Idle,
             })
             .collect();
         Self {
@@ -1957,9 +1967,14 @@ impl Cursor {
     /// up, so the input need not be read further.
     #[must_use]
     pub fn is_exhausted(&self) -> bool {
+        self.exhausted_from(0)
+    }
+
+    fn exhausted_from(&self, from: usize) -> bool {
         self.stages
             .iter()
             .zip(&self.state)
+            .skip(from)
             .take_while(|(stage, _)| !stage.is_blocking())
             .any(|(stage, state)| {
                 matches!(stage, Stage::Limit(_)) && matches!(state, StageState::Remaining(0))
@@ -2011,6 +2026,58 @@ impl Cursor {
             let stage = &self.stages[index];
             let held = &mut self.state[index];
             match stage {
+                Stage::Unnest {
+                    expression,
+                    alias,
+                    index_field,
+                } => {
+                    let value = expression.eval_at(&row, self.unrecorded, false, self.runtime);
+                    let alias = alias.clone();
+                    let index_field = index_field.clone();
+                    match value {
+                        Eval::Value(Value::Array(values)) => {
+                            for (position, value) in values.into_iter().enumerate() {
+                                if self.exhausted_from(index + 1) {
+                                    break;
+                                }
+                                let mut child = row.clone();
+                                set_path(&mut child.fields, &alias, value);
+                                if let Some(path) = &index_field {
+                                    let position = i64::try_from(position).map_err(|_| {
+                                        EvalError::Unobserved {
+                                            function: "unnest",
+                                            reason: "array index is out of range",
+                                        }
+                                    })?;
+                                    set_path(&mut child.fields, path, Value::Integer(position));
+                                }
+                                self.run(index + 1, child, out)?;
+                            }
+                        }
+                        Eval::Value(value) => {
+                            if index_field.is_some() {
+                                return Err(EvalError::Unobserved {
+                                    function: "unnest",
+                                    reason: "index for a non-array value is unobserved",
+                                });
+                            }
+                            set_path(&mut row.fields, &alias, value);
+                            self.run(index + 1, row, out)?;
+                        }
+                        Eval::Absent => {
+                            if index_field.is_some() {
+                                return Err(EvalError::Unobserved {
+                                    function: "unnest",
+                                    reason: "index for an absent value is unobserved",
+                                });
+                            }
+                            remove_path(&mut row.fields, &alias);
+                            self.run(index + 1, row, out)?;
+                        }
+                        Eval::Error(error) => return Err(error),
+                    }
+                    return Ok(());
+                }
                 Stage::Where(condition) => {
                     match condition.eval_at(&row, self.unrecorded, true, self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
@@ -2544,6 +2611,7 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
     for stage in &stages[..=narrowing] {
         match stage {
             Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Unnest { expression, .. } => expression.collect_fields(&mut paths),
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
                 .for_each(|(_, expr)| expr.collect_fields(&mut paths)),

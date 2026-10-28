@@ -270,7 +270,7 @@ const REGISTRY: &[RegistryEntry] = &[
     ),
     ("sample", StageRole::Transform, 1, Some(1), &["mode"]),
     ("union", StageRole::Transform, 1, Some(1), &[]),
-    ("unnest", StageRole::Transform, 1, Some(2), &["index_field"]),
+    ("unnest", StageRole::Transform, 2, Some(2), &["index_field"]),
     ("replace_with", StageRole::Transform, 1, Some(2), &[]),
     ("update", StageRole::Write, 0, None, &[]),
     ("delete", StageRole::Write, 0, None, &[]),

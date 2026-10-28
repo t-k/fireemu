@@ -1672,3 +1672,81 @@ fn unnest_deep_chain_does_not_depend_on_thread_stack() {
         .unwrap();
     handle.join().unwrap();
 }
+
+#[test]
+fn union_appends_prepared_branch_with_suffix_limit_and_metadata() {
+    let left = doc("left", &[("n", int(1))]);
+    let right = doc("right", &[("n", int(2))]);
+    let mut cursor = Cursor::new(vec![
+        Stage::Union {
+            branches: vec![PreparedUnionBranch {
+                stages: Vec::new(),
+                rows: vec![right.clone()],
+            }],
+        },
+        Stage::Limit(2),
+    ]);
+    let mut rows = cursor.push(left.clone()).unwrap();
+    rows.extend(cursor.finish().unwrap());
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].path, left.path);
+    assert_eq!(rows[1].path, right.path);
+    assert!(cursor.finish().unwrap().is_empty());
+}
+
+#[test]
+fn union_prefix_limit_does_not_limit_child_and_suffix_limit_counts_both() {
+    let left = doc("left", &[("n", int(1))]);
+    let right = doc("right", &[("n", int(2))]);
+    let mut cursor = Cursor::new(vec![
+        Stage::Limit(1),
+        Stage::Union {
+            branches: vec![PreparedUnionBranch {
+                stages: Vec::new(),
+                rows: vec![right],
+            }],
+        },
+        Stage::Limit(2),
+    ]);
+    let mut rows = cursor.push(left).unwrap();
+    assert!(cursor.is_exhausted());
+    rows.extend(cursor.finish().unwrap());
+    assert_eq!(
+        rows.iter().map(|r| &r.fields["n"]).collect::<Vec<_>>(),
+        vec![&int(1), &int(2)]
+    );
+}
+
+#[test]
+fn union_keeps_duplicates_and_child_select_drops_only_child_metadata() {
+    let left = doc("left", &[("n", int(1))]);
+    let mut cursor = Cursor::new(vec![Stage::Union {
+        branches: vec![PreparedUnionBranch {
+            stages: vec![Stage::select(vec![(alias("n"), field("n"))])],
+            rows: vec![left.clone(), left.clone()],
+        }],
+    }]);
+    let mut rows = cursor.push(left.clone()).unwrap();
+    rows.extend(cursor.finish().unwrap());
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].path, left.path);
+    assert!(rows[1].path.is_none() && rows[2].path.is_none());
+    assert_eq!(rows[1].fields["n"], int(1));
+}
+
+#[test]
+fn union_refuses_non_row_local_prepared_children() {
+    let mut cursor = Cursor::new(vec![Stage::Union {
+        branches: vec![PreparedUnionBranch {
+            stages: vec![Stage::Limit(1)],
+            rows: vec![doc("right", &[("n", int(2))])],
+        }],
+    }]);
+    assert!(matches!(
+        cursor.finish(),
+        Err(EvalError::Unobserved {
+            function: "union",
+            ..
+        })
+    ));
+}

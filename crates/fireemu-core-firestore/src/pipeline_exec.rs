@@ -1860,6 +1860,11 @@ pub enum Stage {
         /// Optional array element index destination.
         index_field: Option<FieldPath>,
     },
+    /// Appends prepared, independently authorized sources to the current stream.
+    Union {
+        /// Flat branches with row-local transformations and immutable source rows.
+        branches: Vec<PreparedUnionBranch>,
+    },
     /// Drops the first rows.
     Offset(u64),
     /// Keeps at most this many rows.
@@ -1879,6 +1884,15 @@ pub enum Stage {
         /// The group keys, by output name.
         groups: Vec<(String, Expr)>,
     },
+}
+
+/// One prepared union source and its row-local transformations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedUnionBranch {
+    /// Row-local where and select stages, evaluated when the branch is consumed.
+    pub stages: Vec<Stage>,
+    /// Rows from the shared request snapshot.
+    pub rows: Vec<Row>,
 }
 
 impl Stage {
@@ -1909,6 +1923,8 @@ enum StageState {
     Remaining(u64),
     /// The rows a blocking stage has received.
     Buffer(Vec<Row>),
+    /// A union that has already appended its sources.
+    UnionDone,
 }
 
 /// One lazy array expansion retained while its current child runs downstream.
@@ -1961,7 +1977,8 @@ impl Cursor {
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
                 | Stage::RemoveFields(_)
-                | Stage::Unnest { .. } => StageState::Idle,
+                | Stage::Unnest { .. }
+                | Stage::Union { .. } => StageState::Idle,
             })
             .collect();
         Self {
@@ -1984,7 +2001,7 @@ impl Cursor {
             .iter()
             .zip(&self.state)
             .skip(from)
-            .take_while(|(stage, _)| !stage.is_blocking())
+            .take_while(|(stage, _)| !stage.is_blocking() && !matches!(stage, Stage::Union { .. }))
             .any(|(stage, state)| {
                 matches!(stage, Stage::Limit(_)) && matches!(state, StageState::Remaining(0))
             })
@@ -2002,6 +2019,35 @@ impl Cursor {
     pub fn finish(&mut self) -> Result<Vec<Row>, EvalError> {
         let mut out = Vec::new();
         for index in 0..self.stages.len() {
+            if let Stage::Union { branches } = self.stages[index].clone() {
+                if matches!(self.state[index], StageState::UnionDone) {
+                    continue;
+                }
+                self.state[index] = StageState::UnionDone;
+                for branch in branches {
+                    if branch
+                        .stages
+                        .iter()
+                        .any(|stage| !matches!(stage, Stage::Where(_) | Stage::Select { .. }))
+                    {
+                        return Err(EvalError::Unobserved {
+                            function: "union",
+                            reason: "prepared branch contains a non-row-local stage",
+                        });
+                    }
+                    let mut child =
+                        Self::new_in_with_runtime(branch.stages, self.unrecorded, self.runtime);
+                    for row in branch.rows {
+                        if self.exhausted_from(index + 1) {
+                            break;
+                        }
+                        for produced in child.push(row)? {
+                            self.run(index + 1, produced, &mut out)?;
+                        }
+                    }
+                }
+                continue;
+            }
             if !self.stages[index].is_blocking() {
                 continue;
             }
@@ -2069,6 +2115,7 @@ impl Cursor {
             let stage = &self.stages[index];
             let held = &mut self.state[index];
             match stage {
+                Stage::Union { .. } => {}
                 Stage::Unnest {
                     expression,
                     alias,
@@ -2630,6 +2677,12 @@ fn parent_map<'a>(
 /// reads no field still names `__name__`, so the scan reads names only.
 #[must_use]
 pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
+    if stages
+        .iter()
+        .any(|stage| matches!(stage, Stage::Union { .. }))
+    {
+        return None;
+    }
     let narrowing = stages.iter().position(|stage| {
         matches!(
             stage,
@@ -2663,7 +2716,7 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
                     expr.collect_fields(&mut paths);
                 }
             }
-            Stage::RemoveFields(_) | Stage::Offset(_) | Stage::Limit(_) => {}
+            Stage::Union { .. } | Stage::RemoveFields(_) | Stage::Offset(_) | Stage::Limit(_) => {}
         }
     }
     paths.sort();

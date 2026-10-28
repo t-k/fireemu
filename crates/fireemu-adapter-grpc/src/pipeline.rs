@@ -1672,10 +1672,13 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                         }
                     })?,
             )),
-            // A literal holding an expression with a key that is not plain: the official
-            // emulator names a reserved key before the value type; production has not answered
-            // such a key, so strict refuses it as unobserved.
-            Some(_) if !literal_keys_are_plain(value) && unrecorded == Unrecorded::Refuse => {
+            // Preserve the strict guard for malformed or unrecorded literal subtrees while
+            // allowing recorded reserved-key and expression-type refusals to be checked.
+            Some(_)
+                if !literal_keys_are_plain(value)
+                    && unrecorded == Unrecorded::Refuse
+                    && !literal_expression_shape_safe(value) =>
+            {
                 Err(Status::unimplemented(
                     "a literal holding an expression with this key is not observed locally",
                 ))
@@ -2192,17 +2195,15 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// Whether production recorded a literal of this shape: every vector map is
 /// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
 /// none a negative zero (O-3, O-4
-/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`), at most one map key
-/// is empty or reserved (production named one, O-4 `literals#key-empty`, `#key-reserved`;
-/// which of several it names is unrecorded), and no key is `__name__` (only the official
-/// emulator answered it).
+/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`). Recorded reserved
+/// keys are handled by the ordered refusal checks after this shape check.
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
     // `in_array`: production read vectors alone and as a map value, never inside an array
     // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, refusable: &mut usize, in_array: bool) -> bool {
+    fn walk(value: &pb::Value, in_array: bool) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, refusable, true)),
+            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
             Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
@@ -2217,21 +2218,44 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
-                    *refusable += 1;
-                }
                 // Production answered a string `__type__` alone in its map only (O-4
                 // `literals#key-type`).
                 let typed = key != "__type__"
                     || (matches!(inner.value_type, Some(V::StringValue(_)))
                         && map.fields.len() == 1);
-                typed && key != "__name__" && walk(inner, refusable, false)
+                typed && walk(inner, false)
             }),
             _ => true,
         }
     }
-    let mut refusable = 0;
-    walk(value, &mut refusable, false) && refusable <= 1
+    walk(value, false)
+}
+
+/// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
+fn literal_expression_shape_safe(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    if literal_depth(value) > fireemu_core_firestore::value::MAX_NESTING_DEPTH as usize {
+        return false;
+    }
+    if expression_kind(value).is_none() {
+        return literal_value_error(value).is_none() && literal_shape_recorded(value);
+    }
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().all(literal_expression_shape_safe),
+        Some(V::MapValue(map)) => {
+            if is_vector_literal(value) {
+                return false;
+            }
+            if let Some(typed) = map.fields.get("__type__") {
+                if map.fields.len() != 1 || expression_kind(typed).is_none() {
+                    return false;
+                }
+            }
+            map.fields.values().all(literal_expression_shape_safe)
+        }
+        Some(V::FieldReferenceValue(_) | V::FunctionValue(_)) => true,
+        _ => false,
+    }
 }
 
 /// Whether every map key a literal holds, at any depth, is plain.
@@ -4616,6 +4640,161 @@ mod tests {
 
     /// A literal map's keys come in the body's order while a REST body is compiled, in key order
     /// otherwise, and in key order where two maps of the body hold the same keys in other orders.
+    #[test]
+    fn generated_literal_key_combinations() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("reserved", "literal", "direct", "strict"),
+            ("reserved", "literal", "nested", "strict"),
+            ("name", "literal", "direct", "strict"),
+            ("name", "literal", "nested", "strict"),
+            ("reserved", "field", "direct", "strict"),
+            ("empty", "field", "direct", "strict"),
+            ("type", "field", "direct", "strict"),
+            ("dotted", "function", "direct", "strict"),
+            ("name", "field", "nested", "strict"),
+            ("reserved", "field", "array", "strict"),
+            ("plain", "literal", "direct", "strict"),
+            ("plain", "field", "direct", "strict"),
+            ("name", "field", "direct", "ordinary"),
+            ("type", "literal", "direct", "ordinary"),
+            ("dotted", "literal", "array", "ordinary"),
+            ("dotted", "function", "nested", "ordinary"),
+            ("empty", "function", "array", "ordinary"),
+            ("empty", "literal", "nested", "strict"),
+            ("reserved", "function", "array", "ordinary"),
+            ("plain", "function", "nested", "ordinary"),
+            ("plain", "field", "array", "ordinary"),
+            ("name", "function", "array", "ordinary"),
+            ("type", "function", "array", "ordinary"),
+            ("dotted", "field", "direct", "ordinary"),
+            ("type", "field", "nested", "strict"),
+        ];
+        let wrap_map = |key: &str, inner: pb::Value| pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [(key.to_owned(), inner)].into_iter().collect(),
+            })),
+        };
+        for (key, payload, nest, profile) in cases {
+            let name = match key {
+                "reserved" => "__x__",
+                "name" => "__name__",
+                "empty" => "",
+                "dotted" => "a.b",
+                "type" => "__type__",
+                "plain" => "k",
+                _ => unreachable!(),
+            };
+            let inner = match payload {
+                "literal" if key == "type" => pb::Value {
+                    value_type: Some(V::StringValue("tag".to_owned())),
+                },
+                "literal" => pb::Value {
+                    value_type: Some(V::IntegerValue(1)),
+                },
+                "field" => pb::Value {
+                    value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                },
+                "function" => pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "document_id".to_owned(),
+                        ..Default::default()
+                    })),
+                },
+                _ => unreachable!(),
+            };
+            let mut value = wrap_map(name, inner);
+            if nest == "nested" {
+                value = wrap_map("outer", value);
+            }
+            if nest == "array" {
+                value = pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue {
+                        values: vec![value],
+                    })),
+                };
+            }
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&value, mode);
+            let expected = if matches!(key, "reserved" | "name") {
+                Some(format!("field name '{name}' is reserved."))
+            } else if payload == "field" {
+                Some("Value type is not supported: FIELD_REFERENCE_VALUE".to_owned())
+            } else if payload == "function" {
+                Some("Value type is not supported: FUNCTION_VALUE".to_owned())
+            } else if key == "empty" {
+                Some(EMPTY_LITERAL_KEY.to_owned())
+            } else {
+                None
+            };
+            match expected {
+                Some(text) => assert_eq!(
+                    result.unwrap_err().message(),
+                    text,
+                    "{key} {payload} {nest} {profile}"
+                ),
+                None => assert!(
+                    result.is_ok(),
+                    "{key} {payload} {nest} {profile}: {result:?}"
+                ),
+            }
+        }
+        let name = pb::Value {
+            value_type: Some(V::FieldReferenceValue("__name__".to_owned())),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert!(decode_operand_tree(&name, mode).is_ok());
+        }
+    }
+
+    #[test]
+    fn malformed_vector_and_literal_depth_stay_unobserved_with_expressions() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let vector = value(V::MapValue(pb::MapValue {
+            fields: [
+                (
+                    "__type__".to_owned(),
+                    value(V::StringValue("__vector__".to_owned())),
+                ),
+                (
+                    "value".to_owned(),
+                    value(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        }));
+        let map = |fields| value(V::MapValue(pb::MapValue { fields }));
+        let field = value(V::FieldReferenceValue("i".to_owned()));
+        let bad = map([("a".to_owned(), vector), ("__x__".to_owned(), field)]
+            .into_iter()
+            .collect());
+        assert_eq!(
+            decode_operand_tree(&bad, Unrecorded::Refuse)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let mut deep = value(V::FieldReferenceValue("i".to_owned()));
+        for _ in 0..21 {
+            deep = map([("x".to_owned(), deep)].into_iter().collect());
+        }
+        let bad = map([("__x__".to_owned(), deep)].into_iter().collect());
+        assert_eq!(
+            decode_operand_tree(&bad, Unrecorded::Refuse)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+    }
+
     #[test]
     fn literal_keys_follow_the_wire_order_while_it_is_known() {
         let fields = |keys: &[&str]| -> std::collections::HashMap<String, pb::Value> {

@@ -3341,3 +3341,64 @@ fn union_generated_route_combinations() {
         );
     }
 }
+
+#[test]
+fn recorded_literal_key_eleven_refusals_match_production() {
+    let production = read("fs-ent-pipeline-production.json");
+    let cases = [
+        ("o5/value-shapes", "keys-empty-and-reserved"),
+        ("o5/value-shapes", "keys-two-reserved"),
+        ("o5/value-shapes", "keys-reserved-inner-and-outer"),
+        ("o5/value-shapes", "key-name"),
+        ("o5/value-shapes", "key-inner-name"),
+        ("o5/literal-keys", "key-reserved-with-field"),
+        ("o5/literal-keys", "key-empty-with-field"),
+        ("o5/literal-keys", "key-type-with-field"),
+        ("o5/literal-keys", "key-dotted-with-function"),
+        ("o5/literal-keys", "nested-key-name-with-field"),
+        ("o5/literal-keys", "array-of-map-reserved-key-with-field"),
+    ];
+    let mut failures = Vec::new();
+    for (family, id) in cases {
+        let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]["steps"][id];
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, family, id, false);
+            if status != 400 || body != expected["body"] {
+                failures.push(format!("{family}#{id} strict={strict}: {status} {body}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_literal_key_grpc_refusals_keep_messages_where_order_is_observable() {
+    let production = read("fs-ent-pipeline-production.json");
+    let cases = [
+        ("o5/value-shapes", "keys-empty-and-reserved"),
+        ("o5/value-shapes", "keys-two-reserved"),
+        ("o5/value-shapes", "keys-reserved-inner-and-outer"),
+        ("o5/value-shapes", "key-name"),
+        ("o5/value-shapes", "key-inner-name"),
+        ("o5/literal-keys", "key-reserved-with-field"),
+        ("o5/literal-keys", "key-empty-with-field"),
+        ("o5/literal-keys", "key-type-with-field"),
+        ("o5/literal-keys", "key-dotted-with-function"),
+        ("o5/literal-keys", "nested-key-name-with-field"),
+        ("o5/literal-keys", "array-of-map-reserved-key-with-field"),
+    ];
+    let mut failures = Vec::new();
+    for (family, id) in cases {
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, family, id, true);
+            let unordered = matches!(id, "keys-empty-and-reserved" | "keys-two-reserved" | "keys-reserved-inner-and-outer");
+            let wanted = if strict && unordered { 501 } else { 400 };
+            if status != wanted { failures.push(format!("{family}#{id} strict={strict}: {status} {body}")); continue; }
+            if !unordered {
+                let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]["steps"][id]["body"][0]["error"]["message"];
+                if &body["grpcMessage"] != expected { failures.push(format!("{family}#{id} strict={strict}: {body}")); }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -403,7 +403,7 @@ pub(super) const SQRT: Function = function(
     "sqrt",
     Arity::Exact(1),
     false,
-    "sqrt(number: float64): float64",
+    "sqrt(number: number): float64",
     &[],
     eval_sqrt,
 );

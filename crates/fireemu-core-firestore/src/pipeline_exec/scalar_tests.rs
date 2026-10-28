@@ -3300,7 +3300,7 @@ proptest! {
 
 #[test]
 fn sqrt_declares_one_argument_without_claiming_unobserved_error_text() {
-    assert!(Expr::call("sqrt", vec![], Placement::Value).is_err());
+    assert_eq!(Expr::call("sqrt", vec![], Placement::Value).unwrap_err().to_string(), "The function 'sqrt(number: number): float64' takes [1..1] argument(s), but 0 were provided.");
     assert!(Expr::call(
         "sqrt",
         vec![

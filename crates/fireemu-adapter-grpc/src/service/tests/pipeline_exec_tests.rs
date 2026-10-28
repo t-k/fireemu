@@ -803,6 +803,27 @@ async fn sqrt_wrong_type_is_captured_or_reported_and_empty_rows_are_lazy() {
             actual[0].get("v").map(String::as_str),
             Some("Boolean(true)")
         );
+        let two_args = call(
+            "sqrt",
+            vec![value(V::IntegerValue(1)), value(V::IntegerValue(2))],
+        );
+        let error = match Firestore::execute_pipeline(
+            &service,
+            Request::new(request(false, "select", select(two_args))),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("unrecorded two-argument call must refuse"),
+        };
+        if matches!(
+            policy,
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        ) {
+            assert_eq!(error.code(), tonic::Code::Unimplemented);
+        } else {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
         let condition = call("greater_than", vec![sqrt(), value(V::IntegerValue(0))]);
         let mut unrecorded_stream = Firestore::execute_pipeline(
             &service,

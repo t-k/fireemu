@@ -1907,47 +1907,6 @@
     }
   },
   {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'sqrt(number: float64): float64' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'sqrt(number: number): float64' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The observed local zero-argument arity refusal uses a different signature from the retained production recording.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-sqrt",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "The function 'sqrt(number: float64): float64' takes [1..1] argument(s), but 0 were provided.; production has not refused a request of this shape with this text, so this refusal is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [

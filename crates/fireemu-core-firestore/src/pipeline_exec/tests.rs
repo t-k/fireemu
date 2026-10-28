@@ -142,7 +142,16 @@ fn table_lists_exactly_the_recorded_functions() {
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
     }
-    for name in ["eq", "between", "sqrt", "REGEX_MATCH", "AND", "", "Equal"] {
+    for name in [
+        "eq",
+        "between",
+        "sqrt",
+        "REGEX_MATCH",
+        "JOIN",
+        "AND",
+        "",
+        "Equal",
+    ] {
         assert!(function(name).is_none(), "{name}");
     }
 }

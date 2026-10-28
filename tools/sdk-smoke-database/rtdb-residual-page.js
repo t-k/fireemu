@@ -43,11 +43,93 @@ window.__rrRun = async (c) => {
   const on = (promise, label, actor = 'w') => promise.then(() => emit('ack', { actor, label }), (e) => emit('rejected', { actor, label, code: errorCode(e), shape: message(e) }));
   try {
     if (c.scenario === 'cv08') await cv08();
-    else await cv10();
+    else if (c.scenario === 'cv10') await cv10();
+    else if (c.scenario === 'sdk-next') await sdkNext();
+    else throw Error('unknown scenario');
     step = 'end';
     emit('done');
   } finally {
     await Promise.allSettled(apps.map((a) => deleteApp(a)));
+  }
+
+  async function sdkNext() {
+    const w = open('w'), o = open('o'), unsubs = [];
+    let operations = 0, listenerError = null;
+    const perform = async (label, action) => {
+      if (listenerError) throw listenerError;
+      if (++operations > 24) throw Error('sdk operation cap reached');
+      emit('operation', { actor: 'w', label, code: String(operations) });
+      const result = await action();
+      if (listenerError) throw listenerError;
+      return result;
+    };
+    const get = async (label, path) => {
+      const snap = await perform(`get-${label}`, () => D.get(at(w, path)));
+      emit('get', { actor: 'w', label, shape: JSON.stringify(snap.val()) });
+      return snap.val();
+    };
+    const observed = [];
+    try {
+      step = 'seed';
+      await perform('seed', () => D.set(at(w, ''), { items: { a: { score: 1 }, b: { score: 2, note: 'old' }, c: { score: 2 } }, merge: { keep: 1, edit: 1 }, fanout: {}, values: { numeric: 7, string: 'old' }, txn: { abort: 3, apply: 4 } }));
+      step = 'attach';
+      const query = D.query(at(o, 'items'), D.orderByChild('score'));
+      for (const [type, subscribe] of [['child_added', D.onChildAdded], ['child_changed', D.onChildChanged], ['child_moved', D.onChildMoved], ['child_removed', D.onChildRemoved]]) {
+        unsubs.push(subscribe(query, (snap, prev) => { observed.push(type); emit(type, { label: 'items', key: snap.key, prev: prev ?? null, shape: JSON.stringify(snap.val()) }); }, (e) => { listenerError = Error('items listener failed'); emit('error', { label: 'items', code: errorCode(e) }); }));
+      }
+      const valueSeen = new Set();
+      for (const label of ['items', 'merge', 'fanout']) {
+        unsubs.push(D.onValue(at(o, label), (snap) => { valueSeen.add(label); emit('value', { label, shape: JSON.stringify(snap.val()) }); }, (e) => { listenerError = Error('value listener failed'); emit('error', { label, code: errorCode(e) }); }));
+      }
+      await need('initial values', () => valueSeen.size === 3, 20000);
+      if (valueSeen.size !== 3) throw Error('initial values incomplete');
+      await need('initial query', () => observed.filter((x) => x === 'child_added').length >= 3, 20000);
+      if (observed.filter((x) => x === 'child_added').length < 3) throw Error('initial query incomplete');
+      step = 'push';
+      const keys = [];
+      for (const label of ['a', 'b']) {
+        const ref = await perform(`push-${label}`, () => D.push(at(w, 'list')));
+        if (typeof ref.key !== 'string' || !ref.key || keys.includes(ref.key)) throw Error('invalid push key');
+        keys.push(ref.key);
+        await perform(`write-${label}`, () => D.set(ref, { label }));
+        const snap = await perform(`read-${label}`, () => D.get(ref));
+        emit('push', { actor: 'w', label, key: ref.key, shape: JSON.stringify(snap.val()) });
+      }
+      step = 'merge';
+      await perform('update', () => D.update(at(w, 'merge'), { edit: 2 }));
+      await get('update-preserves-sibling', 'merge');
+      await perform('replace', () => D.set(at(w, 'merge'), { edit: 3 }));
+      await get('set-replaces-node', 'merge');
+      step = 'fanout';
+      await perform('fanout', () => D.update(at(w, ''), { 'fanout/x': 1, 'fanout/y': 2 }));
+      await get('atomic-multipath-final', 'fanout');
+      step = 'events';
+      await perform('change', () => D.update(at(w, 'items/b'), { note: 'new' }));
+      await need('child_changed', () => observed.includes('child_changed'), 20000);
+      if (!observed.includes('child_changed')) throw Error('missing child_changed');
+      await perform('move', () => D.update(at(w, 'items/b'), { score: 3 }));
+      await need('child_moved', () => observed.includes('child_moved'), 20000);
+      if (!observed.includes('child_moved')) throw Error('missing child_moved');
+      step = 'server-values';
+      const before = Date.now();
+      await perform('server-values', () => D.update(at(w, 'values'), { numeric: D.increment(5), absent: D.increment(5), string: D.increment(5), at: D.serverTimestamp() }));
+      const after = Date.now();
+      const values = await get('server-values', 'values');
+      emit('interval', { actor: 'w', label: 'server-timestamp', shape: JSON.stringify({ before, after, value: values?.at }) });
+      step = 'transaction';
+      const callbacks = [];
+      const abort = await perform('transaction-abort', () => D.runTransaction(at(w, 'txn/abort'), (v) => { callbacks.push(v); return undefined; }));
+      emit('transaction', { actor: 'w', label: 'abort', shape: JSON.stringify({ callbacks, committed: abort.committed, value: abort.snapshot.val() }) });
+      let txnSeen = false;
+      unsubs.push(D.onValue(at(o, 'txn/apply'), (snap) => { txnSeen = true; emit('value', { label: 'txn-apply', shape: JSON.stringify(snap.val()) }); }, (e) => { listenerError = Error('transaction listener failed'); emit('error', { label: 'txn-apply', code: errorCode(e) }); }));
+      await need('txn initial', () => txnSeen, 20000);
+      if (!txnSeen) throw Error('transaction listener incomplete');
+      const applyCalls = [];
+      const apply = await perform('transaction-apply', () => D.runTransaction(at(w, 'txn/apply'), (v) => { applyCalls.push(v); return (v ?? 0) + 1; }, { applyLocally: false }));
+      emit('transaction', { actor: 'w', label: 'applyLocally-false', shape: JSON.stringify({ callbacks: applyCalls, committed: apply.committed, value: apply.snapshot.val() }) });
+      emit('gap', { label: 'transaction-retry', code: 'unobserved' });
+      emit('operation-count', { actor: 'w', code: String(operations) });
+    } finally { for (const off of unsubs) off(); }
   }
 
   async function cv08() {

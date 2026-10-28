@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { adminClient, assertNoSecrets, LAUNCH, redact } from './cv11-genuine-auth.mjs';
 import { ADC_ARGS, runPreflight } from './adc-preflight.mjs';
 import { DEFAULT_JAR, startJar } from './jar.mjs';
-import { judgeRuns, sanitizeProfiles, SCENARIOS } from './rtdb-residual-judge.mjs';
+import { judgeRuns, sanitizeProfiles, SCENARIOS, validateSdkNext } from './rtdb-residual-judge.mjs';
 import { createRtdbAdmin, Stop } from './rtdb-admin.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +52,7 @@ export function rulesFor(prefix, { deny = false } = {}) {
       [top]: {
         [run]: {
           cv08: { $cell: { items: { ...OPEN, '.indexOn': ['score'] }, gate: OPEN, gated: { '.read': "data.parent().child('gate').val() === true", '.write': true }, other: OPEN } },
+          'sdk-next': { $cell: { '.read': true, '.write': true, items: { '.indexOn': ['score'] } } },
           cv10: { $cell: { '.read': true, e1: W, e2: W, e3: W, e4: W, e5: W, e6: W, e7: flag, e8: flag, e9: W, marker: W, dprobe: flag } },
         },
       },
@@ -86,6 +87,7 @@ async function runProfile(run, o, scenario, prof) {
   const out = await o.browser(cfg, hooks);
   // Sticky: a profile that did not observe the writer's disconnect may leave onDisconnect writes pending.
   if (scenario === 'cv10' && !fired(out.journal)) run.fireWait = true;
+  if (scenario === 'sdk-next' && (!validateSdkNext(out.journal).valid || !out.journal.some((e) => e.type === 'done'))) run.errors.push('sdk-next profile incomplete');
   return { scenario, name: prof.name, ...out };
 }
 
@@ -99,7 +101,7 @@ export async function runScenario(o) {
   run.sleep = sleep;
   const profiles = [];
   // Local runs may be narrowed (--scenarios, --transports); production always runs all eight.
-  const scenarios = o.scenarios ?? SCENARIOS, profilesToRun = o.profiles ?? PROFILES;
+  const scenarios = o.scenarios ?? (o.mode === 'production' && o.packet?.scenario === 'sdk-next' ? ['sdk-next'] : ['cv08', 'cv10']), profilesToRun = o.profiles ?? PROFILES;
   try {
     if (o.mode === 'production') await setupProduction(run, sleep);
     await installRules(run, o);
@@ -266,7 +268,7 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
-  if (packet) verifyBundles(packet);
+  if (packet) { if (packet.scenario !== undefined && packet.scenario !== 'sdk-next') throw Error('invalid fixed packet scenario'); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.

@@ -11,7 +11,7 @@ import { LP_TOLERANCE_SECONDS, WS_FIRE_MAX_SECONDS } from './cv07-ondisconnect.m
 
 export const KEPT = ['step', 'type', 'actor', 'label', 'key', 'prev', 'shape', 'code'];
 export const UNKNOWN_TYPES = new Set(['timeout', 'error']);
-export const SCENARIOS = ['cv08', 'cv10'];
+export const SCENARIOS = ['cv08', 'cv10', 'sdk-next'];
 export const ROUNDS_BY_TRANSPORT = { ws: ['r1-ws', 'r2-ws'], lp: ['r1-lp', 'r2-lp'] };
 
 /** The comparison key of one row: the kept fields only, so timings and any extra field are ignored. */
@@ -132,6 +132,7 @@ export function judgeRuns(production, local) {
   let missing = false;
   for (const scenario of SCENARIOS) {
     const prod = byName(production, scenario), here = byName(local, scenario);
+    if (scenario === 'sdk-next' && prod.size) { missing = true; continue; }
     if (!prod.size) continue;
     for (const transport of ['ws', 'lp']) {
       const [n1, n2] = ROUNDS_BY_TRANSPORT[transport], p1 = prod.get(n1), p2 = prod.get(n2);
@@ -155,4 +156,37 @@ export function sanitizeProfiles(profiles) {
     name: p.name,
     journal: p.journal.map((row) => Object.fromEntries([...KEPT, 'seconds'].filter((k) => k in row && row[k] !== undefined).map((k) => [k, row[k]]))),
   }));
+}
+
+/** Validate fixed SDK-next evidence without treating one run as parity or retry proof. */
+export function validateSdkNext(journal) {
+  const errors = [];
+  const one = (type, label) => {
+    const rows = journal.filter((r) => r.type === type && r.label === label);
+    if (rows.length !== 1) errors.push(`missing or duplicate ${type}:${label}`);
+    return rows[0];
+  };
+  const parse = (r) => { try { return JSON.parse(r?.shape); } catch { errors.push('invalid typed shape'); return undefined; } };
+  const pushes = ['a', 'b'].map((label) => one('push', label));
+  if (pushes.some((r) => typeof r?.key !== 'string' || !r.key) || pushes[0]?.key === pushes[1]?.key) errors.push('push keys');
+  for (const [i, r] of pushes.entries()) if (JSON.stringify(parse(r)) !== JSON.stringify({ label: ['a', 'b'][i] })) errors.push('push readback');
+  for (const [label, expected] of [['update-preserves-sibling', { keep: 1, edit: 2 }], ['set-replaces-node', { edit: 3 }], ['atomic-multipath-final', { x: 1, y: 2 }], ['server-values', { numeric: 12, absent: 5, string: 5 }]]) {
+    const value = parse(one('get', label));
+    if (!value || Object.entries(expected).some(([k, v]) => value[k] !== v) || (label !== 'server-values' && Object.keys(value).length !== Object.keys(expected).length)) errors.push(label);
+  }
+  const interval = parse(one('interval', 'server-timestamp'));
+  if (!interval || !Number.isInteger(interval.value) || !Number.isFinite(interval.before) || !Number.isFinite(interval.after) || interval.before > interval.after || interval.value < interval.before - 600000 || interval.value > interval.after + 600000) errors.push('timestamp interval');
+  const values = parse(one('get', 'server-values'));
+  if (values?.at !== interval?.value || Object.keys(values ?? {}).length !== 4) errors.push('timestamp readback binding');
+  const abort = parse(one('transaction', 'abort')), apply = parse(one('transaction', 'applyLocally-false'));
+  if (!abort || abort.committed !== false || !Array.isArray(abort.callbacks)) errors.push('transaction abort');
+  if (!apply || apply.committed !== true || !Array.isArray(apply.callbacks)) errors.push('transaction apply');
+  for (const type of ['child_added', 'child_changed', 'child_moved']) if (!journal.some((r) => r.type === type && typeof r.key === 'string' && (r.prev === null || typeof r.prev === 'string'))) errors.push(type);
+  const initial = journal.filter((r) => r.step === 'attach' && r.type === 'child_added' && r.label === 'items');
+  if (!initial.some((r) => r.key === 'b' && r.prev === 'a') || !initial.some((r) => r.key === 'c' && r.prev === 'b')) errors.push('query tie ordering');
+  const ops = journal.filter((r) => r.type === 'operation');
+  if (ops.length !== 19 || ops.some((r, i) => r.code !== String(i + 1))) errors.push('operation count/order');
+  if (journal.some((r) => ['timeout', 'error', 'rejected'].includes(r.type))) errors.push('unknown outcome');
+  if (!journal.some((r) => r.type === 'gap' && r.label === 'transaction-retry' && r.code === 'unobserved')) errors.push('retry gap');
+  return { valid: errors.length === 0, errors, retry: 'unobserved', verdict: 'needs-review' };
 }

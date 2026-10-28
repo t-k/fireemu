@@ -1592,19 +1592,6 @@ fn type_name(value: &Value) -> &'static str {
 /// `functions#map-integer-key`, O-4 `functions#map-key-boolean`).
 const RECORDED_MAP_KEY_TYPES: [&str; 2] = ["LONG", "BOOLEAN"];
 
-/// The argument types production named, per document function, when it refused one: the
-/// text names the function, so each pair is its own row (FS-ENT-ORACLE O-3
-/// `functions#document-id-string`, `#collection-id-string`, `#parent-string`, O-4
-/// `functions#document-id-integer`, `#collection-id-map`, `#parent-boolean`).
-const RECORDED_DOCUMENT_ARGUMENT_TYPES: [(&str, &str); 6] = [
-    ("document_id", "STRING"),
-    ("document_id", "LONG"),
-    ("collection_id", "STRING"),
-    ("collection_id", "MAP"),
-    ("parent", "STRING"),
-    ("parent", "BOOLEAN"),
-];
-
 /// `map(key, value, ...)`, as production answered it (FS-ENT-ORACLE O-1, O-3 and O-4
 /// `functions#map-*`) and the official emulator alike: a key whose value is absent is left out
 /// (`map("k", i, "k2", x)` is `{k: 1}`), only two present values repeat a key (a missing value
@@ -1665,8 +1652,8 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
 /// - a collection at any depth: `INVALID_ARGUMENT` naming the reference and its length in
 ///   UTF-16 units as the index where the separator is missing (strict answers ASCII names
 ///   only, the ones production recorded);
-/// - another type: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail (strict answers the
-///   recorded types only).
+/// - another type: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail naming the concrete
+///   nonreference type. Only the recorded pairs establish production behavior.
 ///
 /// A malformed reference is unrecorded in both profiles.
 fn document_argument(
@@ -1704,15 +1691,6 @@ fn document_argument(
             None => unobserved("the reference does not name a document"),
         },
         [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
-        // Production refused every argument type it was given but a reference, naming the
-        // type (O-3 a string, O-4 an integer, a map and a boolean, each with one function);
-        // strict refuses the other pairs as unobserved.
-        [Eval::Value(other)]
-            if unrecorded == Unrecorded::Refuse
-                && !RECORDED_DOCUMENT_ARGUMENT_TYPES.contains(&(function, type_name(other))) =>
-        {
-            unobserved("an argument of this type")
-        }
         [Eval::Value(other)] => Err(Eval::Error(EvalError::WrongType {
             function,
             expected: "Reference",

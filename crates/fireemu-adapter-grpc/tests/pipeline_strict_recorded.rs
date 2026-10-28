@@ -378,8 +378,8 @@ fn strict_answers_only_the_argument_types_production_recorded() {
     let mut cases = Vec::new();
     // Production refused each function of a field per runtime type, since the text names it:
     // document_id of a string (O-3) and an integer (O-4), collection_id of a string (O-3) and a
-    // map (O-4), parent of a string (O-3) and a boolean (O-4). A constant where production read
-    // a field is another shape, so strict answers none of these (ruling of 2026-10-21).
+    // map (O-4), parent of a string (O-3) and a boolean (O-4). O-5 also recorded the
+    // indicated constant argument shapes; other shapes remain gated.
     let call_of = |function: &str, arg: Value| select(func(function, vec![arg]));
     for (function, field_name, got) in [
         ("document_id", "top", "STRING"),
@@ -413,11 +413,15 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         cases.push(Case {
             label,
             stages: vec![call_of(function, arg)],
-            strict: None,
+            strict: matches!(
+                (function, got),
+                ("document_id", "MAP" | "BOOLEAN") | ("collection_id" | "parent", "LONG")
+            )
+            .then_some((400, text)),
             emulator: (400, text),
         });
     }
-    // Unrecorded: every other type.
+    // O-5 recorded these nonreference types; the vector shape remains unrecorded.
     for (label, arg, got) in [
         ("document_id(1.5)", json!({ "doubleValue": 1.5 }), "DOUBLE"),
         (
@@ -450,14 +454,17 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         cases.push(Case {
             label,
             stages: vec![doc_id(arg)],
-            strict: None,
+            strict: (got != "VECTOR").then_some((400, text)),
             emulator: (400, text),
         });
     }
     cases.push(Case {
         label: "parent(1.5)",
         stages: vec![select(func("parent", vec![json!({ "doubleValue": 1.5 })]))],
-        strict: None,
+        strict: Some((
+            400,
+            "The function parent(...) requires `Reference` but got `DOUBLE`.",
+        )),
         emulator: (
             400,
             "The function parent(...) requires `Reference` but got `DOUBLE`.",

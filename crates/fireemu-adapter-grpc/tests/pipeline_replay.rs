@@ -361,6 +361,19 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
             "unnest-twice",
             "unnest-one-argument",
             "unnest-three-arguments",
+            "union-other",
+            "union-itself",
+            "union-then-sort",
+            "union-then-limit",
+            "union-inner-where",
+            "union-inner-select",
+            "union-empty-input",
+            "union-of-union",
+            "union-after-select",
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
         ],
         &[
             "unnest-tags",
@@ -379,6 +392,19 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
             "unnest-twice",
             "unnest-one-argument",
             "unnest-three-arguments",
+            "union-other",
+            "union-itself",
+            "union-then-sort",
+            "union-then-limit",
+            "union-inner-where",
+            "union-inner-select",
+            "union-empty-input",
+            "union-of-union",
+            "union-after-select",
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
         ],
     ),
 ];
@@ -1076,7 +1102,7 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 185, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 161, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
             120,

@@ -1906,7 +1906,7 @@ fn union_generated_core_combinations() {
             expected.truncate(2);
         }
         if boundary == "blocking" {
-            expected.sort();
+            expected.sort_unstable();
         }
         assert_eq!(
             actual

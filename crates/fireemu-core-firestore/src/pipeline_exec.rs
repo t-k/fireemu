@@ -392,6 +392,18 @@ const FUNCTIONS: &[Function] = &[
         "array_get(array: array[any], index: int64): any?",
         eval_array_get,
     ),
+    array_access_function(
+        "maximum_n",
+        Arity::Exact(2),
+        "maximum_n(input: array[any?], n: int64): array[any]",
+        eval_maximum_n,
+    ),
+    array_access_function(
+        "minimum_n",
+        Arity::Exact(2),
+        "minimum_n(input: array[any?], n: int64): array[any]",
+        eval_minimum_n,
+    ),
     Function {
         name: "join",
         arity: Arity::Between(2, 3),
@@ -1005,6 +1017,63 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .and_then(|i| values.get(i))
         .cloned()
         .map_or(Eval::Absent, Eval::Value)
+}
+
+fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
+    let n = match subsequence_integer(&args[1], name, cx) {
+        Ok(n) if n >= 0 => usize::try_from(n).unwrap_or(usize::MAX),
+        Ok(_) => {
+            return Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "negative count refusal is unobserved",
+            })
+        }
+        Err(error) => return error,
+    };
+    if n == 0 {
+        return Eval::Value(Value::Array(Vec::new()));
+    }
+    let mut selected: Vec<Value> = values
+        .iter()
+        .filter(|value| !matches!(value, Value::Null))
+        .cloned()
+        .collect();
+    if let Some(first) = selected.first() {
+        if selected
+            .iter()
+            .any(|value| std::mem::discriminant(value) != std::mem::discriminant(first))
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "cross-type ordering is unobserved",
+            });
+        }
+    }
+    selected.sort_by(Value::canonical_cmp);
+    if selected
+        .windows(2)
+        .any(|pair| pair[0].canonical_cmp(&pair[1]) == Ordering::Equal && pair[0] != pair[1])
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "ordering of distinguishable ties is unobserved",
+        });
+    }
+    if maximum {
+        selected.reverse();
+    }
+    selected.truncate(n);
+    Eval::Value(Value::Array(selected))
+}
+fn eval_maximum_n(args: &[Eval], cx: Context) -> Eval {
+    eval_extrema_n(args, cx, "maximum_n", true)
+}
+fn eval_minimum_n(args: &[Eval], cx: Context) -> Eval {
+    eval_extrema_n(args, cx, "minimum_n", false)
 }
 
 fn eval_join(args: &[Eval], cx: Context) -> Eval {

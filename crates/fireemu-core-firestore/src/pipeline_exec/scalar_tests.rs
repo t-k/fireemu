@@ -2939,3 +2939,159 @@ fn join_bytes_and_ambiguous_invalid_arguments_are_unobserved() {
     )));
     assert!(is_unobserved(&strict("join", &[null(), int(4)])));
 }
+
+#[test]
+fn recorded_array_extrema_results_and_arity() {
+    let input = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    for (name, expected_two, expected_all) in [
+        (
+            "maximum_n",
+            vec![Value::Integer(3), Value::Integer(2)],
+            vec![Value::Integer(3), Value::Integer(2), Value::Integer(1)],
+        ),
+        (
+            "minimum_n",
+            vec![Value::Integer(1), Value::Integer(2)],
+            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+        ),
+    ] {
+        for (args, expected) in [
+            (vec![input.clone(), int(2)], array(expected_two)),
+            (vec![input.clone(), int(10)], array(expected_all)),
+            (vec![input.clone(), int(0)], array(vec![])),
+            (vec![null(), int(2)], null()),
+            (vec![Eval::Absent, int(2)], null()),
+            (vec![int(5), int(2)], wrong(name, "Array", "LONG")),
+        ] {
+            assert_eq!(both(name, &args), expected, "{name} {args:?}");
+        }
+        assert_eq!(Expr::call(name, vec![], Placement::Value).unwrap_err().to_string(), format!("The function '{name}(input: array[any?], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided."));
+    }
+}
+
+#[test]
+fn array_extrema_pict_rows() {
+    let cases = [
+        ("maximum", "integers", "two", "strict"),
+        ("minimum", "integers", "two", "strict"),
+        ("maximum", "null_elements", "large", "emulator"),
+        ("minimum", "strings", "large", "strict"),
+        ("maximum", "empty", "zero", "emulator"),
+        ("minimum", "null", "two", "strict"),
+        ("maximum", "absent", "large", "strict"),
+        ("minimum", "integers", "negative", "emulator"),
+        ("maximum", "integers", "large", "strict"),
+        ("maximum", "strings", "zero", "emulator"),
+        ("minimum", "empty", "large", "strict"),
+        ("minimum", "empty", "two", "emulator"),
+        ("maximum", "empty", "negative", "strict"),
+        ("minimum", "absent", "negative", "emulator"),
+        ("maximum", "null", "zero", "emulator"),
+        ("minimum", "null_elements", "two", "strict"),
+        ("maximum", "absent", "two", "strict"),
+        ("minimum", "null", "large", "emulator"),
+        ("minimum", "null_elements", "negative", "emulator"),
+        ("minimum", "absent", "zero", "strict"),
+        ("maximum", "strings", "two", "emulator"),
+        ("minimum", "integers", "zero", "emulator"),
+        ("maximum", "strings", "negative", "strict"),
+        ("minimum", "null", "negative", "emulator"),
+        ("maximum", "null_elements", "zero", "emulator"),
+    ];
+    for (function, shape, count, profile) in cases {
+        let (input, mut ordered) = match shape {
+            "integers" => (
+                array(vec![
+                    Value::Integer(3),
+                    Value::Integer(1),
+                    Value::Integer(2),
+                ]),
+                vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+            ),
+            "strings" => (
+                array(vec![Value::String("c".into()), Value::String("a".into())]),
+                vec![Value::String("a".into()), Value::String("c".into())],
+            ),
+            "null_elements" => (
+                array(vec![Value::Integer(2), Value::Null, Value::Integer(1)]),
+                vec![Value::Integer(1), Value::Integer(2)],
+            ),
+            "empty" => (array(vec![]), vec![]),
+            "null" => (null(), vec![]),
+            _ => (Eval::Absent, vec![]),
+        };
+        let n = match count {
+            "zero" => 0_i64,
+            "two" => 2,
+            "negative" => -1,
+            _ => 10,
+        };
+        let name = if function == "maximum" {
+            "maximum_n"
+        } else {
+            "minimum_n"
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let got = call_in(name, &[input, int(n)], mode, false);
+        if matches!(shape, "null" | "absent") {
+            assert_eq!(got, null());
+        } else if n < 0 {
+            assert!(is_unobserved(&got));
+        } else {
+            if function == "maximum" {
+                ordered.reverse();
+            }
+            ordered.truncate(usize::try_from(n).unwrap());
+            assert_eq!(got, array(ordered), "{function}/{shape}/{count}/{profile}");
+        }
+    }
+}
+
+#[test]
+fn extrema_mixed_types_ties_and_negative_count_remain_unobserved() {
+    for name in ["maximum_n", "minimum_n"] {
+        let mixed = array(vec![Value::Integer(1), Value::String("a".into())]);
+        assert!(is_unobserved(&strict(name, &[mixed, int(1)])));
+        assert!(is_unobserved(&strict(
+            name,
+            &[array(vec![Value::Integer(1)]), int(-1)]
+        )));
+        let duplicate = array(vec![Value::Integer(2), Value::Integer(2)]);
+        assert_eq!(
+            strict(name, &[duplicate, int(2)]),
+            array(vec![Value::Integer(2), Value::Integer(2)])
+        );
+        assert!(is_unobserved(&strict(
+            name,
+            &[array(vec![Value::Integer(1), Value::Double(1.0)]), int(1)]
+        )));
+        assert!(is_unobserved(&strict(
+            name,
+            &[
+                array(vec![Value::Double(f64::NAN), Value::Double(f64::NAN)]),
+                int(1)
+            ]
+        )));
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_extrema_matches_integer_reference(items in proptest::collection::vec(-100_i64..100, 0..30), n in 0_usize..40) {
+        let input = array(items.iter().copied().map(Value::Integer).collect());
+        let mut sorted = items.clone(); sorted.sort_unstable();
+        let first: Vec<Value> = sorted.iter().take(n).copied().map(Value::Integer).collect();
+        let last: Vec<Value> = sorted.iter().rev().take(n).copied().map(Value::Integer).collect();
+        prop_assert_eq!(strict("minimum_n", &[input.clone(), int(i64::try_from(n).unwrap())]), array(first));
+        prop_assert_eq!(strict("maximum_n", &[input, int(i64::try_from(n).unwrap())]), array(last));
+    }
+}

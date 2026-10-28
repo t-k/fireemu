@@ -4638,44 +4638,43 @@ mod tests {
         }
     }
 
-    /// A literal map's keys come in the body's order while a REST body is compiled, in key order
-    /// otherwise, and in key order where two maps of the body hold the same keys in other orders.
+    const GENERATED_LITERAL_KEY_CASES: &[(&str, &str, &str, &str)] = &[
+        ("reserved", "literal", "direct", "strict"),
+        ("reserved", "literal", "nested", "strict"),
+        ("name", "literal", "direct", "strict"),
+        ("name", "literal", "nested", "strict"),
+        ("reserved", "field", "direct", "strict"),
+        ("empty", "field", "direct", "strict"),
+        ("type", "field", "direct", "strict"),
+        ("dotted", "function", "direct", "strict"),
+        ("name", "field", "nested", "strict"),
+        ("reserved", "field", "array", "strict"),
+        ("plain", "literal", "direct", "strict"),
+        ("plain", "field", "direct", "strict"),
+        ("name", "field", "direct", "ordinary"),
+        ("type", "literal", "direct", "ordinary"),
+        ("dotted", "literal", "array", "ordinary"),
+        ("dotted", "function", "nested", "ordinary"),
+        ("empty", "function", "array", "ordinary"),
+        ("empty", "literal", "nested", "strict"),
+        ("reserved", "function", "array", "ordinary"),
+        ("plain", "function", "nested", "ordinary"),
+        ("plain", "field", "array", "ordinary"),
+        ("name", "function", "array", "ordinary"),
+        ("type", "function", "array", "ordinary"),
+        ("dotted", "field", "direct", "ordinary"),
+        ("type", "field", "nested", "strict"),
+    ];
+
     #[test]
     fn generated_literal_key_combinations() {
         use pb::value::ValueType as V;
-        let cases = [
-            ("reserved", "literal", "direct", "strict"),
-            ("reserved", "literal", "nested", "strict"),
-            ("name", "literal", "direct", "strict"),
-            ("name", "literal", "nested", "strict"),
-            ("reserved", "field", "direct", "strict"),
-            ("empty", "field", "direct", "strict"),
-            ("type", "field", "direct", "strict"),
-            ("dotted", "function", "direct", "strict"),
-            ("name", "field", "nested", "strict"),
-            ("reserved", "field", "array", "strict"),
-            ("plain", "literal", "direct", "strict"),
-            ("plain", "field", "direct", "strict"),
-            ("name", "field", "direct", "ordinary"),
-            ("type", "literal", "direct", "ordinary"),
-            ("dotted", "literal", "array", "ordinary"),
-            ("dotted", "function", "nested", "ordinary"),
-            ("empty", "function", "array", "ordinary"),
-            ("empty", "literal", "nested", "strict"),
-            ("reserved", "function", "array", "ordinary"),
-            ("plain", "function", "nested", "ordinary"),
-            ("plain", "field", "array", "ordinary"),
-            ("name", "function", "array", "ordinary"),
-            ("type", "function", "array", "ordinary"),
-            ("dotted", "field", "direct", "ordinary"),
-            ("type", "field", "nested", "strict"),
-        ];
         let wrap_map = |key: &str, inner: pb::Value| pb::Value {
             value_type: Some(V::MapValue(pb::MapValue {
                 fields: [(key.to_owned(), inner)].into_iter().collect(),
             })),
         };
-        for (key, payload, nest, profile) in cases {
+        for &(key, payload, nest, profile) in GENERATED_LITERAL_KEY_CASES {
             let name = match key {
                 "reserved" => "__x__",
                 "name" => "__name__",
@@ -4812,6 +4811,8 @@ mod tests {
         }
     }
 
+    /// A literal map's keys come in the body's order while a REST body is compiled, in key order
+    /// otherwise, and in key order where two maps of the body hold the same keys in other orders.
     #[test]
     fn literal_keys_follow_the_wire_order_while_it_is_known() {
         let fields = |keys: &[&str]| -> std::collections::HashMap<String, pb::Value> {

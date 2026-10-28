@@ -38,6 +38,7 @@ export function createStageSupport(ctx, { fetchFn = fetch, journal, claim, timeo
       await journal({phase:'unknown', op});
       throw new Error(`unknown ${op}; retain claims`);
     }
+    if (ctx.target.token && bytes.includes(Buffer.from(ctx.target.token))) throw new Error('secret in response; retain claims');
     await journal({phase:'response', op, status:response.status, bodyBase64:bytes.toString('base64')});
     if (response.status !== 200) throw new Error(`known rejection ${op}; retain claims`);
     try { return JSON.parse(bytes.toString('utf8')); } catch { throw new Error(`invalid ${op} response; retain claims`); }

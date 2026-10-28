@@ -268,3 +268,23 @@ test('synchronous gRPC transport failure closes its owned client and stops', asy
   await assert.rejects(observeStage(ctx,stageContextCases()[0],{claim:async()=>{},journal:async()=>{},clientFactory:()=>({makeServerStreamRequest(){throw Error('failed');},close(){closed=true;}})}));
   assert.equal(closed,true);
 });
+
+test('lifecycle creates one owned target and stops after unknown create without retry', async () => {
+  const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
+  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  const calls=[];
+  const fetchFn=async (url,init)=>{calls.push([url,init.method]);if(init.method==='POST') throw Error('unknown');return {status:200,text:async()=>'{"databases":[]}'}};
+  const lifecycle=createStageLifecycle(ctx,{fetchFn,claim:async()=>{},journal:async()=>{}});
+  await assert.rejects(lifecycle.create(),/unknown/);
+  await assert.rejects(lifecycle.create(),/sequence/);
+  assert.deepEqual(calls.map(x=>x[1]),['GET','POST']);
+});
+
+test('lifecycle setup counts the worst successful four polls and uses bounded cadence', async () => {
+  const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
+  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  const name=`projects/${ctx.project}/databases/${ctx.database}`;let polls=0,calls=0,sleeps=0;
+  const fetchFn=async (url,init)=>{calls++;let obj;if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/a`};else if(url.includes('/operations/'))obj={done:++polls===4};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)}};
+  const lifecycle=createStageLifecycle(ctx,{fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async ms=>{assert.equal(ms,5000);sleeps++;}});
+  assert.deepEqual(await lifecycle.create(),{name,uid:'fake-uid'});assert.equal(calls,7);assert.equal(sleeps,3);
+});

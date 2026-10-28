@@ -42,7 +42,7 @@ export async function observeStage(ctx, step, {claim, journal, clientFactory, ti
     try { call = client.makeServerStreamRequest('/google.firestore.v1.Firestore/ExecutePipeline', () => bytes, b => b, built.request, metadata, {deadline:new Date(Date.now()+timeoutMs)}); }
     catch { client.close(); gapic.close().finally(() => reject(new Error('unknown gRPC start; retain claims'))); return; }
     call.on('metadata', () => { queue=queue.then(() => journal({phase:'headers', id:step.id})).catch(() => {journalError=true; call.cancel();}); });
-    call.on('data', frame => { length+=frame.length; if (length>1024*1024 || frames.length>=1024) {overflow=true; call.cancel(); return;} frames.push(Buffer.from(frame).toString('base64')); });
+    call.on('data', frame => { if (ctx.target.kind === 'production' && ctx.target.token && Buffer.from(frame).includes(Buffer.from(ctx.target.token))) {overflow=true; call.cancel(); return;} length+=frame.length; if (length>1024*1024 || frames.length>=1024) {overflow=true; call.cancel(); return;} frames.push(Buffer.from(frame).toString('base64')); });
     call.on('error', () => {streamError=true;});
     call.on('status', status => {
       queue.then(async () => {

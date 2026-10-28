@@ -4,7 +4,7 @@ export function createStageBudget({maximum, cleanupReserve}) {
   let count=0;
   return {
     async claim(action) {
-      const cleanup=['delete-owned','verify-absence'].includes(action);
+      const cleanup=['delete-owned','verify-absence','end-describe','end-baseline','end-delete','end-poll','end-list','end-get'].includes(action);
       if (count >= maximum) throw new Error('request ceiling reached');
       if (!cleanup && count >= maximum-cleanupReserve) throw new Error('cleanup reserve reached');
       count++;

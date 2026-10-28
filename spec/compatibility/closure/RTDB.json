@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
  "parent": "RTDB",
- "parentStatus": "COMPAT_VERIFIED",
+ "parentStatus": "IMPLEMENTING",
  "inventoryStatus": "FROZEN",
  "frozenOn": "2026-10-26",
  "freezeAuthority": "docs.local/instructions/owner-decisions.md (owner 1560: genuine whole current supported RTDB closure; owner 1471 Q8: platform SDKs in a later separate parent); conditions frozen from the RTDB coverage ledger RTDB-CV-01..16 (docs.local/logs/2026-10-24/2026-10-24-002-compat-verified/rtdb-coverage-ledger.md)",
@@ -13,7 +13,9 @@
   "type": "USER_DATABASE"
  },
  "closureReview": {
-  "decision": "APPROVED",
+  "decision": "CHANGES_REQUESTED",
+  "historicalDecision": "APPROVED",
+  "reopenDecisionRef": "docs.local/instructions/owner-decisions.md (owner 1866, 2026-10-28): subset evidence does not establish parent completion; remaining work is required",
   "decidedOn": "2026-10-27",
   "decider": "project coordinator (delegated by the owner)",
   "decisionRef": "docs.local/instructions/owner-decisions.md (line 1838, 2026-10-27); docs.local/reviews/2026-10-27-rtdb-closure-residual-review.md (APPROVE of dd90111a2 and 1170d27ce); earlier: docs.local/instructions/owner-decisions.md (line 1790, 2026-10-26 RTDB closure review); docs.local/instructions/owner-decisions.md (lines 1862 and 1863, conditional candidate integration)",

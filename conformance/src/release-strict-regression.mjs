@@ -666,7 +666,8 @@ export function planComparisons(
     const pendingEventarc = parent === "EVENTARC" && entry.closure.parentStatus === "IMPLEMENTING";
     // PUBSUB registers its per-case comparison (a disclosed exclusion) before the parent review.
     const pendingPubsub = parent === "PUBSUB" && entry.closure.parentStatus === "IMPLEMENTING";
-    if (entry.closure.parentStatus !== "COMPAT_VERIFIED" && !pendingEventarc && !pendingPubsub)
+    const reopenedParent = ["RTDB", "FS-PIPELINE"].includes(parent) && entry.closure.parentStatus === "IMPLEMENTING";
+    if (entry.closure.parentStatus !== "COMPAT_VERIFIED" && !pendingEventarc && !pendingPubsub && !reopenedParent)
       continue;
     if (
       pendingPubsub &&
@@ -691,7 +692,7 @@ export function planComparisons(
       continue;
     }
     if (!Array.isArray(comparisons) || comparisons.length === 0) {
-      errors.push(`${parent}: COMPAT_VERIFIED without integratedRegression comparisons`);
+      errors.push(`${parent}: ${entry.closure.parentStatus} without integratedRegression comparisons`);
       continue;
     }
     for (const { path } of comparisons) {

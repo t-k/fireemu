@@ -172,9 +172,8 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
   assert.deepEqual(run.clear, ["fs-ent-pipeline"]);
   assert.deepEqual(run.commands[0].expectedExitCodes, [1]);
   assert.equal(run.commands[0].env.FIREEMU_SANDBOX_LANE, "fs-ent-pipeline");
-  // As a verified parent the plan accepts it and names this run.
-  const verified = { ...closure, parentStatus: "COMPAT_VERIFIED" };
-  const plan = planComparisons([{ closure: verified, path: CLOSURE }], (path) =>
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  const plan = planComparisons([{ closure, path: CLOSURE }], (path) =>
     path === closure.integratedRegression.comparisons[0].path ? comparison : undefined,
   );
   assert.deepEqual(

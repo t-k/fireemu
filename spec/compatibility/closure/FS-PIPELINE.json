@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FS-PIPELINE",
-  "parentStatus": "COMPAT_VERIFIED",
+  "parentStatus": "IMPLEMENTING",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -13,7 +13,9 @@
   },
   "scopeAuthority": "docs.local/instructions/owner-decisions.md (ledger 1794, option A of docs.local/reviews/2026-10-26-fs-pipeline-scope-inventory.md; ledger 1792, entpipe1 kept until the end of FS-PIPELINE observation)",
   "closureReview": {
-    "decision": "APPROVED",
+    "decision": "CHANGES_REQUESTED",
+    "historicalDecision": "APPROVED",
+    "reopenDecisionRef": "docs.local/instructions/owner-decisions.md (owner 1866, 2026-10-28): subset evidence does not establish parent completion; remaining work is required",
     "decidedOn": "2026-10-28",
     "decider": "project coordinator under owner decision1858",
     "decisionRef": "docs.local/instructions/owner-decisions.md (line1859)",

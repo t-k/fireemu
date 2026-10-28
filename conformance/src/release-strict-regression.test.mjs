@@ -2030,10 +2030,10 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("RTDB uses its disclosed exclusion for its six comparisons as a verified closure", () => {
+test("reopened RTDB retains its six disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
-  assert.equal(rtdb.closure.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(rtdb.closure.parentStatus, "IMPLEMENTING");
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   const excluded = reviewed.excluded.filter(
@@ -2048,12 +2048,8 @@ test("RTDB uses its disclosed exclusion for its six comparisons as a verified cl
     "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
   ]);
   assert.ok(excluded.every((entry) => entry.parents.join() === "RTDB"));
-  rtdb.closure.parentStatus = "IMPLEMENTING";
-  assert.ok(
-    planComparisons(closures, readJson).errors.includes(
-      "excluded kind rtdb-production-comparison-v1: no verified closure names it",
-    ),
-  );
+  rtdb.closure.integratedRegression.comparisons = [];
+  assert.ok(planComparisons(closures, readJson).errors.some((error) => error.includes("RTDB:")));
 });
 
 test("every release command binds its declared mode to the actual CLI action", () => {
@@ -2562,4 +2558,17 @@ test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifa
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("reopened parents require comparisons while unrelated pending parents stay excluded", () => {
+  for (const parent of ["RTDB", "FS-PIPELINE"]) {
+    const closures = committedClosures();
+    const entry = closures.find(({ closure }) => closure.parent === parent);
+    entry.closure.parentStatus = "IMPLEMENTING";
+    entry.closure.integratedRegression.comparisons = [];
+    assert.ok(planComparisons(closures, readJson).errors.some((error) => error.includes(`${parent}:`)));
+  }
+  const pending = { name: "OTHER.json", closure: { parent: "OTHER", parentStatus: "IMPLEMENTING" } };
+  assert.deepEqual(planComparisons([pending], readJson, { excludedKinds: [], runs: [] }).errors, []);
 });

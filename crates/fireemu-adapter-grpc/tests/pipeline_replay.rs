@@ -1980,7 +1980,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 .iter()
                 .any(|(row, _, _)| row.split('#').next() == Some(*program));
             let expected_gap = expected_program_gap(program, strict);
-            if has_gap != expected_gap {
+            if program_gap_changed(has_gap, expected_gap) {
                 failures.push(format!(
                     "strict={strict}: pending program gap changed for {program}: expected {expected_gap}, got {has_gap}"
                 ));
@@ -2186,6 +2186,10 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
     assert!(regenerate_o5_row(&ordinary, &both).is_none());
 }
 
+fn program_gap_changed(has_gap: bool, expected_gap: bool) -> bool {
+    has_gap != expected_gap
+}
+
 fn expected_program_gap(program: &str, strict: bool) -> bool {
     match (program, strict) {
         ("fs-ent-pipeline/o8c/collections-main", true) => false,
@@ -2196,6 +2200,10 @@ fn expected_program_gap(program: &str, strict: bool) -> bool {
 
 #[test]
 fn pinned_program_gaps_are_profile_specific() {
+    assert!(!program_gap_changed(false, false));
+    assert!(program_gap_changed(true, false));
+    assert!(program_gap_changed(false, true));
+    assert!(!program_gap_changed(true, true));
     let collections = "fs-ent-pipeline/o8c/collections-main";
     let stages = "fs-ent-pipeline/o8d/stages-main";
     assert!(!expected_program_gap(collections, true));

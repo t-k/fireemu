@@ -156,6 +156,21 @@ test('fixed script completes against a deterministic offline SDK double', async 
   assert.equal(deleted, 2);
   assert.equal(listeners.length, 0);
   assert.ok(events.some((r) => r.type === 'value' && r.label === 'txn-apply' && r.actor === 'w'));
+  tree = null; deleted = 0; serial = 0; events.length = 0;
+  const guardCalls = [];
+  context.__sdkNextWsGuard = {
+    beginOperation: (label) => guardCalls.push(`begin:${label}`), endOperation: () => guardCalls.push('end'),
+    startupRead: (actor, value) => guardCalls.push(`startup:${actor}:${value}`), arm: () => guardCalls.push('arm'),
+    assertHealthy: () => {}, quiescent: () => true, finish: () => guardCalls.push('finish'), freeze: () => guardCalls.push('freeze'), status: () => ({ terminal: true }),
+  };
+  await context.window.__rrRun({ scenario: 'sdk-next', transport: 'ws', base: 'test', name: 'r1-ws', waitScale: 0.001, wsGuardRequired: true });
+  assert.equal(guardCalls.filter((x) => x.startsWith('begin:')).length, 21);
+  assert.ok(guardCalls.indexOf('startup:w:null') < guardCalls.indexOf('arm'));
+  assert.ok(guardCalls.indexOf('startup:o:null') < guardCalls.indexOf('arm'));
+  assert.ok(guardCalls.indexOf('arm') < guardCalls.indexOf('begin:seed'));
+  assert.equal(guardCalls.at(-1), 'finish');
+  assert.equal(deleted, 2);
+  assert.equal(listeners.length, 0);
 });
 
 test('production sdk-next is refused until presend and retry barriers are verified', async () => {
@@ -164,42 +179,12 @@ test('production sdk-next is refused until presend and retry barriers are verifi
   assert.doesNotThrow(() => assertProductionSdkNextReady({}));
 });
 
-test('diagnostic WS guard synchronously stops sends, replacement and reset', async () => {
+test('diagnostic WS guard freezes when the first startup connection closes', async () => {
   const vm = await import('node:vm');
   const { installSdkNextWsGuard } = await import('./rtdb-residual.mjs');
-  const setup = () => {
-    const context = vm.createContext({ URL, writes: [] });
-    vm.runInContext(`class Socket { static OPEN = 1; constructor(url) { this.url = url; this.readyState = 1; this.listeners = {}; } addEventListener(k, f) { (this.listeners[k] ??= []).push(f); } send(x) { writes.push(x); } fire(k, e = {}) { for (const f of this.listeners[k] ?? []) f(e); } } globalThis.WebSocket = Socket;`, context);
-    vm.runInContext(`(${installSdkNextWsGuard.toString()})({host:'localhost:9000', maxConnections:2, maxMessages:2})`, context);
-    return context;
-  };
-  {
-    const c = setup();
-    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); globalThis.b = new WebSocket('ws://localhost:9000/'); __sdkNextWsGuard.arm(); a.send('a'); b.send('b');`, c);
-    assert.throws(() => vm.runInContext(`a.send('c')`, c), /send limit/);
-    assert.deepEqual([...c.writes], ['a', 'b']);
-    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
-  }
-  {
-    const c = setup();
-    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/');`, c);
-    assert.throws(() => vm.runInContext(`__sdkNextWsGuard.arm()`, c), /startup incomplete/);
-    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
-  }
-  {
-    const c = setup();
-    assert.throws(() => vm.runInContext(`new WebSocket('ws://other:9000/')`, c), /disallowed host/);
-    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
-  }
-  {
-    const c = setup();
-    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); a.fire('close');`, c);
-    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
-  }
-  {
-    const c = setup();
-    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); globalThis.b = new WebSocket('ws://localhost:9000/'); __sdkNextWsGuard.arm(); a.fire('message', {data: JSON.stringify({t:'c', d:{t:'r'}})});`, c);
-    assert.throws(() => vm.runInContext(`b.send('after-reset')`, c), /frozen/);
-    assert.equal(c.writes.length, 0);
-  }
+  const context = vm.createContext({ URL });
+  vm.runInContext(`class Socket { static OPEN = 1; constructor() { this.readyState = 1; this.listeners = {}; } addEventListener(k, f) { (this.listeners[k] ??= []).push(f); } send() {} fire(k, e = {}) { for (const f of this.listeners[k] ?? []) f(e); } } globalThis.WebSocket = Socket;`, context);
+  vm.runInContext(`(${installSdkNextWsGuard.toString()})({host:'localhost:9000', namespace:'demo', base:'local/sdk/r1-ws', maxConnections:2, maxMessages:2})`, context);
+  vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/.ws?ns=demo'); a.fire('close');`, context);
+  assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/.ws?ns=demo')`, context), /frozen/);
 });

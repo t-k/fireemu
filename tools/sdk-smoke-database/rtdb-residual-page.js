@@ -44,10 +44,25 @@ window.__rrRun = async (c) => {
   try {
     if (c.scenario === 'cv08') await cv08();
     else if (c.scenario === 'cv10') await cv10();
-    else if (c.scenario === 'sdk-next') await sdkNext();
+    else if (c.scenario === 'sdk-next') {
+      await sdkNext();
+      if (c.wsGuardRequired) {
+        const guard = globalThis.__sdkNextWsGuard;
+        const quiet = await waitFor(() => { guard.assertHealthy(); return guard.quiescent(); }, 5000);
+        if (!quiet) { guard.freeze(); throw Error('transport not quiescent'); }
+        guard.finish();
+        await emit('guard', { actor: 'host', code: JSON.stringify(guard.status()) });
+      }
+    }
     else throw Error('unknown scenario');
     step = 'end';
     emit('done');
+  } catch (error) {
+    if (c.wsGuardRequired && globalThis.__sdkNextWsGuard) {
+      globalThis.__sdkNextWsGuard.freeze();
+      await emit('guard', { actor: 'host', code: JSON.stringify(globalThis.__sdkNextWsGuard.status()) });
+    }
+    throw error;
   } finally {
     await Promise.allSettled(apps.map((a) => deleteApp(a)));
   }
@@ -59,9 +74,14 @@ window.__rrRun = async (c) => {
       if (listenerError) throw listenerError;
       if (++operations > 24) throw Error('sdk operation cap reached');
       emit('operation', { actor: 'w', label, code: String(operations) });
-      const result = await action();
-      if (listenerError) throw listenerError;
-      return result;
+      const guard = c.wsGuardRequired ? globalThis.__sdkNextWsGuard : null;
+      if (guard) guard.beginOperation(label);
+      try {
+        const result = await action();
+        if (listenerError) throw listenerError;
+        if (guard) { guard.assertHealthy(); guard.endOperation(); }
+        return result;
+      } catch (error) { if (guard) guard.freeze(); throw error; }
     };
     const get = async (label, path) => {
       const snap = await perform(`get-${label}`, () => D.get(at(w, path)));
@@ -76,7 +96,9 @@ window.__rrRun = async (c) => {
         const value = snap.val();
         emit('startup', { actor, label: 'root-read', shape: JSON.stringify(value) });
         if (value !== null) throw Error('startup root not empty');
+        if (c.wsGuardRequired) globalThis.__sdkNextWsGuard.startupRead(actor, value);
       }
+      if (c.wsGuardRequired) globalThis.__sdkNextWsGuard.arm();
       step = 'seed';
       await perform('seed', () => D.set(at(w, ''), { items: { a: { score: 1 }, b: { score: 2, note: 'old' }, c: { score: 2 } }, merge: { keep: 1, edit: 1 }, fanout: {}, values: { numeric: 7, string: 'old' }, txn: { abort: 3, apply: 4 } }));
       step = 'attach';

@@ -152,43 +152,103 @@ export function assertProductionSdkNextReady(packet) {
   if (packet?.scenario === 'sdk-next') throw Error('sdk-next transport guard unverified');
 }
 
-// Local diagnostic only. Production remains blocked until WS/LP startup and retry barriers are proven.
-export function installSdkNextWsGuard({ host, maxConnections = 2, maxMessages = 2500 }) {
+// Conservative fixed-corpus diagnostic. Production remains blocked pending source/transport review.
+export function installSdkNextWsGuard({ host, namespace, base, secure = false, maxConnections = 2, maxMessages = 1250 }) {
   const Native = globalThis.WebSocket, originalSend = Native.prototype.send;
-  let frozen = false, armed = false, terminal = false, connections = 0, messages = 0;
-  const sockets = new Set();
-  const freeze = () => { if (!terminal) frozen = true; };
+  if (typeof window !== 'undefined' && window.top !== window) {
+    Object.defineProperty(globalThis, 'WebSocket', { value: new Proxy(Native, { construct() { throw Error('sdk-next child frame blocked'); } }), writable: false, configurable: false });
+    return;
+  }
+  if (typeof window !== 'undefined') Object.defineProperty(globalThis, 'open', { value: () => { throw Error('sdk-next popup blocked'); }, writable: false, configurable: false });
+  const order = ['startup-w', 'startup-o', 'seed', 'push-a', 'write-a', 'read-a', 'push-b', 'write-b', 'read-b', 'update', 'get-update-preserves-sibling', 'replace', 'get-set-replaces-node', 'fanout', 'get-atomic-multipath-final', 'change', 'move', 'server-values', 'get-server-values', 'transaction-abort', 'transaction-apply'];
+  const writes = { seed: 'p', 'write-a': 'p', 'write-b': 'p', update: 'm', replace: 'p', fanout: 'm', change: 'm', move: 'm', 'server-values': 'm', 'transaction-apply': 'p' };
+  let frozen = false, armed = false, terminal = false, unknown = false, connections = 0, messages = 0, operation = null, operationIndex = 0, mutationSent = false;
+  const sockets = new Set(), sessions = new Map(), pending = new Map(), startup = new Set(), seenMutations = new Set(), requests = new WeakMap();
+  const freeze = () => { if (!terminal) { if (pending.size) unknown = true; frozen = true; } };
   const fail = (why) => { freeze(); throw new Error(`sdk-next transport frozen: ${why}`); };
-  const guardedSend = function (...args) {
-    if (frozen || !sockets.has(this)) return fail('send refused');
+  const within = (p) => typeof p === 'string' && (p === `/${base}` || p.startsWith(`/${base}/`)) && !p.split('/').some((part) => part === '.' || part === '..');
+  const request = (socket, data) => {
+    if (data === '0') return;
+    if (typeof data !== 'string' || data.length > 16384) return fail('nontext or oversize send');
+    if (/^\d+$/.test(data)) return fail('fragment send');
+    let msg;
+    try { msg = JSON.parse(data); } catch { return fail('unknown outgoing message'); }
+    if (msg?.t !== 'd' || !msg.d || !Number.isSafeInteger(msg.d.r) || typeof msg.d.a !== 'string') return fail('unknown outgoing protocol');
+    const { r, a, b } = msg.d;
+    const tracker = requests.get(socket);
+    if (!tracker || tracker.seen.has(r)) return fail('request id reuse');
+    tracker.seen.add(r); tracker.waiting.add(r);
+    if (a !== 's' && (!['g', 'q', 'n', 'p', 'm'].includes(a) || !within(b?.p))) return fail('outgoing scope');
+    if (a === 'm' && (!b?.d || typeof b.d !== 'object' || Array.isArray(b.d) || Object.keys(b.d).some((key) => key.split('/').some((part) => !part || part === '.' || part === '..' || /[.#$\[\]]/.test(part))))) return fail('outgoing scope');
+    if (a === 'p' || a === 'm') {
+      if (!armed) return fail('startup mutation');
+      if (!operation || writes[operation] !== a || mutationSent) return fail('mutation retransmit or unexpected operation');
+      if (pending.size) return fail('pending mutation');
+      const fingerprint = JSON.stringify([a, b]);
+      if (seenMutations.has(fingerprint)) return fail('mutation retransmit');
+      seenMutations.add(fingerprint);
+      mutationSent = true;
+      pending.set(socket, r);
+    }
+  };
+  const guardedSend = function (data) {
+    if (frozen || terminal || !sockets.has(this)) return fail('send refused');
+    request(this, data);
     if (++messages > maxMessages) return fail('send limit');
-    try { return Reflect.apply(originalSend, this, args); } catch (e) { freeze(); throw e; }
+    try { return Reflect.apply(originalSend, this, [data]); } catch (e) { freeze(); throw e; }
   };
   Object.defineProperty(Native.prototype, 'send', { value: guardedSend, writable: false, configurable: false });
   const Guarded = new Proxy(Native, {
     construct(target, args) {
-      if (frozen || armed) return fail('new connection refused');
+      if (frozen || terminal || armed) return fail('new connection refused');
       let url;
       try { url = new URL(String(args[0])); } catch { return fail('invalid URL'); }
-      if (!['ws:', 'wss:'].includes(url.protocol) || url.host !== host) return fail('disallowed host');
+      const ns = url.searchParams.getAll('ns');
+      const hostBindsNamespace = secure && host === `${namespace}.firebaseio.com`;
+      if (url.protocol !== (secure ? 'wss:' : 'ws:') || url.host !== host || url.pathname !== '/.ws' || !((ns.length === 1 && ns[0] === namespace) || (ns.length === 0 && hostBindsNamespace))) return fail('connection scope/host/namespace');
       if (++connections > maxConnections) return fail('connection limit');
       let ws;
       try { ws = Reflect.construct(target, args, target); } catch (e) { freeze(); throw e; }
       sockets.add(ws);
+      requests.set(ws, { seen: new Set(), waiting: new Set() });
       ws.addEventListener('error', freeze);
       ws.addEventListener('close', freeze);
       ws.addEventListener('message', (event) => {
-        if (typeof event.data !== 'string') return;
-        try { const data = JSON.parse(event.data); if (data?.t === 'c' && ['r', 's'].includes(data.d?.t)) freeze(); } catch { /* RTDB may split messages; semantic barrier remains unverified. */ }
+        if (frozen || terminal) return;
+        const data = event.data;
+        if (data === '0') return;
+        if (typeof data !== 'string' || data.length > 16384 || /^\d+$/.test(data)) { freeze(); return; }
+        let msg;
+        try { msg = JSON.parse(data); } catch { freeze(); return; }
+        if (msg?.t === 'c') {
+          const ctrl = msg.d;
+          if (ctrl?.t === 'h' && !armed && !sessions.has(ws) && ctrl.d?.h === host && ctrl.d?.v === '5' && typeof ctrl.d?.s === 'string' && ctrl.d.s.length > 0) { sessions.set(ws, ctrl.d.s); return; }
+          if (ctrl?.t === 'o') return;
+          freeze(); return;
+        }
+        if (msg?.t !== 'd' || !msg.d || typeof msg.d !== 'object') { freeze(); return; }
+        if (Object.hasOwn(msg.d, 'r')) {
+          const tracker = requests.get(ws);
+          if (!Number.isSafeInteger(msg.d.r) || !tracker?.waiting.has(msg.d.r)) { freeze(); return; }
+          tracker.waiting.delete(msg.d.r);
+          if (msg.d.b?.s !== 'ok') { freeze(); return; }
+          if (pending.has(ws) && msg.d.r === pending.get(ws)) pending.delete(ws);
+        } else if (!['d', 'm'].includes(msg.d.a) || typeof msg.d.b?.p !== 'string' || !within(msg.d.b.p.startsWith('/') ? msg.d.b.p : `/${msg.d.b.p}`)) { freeze(); }
       });
       return ws;
     },
   });
   Object.defineProperty(globalThis, 'WebSocket', { value: Guarded, writable: false, configurable: false });
   Object.defineProperty(globalThis, '__sdkNextWsGuard', { value: Object.freeze({
-    arm() { if (frozen || sockets.size !== 2 || [...sockets].some((s) => s.readyState !== Native.OPEN)) return fail('startup incomplete'); armed = true; },
-    finish() { terminal = true; },
-    status() { return { frozen, armed, terminal, connections, messages }; },
+    startupRead(actor, value) { if (frozen || armed || operation || value !== null || !['w', 'o'].includes(actor) || startup.has(actor) || (actor === 'w' ? operationIndex !== 1 : operationIndex !== 2 || !startup.has('w'))) return fail('startup read'); startup.add(actor); },
+    arm() { if (frozen || terminal || operationIndex !== 2 || startup.size !== 2 || sockets.size !== 2 || sessions.size !== 2 || new Set(sessions.values()).size !== 2 || [...sockets].some((s) => s.readyState !== Native.OPEN)) return fail('startup sessions incomplete'); armed = true; },
+    beginOperation(label) { if (frozen || terminal || operation || label !== order[operationIndex] || (!armed && !label.startsWith('startup-'))) return fail('startup or operation order'); operation = label; mutationSent = false; },
+    endOperation() { if (frozen || terminal || !operation || pending.size || (writes[operation] && !mutationSent)) return fail('pending or invalid operation'); operation = null; operationIndex++; },
+    freeze,
+    assertHealthy() { if (frozen || terminal) return fail('unhealthy'); },
+    quiescent() { return pending.size === 0 && [...sockets].every((socket) => requests.get(socket).waiting.size === 0); },
+    finish() { if (pending.size) return fail('pending mutation'); if (frozen || !armed || operation || operationIndex !== order.length || [...sockets].some((socket) => requests.get(socket).waiting.size)) return fail('terminal not quiescent'); terminal = true; },
+    status() { return { frozen, armed, terminal, unknown, connections, messages, pending: pending.size, operationIndex }; },
   }), writable: false, configurable: false });
 }
 
@@ -217,17 +277,27 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
     capped.catch(() => {});
     try {
       const context = await browser.newContext(cfg.scenario === 'sdk-next' ? { serviceWorkers: 'block' } : {});
-      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.addInitScript(installSdkNextWsGuard, { host: new URL(pageConfig.databaseURL).host });
+      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') {
+        const target = new URL(pageConfig.databaseURL);
+        await context.addInitScript(installSdkNextWsGuard, { host: target.host, namespace: target.searchParams.get('ns') ?? INSTANCE, base: cfg.base, secure: target.protocol === 'https:' });
+      }
+      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.addInitScript(() => { for (const name of ['Worker', 'SharedWorker']) if (name in globalThis) Object.defineProperty(globalThis, name, { value: function () { throw Error('worker blocked'); }, writable: false, configurable: false }); });
       if (pageConfig.emulator) await context.grantPermissions(['local-network-access'], { origin: `http://${origin}` }).catch(() => {});
       const page = await context.newPage();
-      await page.route('**/*', (route) => {
+      const routeRequests = (route) => {
         const url = new URL(route.request().url());
         if (url.host === origin) return route.continue();
-        if (url.host === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/12.18.0/')) return route.fulfill({ contentType: 'text/javascript', body: readFileSync(path.resolve(modules, 'firebase', path.basename(url.pathname))) });
+        if (url.host === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/12.18.0/')) {
+          if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws' && (url.origin !== 'https://www.gstatic.com' || url.search || !['/firebasejs/12.18.0/firebase-app.js', '/firebasejs/12.18.0/firebase-database.js'].includes(url.pathname))) { counts.blocked++; return route.abort(); }
+          return route.fulfill({ contentType: 'text/javascript', body: readFileSync(path.resolve(modules, 'firebase', path.basename(url.pathname))) });
+        }
+        if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') { counts.blocked++; return route.abort(); }
         if (!pageConfig.allowHost(url.host)) { counts.blocked++; return route.abort(); }
         if (++counts.http > CAPS.browserHttp) { overCap(); return route.abort(); }
         return route.continue();
-      });
+      };
+      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.route('**/*', routeRequests);
+      else await page.route('**/*', routeRequests);
       page.on('websocket', (ws) => {
         if (++counts.ws > CAPS.browserWs) overCap();
         for (const kind of ['framesent', 'framereceived']) ws.on(kind, () => { if (++counts.frames > CAPS.browserFrames) overCap(); });
@@ -238,7 +308,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
       await page.waitForFunction(() => typeof window.__rrRun === 'function');
       const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('profile timeout')), profileTimeout(cfg)).unref());
       timeout.catch(() => {});
-      await Promise.race([page.evaluate((c) => window.__rrRun(c), { ...pageConfig, ...cfg, allowHost: undefined }), capped, timeout]);
+      await Promise.race([page.evaluate((c) => window.__rrRun(c), { ...pageConfig, ...cfg, allowHost: undefined, wsGuardRequired: cfg.scenario === 'sdk-next' && cfg.transport === 'ws' }), capped, timeout]);
       // Evidence of the transport the SDK actually used.
       const transport = { scenario: cfg.scenario, step: 'runner', type: 'transport', code: transportOf(counts) };
       journal.push(transport);

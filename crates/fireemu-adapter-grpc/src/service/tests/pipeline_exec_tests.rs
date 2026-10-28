@@ -807,14 +807,13 @@ async fn sqrt_wrong_type_is_captured_or_reported_and_empty_rows_are_lazy() {
             "sqrt",
             vec![value(V::IntegerValue(1)), value(V::IntegerValue(2))],
         );
-        let error = match Firestore::execute_pipeline(
+        let Err(error) = Firestore::execute_pipeline(
             &service,
             Request::new(request(false, "select", select(two_args))),
         )
         .await
-        {
-            Err(error) => error,
-            Ok(_) => panic!("unrecorded two-argument call must refuse"),
+        else {
+            panic!("unrecorded two-argument call must refuse");
         };
         if matches!(
             policy,

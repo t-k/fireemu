@@ -26,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 39] = [
+pub const NAMES: [&str; 44] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -66,6 +66,11 @@ pub const NAMES: [&str; 39] = [
     "ceil",
     "pow",
     "sqrt",
+    "exp",
+    "ln",
+    "log",
+    "log10",
+    "trunc",
 ];
 
 pub(super) const CURRENT_TIMESTAMP: Function = function(
@@ -406,6 +411,53 @@ pub(super) const SQRT: Function = function(
     "sqrt(number: number): float64",
     &[],
     eval_sqrt,
+);
+
+pub(super) const EXP: Function = function(
+    "exp",
+    Arity::Exact(1),
+    false,
+    "exp(exponent: number): number",
+    &[],
+    eval_exp,
+);
+pub(super) const LN: Function = function(
+    "ln",
+    Arity::Exact(1),
+    false,
+    "ln(number: number): number",
+    &[],
+    eval_ln,
+);
+pub(super) const LOG: Function = function(
+    "log",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("log(number: number): number", 1, 1),
+        ("log(number: number, base: number): number", 2, 2),
+    ],
+    eval_log,
+);
+pub(super) const LOG10: Function = function(
+    "log10",
+    Arity::Exact(1),
+    false,
+    "log10(number: number): number",
+    &[],
+    eval_log10,
+);
+pub(super) const TRUNC: Function = function(
+    "trunc",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("trunc[T <: number](number: T): T", 1, 1),
+        ("trunc[T <: number](number: T, places: int64): T", 2, 2),
+    ],
+    eval_trunc,
 );
 
 fn unobserved(function: &'static str, reason: &'static str) -> Eval {
@@ -1815,5 +1867,88 @@ fn sqrt_number(value: f64) -> Eval {
         invalid("sqrt(...) requires a non-negative number")
     } else {
         double(value.sqrt())
+    }
+}
+
+fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<Num>, Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    if strict(cx) {
+        return Err(unobserved(name, "numeric arguments are unobserved"));
+    }
+    numbers(name, args, args.len(), cx)
+}
+fn eval_exp(args: &[Eval], cx: Context) -> Eval {
+    match numeric_inputs("exp", args, cx) {
+        Ok(v) => double(v[0].double().exp()),
+        Err(e) => e,
+    }
+}
+fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
+    let values = match numeric_inputs(name, args, cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let x = values[0].double();
+    let base = values.get(1).map(|v| v.double());
+    if base.is_some_and(|b| {
+        (x.is_nan() || x == f64::NEG_INFINITY) && (b <= 0.0 || b.to_bits() == 1.0_f64.to_bits())
+    }) || (x <= 0.0 && base.is_some_and(|b| b.is_nan() || b == f64::INFINITY))
+    {
+        return unobserved(name, "mixed special and invalid arguments");
+    }
+    if x.is_nan()
+        || x == f64::NEG_INFINITY
+        || base.is_some_and(f64::is_nan)
+        || base == Some(f64::INFINITY)
+    {
+        return double(f64::NAN);
+    }
+    if x <= 0.0 || base.is_some_and(|b| b <= 0.0 || b.to_bits() == 1.0_f64.to_bits()) {
+        return invalid(format!("{name}(...) invalid logarithm domain"));
+    }
+    double(match base {
+        Some(b) => x.log(b),
+        None if name == "log10" => x.log10(),
+        None => x.ln(),
+    })
+}
+fn eval_ln(args: &[Eval], cx: Context) -> Eval {
+    logarithm("ln", args, cx)
+}
+fn eval_log(args: &[Eval], cx: Context) -> Eval {
+    logarithm("log", args, cx)
+}
+fn eval_log10(args: &[Eval], cx: Context) -> Eval {
+    logarithm("log10", args, cx)
+}
+fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if strict(cx) {
+        return unobserved("trunc", "numeric arguments are unobserved");
+    }
+    let values = match check("trunc", args, &[Param::Number, Param::Int], cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let places = values
+        .get(1)
+        .and_then(|v| {
+            if let Value::Integer(i) = v {
+                Some(*i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    if places != 0 {
+        return unobserved("trunc", "nonzero decimal precision is unobserved");
+    }
+    match Num::of(values[0]) {
+        Num::Int(i) => integer(i),
+        Num::Double(d) => double(d.trunc()),
     }
 }

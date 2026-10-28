@@ -560,6 +560,11 @@ const FUNCTIONS: &[Function] = &[
     scalar::CEIL,
     scalar::POW,
     scalar::SQRT,
+    scalar::EXP,
+    scalar::LN,
+    scalar::LOG,
+    scalar::LOG10,
+    scalar::TRUNC,
 ];
 
 /// Looks a function up in the static table.

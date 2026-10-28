@@ -140,6 +140,11 @@ fn table_lists_exactly_the_recorded_functions() {
             "ceil",
             "pow",
             "sqrt",
+            "exp",
+            "ln",
+            "log",
+            "log10",
+            "trunc",
         ]
     );
     assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));

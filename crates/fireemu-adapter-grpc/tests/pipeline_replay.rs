@@ -3391,12 +3391,21 @@ fn recorded_literal_key_grpc_refusals_keep_messages_where_order_is_observable() 
     for (family, id) in cases {
         for strict in [true, false] {
             let (status, body) = internal_case(strict, family, id, true);
-            let unordered = matches!(id, "keys-empty-and-reserved" | "keys-two-reserved" | "keys-reserved-inner-and-outer");
+            let unordered = matches!(
+                id,
+                "keys-empty-and-reserved" | "keys-two-reserved" | "keys-reserved-inner-and-outer"
+            );
             let wanted = if strict && unordered { 501 } else { 400 };
-            if status != wanted { failures.push(format!("{family}#{id} strict={strict}: {status} {body}")); continue; }
+            if status != wanted {
+                failures.push(format!("{family}#{id} strict={strict}: {status} {body}"));
+                continue;
+            }
             if !unordered {
-                let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]["steps"][id]["body"][0]["error"]["message"];
-                if &body["grpcMessage"] != expected { failures.push(format!("{family}#{id} strict={strict}: {body}")); }
+                let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]
+                    ["steps"][id]["body"][0]["error"]["message"];
+                if &body["grpcMessage"] != expected {
+                    failures.push(format!("{family}#{id} strict={strict}: {body}"));
+                }
             }
         }
     }

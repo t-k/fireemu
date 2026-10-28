@@ -14,6 +14,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Firestore Enterprise pipelines can execute a finite subset of `union` branches over collection inputs with row-local `where` and `select` stages. Nested branches and unsupported child stages remain subject to local limits and refusal checks.
 - The `sample(size, mode)` stage supports document sampling without replacement and ordered percentage sampling, where percentage is a fraction between 0 and 1. Random outputs are evaluated by their bounded contract; production's random sequence is not reproduced.
+- Realtime Database onDisconnect replay covers the recorded re-registration, nested-priority and string-priority cases in both profiles. Other priority shapes remain unverified.
 
 ### Changed
 

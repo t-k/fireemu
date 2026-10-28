@@ -8,6 +8,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-10-29
+
+### Added
+
+- Firestore Enterprise pipelines evaluate `sqrt`, `exp`, `ln`, `log`, `log10` and zero-precision `trunc` in the emulator profile. Nonzero truncation precision and finite exponential subnormal outputs remain unobserved. Strict numeric, domain, null and type behavior remains unobserved apart from the recorded O-5 argument-count diagnostics and recorded `sqrt` wrong-type case; these functions do not establish general production parity.
+- Realtime Database replay fixtures cover finite recorded server-value, Rules language, Rules method and Rules operator cases in both profiles. These observations do not establish parity for unrecorded inputs.
+
 ## [0.35.0] - 2026-10-29
 
 ### Added
@@ -1032,7 +1039,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.35.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/t-k/fireemu/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/t-k/fireemu/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/t-k/fireemu/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/t-k/fireemu/compare/v0.32.0...v0.33.0

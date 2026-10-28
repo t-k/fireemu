@@ -544,13 +544,13 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "offset(-1)",
             stages: offset(int(-1)),
-            strict: None,
+            strict: Some((400, "The 'offset(...)' cannot have a negative value: -1")),
             emulator: (400, "The 'offset(...)' cannot have a negative value: -1"),
         },
         Case {
             label: "limit(true)",
             stages: limit(json!({ "booleanValue": true })),
-            strict: None,
+            strict: Some((400, "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.")),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
@@ -559,7 +559,7 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit(1.5)",
             stages: limit(json!({ "doubleValue": 1.5 })),
-            strict: None,
+            strict: Some((400, "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.")),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.",
@@ -568,7 +568,7 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit(null)",
             stages: limit(json!({ "nullValue": null })),
-            strict: None,
+            strict: Some((400, "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.")),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.",
@@ -577,7 +577,7 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit({})",
             stages: limit(map(vec![])),
-            strict: None,
+            strict: Some((400, "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.")),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.",
@@ -586,7 +586,7 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "offset(true)",
             stages: offset(json!({ "booleanValue": true })),
-            strict: None,
+            strict: Some((400, "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.")),
             emulator: (
                 400,
                 "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.",

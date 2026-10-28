@@ -1,0 +1,238 @@
+[
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#limit-boolean",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "limit",
+              "args": [
+                {
+                  "booleanValue": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#limit-double",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "limit",
+              "args": [
+                {
+                  "doubleValue": 1.5
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#limit-null",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "limit",
+              "args": [
+                {
+                  "nullValue": null
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#limit-empty-map",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "limit",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {}
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#offset-negative",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "offset",
+              "args": [
+                {
+                  "integerValue": "-1"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "The 'offset(...)' cannot have a negative value: -1",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/stage-order#offset-boolean",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/so5"
+                }
+              ]
+            },
+            {
+              "name": "offset",
+              "args": [
+                {
+                  "booleanValue": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  }
+]

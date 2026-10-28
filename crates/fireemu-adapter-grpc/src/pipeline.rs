@@ -1040,12 +1040,12 @@ pub fn compile_pipeline_in_order(
                 }
                 "offset" => {
                     only_filters_so_far = false;
-                    let offset = count_argument(stage, unrecorded)?;
+                    let offset = count_argument(stage)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
                     only_filters_so_far = false;
-                    let limit = count_argument(stage, unrecorded)?;
+                    let limit = count_argument(stage)?;
                     stages.push(Stage::Limit(limit));
                 }
                 "sort" => {
@@ -2621,26 +2621,12 @@ fn parse_alias(alias: &str) -> Result<FieldPath, Status> {
 /// The count a `limit` or `offset` stage takes. Any non-negative integer is answered in both
 /// profiles (FS-ENT-ORACLE O-4 `o4/stages#limit-*`, `#offset-5000000000`). Production refused a
 /// string for both and a negative limit with the official emulator's texts (O-4
-/// `#limit-string`, `#offset-string`, `#limit-negative`); the official emulator refuses every
-/// other type and a negative offset alike, which production has not answered, so strict
-/// refuses those as unobserved.
-fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<u64, Status> {
+/// `#limit-string`, `#offset-string`, `#limit-negative`). O-5 records additional wrong-type
+/// refusals and a negative offset. The outer request shape gate determines strict admission.
+fn count_argument(stage: &pb::pipeline::Stage) -> Result<u64, Status> {
     use pb::value::ValueType as V;
     let name = stage.name.as_str();
     let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
-    // O-5 `appendix#proposed-limit-zero` and `#proposed-offset-zero` record zero for
-    // both stages. Negative offset remains unobserved; a negative limit was refused in O-4.
-    let recorded = match argument {
-        Some(V::IntegerValue(_)) if name == "limit" => true,
-        Some(V::IntegerValue(n)) => *n >= 0,
-        Some(V::StringValue(_)) => true,
-        _ => false,
-    };
-    if unrecorded == Unrecorded::Refuse && !recorded {
-        return Err(Status::unimplemented(format!(
-            "this {name} argument is not observed locally"
-        )));
-    }
     match argument {
         Some(V::IntegerValue(n)) if *n >= 0 => Ok(u64::try_from(*n).unwrap_or(u64::MAX)),
         Some(V::IntegerValue(n)) => Err(Status::invalid_argument(format!(
@@ -3172,7 +3158,7 @@ fn check_unrun_alias_stage(
     let name = stage.name.as_str();
     // A limit or offset after an unrun stage: its argument checks come first, as above.
     if matches!(name, "limit" | "offset") {
-        count_argument(stage, unrecorded)?;
+        count_argument(stage)?;
         return Ok(());
     }
     if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
@@ -3881,6 +3867,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn count_argument_retains_the_full_positive_i64_range() {
+        use pb::value::ValueType as V;
+        for name in ["limit", "offset"] {
+            let stage = pb::pipeline::Stage {
+                name: name.to_owned(),
+                args: vec![pb::Value { value_type: Some(V::IntegerValue(i64::MAX)) }],
+                ..Default::default()
+            };
+            assert_eq!(count_argument(&stage).unwrap(), u64::try_from(i64::MAX).unwrap());
+        }
+    }
+
+    #[test]
     fn count_argument_pict_cases() {
         use pb::value::ValueType as V;
         use tonic::Code;
@@ -3917,19 +3916,10 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let profile = if strict {
-                Unrecorded::Refuse
-            } else {
-                Unrecorded::OfficialEmulator
-            };
-            let got = count_argument(&stage, profile);
+            let got = count_argument(&stage);
             match kind {
                 "zero" => assert_eq!(got.unwrap(), 0, "{strict} {name} {kind}"),
                 "positive" => assert_eq!(got.unwrap(), 1, "{strict} {name} {kind}"),
-                "negative" if strict && name == "offset" => {
-                    assert_eq!(got.unwrap_err().code(), Code::Unimplemented);
-                }
-                "boolean" if strict => assert_eq!(got.unwrap_err().code(), Code::Unimplemented),
                 _ => assert_eq!(
                     got.unwrap_err().code(),
                     Code::InvalidArgument,

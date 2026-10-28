@@ -1,0 +1,35 @@
+{
+  "error": {
+    "code": 403,
+    "message": "Firebase Realtime Database Management API has not been used in project demo-project before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/firebasedatabase.googleapis.com/overview?project=demo-project then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.",
+    "status": "PERMISSION_DENIED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "SERVICE_DISABLED",
+        "domain": "googleapis.com",
+        "metadata": {
+          "serviceTitle": "Firebase Realtime Database Management API",
+          "service": "firebasedatabase.googleapis.com",
+          "consumer": "projects/demo-project",
+          "containerInfo": "demo-project",
+          "activationUrl": "https://console.developers.google.com/apis/api/firebasedatabase.googleapis.com/overview?project=demo-project"
+        }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+        "locale": "en-US",
+        "message": "Firebase Realtime Database Management API has not been used in project demo-project before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/firebasedatabase.googleapis.com/overview?project=demo-project then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.Help",
+        "links": [
+          {
+            "description": "Google developers console API activation",
+            "url": "https://console.developers.google.com/apis/api/firebasedatabase.googleapis.com/overview?project=demo-project"
+          }
+        ]
+      }
+    ]
+  }
+}

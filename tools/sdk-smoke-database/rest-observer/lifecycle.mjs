@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validOperation } from './recovery.mjs';
-import { knownPropagation } from './transport.mjs';
+import { knownPropagation,knownInstanceNotReady } from './transport.mjs';
 
 export async function waitForRules(probe,sleep,instance) {
  const waits=[2000,4000,8000,16000,30000,30000,30000];
@@ -13,8 +13,13 @@ export async function waitForBaseline(probe,sleep,instance) {
  for(let i=0;i<=waits.length;i++){const r=await probe();if(r.status===200){let v;try{v=JSON.parse(r.body);}catch{throw Error('baseline response');}if(v!==null)throw Error('baseline nonempty');return;}if(r.status!==423||!knownPropagation(r,instance)||i===waits.length)throw Error('baseline unresolved');await sleep(waits[i]);}
 }
 
+export async function waitForInstanceList(probe,sleep,project){
+ for(let i=0;i<12;i++){const r=await probe();if(r?.status===200){try{return JSON.parse(r.body);}catch{throw Error('instance readiness body');}}if(!knownInstanceNotReady(r,project)||i===11)throw Error('instance readiness unresolved');await sleep(10000);}
+}
+
 // io must provide counted, durable and sticky-unknown request semantics.
 export async function lifecycle(io, p, corpus) {
+ if(p.mode==='priority-observation'&&typeof p.listReadiness!=='function')throw Error('instance readiness missing');
  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(p.prefix) || !/^[a-f0-9]{64}$/.test(p.baselineHash)) throw Error('invalid lifecycle packet');
  const instance = (v, state) => v?.name === p.instanceName && v.type === 'USER_DATABASE' && v.state === state;
  const read = async (step, path, accept) => { const v=await io(step,'GET',path); if (!accept(v)) throw Error(`${step}: guard`); return v; };
@@ -28,7 +33,7 @@ export async function lifecycle(io, p, corpus) {
  await finishOp('api-enable',await mutate('api-enable','POST','service:enable',{},op));
  await read('api-enabled','service',state('ENABLED'));
  await read('instance-before','instance',v=>instance(v,'DELETED'));
- await read('active-before','instances',empty);
+ if(p.mode==='priority-observation'){const list=await waitForInstanceList(p.listReadiness,p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))),p.project);if(!empty(list))throw Error('active-before: guard');}else await read('active-before','instances',empty);
  const restored=await mutate('undelete','POST','instance:undelete',undefined,v=>instance(v,'ACTIVE')||instance(v,'DISABLED'));
  if(instance(restored,'DISABLED')) await mutate('reenable','POST','instance:reenable',undefined,v=>instance(v,'ACTIVE'));
  await read('instance-active','instance',v=>instance(v,'ACTIVE'));

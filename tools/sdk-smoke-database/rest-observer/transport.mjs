@@ -8,6 +8,12 @@ export function knownPropagation(response,instance) {
  if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).length!==1||typeof v.error!=='string')return false;
  return response.status===423?v.error===`The Firebase database '${instance}' has been disabled by a database owner.`:v.error==='Permission denied';
 }
+export function knownInstanceNotReady(response,project){
+ if(response?.status!==403||typeof project!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(project)||typeof response.body!=='string')return false;let doc;try{doc=JSON.parse(response.body);}catch{return false;}const e=doc?.error;if(e?.code!==403||e.status!=='PERMISSION_DENIED'||!Array.isArray(e.details))return false;const d=e.details.filter(x=>x?.['@type']==='type.googleapis.com/google.rpc.ErrorInfo');return d.length===1&&d[0].reason==='SERVICE_DISABLED'&&d[0].domain==='googleapis.com'&&d[0].metadata?.service==='firebasedatabase.googleapis.com'&&d[0].metadata?.consumer===`projects/${project}`;
+}
+function permittedInstanceReadiness(request,response){
+ try{const u=new URL(request.url);return request.step==='instance-readiness'&&request.phase==='normal'&&request.method==='GET'&&typeof request.projectNumber==='string'&&/^[0-9]{1,20}$/.test(request.projectNumber)&&u.protocol==='https:'&&u.hostname==='firebasedatabase.googleapis.com'&&!u.port&&!u.username&&!u.password&&!u.search&&!u.hash&&u.pathname===`/v1beta/projects/${request.projectNumber}/locations/-/instances`&&knownInstanceNotReady(response,request.expectedProject);}catch{return false;}
+}
 function permittedProbe(request,response){
  try{const u=new URL(request.url);const match=/^([a-z][a-z0-9-]{3,62})\.firebaseio\.com$/.exec(u.hostname);return (request.step==='rules-propagation'||(request.step==='baseline-propagation'&&response.status===423))&&request.method==='GET'&&u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&!u.search&&!u.hash&&(request.step==='rules-propagation'?/^\/rnext1_[a-f0-9]{24}(?:\/ready)?\.json$/.test(u.pathname):/^\/rnext1_[a-f0-9]{24}\.json$/.test(u.pathname))&&!!match&&knownPropagation(response,match[1]);}catch{return false;}
 }
@@ -31,23 +37,23 @@ export async function createTransport({file,max,reserve,wire}) {
   used++; const id=used; await append({state:'before-send',id,method:request.method,url:request.url,phase:request.phase,body:request.body});
   let receipt=false, bodyCaptured=false; const onHeaders=async (status,headers)=>{if(receipt||!Number.isInteger(status))throw Error('invalid headers'); const safe={};for(const k of ['etag','content-type','content-length'])if(typeof headers[k]==='string'&&!SECRET.test(headers[k]))safe[k]=headers[k];await append({state:'response-headers',id,status,headers:safe});receipt=true;};
   onHeaders.body=async raw=>{if(!receipt||bodyCaptured||!Buffer.isBuffer(raw)||raw.length>1048576||SECRET.test(raw.toString('latin1')))throw Error('body refused');await append({state:'response-persisted',id,redacted:request.step==='auth-preflight',bodyBase64:raw.toString('base64'),bodyBytes:raw.length,bodySha256:createHash('sha256').update(raw).digest('hex')});bodyCaptured=true;};
-  let response; try{response=await wire(request,onHeaders); if(!receipt)throw Error('missing headers'); if(!response||!Number.isInteger(response.status)||(response.status<200||response.status>=300)&&!permittedProbe(request,response)&&!permittedRulesCase(request,response)&&!permittedQueryCase(request,response)&&!permittedBoundsCase(request,response)||!Buffer.isBuffer(response.raw)||response.raw.length>1048576||typeof response.body!=='string'||!response.headers||SECRET.test(response.body))throw Error('unknown response');if(!bodyCaptured)await onHeaders.body(response.raw);}catch(e){unknown=true;try{if(e instanceof KnownRejection && receipt && bodyCaptured){await append({state:'known-rejection',id,status:e.status});if(e.status<400||e.status>=500)await append({state:'unknown',id});}else await append({state:'unknown',id});}catch{}throw Error('request stopped');}
+  let response; try{response=await wire(request,onHeaders); if(!receipt)throw Error('missing headers'); if(!response||!Number.isInteger(response.status)||(response.status<200||response.status>=300)&&!permittedProbe(request,response)&&!permittedRulesCase(request,response)&&!permittedQueryCase(request,response)&&!permittedBoundsCase(request,response)&&!permittedInstanceReadiness(request,response)||!Buffer.isBuffer(response.raw)||response.raw.length>1048576||typeof response.body!=='string'||!response.headers||SECRET.test(response.body))throw Error('unknown response');if(!bodyCaptured)await onHeaders.body(response.raw);}catch(e){unknown=true;try{if(e instanceof KnownRejection && receipt && bodyCaptured){await append({state:'known-rejection',id,status:e.status});if(e.status<400||e.status>=500)await append({state:'unknown',id});}else await append({state:'unknown',id});}catch{}throw Error('request stopped');}
   return response;
  };
  invoke.close=()=>handle.close(); return invoke;
 }
 
-export function makeWire({instance,project,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false,managementOnly=false}) {
+export function makeWire({instance,project,projectNumber,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false,managementOnly=false}) {
  if(typeof project!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(project)||typeof instance!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(instance)||typeof token!=='string'||!token||typeof fetchImpl!=='function'||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>25000)throw Error('invalid wire config');
  const hosts=new Set(serviceOnly?['serviceusage.googleapis.com']:managementOnly?['firebasedatabase.googleapis.com','serviceusage.googleapis.com']:[`${instance}.firebaseio.com`,'firebasedatabase.googleapis.com','serviceusage.googleapis.com']);
  return async (request,onHeaders=async()=>{})=>{
-  const u=new URL(request.url);if(u.protocol!=='https:'||!hosts.has(u.hostname)||u.port||u.username||u.password||u.hash)throw Error('host refused');
+  if(request.step==='instance-readiness'&&(request.expectedProject!==project||request.projectNumber!==projectNumber||!/^[0-9]{1,20}$/.test(projectNumber??'')))throw Error('readiness project refused');const u=new URL(request.url);if(u.protocol!=='https:'||!hosts.has(u.hostname)||u.port||u.username||u.password||u.hash)throw Error('host refused');
   const headers={};if(request.step!=='corpus'&&request.step!=='rules-case'&&request.step!=='query-case'&&request.step!=='bounds-case'&&request.step!=='rules-anchor'&&request.step!=='rules-propagation'){headers.authorization=`Bearer ${token}`;headers['x-goog-user-project']=project;}if(request.body!==undefined)headers['content-type']='application/json';
   const response=await fetchImpl(u,{method:request.method,headers,body:request.body,redirect:'manual',signal:AbortSignal.timeout(timeoutMs)});
   const out={};for(const k of ['etag','content-type','content-length']){const v=response.headers.get(k);if(v!==null&&!SECRET.test(v))out[k]=v;}
   await onHeaders(response.status,out);
   const chunks=[];let total=0; if(response.body) { const reader=response.body.getReader(); try { for (;;) { const {done,value}=await reader.read(); if(done)break; total+=value.byteLength; if(total>1048576){await reader.cancel();throw Error('response too large');} chunks.push(value); } } finally { reader.releaseLock(); } }
   const raw=Buffer.concat(chunks,total);if(onHeaders.body)await onHeaders.body(raw);const body=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw);
-  const result={status:response.status,headers:out,body,raw};if((response.status<200||response.status>=300)&&!permittedProbe(request,result)&&!permittedRulesCase(request,result)&&!permittedQueryCase(request,result)&&!permittedBoundsCase(request,result))throw new KnownRejection(response.status);return result;
+  const result={status:response.status,headers:out,body,raw};if((response.status<200||response.status>=300)&&!permittedProbe(request,result)&&!permittedRulesCase(request,result)&&!permittedQueryCase(request,result)&&!permittedBoundsCase(request,result)&&!permittedInstanceReadiness(request,result))throw new KnownRejection(response.status);return result;
  };
 }

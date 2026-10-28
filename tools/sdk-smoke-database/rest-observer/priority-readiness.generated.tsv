@@ -1,0 +1,10 @@
+Identity	Boundary	Outcome
+same	early	response
+same	last	response
+foreign	last	response
+malformed	early	timeout
+other	early	response
+other	last	timeout
+same	last	timeout
+malformed	last	response
+foreign	early	timeout

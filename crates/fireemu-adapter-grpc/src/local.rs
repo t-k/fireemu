@@ -8344,6 +8344,90 @@ mod lock_tests {
     }
 
     #[test]
+    fn union_sources_do_not_resample_after_concurrent_write_begins() {
+        let backend = backend();
+        let database = "projects/demo-app/databases/(default)";
+        let doc = move |collection: &str, value: i64| pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{database}/documents/{collection}/doc"),
+                fields: [(
+                    "n".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        backend
+            .commit(&pb::CommitRequest {
+                database: database.to_owned(),
+                writes: vec![doc("left", 1), doc("right", 2)],
+                ..Default::default()
+            })
+            .unwrap();
+        let request = |collection: &str| pb::RunQueryRequest {
+            parent: format!("{database}/documents"),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        let thread = std::cell::RefCell::new(None);
+        let guard = |_: &FirestoreState, _, _: ReadCheck<'_>| {
+            if thread.borrow().is_none() {
+                let writer = backend.clone();
+                let tx = tx.clone();
+                *thread.borrow_mut() = Some(std::thread::spawn(move || {
+                    tx.send(()).unwrap();
+                    writer
+                        .commit(&pb::CommitRequest {
+                            database: database.to_owned(),
+                            writes: vec![doc("right", 99)],
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }));
+                rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+            Ok(())
+        };
+        let responses = backend
+            .run_pipeline_sources(&[request("left"), request("right")], &guard)
+            .unwrap();
+        thread.into_inner().unwrap().join().unwrap();
+        let right = responses[1]
+            .iter()
+            .find_map(|response| response.document.as_ref())
+            .unwrap();
+        assert_eq!(
+            right.fields["n"].value_type,
+            Some(pb::value::ValueType::IntegerValue(2))
+        );
+        let after = backend
+            .run_pipeline_sources(&[request("right")], &crate::rules::allow_all_reads)
+            .unwrap();
+        let right = after[0]
+            .iter()
+            .find_map(|response| response.document.as_ref())
+            .unwrap();
+        assert_eq!(
+            right.fields["n"].value_type,
+            Some(pb::value::ValueType::IntegerValue(99))
+        );
+    }
+
+    #[test]
     fn an_already_idle_transaction_releases_its_lock_before_contention_wait() {
         let backend = Arc::new(
             LocalBackend::new(

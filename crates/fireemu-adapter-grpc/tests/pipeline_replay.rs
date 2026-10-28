@@ -501,14 +501,43 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
 }
 
 // The retained percent=1 observation contains every eligible input row in scan order.
-fn sample_contract(rule: &SampleOf, body: &Value, source: &[Value], percent: bool) -> bool {
+fn sample_timestamp(value: Option<&Value>, placeholder: &str, recorded: bool) -> bool {
+    let Some(text) = value.and_then(Value::as_str) else {
+        return false;
+    };
+    if recorded && text == placeholder {
+        return true;
+    }
+    chrono::DateTime::parse_from_rfc3339(text).is_ok_and(|time| {
+        fireemu_core_firestore::value::Timestamp::new(
+            time.timestamp(),
+            time.timestamp_subsec_nanos(),
+        )
+        .is_ok()
+    })
+}
+
+fn sample_contract(
+    rule: &SampleOf,
+    body: &Value,
+    source: &[Value],
+    percent: bool,
+    recorded: bool,
+) -> bool {
     let Some(parts) = body.as_array() else {
         return false;
     };
     let [part] = parts.as_slice() else {
         return false;
     };
-    if !part.is_object() {
+    let Some(unit) = part.as_object() else {
+        return false;
+    };
+    if unit
+        .keys()
+        .any(|key| key != "executionTime" && key != "results")
+        || !sample_timestamp(unit.get("executionTime"), "<t1>", recorded)
+    {
         return false;
     }
     let rows: &[Value] = match part.get("results") {
@@ -522,8 +551,8 @@ fn sample_contract(rule: &SampleOf, body: &Value, source: &[Value], percent: boo
     let mut seen = HashSet::new();
     let mut previous = None;
     for row in rows {
-        if !row.get("createTime").is_some_and(Value::is_string)
-            || !row.get("updateTime").is_some_and(Value::is_string)
+        if !sample_timestamp(row.get("createTime"), "<t2>", recorded)
+            || !sample_timestamp(row.get("updateTime"), "<t2>", recorded)
         {
             return false;
         }
@@ -559,6 +588,16 @@ const CLOCK_WINDOW_SECONDS: i64 = 120;
 /// Whether an answer satisfies the rule of its row.
 /// `now` is the clock in seconds since the epoch that a clock row is judged against.
 fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bool {
+    satisfies_in(rule, status, body, now, false)
+}
+
+fn satisfies_in(
+    rule: &Nondeterministic,
+    status: u16,
+    body: &Value,
+    now: i64,
+    recorded: bool,
+) -> bool {
     if status != 200 {
         return false;
     }
@@ -579,7 +618,7 @@ fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bo
                 .flatten()
                 .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
                 .collect();
-            sample_contract(sample, body, &source, sample.count == usize::MAX)
+            sample_contract(sample, body, &source, sample.count == usize::MAX, recorded)
         }
         Nondeterministic::ClockSeconds => {
             let [result] = results.as_slice() else {
@@ -2482,7 +2521,10 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
                 .map_or(0, |text| text.parse::<i64>().unwrap());
             for recording in [&program["steps"][step], again] {
                 let status = u16::try_from(recording["status"].as_u64().unwrap()).unwrap();
-                assert!(satisfies(&rule, status, &recording["body"], now), "{row}");
+                assert!(
+                    satisfies_in(&rule, status, &recording["body"], now, true),
+                    "{row}"
+                );
             }
             // A refusal is no answer to a request production accepted.
             assert!(!satisfies(&rule, 400, &json!([]), now), "{row}");
@@ -3492,6 +3534,7 @@ fn recorded_literal_key_grpc_refusals_keep_messages_where_order_is_observable() 
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn sample_contract_rejects_typed_row_and_framing_near_misses() {
     let production = read("fs-ent-pipeline-production.json");
     let body = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"]
@@ -3503,59 +3546,123 @@ fn sample_contract_rejects_typed_row_and_framing_near_misses() {
         .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
         .collect();
     assert_eq!(rows.len(), 5);
-    let sample = |items: Vec<Value>| json!([{"results": items}]);
+    let sample = |items: Vec<Value>| json!([{"executionTime":"<t1>", "results": items}]);
     let rule = SampleOf {
         count: 2,
         members: SU,
     };
     let good = sample(vec![rows[0].clone(), rows[1].clone()]);
-    assert!(sample_contract(&rule, &good, &rows, false));
+    assert!(sample_contract(&rule, &good, &rows, false, true));
     let mut bad = good.clone();
     bad[0]["results"][0]["fields"]["n"] = json!({"stringValue":"1"});
-    assert!(!sample_contract(&rule, &bad, &rows, false));
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
     let mut bad = good.clone();
     bad[0]["results"][0]["createTime"] = json!(1);
-    assert!(!sample_contract(&rule, &bad, &rows, false));
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
     let mut bad = good.clone();
     bad[0]["results"][0]["name"] = json!("projects/p/databases/d/documents/su/unknown");
-    assert!(!sample_contract(&rule, &bad, &rows, false));
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
     assert!(!sample_contract(
         &rule,
         &sample(vec![rows[0].clone(), rows[0].clone()]),
         &rows,
-        false
+        false,
+        true
     ));
     assert!(!sample_contract(
         &rule,
         &sample(vec![rows[0].clone()]),
         &rows,
-        false
+        false,
+        true
     ));
     assert!(!sample_contract(
         &rule,
-        &json!([{"results":[rows[0].clone()]},{"results":[rows[1].clone()]}]),
+        &json!([{"executionTime":"<t1>","results":[rows[0].clone()]},{"executionTime":"<t1>","results":[rows[1].clone()]}]),
         &rows,
-        false
+        false,
+        true
     ));
     assert!(!sample_contract(
         &rule,
-        &json!([{"results":[rows[0].clone(),rows[1].clone()]},{"results":[]}]),
+        &json!([{"executionTime":"<t1>","results":[rows[0].clone(),rows[1].clone()]},{"executionTime":"<t1>","results":[]}]),
         &rows,
-        false
+        false,
+        true
     ));
     assert!(!sample_contract(
         &rule,
         &sample(vec![rows[1].clone(), rows[0].clone()]),
         &rows,
+        true,
         true
     ));
     assert!(sample_contract(
         &rule,
         &sample(vec![rows[0].clone()]),
         &rows,
+        true,
         true
     ));
-    assert!(sample_contract(&rule, &sample(rows.clone()), &rows, true));
-    assert!(sample_contract(&rule, &sample(vec![]), &rows, true));
-    assert!(!sample_contract(&rule, &json!([null]), &rows, true));
+    assert!(sample_contract(
+        &rule,
+        &sample(rows.clone()),
+        &rows,
+        true,
+        true
+    ));
+    assert!(sample_contract(&rule, &sample(vec![]), &rows, true, true));
+    assert!(!sample_contract(&rule, &json!([null]), &rows, true, true));
+    assert!(!sample_contract(&rule, &good, &rows, false, false));
+    let mut live = good.clone();
+    live[0]["executionTime"] = json!("2026-01-01T00:00:00Z");
+    for row in live[0]["results"].as_array_mut().unwrap() {
+        row["createTime"] = json!("2026-01-01T00:00:00Z");
+        row["updateTime"] = json!("2026-01-01T00:00:00Z");
+    }
+    assert!(sample_contract(&rule, &live, &rows, false, false));
+    live[0]["results"][0]["createTime"] = json!("<t2>");
+    assert!(!sample_contract(&rule, &live, &rows, false, false));
+
+    assert!(!sample_contract(&rule, &json!([{}]), &rows, true, true));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"error":{"message":"bad"}}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"broken"}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":7}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"<t1>","error":{}}]),
+        &rows,
+        true,
+        true
+    ));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["createTime"] = json!("broken");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["updateTime"] = json!("broken");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("updateTime");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
 }

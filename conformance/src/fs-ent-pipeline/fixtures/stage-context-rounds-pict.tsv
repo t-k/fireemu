@@ -1,0 +1,13 @@
+Phase	Outcome	Round
+seed	unknown	1
+delete-owned	unknown	2
+observe	unknown	1
+delete-owned	success	1
+verify-absence	unknown	1
+observe	success	2
+baseline	success	2
+verify	success	1
+baseline	unknown	1
+verify	unknown	2
+seed	success	2
+verify-absence	success	2

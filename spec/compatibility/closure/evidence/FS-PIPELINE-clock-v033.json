@@ -1,0 +1,28 @@
+{
+  "kind": "fs-ent-pipeline-current-timestamp-clock-v1",
+  "recipe": "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok",
+  "sourceCommit": "86abafcdf2197456b819134c33f76ecd5da2a54c",
+  "binarySha256": "8da4b077c5b4cb63d364451f838de21d95d58101e64fe36541e52da872b6da76",
+  "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "configSha256": "92896e1fc1628c3fb471873b05cf8ca8e60976b733bbf729503a8f7b208cdb6d",
+  "configuredClock": "2031-02-03T04:05:06.123456789Z",
+  "expectedClock": "2031-02-03T04:05:06.123456Z",
+  "status": 200,
+  "response": [
+    {
+      "executionTime": "2031-02-03T04:05:06.123456789Z",
+      "results": [
+        {
+          "fields": {
+            "v": {
+              "timestampValue": "2031-02-03T04:05:06.123456Z"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "resultShapeMatchesProduction": true,
+  "rawReceiptSha256": "33dd959bfbaf3efbeb68dcaf331253c0ec29d61cd24e2dd7bf121f2311143639",
+  "productionRequests": 0
+}

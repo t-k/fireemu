@@ -898,7 +898,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
-    "sha256": "10f8807a7d2c54dd737c3eed9f157d4dbda777c945453a79dda4142e5df83898",
+    "sha256": "7c5c35ce479b1b691caac1e0a69d756f710bfb35d2e8f729b11c2e1b820beded",
     "rows": 172,
     "summary": {
      "rest": {
@@ -908,12 +908,15 @@
       "MATCH": 48
      }
     },
-    "binding": "Release binary from signed source 1bc8e560639aaadb1d46e034228737f7ad5edea7; SHA-256 b3de0286328d34868e964233568e8a3d584e40606356e3e92d21758b834c627c. This additional REST replay does not rebind the historical SDK, Auth, residual or S5 comparisons."
+    "binding": "Release binary from signed source 86abafcdf2197456b819134c33f76ecd5da2a54c; SHA-256 8da4b077c5b4cb63d364451f838de21d95d58101e64fe36541e52da872b6da76. This additional REST replay does not rebind the historical SDK, Auth, residual or S5 comparisons."
    }
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
-  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences. The S5 comparison (production-1 of RTDB-S5-20261027-01) is bound to its own release binary, built from the commit named in its evidence."
+  "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences. The S5 comparison (production-1 of RTDB-S5-20261027-01) is bound to its own release binary, built from the commit named in its evidence.",
+  "next4EvidencePath": "spec/compatibility/closure/evidence/RTDB-next4-v033-comparison.json",
+  "next4EvidenceSha256": "f817de8601908381629a412a8fb29df0c29603cd6d5797c96fbfbc1f6d898ead",
+  "next4EvidenceNote": "The 36 recorded NEXT4 rows match under each profile on this release binary; this does not claim unobserved inputs."
  },
  "knownDifferences": {
   "restMemberOrder": {

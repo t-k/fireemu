@@ -15,7 +15,7 @@ export function routeAdmin(path,p,prefix) {
 }
 
 // wire is injected by the caller. This module never acquires credentials or starts network access.
-export async function runPacket({packet,digest,wire,output,prefix,transport}) {
+export async function runPacket({packet,digest,wire,output,prefix,transport,sleep}) {
  const p=await verifyPacket(packet,digest);
  if(!/^rnext1_[a-f0-9]{24}$/.test(prefix)) throw Error('invalid run prefix');
  const base=`https://${p.instance}.firebaseio.com`, mgmt=`https://firebasedatabase.googleapis.com/v1beta/projects/${p.projectNumber}/locations`, service=`https://serviceusage.googleapis.com/v1/projects/${p.projectNumber}/services/firebasedatabase.googleapis.com`, instance=`${mgmt}/${p.location}/instances/${p.instance}`;
@@ -25,5 +25,5 @@ export async function runPacket({packet,digest,wire,output,prefix,transport}) {
  const io=async (step,method,path,body)=>{if(step==='prefix-delete') cleanup=true;const response=await counted({step,method,url:url(path),body:body===undefined?undefined:typeof body==='string'?body:JSON.stringify(body),phase:cleanup?'cleanup':'normal'});if(step==='rules-before'||step==='rules-restored')return response.body;try{return JSON.parse(response.body);}catch{throw Error(`${step}: unreadable response`);}};
  const state={used:0,max:p.maxRequests,cleanupReserve:0,unknown:false,journal:[]};
  const corpus=()=>runCorpus(state,async req=>counted({step:'corpus',method:req.method,url:`${base}${req.path}${req.query?'?'+req.query:''}`,body:req.body,phase:req.phase}),prefix,p.anchors);
- try{return await lifecycle(io,{prefix,instanceName:`projects/${p.projectNumber}/locations/${p.location}/instances/${p.instance}`,baselineHash:p.baselineRulesSha256,instance:p.instance,probe:()=>counted({step:'rules-propagation',method:'GET',url:`${base}/${prefix}.json`,phase:'normal'}),serviceName:`projects/${p.projectNumber}/services/firebasedatabase.googleapis.com`},corpus);}finally{if(!transport)await counted.close();}
+ try{return await lifecycle(io,{prefix,instanceName:`projects/${p.projectNumber}/locations/${p.location}/instances/${p.instance}`,baselineHash:p.baselineRulesSha256,instance:p.instance,sleep,baselineProbe:()=>counted({step:'baseline-propagation',method:'GET',url:`${base}/${prefix}.json`,phase:'normal'}),probe:()=>counted({step:'rules-propagation',method:'GET',url:`${base}/${prefix}.json`,phase:'normal'}),serviceName:`projects/${p.projectNumber}/services/firebasedatabase.googleapis.com`},corpus);}finally{if(!transport)await counted.close();}
 }

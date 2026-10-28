@@ -9,7 +9,7 @@ export function knownPropagation(response,instance) {
  return response.status===423?v.error===`The Firebase database '${instance}' has been disabled by a database owner.`:v.error==='Permission denied';
 }
 function permittedProbe(request,response){
- try{const u=new URL(request.url);const match=/^([a-z][a-z0-9-]{3,62})\.firebaseio\.com$/.exec(u.hostname);return request.step==='rules-propagation'&&request.method==='GET'&&u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&!u.search&&!u.hash&&/^\/rnext1_[a-f0-9]{24}\.json$/.test(u.pathname)&&!!match&&knownPropagation(response,match[1]);}catch{return false;}
+ try{const u=new URL(request.url);const match=/^([a-z][a-z0-9-]{3,62})\.firebaseio\.com$/.exec(u.hostname);return (request.step==='rules-propagation'||(request.step==='baseline-propagation'&&response.status===423))&&request.method==='GET'&&u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&!u.search&&!u.hash&&/^\/rnext1_[a-f0-9]{24}\.json$/.test(u.pathname)&&!!match&&knownPropagation(response,match[1]);}catch{return false;}
 }
 export async function createTransport({file,max,reserve,wire}) {
  if (!Number.isInteger(max)||max<1||!Number.isInteger(reserve)||reserve<0||reserve>=max||typeof wire!=='function') throw Error('invalid transport config');

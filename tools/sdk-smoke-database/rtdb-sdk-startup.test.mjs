@@ -108,3 +108,19 @@ test('startup permits only the exact owned root GET, not a child read',()=>{
  assert.throws(()=>run(`w.send(JSON.stringify({t:'d',d:{r:1,a:'g',b:{p:'/owned/sdk/child'}}}))`),/scope|root/i);
  assert.equal(c.writes.length,0);
 });
+
+test('startup context blocks service workers alongside sdk-next', async()=>{
+ const { browserContextOptions }=await import('./rtdb-residual.mjs');
+ assert.deepEqual(browserContextOptions('sdk-next-startup'),{serviceWorkers:'block'});
+ assert.deepEqual(browserContextOptions('sdk-next'),{serviceWorkers:'block'});
+ assert.deepEqual(browserContextOptions('cv08'),{});
+});
+
+test('private raw control persists exact UTF-8 and fails closed on write error or secret',async()=>{
+ const { createPrivateControlWriter }=await import('./rtdb-residual.mjs');
+ let stored;const writer=createPrivateControlWriter((bytes)=>{stored=bytes},['super-secret']);
+ const raw='{"t":"c","d":"'+ '漢'.repeat(1300)+'"}';writer('r1-ws',raw);
+ assert.equal(JSON.parse(stored.toString()).raw,raw);
+ assert.throws(()=>writer('r1-ws','super-secret'),/secret/i);
+ assert.throws(()=>createPrivateControlWriter(()=>{throw Error('disk')},[])('r1-ws','ok'),/disk/);
+});

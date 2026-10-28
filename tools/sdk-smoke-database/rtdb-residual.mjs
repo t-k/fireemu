@@ -13,7 +13,7 @@
 // The management calls (API, instance, Rules, prefix delete) use the ADC token and never reach an
 // output (assertNoSecrets guards every write). Setup and cleanup follow the CV11 recorder.
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
@@ -292,6 +292,19 @@ export const profileTimeout = (cfg) => (cfg.scenario === 'cv10' ? PROFILE_TIMEOU
 // One profile in headless Chromium. The page and SDK bundles are served from loopback; HTTP requests,
 // WebSockets and WebSocket frames are counted against the caps, and Chromium itself resolves nothing
 // but loopback and Firebase hosts (--host-rules).
+export const browserContextOptions = (scenario) => ['sdk-next', 'sdk-next-startup'].includes(scenario) ? { serviceWorkers: 'block' } : {};
+
+export function createPrivateControlWriter(write, secrets) {
+  let count = 0;
+  return (profile, raw) => {
+    if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > 4096 || count >= 8) throw Error('private control limit');
+    const line = `${JSON.stringify({ profile, raw })}\n`;
+    assertNoSecrets(line, secrets);
+    write(Buffer.from(line));
+    count++;
+  };
+}
+
 export function browserRunner({ modules, page: pageConfig, stop = {} }) {
   const require = createRequire(path.join(path.resolve(modules), 'x.js'));
   const { chromium } = require('playwright');
@@ -309,7 +322,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
     const capped = new Promise((_, reject) => { overCap = () => reject(Error('browser request cap reached')); });
     capped.catch(() => {});
     try {
-      const context = await browser.newContext(cfg.scenario === 'sdk-next' ? { serviceWorkers: 'block' } : {});
+      const context = await browser.newContext(browserContextOptions(cfg.scenario));
       if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws') {
         const target = new URL(pageConfig.databaseURL);
         await context.addInitScript(installSdkNextWsGuard, { host: target.host, namespace: target.searchParams.get('ns') ?? INSTANCE, base: cfg.base, secure: target.protocol === 'https:', noMutations: cfg.scenario === 'sdk-next-startup', maxMessages: cfg.scenario === 'sdk-next-startup' ? 16 : 1250, maxControls: 4 });
@@ -335,7 +348,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
         if (++counts.ws > CAPS.browserWs) overCap();
         for (const kind of ['framesent', 'framereceived']) ws.on(kind, () => { if (++counts.frames > CAPS.browserFrames) overCap(); });
       });
-      await page.exposeFunction('__rrEvent', (e) => { const row = Object.fromEntries(Object.entries(e).filter(([, v]) => v !== undefined)); journal.push(row); hooks.event(`${cfg.scenario}:${cfg.name}`, row); });
+      await page.exposeFunction('__rrEvent', (e) => { const row = Object.fromEntries(Object.entries(e).filter(([, v]) => v !== undefined)); hooks.event(`${cfg.scenario}:${cfg.name}`, row); journal.push(row); });
       await page.exposeFunction('__rrHook', (name) => hooks[name]());
       await page.goto(`http://${origin}/`);
       await page.waitForFunction(() => typeof window.__rrRun === 'function');
@@ -370,7 +383,7 @@ async function freePort() {
 export function writeOutputs(out, mode, result, prefixRoot, secrets) {
   const write = (f, text) => writeFileSync(path.join(out, f), assertNoSecrets(text, secrets));
   let refused;
-  for (const [f, value] of [['result.json', { ...result, profiles: undefined, prefixRoot }], ['journal.json', { mode, profiles: result.profiles.map((p) => ({ scenario: p.scenario, name: p.name, counts: p.counts, journal: p.journal })) }]]) {
+  for (const [f, value] of [['result.json', { ...result, profiles: undefined, prefixRoot }], ['journal.json', { mode, profiles: result.profiles.map((p) => ({ scenario: p.scenario, name: p.name, counts: p.counts, journal: p.journal.filter((r) => r.type !== 'raw-control') })) }]]) {
     try { write(f, `${JSON.stringify(value, null, 2)}\n`); } catch { refused ??= f; }
   }
   if (!refused) return result.status;
@@ -427,13 +440,17 @@ async function main(argv) {
   const secrets = [], stop = { requested: false };
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.
   const append = (f, row) => appendFileSync(path.join(out, f), `${redact(JSON.stringify(row), secrets).replace(/\n/g, ' ')}\n`);
+  const privateControl = createPrivateControlWriter((bytes) => {
+    const fd = openSync(path.join(out, 'private-controls.jsonl'), 'a', 0o600);
+    try { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset); if (!n) throw Error('short private control write'); offset += n; } fsyncSync(fd); } finally { closeSync(fd); }
+  }, secrets);
   // A signal or a crash stops the observation; cleanup then runs once through runScenario's finally.
   const onStop = (why) => { if (!stop.requested) console.error(`rtdb-residual: ${why}: stopping the observation, cleanup continues`); stop.requested = true; stop.closeBrowser?.(); };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => onStop(signal));
   process.on('unhandledRejection', () => onStop('unhandled rejection'));
   process.on('uncaughtException', () => onStop('uncaught exception'));
   const prefix = `${packet?.prefixRoot ?? 'parity20261027'}/rr${randomBytes(5).toString('hex')}`;
-  const common = { prefix, secrets, stop, log: (row) => append('requests.jsonl', row), event: (name, row) => append('events.jsonl', { profile: name, ...row }) };
+  const common = { prefix, secrets, stop, log: (row) => append('requests.jsonl', row), event: (name, row) => row.type === 'raw-control' ? privateControl(name, row.shape) : append('events.jsonl', { profile: name, ...row }) };
   let child, official, o;
   try {
     if (mode === 'local') {

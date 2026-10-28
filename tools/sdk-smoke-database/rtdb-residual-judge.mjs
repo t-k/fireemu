@@ -154,7 +154,7 @@ export function sanitizeProfiles(profiles) {
   return profiles.map((p) => ({
     scenario: p.scenario,
     name: p.name,
-    journal: p.journal.map((row) => Object.fromEntries([...KEPT, 'seconds'].filter((k) => k in row && row[k] !== undefined).map((k) => [k, row[k]]))),
+    journal: p.journal.filter((row) => row.type !== 'raw-control').map((row) => Object.fromEntries([...KEPT, 'seconds'].filter((k) => k in row && row[k] !== undefined).map((k) => [k, row[k]]))),
   }));
 }
 

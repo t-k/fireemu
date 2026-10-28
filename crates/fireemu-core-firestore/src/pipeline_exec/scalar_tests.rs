@@ -2583,3 +2583,193 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         assert!(is_unobserved(&call(wrong_result, mode)));
     }
 }
+
+#[test]
+fn recorded_array_subsequence_results() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    let repeated = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(1),
+    ]);
+    let null_search = array(vec![Value::Integer(1), Value::Null]);
+    let empty = array(vec![]);
+    let cases = [
+        ("array_slice", vec![a.clone(), int(1)], array(vec![Value::Integer(2), Value::Integer(3)])),
+        ("array_slice", vec![a.clone(), int(1), int(1)], array(vec![Value::Integer(2)])),
+        ("array_slice", vec![a.clone(), int(-1)], array(vec![Value::Integer(3)])),
+        ("array_slice", vec![a.clone(), int(10)], empty.clone()),
+        ("array_slice", vec![null(), int(1)], null()),
+        ("array_slice", vec![Eval::Absent, int(1)], null()),
+        ("array_slice", vec![int(5), int(1)], wrong("array_slice", "Array", "LONG")),
+        ("array_index_of", vec![repeated.clone(), int(1), text("first")], int(0)),
+        ("array_index_of", vec![repeated, int(1), text("last")], int(2)),
+        ("array_index_of", vec![a.clone(), int(9), text("first")], int(-1)),
+        ("array_index_of", vec![null_search, null(), text("first")], int(1)),
+        ("array_index_of", vec![a.clone(), int(1), text("middle")], invalid("The argument 'direction' for function 'array_index_of' must be a literal of type string from the following list: [first, last]")),
+        ("array_index_of", vec![null(), int(1), text("first")], null()),
+        ("array_index_of", vec![Eval::Absent, int(1), text("first")], null()),
+        ("array_index_of", vec![int(5), int(1), text("first")], wrong("array_index_of", "Array", "LONG")),
+    ];
+    for (name, args, expected) in cases {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for (name, result) in [
+        (
+            "array_first_n",
+            array(vec![Value::Integer(1), Value::Integer(2)]),
+        ),
+        (
+            "array_last_n",
+            array(vec![Value::Integer(2), Value::Integer(3)]),
+        ),
+    ] {
+        for (args, expected) in [
+            (vec![a.clone(), int(2)], result),
+            (vec![a.clone(), int(0)], empty.clone()),
+            (
+                vec![a.clone(), int(-1)],
+                invalid(&format!(
+                    "The function `{name}(...)` requires non-negative count."
+                )),
+            ),
+            (vec![a.clone(), int(10)], a.clone()),
+            (vec![null(), int(2)], null()),
+            (vec![Eval::Absent, int(2)], null()),
+            (
+                vec![a.clone(), dbl(1.5)],
+                invalid("Cannot coerce Float64 (1.5) to Int64"),
+            ),
+        ] {
+            assert_eq!(both(name, &args), expected, "{name} {args:?}");
+        }
+        assert_eq!(Expr::call(name, vec![Expr::Constant(Value::Null)], Placement::Value).unwrap_err().to_string(), format!("The function '{name}(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 1 was provided."));
+    }
+    assert_eq!(Expr::call("array_index_of", vec![Expr::Constant(Value::Null); 2], Placement::Value).unwrap_err().to_string(), "The function 'array_index_of(array: array[any], search: any, direction: (first|last)): int64' takes [3..3] argument(s), but 2 were provided.");
+}
+
+#[test]
+fn array_subsequence_pict_rows() {
+    let cases = [
+        ("slice", "populated", "positive", "strict"),
+        ("slice", "populated", "negative", "strict"),
+        ("first", "populated", "zero", "emulator"),
+        ("last", "populated", "large", "strict"),
+        ("index", "populated", "positive", "strict"),
+        ("index", "null", "negative", "emulator"),
+        ("first", "absent", "large", "strict"),
+        ("last", "empty", "zero", "emulator"),
+        ("first", "empty", "negative", "strict"),
+        ("index", "empty", "large", "emulator"),
+        ("first", "null", "zero", "strict"),
+        ("first", "absent", "positive", "emulator"),
+        ("slice", "empty", "positive", "emulator"),
+        ("slice", "absent", "zero", "strict"),
+        ("last", "absent", "negative", "strict"),
+        ("index", "absent", "zero", "strict"),
+        ("last", "null", "positive", "emulator"),
+        ("slice", "null", "large", "strict"),
+    ];
+    for (function, array_case, operand, profile) in cases {
+        let items = vec![Value::Integer(1), Value::Integer(2), Value::Integer(1)];
+        let input = match array_case {
+            "populated" => array(items.clone()),
+            "empty" => array(vec![]),
+            "null" => null(),
+            _ => Eval::Absent,
+        };
+        let n = match operand {
+            "positive" => 2_i64,
+            "zero" => 0,
+            "negative" => -1,
+            _ => 10,
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let name = match function {
+            "slice" => "array_slice",
+            "first" => "array_first_n",
+            "last" => "array_last_n",
+            _ => "array_index_of",
+        };
+        let args = if function == "index" {
+            vec![input, int(n), text("first")]
+        } else {
+            vec![input, int(n)]
+        };
+        let expected = if matches!(array_case, "null" | "absent") {
+            null()
+        } else if function == "index" {
+            let values: &[Value] = if array_case == "empty" { &[] } else { &items };
+            int(values
+                .iter()
+                .position(|value| *value == Value::Integer(n))
+                .map_or(-1, |index| i64::try_from(index).unwrap()))
+        } else if n < 0 && function != "slice" {
+            invalid(&format!(
+                "The function `{name}(...)` requires non-negative count."
+            ))
+        } else {
+            let values: &[Value] = if array_case == "empty" { &[] } else { &items };
+            let count = usize::try_from(n.max(0)).unwrap().min(values.len());
+            let selected = match function {
+                "slice" => {
+                    let start = if n < 0 {
+                        values
+                            .len()
+                            .saturating_sub(usize::try_from(n.unsigned_abs()).unwrap())
+                    } else {
+                        count
+                    };
+                    &values[start..]
+                }
+                "first" => &values[..count],
+                _ => &values[values.len() - count..],
+            };
+            array(selected.to_vec())
+        };
+        assert_eq!(
+            call_in(name, &args, mode, false),
+            expected,
+            "{function}/{array_case}/{operand}/{profile}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_subsequence_matches_reference(items in proptest::collection::vec(-20_i64..20, 0..25), count in 0_usize..40, offset in -40_i64..40) {
+        let values: Vec<Value> = items.iter().copied().map(Value::Integer).collect();
+        let input = array(values.clone());
+        let n = count.min(values.len());
+        prop_assert_eq!(strict("array_first_n", &[input.clone(), int(i64::try_from(count).unwrap())]), array(values[..n].to_vec()));
+        prop_assert_eq!(strict("array_last_n", &[input.clone(), int(i64::try_from(count).unwrap())]), array(values[values.len()-n..].to_vec()));
+        let start = if offset < 0 { values.len().saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap()) } else { usize::try_from(offset).unwrap().min(values.len()) };
+        prop_assert_eq!(strict("array_slice", &[input.clone(), int(offset), int(i64::try_from(count).unwrap())]), array(values[start..start.saturating_add(count).min(values.len())].to_vec()));
+        let needle = 3_i64;
+        let expected = items.iter().position(|v| *v == needle).map_or(-1, |i| i64::try_from(i).unwrap());
+        prop_assert_eq!(strict("array_index_of", &[input, int(needle), text("first")]), int(expected));
+    }
+}
+
+#[test]
+fn array_index_of_mixed_invalid_direction_remains_unobserved() {
+    for input in [null(), int(5)] {
+        assert!(is_unobserved(&strict(
+            "array_index_of",
+            &[input, int(1), text("middle")]
+        )));
+    }
+    assert_eq!(
+        strict("array_index_of", &[null(), int(1), text("first")]),
+        null()
+    );
+}

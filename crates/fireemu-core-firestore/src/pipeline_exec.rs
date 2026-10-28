@@ -993,7 +993,10 @@ fn subsequence_array<'a>(
         matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null));
     let invalid_tail = args.iter().enumerate().skip(1).any(|(i, arg)| {
         if search_null_is_value && i == 1 { return false; }
-        matches!(arg, Eval::Value(value) if !(matches!(value, Value::Integer(_) | Value::Null) || search_null_is_value && i == 2 && matches!(value, Value::String(_))))
+        if search_null_is_value && i == 2 {
+            return matches!(arg, Eval::Value(value) if !matches!(value, Value::Null) && !matches!(value, Value::String(direction) if direction == "first" || direction == "last"));
+        }
+        matches!(arg, Eval::Value(value) if !matches!(value, Value::Integer(_) | Value::Null))
     });
     if cx.unrecorded == Unrecorded::Refuse
         && ((invalid_array && (missing || invalid_tail)) || (missing && invalid_tail))

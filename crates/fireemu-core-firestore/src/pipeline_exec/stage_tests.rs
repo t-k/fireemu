@@ -1636,3 +1636,23 @@ fn unnest_preserves_nonempty_metadata_and_runtime_context() {
     assert_eq!(rows[0].path, row.path);
     assert_eq!(rows[0].fields["out"], Value::Timestamp(timestamp));
 }
+
+#[test]
+fn unnest_deep_chain_does_not_depend_on_thread_stack() {
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let stages = (0..2_000)
+                .map(|_| Stage::Unnest {
+                    expression: Expr::Constant(Value::Array(vec![int(7)])),
+                    alias: alias("v"),
+                    index_field: None,
+                })
+                .collect();
+            let rows = run(stages, vec![doc("x", &[])]);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].fields["v"], int(7));
+        })
+        .unwrap();
+    handle.join().unwrap();
+}

@@ -1911,6 +1911,15 @@ enum StageState {
     Buffer(Vec<Row>),
 }
 
+/// One lazy array expansion retained while its current child runs downstream.
+struct UnnestFrame {
+    from: usize,
+    row: Row,
+    alias: FieldPath,
+    index_field: Option<FieldPath>,
+    values: std::iter::Enumerate<std::vec::IntoIter<Value>>,
+}
+
 /// Runs stages over rows one at a time. Rows that a blocking stage (`sort`, `distinct`,
 /// `aggregate`) holds come out of [`Cursor::finish`].
 #[derive(Debug, Clone)]
@@ -2019,9 +2028,43 @@ impl Cursor {
         Ok(out)
     }
 
-    /// Runs `row` through the stages from `from`; a row that gets through is appended to `out`.
+    /// Runs a row and its lazy expansions without depending on the thread stack.
+    fn run(&mut self, from: usize, row: Row, out: &mut Vec<Row>) -> Result<(), EvalError> {
+        let mut frames = Vec::new();
+        self.run_one(from, row, out, &mut frames)?;
+        while let Some(frame) = frames.last_mut() {
+            if self.exhausted_from(frame.from) {
+                frames.pop();
+                continue;
+            }
+            let Some((position, value)) = frame.values.next() else {
+                frames.pop();
+                continue;
+            };
+            let mut child = frame.row.clone();
+            set_path(&mut child.fields, &frame.alias, value);
+            if let Some(path) = &frame.index_field {
+                let position = i64::try_from(position).map_err(|_| EvalError::Unobserved {
+                    function: "unnest",
+                    reason: "array index is out of range",
+                })?;
+                set_path(&mut child.fields, path, Value::Integer(position));
+            }
+            let from = frame.from;
+            self.run_one(from, child, out, &mut frames)?;
+        }
+        Ok(())
+    }
+
+    /// Processes one row until it ends or produces a lazy expansion frame.
     #[allow(clippy::too_many_lines)]
-    fn run(&mut self, from: usize, mut row: Row, out: &mut Vec<Row>) -> Result<(), EvalError> {
+    fn run_one(
+        &mut self,
+        from: usize,
+        mut row: Row,
+        out: &mut Vec<Row>,
+        frames: &mut Vec<UnnestFrame>,
+    ) -> Result<(), EvalError> {
         for index in from..self.stages.len() {
             let stage = &self.stages[index];
             let held = &mut self.state[index];
@@ -2032,27 +2075,16 @@ impl Cursor {
                     index_field,
                 } => {
                     let value = expression.eval_at(&row, self.unrecorded, false, self.runtime);
-                    let alias = alias.clone();
-                    let index_field = index_field.clone();
                     match value {
                         Eval::Value(Value::Array(values)) => {
-                            for (position, value) in values.into_iter().enumerate() {
-                                if self.exhausted_from(index + 1) {
-                                    break;
-                                }
-                                let mut child = row.clone();
-                                set_path(&mut child.fields, &alias, value);
-                                if let Some(path) = &index_field {
-                                    let position = i64::try_from(position).map_err(|_| {
-                                        EvalError::Unobserved {
-                                            function: "unnest",
-                                            reason: "array index is out of range",
-                                        }
-                                    })?;
-                                    set_path(&mut child.fields, path, Value::Integer(position));
-                                }
-                                self.run(index + 1, child, out)?;
-                            }
+                            frames.push(UnnestFrame {
+                                from: index + 1,
+                                row,
+                                alias: alias.clone(),
+                                index_field: index_field.clone(),
+                                values: values.into_iter().enumerate(),
+                            });
+                            return Ok(());
                         }
                         Eval::Value(value) => {
                             if index_field.is_some() {
@@ -2061,8 +2093,7 @@ impl Cursor {
                                     reason: "index for a non-array value is unobserved",
                                 });
                             }
-                            set_path(&mut row.fields, &alias, value);
-                            self.run(index + 1, row, out)?;
+                            set_path(&mut row.fields, alias, value);
                         }
                         Eval::Absent => {
                             if index_field.is_some() {
@@ -2071,12 +2102,10 @@ impl Cursor {
                                     reason: "index for an absent value is unobserved",
                                 });
                             }
-                            remove_path(&mut row.fields, &alias);
-                            self.run(index + 1, row, out)?;
+                            remove_path(&mut row.fields, alias);
                         }
                         Eval::Error(error) => return Err(error),
                     }
-                    return Ok(());
                 }
                 Stage::Where(condition) => {
                     match condition.eval_at(&row, self.unrecorded, true, self.runtime) {

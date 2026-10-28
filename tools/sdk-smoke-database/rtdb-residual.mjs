@@ -164,6 +164,7 @@ export function validateStartupAdmission({ admission: a, packetSha256, sourceSha
 export function validateStartupEntrypoint(input) {
   validateStartupAdmission(input);
   const { admission: a, nodeSha256, launcherSha256, carry } = input;
+  if (!/^[a-f0-9]{40}$/.test(a.sourceCommit ?? '') || !a.ownerRows[2].includes(`sourceCommit=${a.sourceCommit}`)) throw Error('startup source commit not bound');
   if (a.nodeSha256 !== nodeSha256 || a.launcherSha256 !== launcherSha256 || !a.ownerRows[2].includes(`launcherSha256=${launcherSha256}`) || !a.ownerRows[2].includes(`nodeSha256=${nodeSha256}`) || carry?.taskRequests !== 1177 || carry?.taskAdcAcquisitions !== 20 || carry?.taskCarriedUsd !== 19 || carry?.taskLimitUsd !== 20 || carry?.sandboxAtBaseline !== false || carry?.outcome !== 'cleanup-verified') throw Error('startup entrypoint custody mismatch');
   return true;
 }
@@ -283,7 +284,7 @@ export function verifyPacket(file, expected) {
 }
 
 export function verifyRootStartup(packet, packetSha256, { root = path.resolve(here, '../../../..'), ownerPid = process.pid, nodePath = process.execPath, baselinePacketSha = 'b4fc959098c7a4dfe3e5294cc22729fbeb052ca369a7d949390b65bbc3fd9652' } = {}) {
-  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-runtime-v2/root-ops');
+  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-runtime-v3/root-ops');
   for (const file of [path.join(ops, 'booked-admission.json'), path.join(ops, 'launch-startup.sh'), path.join(root, 'docs.local/instructions/owner-decisions.md'), path.join(root, 'docs.local/runs/sandbox-ledger.jsonl')]) if (!lstatSync(file).isFile()) throw Error('startup authority must be regular files');
   const booked = readFileSync(path.join(ops, 'booked-admission.json'));
   const admission = JSON.parse(booked);

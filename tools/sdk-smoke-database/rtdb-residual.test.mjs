@@ -561,7 +561,8 @@ test('the token is asked of gcloud ADC with no scopes argument, and travels only
 test('preflight: main() runs it right after the token and before any admin request', () => {
   const own = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
   const at = (x) => own.indexOf(x);
-  assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') && at('await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets))') < at('await runScenario(o)'));
+  assert.ok(at('const token = execFileSync') > 0 && at('const token = execFileSync') < at('await runPreflight(out, token,') && at('await runPreflight(out, token,') < at('await runScenario(o)'));
+  assert.ok(own.includes('startup ? startupTokeninfoFetch({ journal: strictJournal }) : fetch'));
   assert.ok(own.includes('if (stopped) return stopped;'));
 });
 

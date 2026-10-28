@@ -13,7 +13,7 @@
 // The management calls (API, instance, Rules, prefix delete) use the ADC token and never reach an
 // output (assertNoSecrets guards every write). Setup and cleanup follow the CV11 recorder.
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
@@ -164,8 +164,68 @@ export function validateStartupAdmission({ admission: a, packetSha256, sourceSha
 export function validateStartupEntrypoint(input) {
   validateStartupAdmission(input);
   const { admission: a, nodeSha256, launcherSha256, carry } = input;
-  if (a.nodeSha256 !== nodeSha256 || a.launcherSha256 !== launcherSha256 || !a.ownerRows[2].includes(`launcherSha256=${launcherSha256}`) || !a.ownerRows[2].includes(`nodeSha256=${nodeSha256}`) || carry?.taskRequests !== 1177 || carry?.taskAdcAcquisitions !== 20 || carry?.outcome !== 'cleanup-verified') throw Error('startup entrypoint custody mismatch');
+  if (a.nodeSha256 !== nodeSha256 || a.launcherSha256 !== launcherSha256 || !a.ownerRows[2].includes(`launcherSha256=${launcherSha256}`) || !a.ownerRows[2].includes(`nodeSha256=${nodeSha256}`) || carry?.taskRequests !== 1177 || carry?.taskAdcAcquisitions !== 20 || carry?.taskCarriedUsd !== 19 || carry?.taskLimitUsd !== 20 || carry?.sandboxAtBaseline !== false || carry?.outcome !== 'cleanup-verified') throw Error('startup entrypoint custody mismatch');
   return true;
+}
+
+export function packageTreeHash(directory) {
+  const root = realpathSync(directory), entries = [];
+  const visit = (dir) => { for (const entry of readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, entry.name); if (entry.isDirectory()) visit(f); else if (entry.isFile()) entries.push(f); } };
+  visit(root);
+  const digest = createHash('sha256');
+  for (const file of entries.sort((a, b) => Buffer.compare(Buffer.from(path.relative(root, a).split(path.sep).join('/')), Buffer.from(path.relative(root, b).split(path.sep).join('/'))))) {
+    const name = Buffer.from(path.relative(root, file).split(path.sep).join('/')), data = readFileSync(file), n = Buffer.alloc(4), size = Buffer.alloc(8);
+    n.writeUInt32BE(name.length); size.writeBigUInt64BE(BigInt(data.length)); digest.update(n).update(name).update(size).update(createHash('sha256').update(data).digest());
+  }
+  return digest.digest('hex');
+}
+
+export function verifyStartupBrowser(modules, admission) {
+  const req = createRequire(path.join(path.resolve(modules), 'x.js'));
+  const playwrightRoot = path.dirname(realpathSync(req.resolve('playwright')));
+  const coreRoot = path.dirname(realpathSync(req.resolve('playwright-core', { paths: [playwrightRoot] })));
+  if (packageTreeHash(playwrightRoot) !== admission.playwrightTreeSha256 || packageTreeHash(coreRoot) !== admission.playwrightCoreTreeSha256) throw Error('startup browser module custody mismatch');
+  const chromium = req('playwright').chromium;
+  const executable = realpathSync(chromium.executablePath());
+  if (sha256(readFileSync(executable)) !== admission.chromiumSha256) throw Error('startup browser custody mismatch');
+  return executable;
+}
+
+export function nixClosureHash(closure) {
+  if (!closure || typeof closure !== 'object' || Array.isArray(closure) || !Object.keys(closure).length) throw Error('invalid Nix closure');
+  const rows = Object.keys(closure).sort().map((name) => {
+    const v = closure[name];
+    if (!name.startsWith('/nix/store/') || !v || typeof v.narHash !== 'string' || !Number.isSafeInteger(v.narSize) || v.narSize < 0 || !Array.isArray(v.references) || v.references.some((r) => typeof r !== 'string')) throw Error('invalid Nix closure entry');
+    return [name, v.narHash, v.narSize, [...v.references].sort()];
+  });
+  return sha256(JSON.stringify(rows));
+}
+
+export function verifyStartupGcloud(gcloud, admission, run = (exe, args) => execFileSync(exe, args, { encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024, env: { PATH: '/usr/bin:/bin', HOME: process.env.HOME ?? '/' } })) {
+  const nix = realpathSync(admission.nixPath), executable = realpathSync(gcloud);
+  if (executable !== admission.gcloudRealPath || sha256(readFileSync(nix)) !== admission.nixSha256) throw Error('startup Nix runtime mismatch');
+  const closure = JSON.parse(run(nix, ['path-info', '--offline', '--json-format', '1', '--json', '--recursive', executable]));
+  if (nixClosureHash(closure) !== admission.gcloudClosureSha256) throw Error('startup gcloud closure mismatch');
+}
+
+export function startupTokeninfoFetch({ journal, fetchImpl = fetch }) {
+  let used = false;
+  return async (url, init) => {
+    if (used || url !== 'https://oauth2.googleapis.com/tokeninfo' || init?.method !== 'POST') throw Error('startup tokeninfo stopped');
+    used = true;
+    try {
+      await journal({ kind: 'before', step: 'tokeninfo', method: 'POST', url, body: '[REDACTED]' });
+      const response = await fetchImpl(url, init);
+      await journal({ kind: 'headers', step: 'tokeninfo', status: response.status, headers: Object.fromEntries(response.headers?.entries?.() ?? []) });
+      const body = await response.text();
+      await journal({ kind: 'after', step: 'tokeninfo', outcome: 'complete', bytes: Buffer.byteLength(body, 'utf8'), body });
+      let consumed = false;
+      return { status: response.status, async text() { if (consumed) throw Error('tokeninfo body already read'); consumed = true; return body; } };
+    } catch (error) {
+      try { await journal({ kind: 'unknown', step: 'tokeninfo', outcome: 'unknown' }); } catch { /* journal may itself be unavailable */ }
+      throw error;
+    }
+  };
 }
 
 export function createStartupStrictClient({ caps, allowed, journal, fetchImpl = fetch, headers = {}, stop = {} }) {
@@ -222,11 +282,15 @@ export function verifyPacket(file, expected) {
   return packet;
 }
 
-export function verifyRootStartup(packet, packetSha256, { root = path.resolve(here, '../../../..'), ownerPid = process.pid, nodePath = process.execPath } = {}) {
-  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-ops-v1/root-ops');
+export function verifyRootStartup(packet, packetSha256, { root = path.resolve(here, '../../../..'), ownerPid = process.pid, nodePath = process.execPath, baselinePacketSha = 'b4fc959098c7a4dfe3e5294cc22729fbeb052ca369a7d949390b65bbc3fd9652' } = {}) {
+  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-runtime-v1/root-ops');
   for (const file of [path.join(ops, 'booked-admission.json'), path.join(ops, 'launch-startup.sh'), path.join(root, 'docs.local/instructions/owner-decisions.md'), path.join(root, 'docs.local/runs/sandbox-ledger.jsonl')]) if (!lstatSync(file).isFile()) throw Error('startup authority must be regular files');
   const booked = readFileSync(path.join(ops, 'booked-admission.json'));
   const admission = JSON.parse(booked);
+  const baselineRaw = readFileSync(path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-rules-operators-03/root-ops/v1-snapshot/packet.json'));
+  if (sha256(baselineRaw) !== baselinePacketSha) throw Error('startup baseline pin differs');
+  const baseline = JSON.parse(baselineRaw);
+  if (baseline.project !== 'fireemu-oracle-query' || baseline.projectNumber !== packet.projectNumber || baseline.instance !== INSTANCE || baseline.baselineRulesSha256 !== packet.baselineRulesSha256) throw Error('startup baseline identity differs');
   const ledger = readFileSync(path.join(root, 'docs.local/instructions/owner-decisions.md'), 'utf8').split(/\r?\n/);
   admission.ownerRows = ['A', 'E', 'V'].map((kind) => { const rows = ledger.filter((line) => line.split(' | ')[1] === `${kind} ${admission.envelopeId}`); if (rows.length !== 1) throw Error('startup authority row is not unique'); return rows[0]; });
   if (!admission.ownerRows[2]?.includes(`admissionSha256=${sha256(booked)}`)) throw Error('startup booked admission not bound');
@@ -235,10 +299,13 @@ export function verifyRootStartup(packet, packetSha256, { root = path.resolve(he
   const gcloudSha256 = sha256(readFileSync(packet.gcloud));
   if (admission.gcloudSha256 !== gcloudSha256 || !admission.ownerRows[2].includes(`gcloudSha256=${gcloudSha256}`)) throw Error('startup credential executable mismatch');
   const raw = readFileSync(path.join(root, 'docs.local/runs/sandbox-ledger.jsonl'), 'utf8').split('\n').filter(Boolean);
-  const row = raw.map((line) => ({ line, value: JSON.parse(line) })).filter(({ value }) => value.project === packet.projectId).at(-1);
-  if (!row || !/^[a-z][a-z0-9-]{4,29}$/.test(packet.projectId ?? '') || admission.projectId !== packet.projectId || !/^[0-9]{1,20}$/.test(packet.projectNumber ?? '') || admission.projectNumber !== packet.projectNumber) throw Error('startup sandbox mismatch');
+  const parsed = raw.map((line) => ({ line, value: JSON.parse(line) })), row = parsed[1195];
+  if (!row || packet.projectId !== 'fireemu-oracle-query' || row.value.project !== packet.projectId || parsed.filter(({ value }) => value.project === packet.projectId).at(-1) !== row || admission.projectId !== packet.projectId || !/^[0-9]{1,20}$/.test(packet.projectNumber ?? '') || admission.projectNumber !== packet.projectNumber) throw Error('startup sandbox mismatch');
   const carrySha256 = sha256(`${row.line}\n`);
   validateStartupEntrypoint({ admission, packetSha256, sourceSha256: sha256(readFileSync(path.join(here, 'rtdb-residual.mjs'))), carrySha256, nodeSha256: sha256(readFileSync(nodePath)), launcherSha256: sha256(readFileSync(path.join(ops, 'launch-startup.sh'))), ledger, carry: row.value });
+  for (const field of ['chromiumSha256', 'playwrightTreeSha256', 'playwrightCoreTreeSha256', 'nixSha256', 'gcloudClosureSha256', 'gcloudRealPath']) if (typeof admission[field] !== 'string' || !admission.ownerRows[2].includes(`${field}=${admission[field]}`)) throw Error('startup runtime pins not bound');
+  verifyStartupGcloud(packet.gcloud, admission);
+  return verifyStartupBrowser(packet.modules, admission);
 }
 
 /** Production remains unavailable until the SDK transport retry barrier is reviewed. */
@@ -403,7 +470,7 @@ export function prepareStartupJournals(out, syncDirectory = (directory) => { con
   syncDirectory(out);
 }
 
-export function browserRunner({ modules, page: pageConfig, stop = {} }) {
+export function browserRunner({ modules, page: pageConfig, stop = {}, startupExecutable }) {
   const require = createRequire(path.join(path.resolve(modules), 'x.js'));
   const { chromium } = require('playwright');
   return async (cfg, hooks) => {
@@ -414,7 +481,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const origin = `127.0.0.1:${server.address().port}`, counts = { http: 0, ws: 0, frames: 0, blocked: 0 }, journal = [];
-    const browser = await chromium.launch({ ...LAUNCH, args: [hostRules()] });
+    const browser = await chromium.launch({ ...LAUNCH, ...(cfg.scenario === 'sdk-next-startup' && startupExecutable ? { executablePath: startupExecutable } : {}), args: [hostRules()] });
     stop.closeBrowser = () => browser.close().catch(() => {});
     let overCap;
     const capped = new Promise((_, reject) => { overCap = () => reject(Error('browser request cap reached')); });
@@ -533,8 +600,8 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
-  let startup = false;
-  if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); if (packet.scenario === 'sdk-next-startup') { verifyRootStartup(packet, opt('--packet-sha256')); startup = true; } else assertProductionSdkNextReady(packet); verifyBundles(packet); }
+  let startup = false, startupExecutable;
+  if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); if (packet.scenario === 'sdk-next-startup') { startupExecutable = verifyRootStartup(packet, opt('--packet-sha256')); startup = true; } else assertProductionSdkNextReady(packet); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
   if (startup) prepareStartupJournals(out);
@@ -576,9 +643,9 @@ async function main(argv) {
       const token = execFileSync(packet.gcloud, ADC_ARGS, { stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 }).toString().trim();
       if (!/^[\x21-\x7e]{20,4096}$/.test(token)) throw Error('ADC token has an unexpected shape');
       secrets.push(token);
-      const stopped = await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets));
+      const stopped = await runPreflight(out, token, startup ? startupTokeninfoFetch({ journal: strictJournal }) : fetch, (text) => assertNoSecrets(text, secrets));
       if (stopped) return stopped;
-      const browser = browserRunner({ modules: packet.modules, stop, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
+      const browser = browserRunner({ modules: packet.modules, stop, startupExecutable, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
       o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common, ...(startup ? { scenarios: ['sdk-next-startup'], strictStartup: true, strictJournal, ticket: startupTicket } : {}) };
     }
     const result = await runScenario(o);

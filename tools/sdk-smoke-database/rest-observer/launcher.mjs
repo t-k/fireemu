@@ -6,7 +6,7 @@ import {join,resolve} from 'node:path';
 import {verifyPacket} from './packet-gate.mjs';
 import {createTransport,makeWire} from './transport.mjs';
 import {runPacket} from './orchestrator.mjs';
-import {recoverApi} from './recovery.mjs';
+import {recoverApi,recoverInstance} from './recovery.mjs';
 const sha=x=>createHash('sha256').update(x).digest('hex');
 const TOKENINFO='https://oauth2.googleapis.com/tokeninfo';
 const scopes=['https://www.googleapis.com/auth/firebase.database','https://www.googleapis.com/auth/cloud-platform'];
@@ -20,8 +20,8 @@ export async function launch({packet,digest,out},{mint:mintImpl=mint,fetchImpl=f
  const p=await verifyPacket(packet,digest);await check(p);for(const k of Object.keys(process.env))if(k==='GOOGLE_APPLICATION_CREDENTIALS'||k==='FIREBASE_TOKEN'||k==='PYTHONPATH'||k==='PYTHONHOME'||k==='NODE_OPTIONS'||k.startsWith('DYLD_')||k.startsWith('LD_')||k.startsWith('CLOUDSDK_'))throw Error('credential environment refused');
  await claimCheck();
  await mkdir(out,{mode:0o700});const token=await mintImpl(p);if(typeof token!=='string'||! /^[\x21-\x7e]{20,4096}$/.test(token))throw Error('credential invalid');
- const sandbox=makeWire({instance:p.instance,project:p.project,token,fetchImpl,serviceOnly:p.mode==='api-recovery'}),auth=authWire(token,fetchImpl);const wire=(r,h)=>r.step==='auth-preflight'?auth(r,h):sandbox(r,h);
+ const sandbox=makeWire({instance:p.instance,project:p.project,token,fetchImpl,serviceOnly:p.mode==='api-recovery',managementOnly:p.mode==='instance-recovery'}),auth=authWire(token,fetchImpl);const wire=(r,h)=>r.step==='auth-preflight'?auth(r,h):sandbox(r,h);
  const counted=await createTransport({file:join(out,'requests.jsonl'),max:p.maxRequests,reserve:p.cleanupReserve,wire});
- try{const pre=await counted({step:'auth-preflight',method:'POST',url:TOKENINFO,phase:'normal'});if(JSON.parse(pre.body).ok!==true)return 'auth-refused';if(p.mode==='api-recovery')return await recoverApi(counted,p);const prefix=`rnext1_${randomBytes(12).toString('hex')}`;return await runPacket({packet,digest,prefix,transport:counted});}finally{await counted.close();}
+ try{const pre=await counted({step:'auth-preflight',method:'POST',url:TOKENINFO,phase:'normal'});if(JSON.parse(pre.body).ok!==true)return 'auth-refused';if(p.mode==='api-recovery')return await recoverApi(counted,p);if(p.mode==='instance-recovery')return await recoverInstance(counted,p);const prefix=`rnext1_${randomBytes(12).toString('hex')}`;return await runPacket({packet,digest,prefix,transport:counted});}finally{await counted.close();}
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){try{const result=await launch(parseArgs(process.argv.slice(2)));process.stdout.write(`${result}\n`);if(result!=='closed')process.exitCode=3;}catch{process.stderr.write('R-next1 stopped; preserve output and seek reviewed recovery.\n');process.exitCode=2;}}

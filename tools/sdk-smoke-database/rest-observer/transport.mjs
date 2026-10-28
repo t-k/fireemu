@@ -28,9 +28,9 @@ export async function createTransport({file,max,reserve,wire}) {
  invoke.close=()=>handle.close(); return invoke;
 }
 
-export function makeWire({instance,project,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false}) {
+export function makeWire({instance,project,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false,managementOnly=false}) {
  if(typeof project!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(project)||typeof instance!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(instance)||typeof token!=='string'||!token||typeof fetchImpl!=='function'||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>25000)throw Error('invalid wire config');
- const hosts=new Set(serviceOnly?['serviceusage.googleapis.com']:[`${instance}.firebaseio.com`,'firebasedatabase.googleapis.com','serviceusage.googleapis.com']);
+ const hosts=new Set(serviceOnly?['serviceusage.googleapis.com']:managementOnly?['firebasedatabase.googleapis.com','serviceusage.googleapis.com']:[`${instance}.firebaseio.com`,'firebasedatabase.googleapis.com','serviceusage.googleapis.com']);
  return async (request,onHeaders=async()=>{})=>{
   const u=new URL(request.url);if(u.protocol!=='https:'||!hosts.has(u.hostname)||u.port||u.username||u.password||u.hash)throw Error('host refused');
   const headers={};if(request.step!=='corpus'&&request.step!=='rules-propagation'){headers.authorization=`Bearer ${token}`;headers['x-goog-user-project']=project;}if(request.body!==undefined)headers['content-type']='application/json';

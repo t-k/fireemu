@@ -56,7 +56,7 @@
     },
     {
       "path": "transport.mjs",
-      "sha256": "9d8781cbee212c9a393f955c8939db093991e47fb2566adb0fc0f9a4a41db0c3"
+      "sha256": "5fb105c1b346bafd2489074e20d247dcff6cd01bf3f7f1c8589816e630a332c5"
     },
     {
       "path": "orchestrator.mjs",
@@ -64,11 +64,11 @@
     },
     {
       "path": "packet-gate.mjs",
-      "sha256": "e54ab3f347283703b8612ba49c0bd4f399a0b57a2206194acf392e0e7df67017"
+      "sha256": "6d3c3555341b7288269efa602bb36d8ba54135308495661b4d9f20e276ea25c4"
     },
     {
       "path": "launcher.mjs",
-      "sha256": "2cd5a80023384839890662951c45afc3f74ccb89d928c1ccbf4a3e050497c284"
+      "sha256": "03c5780cc1ea4c6fbd6aee4f3c7e682c87e00bcda15c066e1a1e372ddbf29c03"
     },
     {
       "path": "provider.mjs",
@@ -80,7 +80,7 @@
     },
     {
       "path": "recovery.mjs",
-      "sha256": "c05f48892b8d95f357120b34be96f470be95a18a50bd793c5db9b775b9b95e12"
+      "sha256": "f1cc62b9eb13c888aea4d54316d9fe065e8273654ef825e8dacdd650408a785f"
     }
   ]
 }

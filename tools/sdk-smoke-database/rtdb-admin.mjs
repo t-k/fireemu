@@ -17,7 +17,7 @@ const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 /** A step that ended the run's work on purpose: the recorder reports its message and cleans up. */
 export class Stop extends Error {}
 
-export function createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: CAPS, propagationMs: PROPAGATION_MS, fireGraceMs: FIRE_GRACE_MS, rulesFor }) {
+export function createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: CAPS, propagationMs: PROPAGATION_MS, fireGraceMs: FIRE_GRACE_MS, rulesFor, strictStartup = false }) {
   // ---- begin of the code lifted from rtdb-residual.mjs ----
   function urls(o) {
     if (o.mode === 'local') {
@@ -55,7 +55,7 @@ export function createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: 
     // 403: the management API list right after the enable (CV11 production-1, propagation). 401 is retried too; it is
     // harmless, but the 401 of this recorder's production-1 and production-2 was a credential cause (an ADC token
     // without userinfo.email, which adc-preflight.mjs now refuses before any request), not propagation.
-    for (let k = 1; method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401 || isDisabledByOwner(r.status, r.text)); k++) {
+    for (let k = 1; !strictStartup && method === 'GET' && run.propagation && r.outcome === 'refused' && (r.status === 403 || r.status === 401 || isDisabledByOwner(r.status, r.text)); k++) {
       const wait = Math.min(2000 * 2 ** (k - 1), 30000, PROPAGATION_MS - run.propagationWaited);
       if (wait <= 0) break;
       run.propagationWaited += wait;
@@ -152,7 +152,7 @@ export function createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: 
       },
       async () => { if (run.state.api === 'ours' && run.state.instance === 'baseline') await setApi(run, 'disable', sleep); },
     ];
-    for (const step of steps) try { await step(); } catch (e) { run.errors.push(e instanceof Stop ? e.message : `unexpected: ${e?.message}`); }
+    for (const step of steps) try { await step(); } catch (e) { run.errors.push(e instanceof Stop ? e.message : `unexpected: ${e?.message}`); if (strictStartup) break; }
   }
   // ---- end of the code lifted from rtdb-residual.mjs ----
   return { urls, isDisabledByOwner, read, mutate, waitOperation, isInstance, setApi, setupProduction, putRules, installRules, cleanup };

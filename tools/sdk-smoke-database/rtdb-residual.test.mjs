@@ -648,3 +648,9 @@ test('active or unexpected instance baseline never disables or deletes that inst
     assert.equal(w.rules, BASE);
   }
 });
+
+test('strict startup collision retains prefix and sends no cleanup writes',async()=>{
+ const w=fakeWorld(),journal=[];w.data[`${PREFIX}/foreign`]={keep:'original'};let browserCalls=0;
+ const r=await local(w,{scenarios:['sdk-next-startup'],strictStartup:true,strictJournal:(row)=>journal.push(row),browser:async()=>{browserCalls++;throw Error('unexpected')}});
+ assert.equal(browserCalls,0);assert.equal(w.data[`${PREFIX}/foreign`].keep,'original');assert.equal(w.rules,BASE);assert.ok(!w.sent.some((x)=>x.startsWith('PUT ')||x.startsWith('DELETE ')));assert.equal(r.status,'needs-recovery');assert.ok(journal.some((x)=>x.kind==='after'));
+});

@@ -101,8 +101,14 @@ export async function runScenario(o) {
     for (const scenario of [o.packet?.scenario, ...(o.scenarios ?? [])]) if (['sdk-next', 'sdk-next-startup'].includes(scenario)) assertProductionSdkNextReady({ scenario });
   }
   o.secrets ??= [];
-  const client = adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets, caps: CAPS });
-  const run = { admin: client, call: client.call, u: urls(o), propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, unresolved: [], errors: [], fireWait: false };
+  const u = urls(o);
+  if (o.strictStartup && (o.scenarios?.length !== 1 || o.scenarios[0] !== 'sdk-next-startup' || typeof o.strictJournal !== 'function')) throw Error('strict startup requires fixed scenario and durable journal');
+  const fixedTargets = new Map([[u.data(o.prefix), ['GET', 'DELETE']], [u.data('.settings/rules'), ['GET', 'PUT']], [u.service, ['GET']], [u.list, ['GET']], [u.instance, ['GET', 'DELETE']], [u.service && `${u.service}:enable`, ['POST']], [u.service && `${u.service}:disable`, ['POST']], [u.instance && `${u.instance}:undelete`, ['POST']], [u.instance && `${u.instance}:reenable`, ['POST']], [u.instance && `${u.instance}:disable`, ['POST']]]);
+  const operations = new Set();
+  const allowed = (url, method) => (fixedTargets.get(url) ?? []).includes(method) || (method === 'GET' && operations.has(url));
+  allowed.register = (name) => { if (u.op && /^operations\/[A-Za-z0-9_-]+$/.test(name)) operations.add(u.op(name)); };
+  const client = o.strictStartup ? createStartupStrictClient({ fetchImpl: o.fetchImpl, headers: o.headers, stop: o.stop, caps: CAPS, allowed, journal: o.strictJournal }) : adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets, caps: CAPS });
+  const run = { admin: client, call: client.call, u, propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, unresolved: [], errors: [], fireWait: false };
   const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   run.sleep = sleep;
   const profiles = [];
@@ -111,7 +117,7 @@ export async function runScenario(o) {
   const isStartup = scenarios.includes('sdk-next-startup');
   if (isStartup && (scenarios.length !== 1 || (o.profiles && (o.profiles.length !== 2 || o.profiles.some((p, i) => p.name !== ['r1-ws', 'r2-ws'][i] || p.transport !== 'ws'))))) throw Error('startup requires exactly two WS profiles');
   const profilesToRun = isStartup ? PROFILES.filter((p) => p.transport === 'ws') : o.profiles ?? PROFILES;
-  const scoped = isStartup ? createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: CAPS, propagationMs: PROPAGATION_MS, fireGraceMs: FIRE_GRACE_MS, rulesFor: (prefix, options) => rulesFor(prefix, { ...options, startup: true }) }) : admin;
+  const scoped = isStartup ? createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: CAPS, propagationMs: PROPAGATION_MS, fireGraceMs: FIRE_GRACE_MS, strictStartup: o.strictStartup, rulesFor: (prefix, options) => rulesFor(prefix, { ...options, startup: true }) }) : admin;
   const { setupProduction, installRules, cleanup } = scoped;
   try {
     if (o.mode === 'production') await setupProduction(run, sleep);
@@ -127,12 +133,41 @@ export async function runScenario(o) {
     run.errors.push(e instanceof Stop ? e.message : `unexpected: ${e?.message}`);
   } finally {
     run.propagation = false;
-    await cleanup(run, o, sleep);
+    if (!o.strictStartup || run.errors.length === 0) await cleanup(run, o, sleep);
   }
   const restored = Object.values(run.state).every((s) => s === 'baseline');
   // An unexpected error or an unwritten log row means a sent request may be unaccounted for.
   const accounted = client.counts.logFailures === 0 && !run.errors.some((e) => e.startsWith('unexpected'));
-  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: client.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: client.counts };
+  return { status: run.unresolved.length === 0 && (!o.strictStartup || (client.unknownAnswers.length === 0 && run.errors.length === 0)) && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: client.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: client.counts };
+}
+
+// This opt-in client is still disarmed from production until packet and lifecycle admission.
+export function createStartupStrictClient({ caps, allowed, journal, fetchImpl = fetch, headers = {}, stop = {} }) {
+  const counts = { observe: 0, cleanup: 0, mutations: 0, unknown: 0, logFailures: 0 }, unknownAnswers = [];
+  let phase = 'observe', latched = false;
+  async function call(step, method, url, body, { raw = false } = {}) {
+    if (latched || stop.requested) throw Error('strict admin latched stop');
+    if (!allowed(url, method)) { latched = true; throw Error('strict admin target rejected'); }
+    const mutation = method !== 'GET';
+    if (counts[phase] >= caps[phase] || (mutation && counts.mutations >= caps.mutations)) { latched = true; throw Error('strict admin cap'); }
+    const sent = body === undefined || typeof body === 'string' ? body : JSON.stringify(body);
+    counts[phase]++; if (mutation) counts.mutations++;
+    let status = 0, text = '', value;
+    try {
+      await journal({ kind: 'before', step, phase, method, url, body: sent ?? null });
+      const response = await fetchImpl(url, { method, body: sent, redirect: 'manual', headers: { 'content-type': 'application/json', ...headers }, signal: AbortSignal.timeout(30000) });
+      status = response.status; text = await response.text();
+      await journal({ kind: 'after', step, phase, method, url, status, body: text });
+      if (status < 200 || status >= 300) throw Error('non-success response');
+      if (!raw && text !== '') value = JSON.parse(text);
+      if (['api-enable', 'api-disable'].includes(step) && method === 'POST' && typeof value?.name === 'string') allowed.register?.(value.name);
+      return { outcome: 'ok', status, text, value };
+    } catch {
+      latched = true; counts.unknown++; unknownAnswers.push(step);
+      return { outcome: 'unknown', status, text };
+    }
+  }
+  return { call, counts, unknownAnswers, cleanup: () => { phase = 'cleanup'; } };
 }
 
 /** Compares a production and a local journal file's profiles; the timing verdict is part of `match`. */
@@ -302,6 +337,16 @@ export function createPrivateControlWriter(write, secrets) {
     assertNoSecrets(line, secrets);
     write(Buffer.from(line));
     count++;
+  };
+}
+
+export function createPrivateAdminJournal(file, secrets) {
+  return (row) => {
+    const line = `${JSON.stringify(row)}\n`;
+    assertNoSecrets(line, secrets);
+    const bytes = Buffer.from(line);
+    const fd = openSync(file, 'a', 0o600);
+    try { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset); if (!n) throw Error('short admin journal write'); offset += n; } fsyncSync(fd); } finally { closeSync(fd); }
   };
 }
 

@@ -121,6 +121,7 @@ test('private raw control persists exact UTF-8 and fails closed on write error o
  let stored;const writer=createPrivateControlWriter((bytes)=>{stored=bytes},['super-secret']);
  const raw='{"t":"c","d":"'+ '漢'.repeat(1300)+'"}';writer('r1-ws',raw);
  assert.equal(JSON.parse(stored.toString()).raw,raw);
+ const ascii='{"t":"c","d":"'+'a'.repeat(3000)+'"}';writer('r2-ws',ascii);assert.equal(JSON.parse(stored.toString()).raw,ascii);
  assert.throws(()=>writer('r1-ws','super-secret'),/secret/i);
  assert.throws(()=>createPrivateControlWriter(()=>{throw Error('disk')},[])('r1-ws','ok'),/disk/);
 });

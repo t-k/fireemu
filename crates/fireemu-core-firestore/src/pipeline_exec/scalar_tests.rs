@@ -82,8 +82,11 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 38);
-    assert!(function("sqrt").is_none());
+    assert_eq!(NAMES.len(), 44);
+    for name in ["exp", "ln", "log", "log10", "trunc"] {
+        assert!(function(name).is_some());
+    }
+    assert!(function("sqrt").is_some());
 }
 
 #[test]
@@ -3135,4 +3138,377 @@ fn map_set_odd_count_is_recorded_arity_and_minimum_still_precedes_it() {
     );
     let args = vec![Expr::Constant(Value::Null); 3];
     assert!(Expr::call("map_set", args, Placement::Value).is_ok());
+}
+
+#[test]
+fn sqrt_observed_wrong_type_and_unobserved_strict_numeric() {
+    assert!(function("sqrt").is_some(), "sqrt must be registered");
+    assert_eq!(both("sqrt", &[text("s")]), wrong("sqrt", "Float", "STRING"));
+    for value in [
+        int(25),
+        dbl(0.0),
+        dbl(-1.0),
+        dbl(f64::NAN),
+        dbl(f64::INFINITY),
+        null(),
+        Eval::Absent,
+    ] {
+        assert!(
+            is_unobserved(&strict("sqrt", &[value])),
+            "strict sqrt must not claim unobserved values"
+        );
+    }
+}
+
+#[test]
+fn sqrt_ordinary_numeric_examples_and_domain() {
+    assert_eq!(emulator("sqrt", &[int(25)]), dbl(5.0));
+    assert_eq!(emulator("sqrt", &[dbl(0.0)]), dbl(0.0));
+    assert!(
+        matches!(emulator("sqrt", &[dbl(f64::NAN)]), Eval::Value(Value::Double(x)) if x.is_nan())
+    );
+    assert!(
+        matches!(emulator("sqrt", &[dbl(f64::INFINITY)]), Eval::Value(Value::Double(x)) if x == f64::INFINITY)
+    );
+    assert!(matches!(
+        emulator("sqrt", &[dbl(-1.0)]),
+        Eval::Error(EvalError::Invalid(_))
+    ));
+    assert!(matches!(
+        emulator("sqrt", &[dbl(f64::NEG_INFINITY)]),
+        Eval::Error(EvalError::Invalid(_))
+    ));
+    assert!(matches!(
+        emulator("sqrt", &[dbl(-0.0)]),
+        Eval::Value(Value::Double(value)) if value == 0.0 && value.is_sign_negative()
+    ));
+    assert!(is_unobserved(&strict("sqrt", &[dbl(f64::NEG_INFINITY)])));
+    assert!(is_unobserved(&strict("sqrt", &[dbl(-0.0)])));
+}
+
+#[test]
+fn sqrt_seeded_pairwise_cases_cover_registered_execution() {
+    let cases = r"Input	Profile	Position	Rows	Arity
+string	strict	is_error	populated	valid
+string	strict	where	populated	valid
+string	strict	select	empty	valid
+string	strict	where	empty	valid
+positive	ordinary	select	populated	valid
+zero	ordinary	select	populated	valid
+negative	ordinary	select	populated	valid
+nan	ordinary	select	populated	valid
+infinity	ordinary	select	populated	valid
+zero	ordinary	is_error	empty	invalid
+negative	strict	where	empty	invalid
+missing	strict	is_error	populated	invalid
+infinity	ordinary	where	empty	invalid
+nan	strict	where	empty	invalid
+other	ordinary	select	populated	invalid
+null	ordinary	select	populated	valid
+positive	strict	is_error	empty	invalid
+positive	strict	where	populated	valid
+other	strict	is_error	empty	valid
+infinity	strict	is_error	populated	invalid
+missing	ordinary	select	empty	valid
+null	strict	is_error	empty	invalid
+negative	ordinary	is_error	empty	invalid
+missing	ordinary	where	populated	invalid
+zero	strict	where	empty	invalid
+nan	ordinary	is_error	empty	invalid
+null	strict	where	empty	valid
+string	ordinary	is_error	populated	invalid
+other	strict	where	empty	valid
+";
+    for line in cases.lines().skip(1) {
+        let columns: Vec<_> = line.split('\t').collect();
+        assert_eq!(columns.len(), 5, "{line}");
+        let [kind, profile, position, rows, arity] = columns.as_slice() else {
+            unreachable!()
+        };
+        if *arity == "invalid" {
+            assert!(
+                Expr::call("sqrt", vec![], Placement::Value).is_err(),
+                "{line}"
+            );
+            continue;
+        }
+        let value = match *kind {
+            "string" => Some(Value::String("s".to_owned())),
+            "positive" => Some(Value::Double(25.0)),
+            "zero" => Some(Value::Double(0.0)),
+            "negative" => Some(Value::Double(-1.0)),
+            "nan" => Some(Value::Double(f64::NAN)),
+            "infinity" => Some(Value::Double(f64::INFINITY)),
+            "null" => Some(Value::Null),
+            "missing" => None,
+            "other" => Some(Value::Boolean(true)),
+            _ => panic!("unknown input: {line}"),
+        };
+        let row = Row::derived(value.map_or_else(BTreeMap::new, |v| {
+            [("v".to_owned(), v)].into_iter().collect()
+        }));
+        let arg = Expr::Field(FieldPath::parse("v").unwrap());
+        let sqrt = Expr::call("sqrt", vec![arg], Placement::Value).unwrap();
+        let expr = if *position == "is_error" {
+            Expr::call("is_error", vec![sqrt], Placement::Value).unwrap()
+        } else {
+            sqrt
+        };
+        let stage = if *position == "where" {
+            Stage::Where(expr)
+        } else {
+            Stage::Select {
+                aliases: vec![(FieldPath::parse("out").unwrap(), expr)],
+                keeps_name: false,
+            }
+        };
+        let input = if *rows == "empty" { vec![] } else { vec![row] };
+        let strict_profile = *profile == "strict";
+        let unrecorded = if strict_profile {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let result = execute_rows_in(vec![stage], input, unrecorded);
+        if *rows == "empty" {
+            assert_eq!(result.unwrap().len(), 0, "{line}");
+            continue;
+        }
+        if strict_profile && *kind != "string" {
+            assert!(
+                matches!(result, Err(EvalError::Unobserved { .. })),
+                "{line}: {result:?}"
+            );
+        } else if (*kind == "string"
+            || *kind == "other"
+            || (!strict_profile && *kind == "negative"))
+            && *position != "is_error"
+        {
+            assert!(result.is_err(), "{line}: {result:?}");
+        } else {
+            assert!(result.is_ok(), "{line}: {result:?}");
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn ordinary_sqrt_squares_nonnegative_finite_inputs(value in 0_u32..1_000_000) {
+        let result = emulator("sqrt", &[dbl(f64::from(value))]);
+        let Eval::Value(Value::Double(root)) = result else { panic!("expected numeric result") };
+        prop_assert!((root * root - f64::from(value)).abs() <= 1e-8);
+        prop_assert!(is_unobserved(&strict("sqrt", &[dbl(f64::from(value))])));
+    }
+}
+
+#[test]
+fn sqrt_declares_one_argument_without_claiming_unobserved_error_text() {
+    assert_eq!(Expr::call("sqrt", vec![], Placement::Value).unwrap_err().to_string(), "The function 'sqrt(number: number): float64' takes [1..1] argument(s), but 0 were provided.");
+    assert!(Expr::call(
+        "sqrt",
+        vec![
+            Expr::Constant(Value::Double(1.0)),
+            Expr::Constant(Value::Double(2.0))
+        ],
+        Placement::Value
+    )
+    .is_err());
+    assert!(Expr::call(
+        "sqrt",
+        vec![Expr::Constant(Value::Double(1.0))],
+        Placement::Value
+    )
+    .is_ok());
+}
+
+#[test]
+fn sqrt_propagates_an_existing_error_before_inspecting_the_input() {
+    let previous = Eval::Error(EvalError::WrongType {
+        function: "inner",
+        expected: "String",
+        got: "LONG",
+    });
+    assert_eq!(strict("sqrt", std::slice::from_ref(&previous)), previous);
+    assert_eq!(emulator("sqrt", std::slice::from_ref(&previous)), previous);
+}
+
+#[test]
+fn sqrt_where_propagates_the_observed_wrong_type_class() {
+    let sqrt = || {
+        Expr::call(
+            "sqrt",
+            vec![Expr::Field(FieldPath::parse("v").unwrap())],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let gt = |arg| {
+        Expr::call(
+            "greater_than",
+            vec![sqrt(), Expr::Constant(Value::Integer(arg))],
+            Placement::Condition,
+        )
+        .unwrap()
+    };
+    let row = || {
+        Row::derived(
+            [("v".to_owned(), Value::String("s".to_owned()))]
+                .into_iter()
+                .collect(),
+        )
+    };
+    let recorded = execute_rows_in(vec![Stage::Where(gt(0))], vec![row()], Unrecorded::Refuse);
+    assert!(matches!(
+        recorded,
+        Err(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING"
+        })
+    ));
+    let same_error = execute_rows_in(vec![Stage::Where(gt(1))], vec![row()], Unrecorded::Refuse);
+    assert!(matches!(
+        same_error,
+        Err(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING"
+        })
+    ));
+}
+
+#[test]
+fn numeric_family_documented_cases_and_strict_boundary() {
+    for (name, args, expected) in [
+        ("exp", vec![int(0)], 1.0),
+        ("ln", vec![int(1)], 0.0),
+        ("log", vec![int(100), int(10)], 2.0),
+        ("log10", vec![int(100)], 2.0),
+        ("trunc", vec![dbl(-15.5)], -15.0),
+        ("trunc", vec![dbl(15.5)], 15.0),
+    ] {
+        assert_eq!(emulator(name, &args), dbl(expected), "{name}");
+        assert!(is_unobserved(&strict(name, &args)), "{name}");
+    }
+    assert_eq!(emulator("trunc", &[int(15), int(0)]), int(15));
+    assert!(matches!(emulator("ln", &[int(0)]), Eval::Error(_)));
+    assert!(matches!(
+        emulator("log", &[int(10), int(1)]),
+        Eval::Error(_)
+    ));
+}
+
+#[test]
+fn numeric_family_seeded_pairwise_and_edges() {
+    let rows = r"Function	Profile	Input	Arity
+exp	ordinary	positive	one
+log	ordinary	positive	two
+trunc	ordinary	positive	two
+ln	strict	null	one
+exp	strict	null	one
+log	strict	wrong	one
+log10	ordinary	null	one
+exp	strict	domain	one
+log10	strict	positive	one
+ln	ordinary	positive	one
+log	strict	null	two
+exp	ordinary	wrong	one
+log10	ordinary	wrong	one
+trunc	ordinary	domain	one
+ln	ordinary	wrong	one
+trunc	strict	wrong	two
+log	strict	domain	two
+ln	ordinary	domain	one
+log10	strict	domain	one
+trunc	ordinary	null	two
+";
+    for line in rows.lines().skip(1) {
+        let fields: Vec<_> = line.split('\t').collect();
+        let name = fields[0];
+        let input = match fields[2] {
+            "positive" => int(2),
+            "null" => Eval::Value(Value::Null),
+            "wrong" => Eval::Value(Value::String("x".into())),
+            "domain" => int(0),
+            _ => unreachable!(),
+        };
+        let mut args = vec![input];
+        if fields[3] == "two" {
+            args.push(int(2));
+        }
+        let value = if fields[1] == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        if fields[1] == "strict" {
+            assert!(is_unobserved(&value), "{line}");
+        } else {
+            match (name, fields[2], fields[3]) {
+                ("exp", "positive", "one") => assert_eq!(value, dbl(2.0_f64.exp()), "{line}"),
+                ("log", "positive", "two") => assert_eq!(value, dbl(1.0), "{line}"),
+                ("ln", "positive", "one") => assert_eq!(value, dbl(2.0_f64.ln()), "{line}"),
+                ("trunc", "domain", "one") => assert_eq!(value, int(0), "{line}"),
+                ("trunc", "positive", "two") => assert!(is_unobserved(&value), "{line}"),
+                (_, "null", _) => assert_eq!(value, Eval::Value(Value::Null), "{line}"),
+                (_, "wrong", _) | ("ln", "domain", _) => {
+                    assert!(matches!(value, Eval::Error(_)), "{line}");
+                }
+                _ => panic!("unexpected PICT row: {line}"),
+            }
+        }
+    }
+    assert_eq!(emulator("trunc", &[int(-15), int(0)]), int(-15));
+    assert!(is_unobserved(&emulator(
+        "trunc",
+        &[int(i64::MIN), int(i64::MIN)]
+    )));
+    for name in ["ln", "log10"] {
+        assert!(
+            matches!(emulator(name, &[dbl(f64::NEG_INFINITY)]), Eval::Value(Value::Double(x)) if x.is_nan())
+        );
+    }
+    assert!(matches!(
+        emulator("log", &[int(10), int(1)]),
+        Eval::Error(_)
+    ));
+}
+
+proptest! {
+    #[test]
+    fn numeric_family_trunc_integer_is_toward_zero(value in -1_000_000_i64..1_000_000) {
+        prop_assert_eq!(emulator("trunc", &[int(value), int(0)]), int(value));
+        prop_assert!(is_unobserved(&strict("trunc", &[int(value), int(0)])));
+    }
+}
+
+#[test]
+fn numeric_family_decimal_and_special_boundaries_are_conservative() {
+    for value in [0.29, -0.29, 1.15] {
+        assert!(is_unobserved(&emulator("trunc", &[dbl(value), int(2)])));
+    }
+    for value in [1e-320, -1e-320] {
+        assert!(is_unobserved(&emulator("trunc", &[dbl(value), int(309)])));
+    }
+    for value in [-0.0, -0.001] {
+        let Eval::Value(Value::Double(result)) = emulator("trunc", &[dbl(value), int(0)]) else {
+            panic!("expected double");
+        };
+        assert_eq!(result.to_bits(), (-0.0_f64).to_bits());
+    }
+    assert!(is_unobserved(&emulator("log", &[int(0), dbl(f64::NAN)])));
+}
+
+#[test]
+fn numeric_family_exp_range_and_explicit_specials() {
+    for value in [1000.0, -1000.0] {
+        assert!(matches!(emulator("exp", &[dbl(value)]), Eval::Error(_)));
+    }
+    assert_eq!(emulator("exp", &[dbl(1.0)]), dbl(1.0_f64.exp()));
+    assert!(is_unobserved(&emulator("exp", &[dbl(-720.0)])));
+    assert_eq!(emulator("exp", &[dbl(f64::INFINITY)]), dbl(f64::INFINITY));
+    assert_eq!(emulator("exp", &[dbl(f64::NEG_INFINITY)]), dbl(0.0));
+    assert!(
+        matches!(emulator("exp", &[dbl(f64::NAN)]), Eval::Value(Value::Double(x)) if x.is_nan())
+    );
 }

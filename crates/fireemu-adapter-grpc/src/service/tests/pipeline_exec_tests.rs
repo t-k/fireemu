@@ -743,3 +743,134 @@ async fn a_run_time_refusal_may_follow_results_and_a_limit_stops_before_it() {
     assert!(stream.next().await.is_none());
     assert_eq!(executor(&service, request(Some(1))).await.len(), 1);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn sqrt_wrong_type_is_captured_or_reported_and_empty_rows_are_lazy() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::StringValue("s".to_owned()))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let call = |name: &str, args: Vec<pb::Value>| {
+        value(V::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        }))
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let sqrt = || call("sqrt", vec![field_ref("f")]);
+        let request = |empty: bool, stage_name: &str, expression: pb::Value| {
+            let mut req = pipeline(&case, "");
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+                req.pipeline_type.as_mut()
+            else {
+                unreachable!()
+            };
+            let stages = &mut structured.pipeline.as_mut().unwrap().stages;
+            if empty {
+                stages[0].args[0] = value(V::ReferenceValue("/empty".to_owned()));
+            }
+            stages.push(stage(stage_name, expression));
+            req
+        };
+        let select = |v| {
+            value(V::MapValue(pb::MapValue {
+                fields: [("v".to_owned(), v)].into_iter().collect(),
+            }))
+        };
+        let actual = executor(
+            &service,
+            request(false, "select", select(call("is_error", vec![sqrt()]))),
+        )
+        .await;
+        assert_eq!(actual.len(), 1);
+        assert_eq!(
+            actual[0].get("v").map(String::as_str),
+            Some("Boolean(true)")
+        );
+        let two_args = call(
+            "sqrt",
+            vec![value(V::IntegerValue(1)), value(V::IntegerValue(2))],
+        );
+        let Err(error) = Firestore::execute_pipeline(
+            &service,
+            Request::new(request(false, "select", select(two_args))),
+        )
+        .await
+        else {
+            panic!("unrecorded two-argument call must refuse");
+        };
+        if matches!(
+            policy,
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        ) {
+            assert_eq!(error.code(), tonic::Code::Unimplemented);
+        } else {
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        }
+        let condition = call("greater_than", vec![sqrt(), value(V::IntegerValue(0))]);
+        let mut unrecorded_stream = Firestore::execute_pipeline(
+            &service,
+            Request::new(request(false, "where", condition.clone())),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+        let unrecorded = unrecorded_stream.next().await.unwrap().unwrap_err();
+        if matches!(
+            policy,
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        ) {
+            assert_eq!(unrecorded.code(), tonic::Code::Unimplemented);
+        } else {
+            assert_eq!(unrecorded.code(), tonic::Code::InvalidArgument);
+        }
+        let mut where_request = request(false, "where", condition);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            where_request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        let id = call("document_id", vec![field_ref("__name__")]);
+        structured.pipeline.as_mut().unwrap().stages.push(stage(
+            "select",
+            value(V::MapValue(pb::MapValue {
+                fields: [("id".to_owned(), id)].into_iter().collect(),
+            })),
+        ));
+        let mut stream = Firestore::execute_pipeline(&service, Request::new(where_request))
+            .await
+            .unwrap()
+            .into_inner();
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error:?}");
+        assert_eq!(
+            error.message(),
+            "The function sqrt(...) requires `Float` but got `STRING`."
+        );
+        let empty_sqrt = || call("sqrt", vec![value(V::StringValue("a".to_owned()))]);
+        assert!(
+            executor(&service, request(true, "select", select(empty_sqrt())))
+                .await
+                .is_empty()
+        );
+        assert!(executor(&service, request(true, "where", empty_sqrt()))
+            .await
+            .is_empty());
+    }
+}

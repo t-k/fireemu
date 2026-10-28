@@ -1,11 +1,12 @@
 //! The string and math functions of a pipeline (`FS-PIPELINE`): `concat`, `to_lower`,
 //! `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`,
 //! `trim`, `ltrim`, `rtrim`, `split`, `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`,
-//! `round`, `floor`, `ceil` and `pow`.
+//! `round`, `floor`, `ceil`, `pow` and `sqrt`.
 //!
-//! Everything here was observed in production by FS-ENT-ORACLE O-8B (2026-10-26, an Enterprise
+//! The existing functions were observed in production by FS-ENT-ORACLE O-8B (2026-10-26, an Enterprise
 //! database, two identical recordings; `fs-ent-pipeline/o8b/strings-main` and `math-main`).
-//! The rules those rows show:
+//! SQRT has only a recorded wrong-type refusal and empty-input witnesses (O-1); numeric
+//! behavior is not established by those rows. The rules the O-8B rows show:
 //!
 //! - A null or a missing argument gives null.
 //! - An argument of the wrong type fails the whole request with
@@ -25,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 38] = [
+pub const NAMES: [&str; 44] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -64,6 +65,12 @@ pub const NAMES: [&str; 38] = [
     "floor",
     "ceil",
     "pow",
+    "sqrt",
+    "exp",
+    "ln",
+    "log",
+    "log10",
+    "trunc",
 ];
 
 pub(super) const CURRENT_TIMESTAMP: Function = function(
@@ -395,6 +402,62 @@ pub(super) const POW: Function = function(
     "pow(base: number, exponent: number): float64",
     &[],
     eval_pow,
+);
+
+pub(super) const SQRT: Function = function(
+    "sqrt",
+    Arity::Exact(1),
+    false,
+    "sqrt(number: number): float64",
+    &[],
+    eval_sqrt,
+);
+
+pub(super) const EXP: Function = function(
+    "exp",
+    Arity::Exact(1),
+    false,
+    "exp(exponent: number): number",
+    &[],
+    eval_exp,
+);
+pub(super) const LN: Function = function(
+    "ln",
+    Arity::Exact(1),
+    false,
+    "ln(number: number): number",
+    &[],
+    eval_ln,
+);
+pub(super) const LOG: Function = function(
+    "log",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("log(number: number): number", 1, 1),
+        ("log(number: number, base: number): number", 2, 2),
+    ],
+    eval_log,
+);
+pub(super) const LOG10: Function = function(
+    "log10",
+    Arity::Exact(1),
+    false,
+    "log10(number: number): number",
+    &[],
+    eval_log10,
+);
+pub(super) const TRUNC: Function = function(
+    "trunc",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("trunc[T <: number](number: T): T", 1, 1),
+        ("trunc[T <: number](number: T, places: int64): T", 2, 2),
+    ],
+    eval_trunc,
 );
 
 fn unobserved(function: &'static str, reason: &'static str) -> Eval {
@@ -1774,4 +1837,128 @@ fn eval_pow(args: &[Eval], cx: Context) -> Eval {
         );
     }
     double(base.powf(exponent))
+}
+
+fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match &args[0] {
+        Eval::Value(Value::String(_)) => Eval::Error(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING",
+        }),
+        _ if strict(cx) => unobserved("sqrt", "numeric and other argument behavior is unobserved"),
+        Eval::Value(Value::Null) | Eval::Absent => null(),
+        Eval::Value(Value::Integer(value)) => sqrt_number(Num::Int(*value).double()),
+        Eval::Value(Value::Double(value)) => sqrt_number(*value),
+        Eval::Value(value) => Eval::Error(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: type_name(value),
+        }),
+        Eval::Error(_) => unreachable!("errors are returned above"),
+    }
+}
+
+fn sqrt_number(value: f64) -> Eval {
+    if value < 0.0 {
+        invalid("sqrt(...) requires a non-negative number")
+    } else {
+        double(value.sqrt())
+    }
+}
+
+fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<Num>, Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    if strict(cx) {
+        return Err(unobserved(name, "numeric arguments are unobserved"));
+    }
+    numbers(name, args, args.len(), cx)
+}
+fn eval_exp(args: &[Eval], cx: Context) -> Eval {
+    match numeric_inputs("exp", args, cx) {
+        Ok(v) => {
+            let input = v[0].double();
+            let result = input.exp();
+            if input.is_finite() && (result.is_infinite() || result == 0.0) {
+                invalid("exp(...) overflow or underflow")
+            } else if input.is_finite() && result.is_subnormal() {
+                unobserved("exp", "subnormal underflow behavior is unobserved")
+            } else {
+                double(result)
+            }
+        }
+        Err(e) => e,
+    }
+}
+fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
+    let values = match numeric_inputs(name, args, cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let x = values[0].double();
+    let base = values.get(1).map(|v| v.double());
+    if base.is_some_and(|b| {
+        (x.is_nan() || x == f64::NEG_INFINITY) && (b <= 0.0 || b.to_bits() == 1.0_f64.to_bits())
+    }) || (x <= 0.0 && base.is_some_and(|b| b.is_nan() || b == f64::INFINITY))
+    {
+        return unobserved(name, "mixed special and invalid arguments");
+    }
+    if x.is_nan()
+        || x == f64::NEG_INFINITY
+        || base.is_some_and(f64::is_nan)
+        || base == Some(f64::INFINITY)
+    {
+        return double(f64::NAN);
+    }
+    if x <= 0.0 || base.is_some_and(|b| b <= 0.0 || b.to_bits() == 1.0_f64.to_bits()) {
+        return invalid(format!("{name}(...) invalid logarithm domain"));
+    }
+    double(match base {
+        Some(b) => x.log(b),
+        None if name == "log10" => x.log10(),
+        None => x.ln(),
+    })
+}
+fn eval_ln(args: &[Eval], cx: Context) -> Eval {
+    logarithm("ln", args, cx)
+}
+fn eval_log(args: &[Eval], cx: Context) -> Eval {
+    logarithm("log", args, cx)
+}
+fn eval_log10(args: &[Eval], cx: Context) -> Eval {
+    logarithm("log10", args, cx)
+}
+fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if strict(cx) {
+        return unobserved("trunc", "numeric arguments are unobserved");
+    }
+    let values = match check("trunc", args, &[Param::Number, Param::Int], cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let places = values
+        .get(1)
+        .and_then(|v| {
+            if let Value::Integer(i) = v {
+                Some(*i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    if places != 0 {
+        return unobserved("trunc", "nonzero decimal precision is unobserved");
+    }
+    match Num::of(values[0]) {
+        Num::Int(i) => integer(i),
+        Num::Double(d) => double(d.trunc()),
+    }
 }

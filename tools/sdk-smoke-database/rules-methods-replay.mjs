@@ -1,0 +1,344 @@
+// Offline replay of recorded REST Rules methods; no production access.
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+const RAW = "5e4481c0baab59f5f4223749dabf12ed88d9d6d655a204421f049a4b422a3a91";
+const IDS = [
+  "parent-ok",
+  "parent-deny",
+  "exists-ok",
+  "exists-deny",
+  "hasChild-ok",
+  "hasChild-deny",
+  "hasChildren-any-ok",
+  "hasChildren-any-deny",
+  "hasChildren-list-ok",
+  "hasChildren-list-deny",
+  "getPriority-number",
+  "getPriority-string",
+  "getPriority-null",
+  "isString-ok",
+  "isString-deny",
+  "isBoolean-ok",
+  "isBoolean-deny",
+  "beginsWith-ok",
+  "beginsWith-deny",
+  "endsWith-ok",
+  "endsWith-deny",
+  "replace-all-ok",
+  "replace-first-only-deny",
+  "toLowerCase-ok",
+  "toLowerCase-deny",
+  "toUpperCase-ok",
+  "toUpperCase-deny",
+  "matches-ok",
+  "matches-deny",
+];
+const parse = (s) => {
+  try {
+    return JSON.parse(s);
+  } catch {
+    throw Error("invalid JSON");
+  }
+};
+export function normalizeObservation(row) {
+  if (
+    !IDS.includes(row?.id) ||
+    !["r1", "r2"].includes(row.round) ||
+    ![200, 401].includes(row.status) ||
+    typeof row.predicate !== "string" ||
+    typeof row.seedBody !== "string" ||
+    row.seedResponse?.status !== 200 ||
+    typeof row.seedResponse.body !== "string" ||
+    typeof row.body !== "string" ||
+    !row.rule ||
+    row.rule[".read"] !== row.predicate
+  )
+    throw Error("invalid observation");
+  parse(row.seedBody);
+  parse(row.seedResponse.body);
+  parse(row.body);
+  const priority = row.id.startsWith("getPriority-");
+  if (
+    priority &&
+    (!Object.hasOwn(row, "export") ||
+      typeof row.exportBody !== "string" ||
+      !isDeepStrictEqual(parse(row.exportBody), row.export))
+  )
+    throw Error("invalid export");
+  return {
+    id: row.id,
+    round: row.round,
+    predicate: row.predicate,
+    seedBody: row.seedBody,
+    seedResponse: {
+      status: row.seedResponse.status,
+      body: row.seedResponse.body,
+      etag: row.seedResponse.etag ?? null,
+    },
+    status: row.status,
+    body: row.body,
+    etag: row.etag ?? null,
+    readback: row.readback,
+    ...(priority ? { export: row.export, exportBody: row.exportBody } : {}),
+    rule: row.rule,
+  };
+}
+function projection(row) {
+  const x = normalizeObservation(row);
+  x.seedBody = parse(x.seedBody);
+  x.seedResponse.body = parse(x.seedResponse.body);
+  x.body = parse(x.body);
+  if (x.exportBody !== undefined) x.exportBody = parse(x.exportBody);
+  return x;
+}
+export function compareCase(expected, actual) {
+  try {
+    return {
+      id: expected.id,
+      round: expected.round,
+      verdict: isDeepStrictEqual(projection(expected), projection(actual)) ? "MATCH" : "MISMATCH",
+    };
+  } catch {
+    return { id: expected.id, round: expected.round, verdict: "MISMATCH" };
+  }
+}
+export function extractFixture(bytes) {
+  if (createHash("sha256").update(bytes).digest("hex") !== RAW) throw Error("raw digest mismatch");
+  const all = bytes.toString("utf8").trim().split("\n").map(parse),
+    obs = all.filter((x) => x.state === "rules-methods-observation").map((x) => x.observation),
+    install = all.filter(
+      (x) =>
+        x.state === "before-send" &&
+        x.id === 14 &&
+        x.method === "PUT" &&
+        x.url.includes("/.settings/rules.json"),
+    );
+  if (install.length !== 1) throw Error("rules install missing");
+  const rules = parse(install[0].body).rules,
+    prefix = Object.keys(rules).filter((x) => /^rnext1_[a-f0-9]{24}$/.test(x));
+  if (prefix.length !== 1) throw Error("rules prefix");
+  const rows = obs.map((o) => {
+    const node = rules[prefix[0]]?.[o.round]?.[o.id];
+    return normalizeObservation({ ...o, rule: o.id.startsWith("parent-") ? node?.leaf : node });
+  });
+  if (
+    rows.length !== 58 ||
+    new Set(rows.map((x) => `${x.round}/${x.id}`)).size !== 58 ||
+    !IDS.every((id) =>
+      ["r1", "r2"].every((round) => rows.some((x) => x.id === id && x.round === round)),
+    )
+  )
+    throw Error("observation coverage");
+  return {
+    schemaVersion: 1,
+    source: { rawSha256: RAW, productionReview: "2026-10-29-rtdb-rules-methods-actual-sol.md" },
+    rows,
+  };
+}
+export async function replayCase(expected, send, root) {
+  if (
+    !/^[A-Za-z0-9_-]+$/.test(root) ||
+    !IDS.includes(expected.id) ||
+    !["r1", "r2"].includes(expected.round)
+  )
+    throw Error("invalid scope");
+  const base = `/${root}/${expected.round}/${expected.id}`,
+    path = `${base}${expected.id.startsWith("parent-") ? "/leaf" : ""}.json`;
+  const seed = await send({ method: "PUT", path: `${base}.json`, body: expected.seedBody });
+  if (
+    seed.status !== 200 ||
+    !isDeepStrictEqual(parse(seed.body), parse(expected.seedResponse.body))
+  )
+    throw Error("seed unresolved");
+  const client = await send({ method: "GET", path, query: "?auth_variable_override=null" });
+  const read = await send({ method: "GET", path });
+  if (read.status !== 200) throw Error("readback unresolved");
+  let exp;
+  if (expected.id.startsWith("getPriority-")) {
+    exp = await send({ method: "GET", path, query: "?format=export" });
+    if (exp.status !== 200) throw Error("export unresolved");
+  }
+  const actual = {
+    id: expected.id,
+    round: expected.round,
+    predicate: expected.predicate,
+    seedBody: expected.seedBody,
+    seedResponse: { status: seed.status, body: seed.body, etag: seed.etag ?? null },
+    status: client.status,
+    body: client.body,
+    etag: client.etag ?? null,
+    readback: parse(read.body),
+    ...(exp ? { export: parse(exp.body), exportBody: exp.body } : {}),
+    rule: expected.rule,
+  };
+  return { result: compareCase(expected, actual), actual };
+}
+export async function replay(origin, fixture, { fetchImpl = fetch } = {}) {
+  const u = new URL(origin);
+  if (
+    u.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) ||
+    u.username ||
+    u.password ||
+    u.pathname !== "/" ||
+    u.search ||
+    u.hash
+  )
+    throw Error("local origin required");
+  if (
+    fixture?.schemaVersion !== 1 ||
+    fixture.rows?.length !== 58 ||
+    new Set(fixture.rows.map((x) => `${x.round}/${x.id}`)).size !== 58
+  )
+    throw Error("fixture invalid");
+  for (const row of fixture.rows) normalizeObservation(row);
+  const root = `methodsreplay${randomBytes(8).toString("hex")}`,
+    rulesUrl = `${u.origin}/.settings/rules.json`,
+    rootUrl = `${u.origin}/${root}.json`,
+    headers = { authorization: "Bearer owner", "content-type": "application/json" };
+  let unknown = false;
+  const unknownError = () => Object.assign(Error("local outcome unknown"), { ownedRoot: root });
+  const local = async (url, options = {}) => {
+    if (unknown) throw unknownError();
+    try {
+      const res = await fetchImpl(url, {
+        ...options,
+        redirect: "manual",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.status < 200 || res.status >= 500 || (res.status >= 300 && res.status < 400)) {
+        unknown = true;
+        throw unknownError();
+      }
+      return {
+        status: res.status,
+        headers: res.headers,
+        text: async () => {
+          try {
+            return await res.text();
+          } catch {
+            unknown = true;
+            throw unknownError();
+          }
+        },
+      };
+    } catch {
+      unknown = true;
+      throw unknownError();
+    }
+  };
+  const parseLocal = (text) => {
+    try {
+      return parse(text);
+    } catch {
+      unknown = true;
+      throw unknownError();
+    }
+  };
+  const baseline = await local(rulesUrl, { headers });
+  if (baseline.status !== 200) throw Error("rules baseline unresolved");
+  const original = await baseline.text();
+  let rows;
+  try {
+    const branches = { r1: {}, r2: {} };
+    for (const item of fixture.rows)
+      branches[item.round][item.id] = item.id.startsWith("parent-")
+        ? { leaf: item.rule }
+        : item.rule;
+    const rules = {
+      rules: {
+        ".read": false,
+        ".write": false,
+        [root]: { ".read": false, ready: { ".read": true }, ...branches },
+      },
+    };
+    const setup = await local(rulesUrl, { method: "PUT", headers, body: JSON.stringify(rules) });
+    if (setup.status !== 200) throw Error("rules setup unresolved");
+    const send = async (req) => {
+      const res = await local(`${u.origin}${req.path}${req.query ?? ""}`, {
+        method: req.method,
+        headers,
+        body: req.body,
+      });
+      const body = await res.text();
+      parseLocal(body);
+      return { status: res.status, etag: res.headers.get("etag"), body };
+    };
+    rows = [];
+    for (const item of fixture.rows) rows.push(await replayCase(item, send, root));
+  } finally {
+    if (unknown) throw unknownError();
+    let failed = false;
+    try {
+      const del = await local(rootUrl, { method: "DELETE", headers });
+      const read = await local(rootUrl, { headers });
+      if (del.status !== 200 || read.status !== 200 || parseLocal(await read.text()) !== null)
+        failed = true;
+    } catch {
+      failed = true;
+    }
+    if (unknown) throw unknownError();
+    try {
+      const put = await local(rulesUrl, { method: "PUT", headers, body: original });
+      const read = await local(rulesUrl, { headers });
+      if (put.status !== 200 || read.status !== 200 || (await read.text()) !== original)
+        failed = true;
+    } catch {
+      failed = true;
+    }
+    if (unknown) throw unknownError();
+    if (failed) throw Error("cleanup unresolved");
+  }
+  return { rows, cleanup: { ownedRootAbsent: true, rulesRestored: true } };
+}
+async function main(args) {
+  if (args[0] === "fixture" && args.length === 3) {
+    await writeFile(
+      args[2],
+      JSON.stringify(extractFixture(await readFile(args[1])), null, 2) + "\n",
+      { flag: "wx" },
+    );
+    return;
+  }
+  if (args[0] === "local" && args.length === 4 && ["strict", "ordinary"].includes(args[2])) {
+    const fixture = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    );
+    await mkdir(args[3]);
+    let result;
+    try {
+      result = await replay(args[1], fixture);
+    } catch (e) {
+      if (e.ownedRoot)
+        await writeFile(
+          `${args[3]}/unknown.json`,
+          JSON.stringify({ status: "UNKNOWN", ownedRoot: e.ownedRoot }) + "\n",
+          { flag: "wx" },
+        );
+      throw e;
+    }
+    await writeFile(
+      `${args[3]}/comparison.json`,
+      JSON.stringify({ profile: args[2], ...result }, null, 2) + "\n",
+      { flag: "wx" },
+    );
+    console.log(
+      JSON.stringify({
+        profile: args[2],
+        rows: result.rows.length,
+        matched: result.rows.filter((x) => x.result.verdict === "MATCH").length,
+      }),
+    );
+    if (result.rows.some((x) => x.result.verdict !== "MATCH")) process.exitCode = 1;
+    return;
+  }
+  throw Error("usage");
+}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main(process.argv.slice(2)).catch(() => {
+    console.error("Rules methods replay stopped");
+    process.exitCode = 2;
+  });

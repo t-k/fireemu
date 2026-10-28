@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "rawSha256": "e4eea118280a740a40ef7df808df8046218fbcfba5c09ac3c380cba78336b56c",
+    "productionReview": "2026-10-29-rtdb-rules-language-actual-sol.md"
+  },
+  "rows": [
+    {
+      "id": "timestamp-valid",
+      "round": "r1",
+      "seed": 1,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":\"timestamp\"}",
+        "override": null
+      },
+      "status": 200,
+      "body": "<timestamp>",
+      "readback": "<timestamp>",
+      "etag": null,
+      "rule": {
+        ".write": true,
+        ".validate": "newData.isNumber() && newData.val() <= now && newData.val() >= 0"
+      }
+    },
+    {
+      "id": "timestamp-negative",
+      "round": "r1",
+      "seed": 1,
+      "request": {
+        "method": "PUT",
+        "body": "-1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": true,
+        ".validate": "newData.isNumber() && newData.val() <= now && newData.val() >= 0"
+      }
+    },
+    {
+      "id": "uid-allow",
+      "round": "r1",
+      "seed": 0,
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": {
+          "uid": "sv-rule-user"
+        }
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "auth.uid === 'sv-rule-user'"
+      }
+    },
+    {
+      "id": "uid-deny",
+      "round": "r1",
+      "seed": 0,
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": {
+          "uid": "sv-rule-user"
+        }
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": 0,
+      "etag": null,
+      "rule": {
+        ".write": "auth.uid === 'sv-other-user'"
+      }
+    },
+    {
+      "id": "contains-allow",
+      "round": "r1",
+      "seed": "alphabet",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "data.val().contains('pha')"
+      }
+    },
+    {
+      "id": "contains-deny",
+      "round": "r1",
+      "seed": "alphabet",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": "alphabet",
+      "etag": null,
+      "rule": {
+        ".write": "data.val().contains('xyz')"
+      }
+    },
+    {
+      "id": "strict-allow",
+      "round": "r1",
+      "seed": "alpha",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "data.val() === 'alpha'"
+      }
+    },
+    {
+      "id": "strict-deny",
+      "round": "r1",
+      "seed": "alpha",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": "alpha",
+      "etag": null,
+      "rule": {
+        ".write": "data.val() === 'beta'"
+      }
+    },
+    {
+      "id": "timestamp-valid",
+      "round": "r2",
+      "seed": 1,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":\"timestamp\"}",
+        "override": null
+      },
+      "status": 200,
+      "body": "<timestamp>",
+      "readback": "<timestamp>",
+      "etag": null,
+      "rule": {
+        ".write": true,
+        ".validate": "newData.isNumber() && newData.val() <= now && newData.val() >= 0"
+      }
+    },
+    {
+      "id": "timestamp-negative",
+      "round": "r2",
+      "seed": 1,
+      "request": {
+        "method": "PUT",
+        "body": "-1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": true,
+        ".validate": "newData.isNumber() && newData.val() <= now && newData.val() >= 0"
+      }
+    },
+    {
+      "id": "uid-allow",
+      "round": "r2",
+      "seed": 0,
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": {
+          "uid": "sv-rule-user"
+        }
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "auth.uid === 'sv-rule-user'"
+      }
+    },
+    {
+      "id": "uid-deny",
+      "round": "r2",
+      "seed": 0,
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": {
+          "uid": "sv-rule-user"
+        }
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": 0,
+      "etag": null,
+      "rule": {
+        ".write": "auth.uid === 'sv-other-user'"
+      }
+    },
+    {
+      "id": "contains-allow",
+      "round": "r2",
+      "seed": "alphabet",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "data.val().contains('pha')"
+      }
+    },
+    {
+      "id": "contains-deny",
+      "round": "r2",
+      "seed": "alphabet",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": "alphabet",
+      "etag": null,
+      "rule": {
+        ".write": "data.val().contains('xyz')"
+      }
+    },
+    {
+      "id": "strict-allow",
+      "round": "r2",
+      "seed": "alpha",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 200,
+      "body": 1,
+      "readback": 1,
+      "etag": null,
+      "rule": {
+        ".write": "data.val() === 'alpha'"
+      }
+    },
+    {
+      "id": "strict-deny",
+      "round": "r2",
+      "seed": "alpha",
+      "request": {
+        "method": "PUT",
+        "body": "1",
+        "override": null
+      },
+      "status": 401,
+      "body": {
+        "error": "Permission denied"
+      },
+      "readback": "alpha",
+      "etag": null,
+      "rule": {
+        ".write": "data.val() === 'beta'"
+      }
+    }
+  ]
+}

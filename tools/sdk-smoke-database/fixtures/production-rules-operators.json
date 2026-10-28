@@ -1,0 +1,3850 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "rawSha256": "a9ff0804e9c3345661990431bf91c11ef093fc43c4280cff677f2ca3781b377a",
+    "productionReview": "2026-10-29-rtdb-rules-operators-03-actual-sol.md",
+    "productionReviewSha256": "1ae656526088d320da040c7a4868c83bda69027b7d397f6209c392759cd23134"
+  },
+  "globalRules": {
+    ".read": false,
+    ".write": false,
+    "{ROOT}": {
+      ".read": false,
+      "ready": {
+        ".read": true
+      },
+      "r1": {
+        "not-false-allow": {
+          ".write": "!(data.val() == true)"
+        },
+        "not-true-deny": {
+          ".write": "!(data.val() == true)"
+        },
+        "or-right-true": {
+          ".write": "data.child('left').val() == true || data.child('right').val() == true"
+        },
+        "or-both-false-deny": {
+          ".write": "data.child('left').val() == true || data.child('right').val() == true"
+        },
+        "or-short-circuit": {
+          ".write": "data.val() == true || data.val().matches(/x/)"
+        },
+        "or-runtime-error-deny": {
+          ".write": "data.val() == true || data.val().matches(/x/)"
+        },
+        "conditional-true-then-allow": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-true-then-deny": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-false-else-allow": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-false-else-deny": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "add-num-allow": {
+          ".write": "data.val() + 2 == newData.val()"
+        },
+        "add-num-deny": {
+          ".write": "data.val() + 2 == newData.val()"
+        },
+        "add-string-allow": {
+          ".write": "data.val() + 'tail' == newData.val()"
+        },
+        "add-string-deny": {
+          ".write": "data.val() + 'tail' == newData.val()"
+        },
+        "add-null-input": {
+          ".write": "data.val() + 1 == 1"
+        },
+        "subtract-allow": {
+          ".write": "data.val() - 2 == newData.val()"
+        },
+        "subtract-deny": {
+          ".write": "data.val() - 2 == newData.val()"
+        },
+        "multiply-allow": {
+          ".write": "data.val() * 3 == newData.val()"
+        },
+        "multiply-deny": {
+          ".write": "data.val() * 3 == newData.val()"
+        },
+        "divide-allow": {
+          ".write": "data.val() / 2 == newData.val()"
+        },
+        "divide-deny": {
+          ".write": "data.val() / 2 == newData.val()"
+        },
+        "modulus-allow": {
+          ".write": "data.val() % 3 == newData.val()"
+        },
+        "modulus-deny": {
+          ".write": "data.val() % 3 == newData.val()"
+        },
+        "negate-allow": {
+          ".write": "-data.val() == newData.val()"
+        },
+        "negate-deny": {
+          ".write": "-data.val() == newData.val()"
+        },
+        "lt-allow": {
+          ".write": "data.val() < 3"
+        },
+        "lt-deny": {
+          ".write": "data.val() < 3"
+        },
+        "gt-allow": {
+          ".write": "data.val() > 3"
+        },
+        "gt-deny": {
+          ".write": "data.val() > 3"
+        },
+        "ne-allow": {
+          ".write": "data.val() != 2"
+        },
+        "ne-deny": {
+          ".write": "data.val() != 2"
+        },
+        "strict-ne-allow": {
+          ".write": "data.val() !== 2"
+        },
+        "strict-ne-deny": {
+          ".write": "data.val() !== 2"
+        },
+        "and-short-circuit": {
+          ".write": "!(data.val() == true && data.val().matches(/x/))"
+        },
+        "conditional-short-circuit": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+        },
+        "q-order-key-allow": {
+          ".read": "query.orderByKey == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-key-deny": {
+          ".read": "query.orderByKey == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-value-allow": {
+          ".read": "query.orderByValue == true",
+          ".indexOn": [
+            "h",
+            ".value"
+          ]
+        },
+        "q-order-value-deny": {
+          ".read": "query.orderByValue == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-priority-allow": {
+          ".read": "query.orderByPriority == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-priority-deny": {
+          ".read": "query.orderByPriority == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-limit-last-allow": {
+          ".read": "query.limitToLast == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-limit-last-deny": {
+          ".read": "query.limitToLast == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-start-at-allow": {
+          ".read": "query.startAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-start-at-deny": {
+          ".read": "query.startAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-end-at-allow": {
+          ".read": "query.endAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-end-at-deny": {
+          ".read": "query.endAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-equal-to-allow": {
+          ".read": "query.equalTo == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-equal-to-deny": {
+          ".read": "query.equalTo == 2",
+          ".indexOn": [
+            "h"
+          ]
+        }
+      },
+      "r2": {
+        "not-false-allow": {
+          ".write": "!(data.val() == true)"
+        },
+        "not-true-deny": {
+          ".write": "!(data.val() == true)"
+        },
+        "or-right-true": {
+          ".write": "data.child('left').val() == true || data.child('right').val() == true"
+        },
+        "or-both-false-deny": {
+          ".write": "data.child('left').val() == true || data.child('right').val() == true"
+        },
+        "or-short-circuit": {
+          ".write": "data.val() == true || data.val().matches(/x/)"
+        },
+        "or-runtime-error-deny": {
+          ".write": "data.val() == true || data.val().matches(/x/)"
+        },
+        "conditional-true-then-allow": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-true-then-deny": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-false-else-allow": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "conditional-false-else-deny": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+        },
+        "add-num-allow": {
+          ".write": "data.val() + 2 == newData.val()"
+        },
+        "add-num-deny": {
+          ".write": "data.val() + 2 == newData.val()"
+        },
+        "add-string-allow": {
+          ".write": "data.val() + 'tail' == newData.val()"
+        },
+        "add-string-deny": {
+          ".write": "data.val() + 'tail' == newData.val()"
+        },
+        "add-null-input": {
+          ".write": "data.val() + 1 == 1"
+        },
+        "subtract-allow": {
+          ".write": "data.val() - 2 == newData.val()"
+        },
+        "subtract-deny": {
+          ".write": "data.val() - 2 == newData.val()"
+        },
+        "multiply-allow": {
+          ".write": "data.val() * 3 == newData.val()"
+        },
+        "multiply-deny": {
+          ".write": "data.val() * 3 == newData.val()"
+        },
+        "divide-allow": {
+          ".write": "data.val() / 2 == newData.val()"
+        },
+        "divide-deny": {
+          ".write": "data.val() / 2 == newData.val()"
+        },
+        "modulus-allow": {
+          ".write": "data.val() % 3 == newData.val()"
+        },
+        "modulus-deny": {
+          ".write": "data.val() % 3 == newData.val()"
+        },
+        "negate-allow": {
+          ".write": "-data.val() == newData.val()"
+        },
+        "negate-deny": {
+          ".write": "-data.val() == newData.val()"
+        },
+        "lt-allow": {
+          ".write": "data.val() < 3"
+        },
+        "lt-deny": {
+          ".write": "data.val() < 3"
+        },
+        "gt-allow": {
+          ".write": "data.val() > 3"
+        },
+        "gt-deny": {
+          ".write": "data.val() > 3"
+        },
+        "ne-allow": {
+          ".write": "data.val() != 2"
+        },
+        "ne-deny": {
+          ".write": "data.val() != 2"
+        },
+        "strict-ne-allow": {
+          ".write": "data.val() !== 2"
+        },
+        "strict-ne-deny": {
+          ".write": "data.val() !== 2"
+        },
+        "and-short-circuit": {
+          ".write": "!(data.val() == true && data.val().matches(/x/))"
+        },
+        "conditional-short-circuit": {
+          ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+        },
+        "q-order-key-allow": {
+          ".read": "query.orderByKey == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-key-deny": {
+          ".read": "query.orderByKey == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-value-allow": {
+          ".read": "query.orderByValue == true",
+          ".indexOn": [
+            "h",
+            ".value"
+          ]
+        },
+        "q-order-value-deny": {
+          ".read": "query.orderByValue == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-priority-allow": {
+          ".read": "query.orderByPriority == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-order-priority-deny": {
+          ".read": "query.orderByPriority == true",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-limit-last-allow": {
+          ".read": "query.limitToLast == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-limit-last-deny": {
+          ".read": "query.limitToLast == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-start-at-allow": {
+          ".read": "query.startAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-start-at-deny": {
+          ".read": "query.startAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-end-at-allow": {
+          ".read": "query.endAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-end-at-deny": {
+          ".read": "query.endAt == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-equal-to-allow": {
+          ".read": "query.equalTo == 2",
+          ".indexOn": [
+            "h"
+          ]
+        },
+        "q-equal-to-deny": {
+          ".read": "query.equalTo == 2",
+          ".indexOn": [
+            "h"
+          ]
+        }
+      }
+    }
+  },
+  "rules": {
+    ".read": false,
+    "ready": {
+      ".read": true
+    },
+    "r1": {
+      "not-false-allow": {
+        ".write": "!(data.val() == true)"
+      },
+      "not-true-deny": {
+        ".write": "!(data.val() == true)"
+      },
+      "or-right-true": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      },
+      "or-both-false-deny": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      },
+      "or-short-circuit": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      },
+      "or-runtime-error-deny": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      },
+      "conditional-true-then-allow": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-true-then-deny": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-false-else-allow": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-false-else-deny": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "add-num-allow": {
+        ".write": "data.val() + 2 == newData.val()"
+      },
+      "add-num-deny": {
+        ".write": "data.val() + 2 == newData.val()"
+      },
+      "add-string-allow": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      },
+      "add-string-deny": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      },
+      "add-null-input": {
+        ".write": "data.val() + 1 == 1"
+      },
+      "subtract-allow": {
+        ".write": "data.val() - 2 == newData.val()"
+      },
+      "subtract-deny": {
+        ".write": "data.val() - 2 == newData.val()"
+      },
+      "multiply-allow": {
+        ".write": "data.val() * 3 == newData.val()"
+      },
+      "multiply-deny": {
+        ".write": "data.val() * 3 == newData.val()"
+      },
+      "divide-allow": {
+        ".write": "data.val() / 2 == newData.val()"
+      },
+      "divide-deny": {
+        ".write": "data.val() / 2 == newData.val()"
+      },
+      "modulus-allow": {
+        ".write": "data.val() % 3 == newData.val()"
+      },
+      "modulus-deny": {
+        ".write": "data.val() % 3 == newData.val()"
+      },
+      "negate-allow": {
+        ".write": "-data.val() == newData.val()"
+      },
+      "negate-deny": {
+        ".write": "-data.val() == newData.val()"
+      },
+      "lt-allow": {
+        ".write": "data.val() < 3"
+      },
+      "lt-deny": {
+        ".write": "data.val() < 3"
+      },
+      "gt-allow": {
+        ".write": "data.val() > 3"
+      },
+      "gt-deny": {
+        ".write": "data.val() > 3"
+      },
+      "ne-allow": {
+        ".write": "data.val() != 2"
+      },
+      "ne-deny": {
+        ".write": "data.val() != 2"
+      },
+      "strict-ne-allow": {
+        ".write": "data.val() !== 2"
+      },
+      "strict-ne-deny": {
+        ".write": "data.val() !== 2"
+      },
+      "and-short-circuit": {
+        ".write": "!(data.val() == true && data.val().matches(/x/))"
+      },
+      "conditional-short-circuit": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+      },
+      "q-order-key-allow": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-key-deny": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-value-allow": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h",
+          ".value"
+        ]
+      },
+      "q-order-value-deny": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-priority-allow": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-priority-deny": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-limit-last-allow": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-limit-last-deny": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-start-at-allow": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-start-at-deny": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-end-at-allow": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-end-at-deny": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-equal-to-allow": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-equal-to-deny": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    "r2": {
+      "not-false-allow": {
+        ".write": "!(data.val() == true)"
+      },
+      "not-true-deny": {
+        ".write": "!(data.val() == true)"
+      },
+      "or-right-true": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      },
+      "or-both-false-deny": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      },
+      "or-short-circuit": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      },
+      "or-runtime-error-deny": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      },
+      "conditional-true-then-allow": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-true-then-deny": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-false-else-allow": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "conditional-false-else-deny": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      },
+      "add-num-allow": {
+        ".write": "data.val() + 2 == newData.val()"
+      },
+      "add-num-deny": {
+        ".write": "data.val() + 2 == newData.val()"
+      },
+      "add-string-allow": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      },
+      "add-string-deny": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      },
+      "add-null-input": {
+        ".write": "data.val() + 1 == 1"
+      },
+      "subtract-allow": {
+        ".write": "data.val() - 2 == newData.val()"
+      },
+      "subtract-deny": {
+        ".write": "data.val() - 2 == newData.val()"
+      },
+      "multiply-allow": {
+        ".write": "data.val() * 3 == newData.val()"
+      },
+      "multiply-deny": {
+        ".write": "data.val() * 3 == newData.val()"
+      },
+      "divide-allow": {
+        ".write": "data.val() / 2 == newData.val()"
+      },
+      "divide-deny": {
+        ".write": "data.val() / 2 == newData.val()"
+      },
+      "modulus-allow": {
+        ".write": "data.val() % 3 == newData.val()"
+      },
+      "modulus-deny": {
+        ".write": "data.val() % 3 == newData.val()"
+      },
+      "negate-allow": {
+        ".write": "-data.val() == newData.val()"
+      },
+      "negate-deny": {
+        ".write": "-data.val() == newData.val()"
+      },
+      "lt-allow": {
+        ".write": "data.val() < 3"
+      },
+      "lt-deny": {
+        ".write": "data.val() < 3"
+      },
+      "gt-allow": {
+        ".write": "data.val() > 3"
+      },
+      "gt-deny": {
+        ".write": "data.val() > 3"
+      },
+      "ne-allow": {
+        ".write": "data.val() != 2"
+      },
+      "ne-deny": {
+        ".write": "data.val() != 2"
+      },
+      "strict-ne-allow": {
+        ".write": "data.val() !== 2"
+      },
+      "strict-ne-deny": {
+        ".write": "data.val() !== 2"
+      },
+      "and-short-circuit": {
+        ".write": "!(data.val() == true && data.val().matches(/x/))"
+      },
+      "conditional-short-circuit": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+      },
+      "q-order-key-allow": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-key-deny": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-value-allow": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h",
+          ".value"
+        ]
+      },
+      "q-order-value-deny": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-priority-allow": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-order-priority-deny": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-limit-last-allow": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-limit-last-deny": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-start-at-allow": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-start-at-deny": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-end-at-allow": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-end-at-deny": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-equal-to-allow": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      },
+      "q-equal-to-deny": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    }
+  },
+  "rows": [
+    {
+      "id": "not-false-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "!(data.val() == true)",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/not-false-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "!(data.val() == true)"
+      }
+    },
+    {
+      "id": "not-true-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "!(data.val() == true)",
+      "seed": true,
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/not-true-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": true,
+      "rule": {
+        ".write": "!(data.val() == true)"
+      }
+    },
+    {
+      "id": "or-right-true",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.child('left').val() == true || data.child('right').val() == true",
+      "seed": {
+        "left": false,
+        "right": true
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"left\":false,\"right\":true}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/or-right-true.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      }
+    },
+    {
+      "id": "or-both-false-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.child('left').val() == true || data.child('right').val() == true",
+      "seed": {
+        "left": false,
+        "right": false
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"left\":false,\"right\":false}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/or-both-false-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "left": false,
+        "right": false
+      },
+      "rule": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      }
+    },
+    {
+      "id": "or-short-circuit",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() == true || data.val().matches(/x/)",
+      "seed": true,
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/or-short-circuit.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "or-runtime-error-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() == true || data.val().matches(/x/)",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/or-runtime-error-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": false,
+      "rule": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "conditional-true-then-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": true,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/conditional-true-then-allow.json",
+        "body": "\"yes\""
+      },
+      "status": 200,
+      "body": "\"yes\"",
+      "etag": null,
+      "readback": "yes",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-true-then-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": true,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/conditional-true-then-deny.json",
+        "body": "\"no\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "condition": true,
+        "old": 1
+      },
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-false-else-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": false,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":false,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/conditional-false-else-allow.json",
+        "body": "\"no\""
+      },
+      "status": 200,
+      "body": "\"no\"",
+      "etag": null,
+      "readback": "no",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-false-else-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": false,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":false,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/conditional-false-else-deny.json",
+        "body": "\"yes\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "condition": false,
+        "old": 1
+      },
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "add-num-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() + 2 == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/add-num-allow.json",
+        "body": "5"
+      },
+      "status": 200,
+      "body": "5",
+      "etag": null,
+      "readback": 5,
+      "rule": {
+        ".write": "data.val() + 2 == newData.val()"
+      }
+    },
+    {
+      "id": "add-num-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() + 2 == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/add-num-deny.json",
+        "body": "6"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() + 2 == newData.val()"
+      }
+    },
+    {
+      "id": "add-string-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() + 'tail' == newData.val()",
+      "seed": "head",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"head\"",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/add-string-allow.json",
+        "body": "\"headtail\""
+      },
+      "status": 200,
+      "body": "\"headtail\"",
+      "etag": null,
+      "readback": "headtail",
+      "rule": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      }
+    },
+    {
+      "id": "add-string-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() + 'tail' == newData.val()",
+      "seed": "head",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"head\"",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/add-string-deny.json",
+        "body": "\"headother\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "head",
+      "rule": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      }
+    },
+    {
+      "id": "add-null-input",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() + 1 == 1",
+      "seed": null,
+      "seedResponse": {
+        "status": 200,
+        "body": "null",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/add-null-input.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": null,
+      "rule": {
+        ".write": "data.val() + 1 == 1"
+      }
+    },
+    {
+      "id": "subtract-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() - 2 == newData.val()",
+      "seed": 5,
+      "seedResponse": {
+        "status": 200,
+        "body": "5",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/subtract-allow.json",
+        "body": "3"
+      },
+      "status": 200,
+      "body": "3",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() - 2 == newData.val()"
+      }
+    },
+    {
+      "id": "subtract-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() - 2 == newData.val()",
+      "seed": 5,
+      "seedResponse": {
+        "status": 200,
+        "body": "5",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/subtract-deny.json",
+        "body": "4"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 5,
+      "rule": {
+        ".write": "data.val() - 2 == newData.val()"
+      }
+    },
+    {
+      "id": "multiply-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() * 3 == newData.val()",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/multiply-allow.json",
+        "body": "12"
+      },
+      "status": 200,
+      "body": "12",
+      "etag": null,
+      "readback": 12,
+      "rule": {
+        ".write": "data.val() * 3 == newData.val()"
+      }
+    },
+    {
+      "id": "multiply-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() * 3 == newData.val()",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/multiply-deny.json",
+        "body": "13"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 4,
+      "rule": {
+        ".write": "data.val() * 3 == newData.val()"
+      }
+    },
+    {
+      "id": "divide-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() / 2 == newData.val()",
+      "seed": 6,
+      "seedResponse": {
+        "status": 200,
+        "body": "6",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/divide-allow.json",
+        "body": "3"
+      },
+      "status": 200,
+      "body": "3",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() / 2 == newData.val()"
+      }
+    },
+    {
+      "id": "divide-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() / 2 == newData.val()",
+      "seed": 6,
+      "seedResponse": {
+        "status": 200,
+        "body": "6",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/divide-deny.json",
+        "body": "4"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 6,
+      "rule": {
+        ".write": "data.val() / 2 == newData.val()"
+      }
+    },
+    {
+      "id": "modulus-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() % 3 == newData.val()",
+      "seed": 7,
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/modulus-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() % 3 == newData.val()"
+      }
+    },
+    {
+      "id": "modulus-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() % 3 == newData.val()",
+      "seed": 7,
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/modulus-deny.json",
+        "body": "2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 7,
+      "rule": {
+        ".write": "data.val() % 3 == newData.val()"
+      }
+    },
+    {
+      "id": "negate-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "-data.val() == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/negate-allow.json",
+        "body": "-3"
+      },
+      "status": 200,
+      "body": "-3",
+      "etag": null,
+      "readback": -3,
+      "rule": {
+        ".write": "-data.val() == newData.val()"
+      }
+    },
+    {
+      "id": "negate-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "-data.val() == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/negate-deny.json",
+        "body": "-2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "-data.val() == newData.val()"
+      }
+    },
+    {
+      "id": "lt-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() < 3",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/lt-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() < 3"
+      }
+    },
+    {
+      "id": "lt-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() < 3",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/lt-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 4,
+      "rule": {
+        ".write": "data.val() < 3"
+      }
+    },
+    {
+      "id": "gt-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() > 3",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/gt-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() > 3"
+      }
+    },
+    {
+      "id": "gt-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() > 3",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/gt-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() > 3"
+      }
+    },
+    {
+      "id": "ne-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() != 2",
+      "seed": 1,
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/ne-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() != 2"
+      }
+    },
+    {
+      "id": "ne-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() != 2",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/ne-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() != 2"
+      }
+    },
+    {
+      "id": "strict-ne-allow",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() !== 2",
+      "seed": 1,
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/strict-ne-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() !== 2"
+      }
+    },
+    {
+      "id": "strict-ne-deny",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "data.val() !== 2",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/strict-ne-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() !== 2"
+      }
+    },
+    {
+      "id": "and-short-circuit",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "!(data.val() == true && data.val().matches(/x/))",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/and-short-circuit.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "!(data.val() == true && data.val().matches(/x/))"
+      }
+    },
+    {
+      "id": "conditional-short-circuit",
+      "round": "r1",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)",
+      "seed": {
+        "condition": true
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r1/conditional-short-circuit.json",
+        "body": "\"yes\""
+      },
+      "status": 200,
+      "body": "\"yes\"",
+      "etag": null,
+      "readback": "yes",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "q-order-key-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByKey == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-key-allow.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-key-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByKey == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-key-deny.json",
+        "query": "orderBy=%22%24value%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-value-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByValue == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-value-allow.json",
+        "query": "orderBy=%22%24value%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h",
+          ".value"
+        ]
+      }
+    },
+    {
+      "id": "q-order-value-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByValue == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-value-deny.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-priority-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByPriority == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-priority-allow.json",
+        "query": "orderBy=%22%24priority%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-priority-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.orderByPriority == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-order-priority-deny.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-limit-last-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.limitToLast == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-limit-last-allow.json",
+        "query": "orderBy=%22h%22&limitToLast=2"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-limit-last-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.limitToLast == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-limit-last-deny.json",
+        "query": "orderBy=%22h%22&limitToFirst=2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-start-at-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.startAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-start-at-allow.json",
+        "query": "orderBy=%22h%22&startAt=2"
+      },
+      "status": 200,
+      "body": "{\"c\":{\"h\":2},\"a\":{\"h\":3}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-start-at-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.startAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-start-at-deny.json",
+        "query": "orderBy=%22h%22&startAt=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-end-at-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.endAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-end-at-allow.json",
+        "query": "orderBy=%22h%22&endAt=2"
+      },
+      "status": 200,
+      "body": "{\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-end-at-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.endAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-end-at-deny.json",
+        "query": "orderBy=%22h%22&endAt=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-equal-to-allow",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.equalTo == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-equal-to-allow.json",
+        "query": "orderBy=%22h%22&equalTo=2"
+      },
+      "status": 200,
+      "body": "{\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-equal-to-deny",
+      "round": "r1",
+      "kind": "query",
+      "predicate": "query.equalTo == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r1/q-equal-to-deny.json",
+        "query": "orderBy=%22h%22&equalTo=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "not-false-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "!(data.val() == true)",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/not-false-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "!(data.val() == true)"
+      }
+    },
+    {
+      "id": "not-true-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "!(data.val() == true)",
+      "seed": true,
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/not-true-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": true,
+      "rule": {
+        ".write": "!(data.val() == true)"
+      }
+    },
+    {
+      "id": "or-right-true",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.child('left').val() == true || data.child('right').val() == true",
+      "seed": {
+        "left": false,
+        "right": true
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"left\":false,\"right\":true}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/or-right-true.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      }
+    },
+    {
+      "id": "or-both-false-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.child('left').val() == true || data.child('right').val() == true",
+      "seed": {
+        "left": false,
+        "right": false
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"left\":false,\"right\":false}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/or-both-false-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "left": false,
+        "right": false
+      },
+      "rule": {
+        ".write": "data.child('left').val() == true || data.child('right').val() == true"
+      }
+    },
+    {
+      "id": "or-short-circuit",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() == true || data.val().matches(/x/)",
+      "seed": true,
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/or-short-circuit.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "or-runtime-error-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() == true || data.val().matches(/x/)",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/or-runtime-error-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": false,
+      "rule": {
+        ".write": "data.val() == true || data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "conditional-true-then-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": true,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/conditional-true-then-allow.json",
+        "body": "\"yes\""
+      },
+      "status": 200,
+      "body": "\"yes\"",
+      "etag": null,
+      "readback": "yes",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-true-then-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": true,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/conditional-true-then-deny.json",
+        "body": "\"no\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "condition": true,
+        "old": 1
+      },
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-false-else-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": false,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":false,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/conditional-false-else-allow.json",
+        "body": "\"no\""
+      },
+      "status": 200,
+      "body": "\"no\"",
+      "etag": null,
+      "readback": "no",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "conditional-false-else-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'",
+      "seed": {
+        "condition": false,
+        "old": 1
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":false,\"old\":1}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/conditional-false-else-deny.json",
+        "body": "\"yes\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "condition": false,
+        "old": 1
+      },
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : newData.val() == 'no'"
+      }
+    },
+    {
+      "id": "add-num-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() + 2 == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/add-num-allow.json",
+        "body": "5"
+      },
+      "status": 200,
+      "body": "5",
+      "etag": null,
+      "readback": 5,
+      "rule": {
+        ".write": "data.val() + 2 == newData.val()"
+      }
+    },
+    {
+      "id": "add-num-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() + 2 == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/add-num-deny.json",
+        "body": "6"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() + 2 == newData.val()"
+      }
+    },
+    {
+      "id": "add-string-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() + 'tail' == newData.val()",
+      "seed": "head",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"head\"",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/add-string-allow.json",
+        "body": "\"headtail\""
+      },
+      "status": 200,
+      "body": "\"headtail\"",
+      "etag": null,
+      "readback": "headtail",
+      "rule": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      }
+    },
+    {
+      "id": "add-string-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() + 'tail' == newData.val()",
+      "seed": "head",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"head\"",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/add-string-deny.json",
+        "body": "\"headother\""
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "head",
+      "rule": {
+        ".write": "data.val() + 'tail' == newData.val()"
+      }
+    },
+    {
+      "id": "add-null-input",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() + 1 == 1",
+      "seed": null,
+      "seedResponse": {
+        "status": 200,
+        "body": "null",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/add-null-input.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": null,
+      "rule": {
+        ".write": "data.val() + 1 == 1"
+      }
+    },
+    {
+      "id": "subtract-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() - 2 == newData.val()",
+      "seed": 5,
+      "seedResponse": {
+        "status": 200,
+        "body": "5",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/subtract-allow.json",
+        "body": "3"
+      },
+      "status": 200,
+      "body": "3",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() - 2 == newData.val()"
+      }
+    },
+    {
+      "id": "subtract-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() - 2 == newData.val()",
+      "seed": 5,
+      "seedResponse": {
+        "status": 200,
+        "body": "5",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/subtract-deny.json",
+        "body": "4"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 5,
+      "rule": {
+        ".write": "data.val() - 2 == newData.val()"
+      }
+    },
+    {
+      "id": "multiply-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() * 3 == newData.val()",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/multiply-allow.json",
+        "body": "12"
+      },
+      "status": 200,
+      "body": "12",
+      "etag": null,
+      "readback": 12,
+      "rule": {
+        ".write": "data.val() * 3 == newData.val()"
+      }
+    },
+    {
+      "id": "multiply-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() * 3 == newData.val()",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/multiply-deny.json",
+        "body": "13"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 4,
+      "rule": {
+        ".write": "data.val() * 3 == newData.val()"
+      }
+    },
+    {
+      "id": "divide-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() / 2 == newData.val()",
+      "seed": 6,
+      "seedResponse": {
+        "status": 200,
+        "body": "6",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/divide-allow.json",
+        "body": "3"
+      },
+      "status": 200,
+      "body": "3",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "data.val() / 2 == newData.val()"
+      }
+    },
+    {
+      "id": "divide-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() / 2 == newData.val()",
+      "seed": 6,
+      "seedResponse": {
+        "status": 200,
+        "body": "6",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/divide-deny.json",
+        "body": "4"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 6,
+      "rule": {
+        ".write": "data.val() / 2 == newData.val()"
+      }
+    },
+    {
+      "id": "modulus-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() % 3 == newData.val()",
+      "seed": 7,
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/modulus-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() % 3 == newData.val()"
+      }
+    },
+    {
+      "id": "modulus-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() % 3 == newData.val()",
+      "seed": 7,
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/modulus-deny.json",
+        "body": "2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 7,
+      "rule": {
+        ".write": "data.val() % 3 == newData.val()"
+      }
+    },
+    {
+      "id": "negate-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "-data.val() == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/negate-allow.json",
+        "body": "-3"
+      },
+      "status": 200,
+      "body": "-3",
+      "etag": null,
+      "readback": -3,
+      "rule": {
+        ".write": "-data.val() == newData.val()"
+      }
+    },
+    {
+      "id": "negate-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "-data.val() == newData.val()",
+      "seed": 3,
+      "seedResponse": {
+        "status": 200,
+        "body": "3",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/negate-deny.json",
+        "body": "-2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 3,
+      "rule": {
+        ".write": "-data.val() == newData.val()"
+      }
+    },
+    {
+      "id": "lt-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() < 3",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/lt-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() < 3"
+      }
+    },
+    {
+      "id": "lt-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() < 3",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/lt-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 4,
+      "rule": {
+        ".write": "data.val() < 3"
+      }
+    },
+    {
+      "id": "gt-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() > 3",
+      "seed": 4,
+      "seedResponse": {
+        "status": 200,
+        "body": "4",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/gt-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() > 3"
+      }
+    },
+    {
+      "id": "gt-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() > 3",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/gt-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() > 3"
+      }
+    },
+    {
+      "id": "ne-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() != 2",
+      "seed": 1,
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/ne-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() != 2"
+      }
+    },
+    {
+      "id": "ne-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() != 2",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/ne-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() != 2"
+      }
+    },
+    {
+      "id": "strict-ne-allow",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() !== 2",
+      "seed": 1,
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/strict-ne-allow.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "data.val() !== 2"
+      }
+    },
+    {
+      "id": "strict-ne-deny",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "data.val() !== 2",
+      "seed": 2,
+      "seedResponse": {
+        "status": 200,
+        "body": "2",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/strict-ne-deny.json",
+        "body": "1"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 2,
+      "rule": {
+        ".write": "data.val() !== 2"
+      }
+    },
+    {
+      "id": "and-short-circuit",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "!(data.val() == true && data.val().matches(/x/))",
+      "seed": false,
+      "seedResponse": {
+        "status": 200,
+        "body": "false",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/and-short-circuit.json",
+        "body": "1"
+      },
+      "status": 200,
+      "body": "1",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".write": "!(data.val() == true && data.val().matches(/x/))"
+      }
+    },
+    {
+      "id": "conditional-short-circuit",
+      "round": "r2",
+      "kind": "write",
+      "predicate": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)",
+      "seed": {
+        "condition": true
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"condition\":true}",
+        "etag": null
+      },
+      "request": {
+        "method": "PUT",
+        "path": "/{ROOT}/r2/conditional-short-circuit.json",
+        "body": "\"yes\""
+      },
+      "status": 200,
+      "body": "\"yes\"",
+      "etag": null,
+      "readback": "yes",
+      "rule": {
+        ".write": "(data.child('condition').val() == true) ? newData.val() == 'yes' : data.val().matches(/x/)"
+      }
+    },
+    {
+      "id": "q-order-key-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByKey == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-key-allow.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-key-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByKey == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-key-deny.json",
+        "query": "orderBy=%22%24value%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByKey == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-value-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByValue == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-value-allow.json",
+        "query": "orderBy=%22%24value%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h",
+          ".value"
+        ]
+      }
+    },
+    {
+      "id": "q-order-value-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByValue == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-value-deny.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByValue == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-priority-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByPriority == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-priority-allow.json",
+        "query": "orderBy=%22%24priority%22"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-order-priority-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.orderByPriority == true",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-order-priority-deny.json",
+        "query": "orderBy=%22%24key%22"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.orderByPriority == true",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-limit-last-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.limitToLast == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-limit-last-allow.json",
+        "query": "orderBy=%22h%22&limitToLast=2"
+      },
+      "status": 200,
+      "body": "{\"a\":{\"h\":3},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-limit-last-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.limitToLast == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-limit-last-deny.json",
+        "query": "orderBy=%22h%22&limitToFirst=2"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.limitToLast == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-start-at-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.startAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-start-at-allow.json",
+        "query": "orderBy=%22h%22&startAt=2"
+      },
+      "status": 200,
+      "body": "{\"c\":{\"h\":2},\"a\":{\"h\":3}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-start-at-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.startAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-start-at-deny.json",
+        "query": "orderBy=%22h%22&startAt=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.startAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-end-at-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.endAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-end-at-allow.json",
+        "query": "orderBy=%22h%22&endAt=2"
+      },
+      "status": 200,
+      "body": "{\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-end-at-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.endAt == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-end-at-deny.json",
+        "query": "orderBy=%22h%22&endAt=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.endAt == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-equal-to-allow",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.equalTo == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-equal-to-allow.json",
+        "query": "orderBy=%22h%22&equalTo=2"
+      },
+      "status": 200,
+      "body": "{\"c\":{\"h\":2}}",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    },
+    {
+      "id": "q-equal-to-deny",
+      "round": "r2",
+      "kind": "query",
+      "predicate": "query.equalTo == 2",
+      "seed": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{ROOT}/r2/q-equal-to-deny.json",
+        "query": "orderBy=%22h%22&equalTo=3"
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": {
+          "h": 3
+        },
+        "b": {
+          "h": 1
+        },
+        "c": {
+          "h": 2
+        }
+      },
+      "rule": {
+        ".read": "query.equalTo == 2",
+        ".indexOn": [
+          "h"
+        ]
+      }
+    }
+  ]
+}

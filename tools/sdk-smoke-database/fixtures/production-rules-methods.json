@@ -1,0 +1,1119 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "rawSha256": "5e4481c0baab59f5f4223749dabf12ed88d9d6d655a204421f049a4b422a3a91",
+    "productionReview": "2026-10-29-rtdb-rules-methods-actual-sol.md"
+  },
+  "rows": [
+    {
+      "id": "parent-ok",
+      "round": "r1",
+      "predicate": "data.parent().child('marker').val() == 'ok'",
+      "seedBody": "{\"marker\":\"ok\",\"leaf\":\"value\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"leaf\":\"value\",\"marker\":\"ok\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"value\"",
+      "etag": null,
+      "readback": "value",
+      "rule": {
+        ".read": "data.parent().child('marker').val() == 'ok'"
+      }
+    },
+    {
+      "id": "parent-deny",
+      "round": "r1",
+      "predicate": "data.parent().child('marker').val() == 'ok'",
+      "seedBody": "{\"marker\":\"no\",\"leaf\":\"value\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"leaf\":\"value\",\"marker\":\"no\"}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "value",
+      "rule": {
+        ".read": "data.parent().child('marker').val() == 'ok'"
+      }
+    },
+    {
+      "id": "exists-ok",
+      "round": "r1",
+      "predicate": "data.child('flag').exists()",
+      "seedBody": "{\"flag\":true,\"payload\":\"v\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"flag\":true,\"payload\":\"v\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"flag\":true,\"payload\":\"v\"}",
+      "etag": null,
+      "readback": {
+        "flag": true,
+        "payload": "v"
+      },
+      "rule": {
+        ".read": "data.child('flag').exists()"
+      }
+    },
+    {
+      "id": "exists-deny",
+      "round": "r1",
+      "predicate": "data.child('flag').exists()",
+      "seedBody": "{\"payload\":\"v\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"payload\":\"v\"}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "payload": "v"
+      },
+      "rule": {
+        ".read": "data.child('flag').exists()"
+      }
+    },
+    {
+      "id": "hasChild-ok",
+      "round": "r1",
+      "predicate": "data.hasChild('nested/leaf')",
+      "seedBody": "{\"nested\":{\"leaf\":\"v\"}}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"nested\":{\"leaf\":\"v\"}}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"nested\":{\"leaf\":\"v\"}}",
+      "etag": null,
+      "readback": {
+        "nested": {
+          "leaf": "v"
+        }
+      },
+      "rule": {
+        ".read": "data.hasChild('nested/leaf')"
+      }
+    },
+    {
+      "id": "hasChild-deny",
+      "round": "r1",
+      "predicate": "data.hasChild('nested/leaf')",
+      "seedBody": "{\"nested\":{\"other\":\"v\"}}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"nested\":{\"other\":\"v\"}}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "nested": {
+          "other": "v"
+        }
+      },
+      "rule": {
+        ".read": "data.hasChild('nested/leaf')"
+      }
+    },
+    {
+      "id": "hasChildren-any-ok",
+      "round": "r1",
+      "predicate": "data.hasChildren()",
+      "seedBody": "{\"a\":1}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"a\":1}",
+      "etag": null,
+      "readback": {
+        "a": 1
+      },
+      "rule": {
+        ".read": "data.hasChildren()"
+      }
+    },
+    {
+      "id": "hasChildren-any-deny",
+      "round": "r1",
+      "predicate": "data.hasChildren()",
+      "seedBody": "\"leaf\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"leaf\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "leaf",
+      "rule": {
+        ".read": "data.hasChildren()"
+      }
+    },
+    {
+      "id": "hasChildren-list-ok",
+      "round": "r1",
+      "predicate": "data.hasChildren(['a','b'])",
+      "seedBody": "{\"a\":1,\"b\":2}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1,\"b\":2}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"a\":1,\"b\":2}",
+      "etag": null,
+      "readback": {
+        "a": 1,
+        "b": 2
+      },
+      "rule": {
+        ".read": "data.hasChildren(['a','b'])"
+      }
+    },
+    {
+      "id": "hasChildren-list-deny",
+      "round": "r1",
+      "predicate": "data.hasChildren(['a','b'])",
+      "seedBody": "{\"a\":1,\"c\":2}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1,\"c\":2}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": 1,
+        "c": 2
+      },
+      "rule": {
+        ".read": "data.hasChildren(['a','b'])"
+      }
+    },
+    {
+      "id": "getPriority-number",
+      "round": "r1",
+      "predicate": "data.getPriority() == 7",
+      "seedBody": "{\".value\":\"v\",\".priority\":7}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\".value\":\"v\",\".priority\":7.0}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": {
+        ".value": "v",
+        ".priority": 7
+      },
+      "exportBody": "{\".value\":\"v\",\".priority\":7.0}",
+      "rule": {
+        ".read": "data.getPriority() == 7"
+      }
+    },
+    {
+      "id": "getPriority-string",
+      "round": "r1",
+      "predicate": "data.getPriority() == 'high'",
+      "seedBody": "{\".value\":\"v\",\".priority\":\"high\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\".value\":\"v\",\".priority\":\"high\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": {
+        ".value": "v",
+        ".priority": "high"
+      },
+      "exportBody": "{\".value\":\"v\",\".priority\":\"high\"}",
+      "rule": {
+        ".read": "data.getPriority() == 'high'"
+      }
+    },
+    {
+      "id": "getPriority-null",
+      "round": "r1",
+      "predicate": "data.getPriority() == null",
+      "seedBody": "\"v\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"v\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": "v",
+      "exportBody": "\"v\"",
+      "rule": {
+        ".read": "data.getPriority() == null"
+      }
+    },
+    {
+      "id": "isString-ok",
+      "round": "r1",
+      "predicate": "data.isString()",
+      "seedBody": "\"text\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"text\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"text\"",
+      "etag": null,
+      "readback": "text",
+      "rule": {
+        ".read": "data.isString()"
+      }
+    },
+    {
+      "id": "isString-deny",
+      "round": "r1",
+      "predicate": "data.isString()",
+      "seedBody": "7",
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 7,
+      "rule": {
+        ".read": "data.isString()"
+      }
+    },
+    {
+      "id": "isBoolean-ok",
+      "round": "r1",
+      "predicate": "data.isBoolean()",
+      "seedBody": "true",
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "status": 200,
+      "body": "true",
+      "etag": null,
+      "readback": true,
+      "rule": {
+        ".read": "data.isBoolean()"
+      }
+    },
+    {
+      "id": "isBoolean-deny",
+      "round": "r1",
+      "predicate": "data.isBoolean()",
+      "seedBody": "1",
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".read": "data.isBoolean()"
+      }
+    },
+    {
+      "id": "beginsWith-ok",
+      "round": "r1",
+      "predicate": "data.val().beginsWith('pre-')",
+      "seedBody": "\"pre-item\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"pre-item\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"pre-item\"",
+      "etag": null,
+      "readback": "pre-item",
+      "rule": {
+        ".read": "data.val().beginsWith('pre-')"
+      }
+    },
+    {
+      "id": "beginsWith-deny",
+      "round": "r1",
+      "predicate": "data.val().beginsWith('pre-')",
+      "seedBody": "\"item-pre\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"item-pre\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "item-pre",
+      "rule": {
+        ".read": "data.val().beginsWith('pre-')"
+      }
+    },
+    {
+      "id": "endsWith-ok",
+      "round": "r1",
+      "predicate": "data.val().endsWith('.cfg')",
+      "seedBody": "\"app.cfg\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"app.cfg\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"app.cfg\"",
+      "etag": null,
+      "readback": "app.cfg",
+      "rule": {
+        ".read": "data.val().endsWith('.cfg')"
+      }
+    },
+    {
+      "id": "endsWith-deny",
+      "round": "r1",
+      "predicate": "data.val().endsWith('.cfg')",
+      "seedBody": "\"cfg.app\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"cfg.app\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "cfg.app",
+      "rule": {
+        ".read": "data.val().endsWith('.cfg')"
+      }
+    },
+    {
+      "id": "replace-all-ok",
+      "round": "r1",
+      "predicate": "data.val().replace('.', '%') == 'a%a%a'",
+      "seedBody": "\"a.a.a\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"a.a.a\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"a.a.a\"",
+      "etag": null,
+      "readback": "a.a.a",
+      "rule": {
+        ".read": "data.val().replace('.', '%') == 'a%a%a'"
+      }
+    },
+    {
+      "id": "replace-first-only-deny",
+      "round": "r1",
+      "predicate": "data.val().replace('.', '%') == 'a%a.a'",
+      "seedBody": "\"a.a.a\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"a.a.a\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "a.a.a",
+      "rule": {
+        ".read": "data.val().replace('.', '%') == 'a%a.a'"
+      }
+    },
+    {
+      "id": "toLowerCase-ok",
+      "round": "r1",
+      "predicate": "data.val().toLowerCase() == 'abc'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"AbC\"",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toLowerCase() == 'abc'"
+      }
+    },
+    {
+      "id": "toLowerCase-deny",
+      "round": "r1",
+      "predicate": "data.val().toLowerCase() == 'abC'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toLowerCase() == 'abC'"
+      }
+    },
+    {
+      "id": "toUpperCase-ok",
+      "round": "r1",
+      "predicate": "data.val().toUpperCase() == 'ABC'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"AbC\"",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toUpperCase() == 'ABC'"
+      }
+    },
+    {
+      "id": "toUpperCase-deny",
+      "round": "r1",
+      "predicate": "data.val().toUpperCase() == 'ABc'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toUpperCase() == 'ABc'"
+      }
+    },
+    {
+      "id": "matches-ok",
+      "round": "r1",
+      "predicate": "data.val().matches(/^abc$/)",
+      "seedBody": "\"abc\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"abc\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"abc\"",
+      "etag": null,
+      "readback": "abc",
+      "rule": {
+        ".read": "data.val().matches(/^abc$/)"
+      }
+    },
+    {
+      "id": "matches-deny",
+      "round": "r1",
+      "predicate": "data.val().matches(/^abc$/)",
+      "seedBody": "\"xabc\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"xabc\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "xabc",
+      "rule": {
+        ".read": "data.val().matches(/^abc$/)"
+      }
+    },
+    {
+      "id": "parent-ok",
+      "round": "r2",
+      "predicate": "data.parent().child('marker').val() == 'ok'",
+      "seedBody": "{\"marker\":\"ok\",\"leaf\":\"value\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"leaf\":\"value\",\"marker\":\"ok\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"value\"",
+      "etag": null,
+      "readback": "value",
+      "rule": {
+        ".read": "data.parent().child('marker').val() == 'ok'"
+      }
+    },
+    {
+      "id": "parent-deny",
+      "round": "r2",
+      "predicate": "data.parent().child('marker').val() == 'ok'",
+      "seedBody": "{\"marker\":\"no\",\"leaf\":\"value\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"leaf\":\"value\",\"marker\":\"no\"}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "value",
+      "rule": {
+        ".read": "data.parent().child('marker').val() == 'ok'"
+      }
+    },
+    {
+      "id": "exists-ok",
+      "round": "r2",
+      "predicate": "data.child('flag').exists()",
+      "seedBody": "{\"flag\":true,\"payload\":\"v\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"flag\":true,\"payload\":\"v\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"flag\":true,\"payload\":\"v\"}",
+      "etag": null,
+      "readback": {
+        "flag": true,
+        "payload": "v"
+      },
+      "rule": {
+        ".read": "data.child('flag').exists()"
+      }
+    },
+    {
+      "id": "exists-deny",
+      "round": "r2",
+      "predicate": "data.child('flag').exists()",
+      "seedBody": "{\"payload\":\"v\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"payload\":\"v\"}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "payload": "v"
+      },
+      "rule": {
+        ".read": "data.child('flag').exists()"
+      }
+    },
+    {
+      "id": "hasChild-ok",
+      "round": "r2",
+      "predicate": "data.hasChild('nested/leaf')",
+      "seedBody": "{\"nested\":{\"leaf\":\"v\"}}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"nested\":{\"leaf\":\"v\"}}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"nested\":{\"leaf\":\"v\"}}",
+      "etag": null,
+      "readback": {
+        "nested": {
+          "leaf": "v"
+        }
+      },
+      "rule": {
+        ".read": "data.hasChild('nested/leaf')"
+      }
+    },
+    {
+      "id": "hasChild-deny",
+      "round": "r2",
+      "predicate": "data.hasChild('nested/leaf')",
+      "seedBody": "{\"nested\":{\"other\":\"v\"}}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"nested\":{\"other\":\"v\"}}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "nested": {
+          "other": "v"
+        }
+      },
+      "rule": {
+        ".read": "data.hasChild('nested/leaf')"
+      }
+    },
+    {
+      "id": "hasChildren-any-ok",
+      "round": "r2",
+      "predicate": "data.hasChildren()",
+      "seedBody": "{\"a\":1}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"a\":1}",
+      "etag": null,
+      "readback": {
+        "a": 1
+      },
+      "rule": {
+        ".read": "data.hasChildren()"
+      }
+    },
+    {
+      "id": "hasChildren-any-deny",
+      "round": "r2",
+      "predicate": "data.hasChildren()",
+      "seedBody": "\"leaf\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"leaf\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "leaf",
+      "rule": {
+        ".read": "data.hasChildren()"
+      }
+    },
+    {
+      "id": "hasChildren-list-ok",
+      "round": "r2",
+      "predicate": "data.hasChildren(['a','b'])",
+      "seedBody": "{\"a\":1,\"b\":2}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1,\"b\":2}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "{\"a\":1,\"b\":2}",
+      "etag": null,
+      "readback": {
+        "a": 1,
+        "b": 2
+      },
+      "rule": {
+        ".read": "data.hasChildren(['a','b'])"
+      }
+    },
+    {
+      "id": "hasChildren-list-deny",
+      "round": "r2",
+      "predicate": "data.hasChildren(['a','b'])",
+      "seedBody": "{\"a\":1,\"c\":2}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\"a\":1,\"c\":2}",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": {
+        "a": 1,
+        "c": 2
+      },
+      "rule": {
+        ".read": "data.hasChildren(['a','b'])"
+      }
+    },
+    {
+      "id": "getPriority-number",
+      "round": "r2",
+      "predicate": "data.getPriority() == 7",
+      "seedBody": "{\".value\":\"v\",\".priority\":7}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\".value\":\"v\",\".priority\":7.0}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": {
+        ".value": "v",
+        ".priority": 7
+      },
+      "exportBody": "{\".value\":\"v\",\".priority\":7.0}",
+      "rule": {
+        ".read": "data.getPriority() == 7"
+      }
+    },
+    {
+      "id": "getPriority-string",
+      "round": "r2",
+      "predicate": "data.getPriority() == 'high'",
+      "seedBody": "{\".value\":\"v\",\".priority\":\"high\"}",
+      "seedResponse": {
+        "status": 200,
+        "body": "{\".value\":\"v\",\".priority\":\"high\"}",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": {
+        ".value": "v",
+        ".priority": "high"
+      },
+      "exportBody": "{\".value\":\"v\",\".priority\":\"high\"}",
+      "rule": {
+        ".read": "data.getPriority() == 'high'"
+      }
+    },
+    {
+      "id": "getPriority-null",
+      "round": "r2",
+      "predicate": "data.getPriority() == null",
+      "seedBody": "\"v\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"v\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"v\"",
+      "etag": null,
+      "readback": "v",
+      "export": "v",
+      "exportBody": "\"v\"",
+      "rule": {
+        ".read": "data.getPriority() == null"
+      }
+    },
+    {
+      "id": "isString-ok",
+      "round": "r2",
+      "predicate": "data.isString()",
+      "seedBody": "\"text\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"text\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"text\"",
+      "etag": null,
+      "readback": "text",
+      "rule": {
+        ".read": "data.isString()"
+      }
+    },
+    {
+      "id": "isString-deny",
+      "round": "r2",
+      "predicate": "data.isString()",
+      "seedBody": "7",
+      "seedResponse": {
+        "status": 200,
+        "body": "7",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 7,
+      "rule": {
+        ".read": "data.isString()"
+      }
+    },
+    {
+      "id": "isBoolean-ok",
+      "round": "r2",
+      "predicate": "data.isBoolean()",
+      "seedBody": "true",
+      "seedResponse": {
+        "status": 200,
+        "body": "true",
+        "etag": null
+      },
+      "status": 200,
+      "body": "true",
+      "etag": null,
+      "readback": true,
+      "rule": {
+        ".read": "data.isBoolean()"
+      }
+    },
+    {
+      "id": "isBoolean-deny",
+      "round": "r2",
+      "predicate": "data.isBoolean()",
+      "seedBody": "1",
+      "seedResponse": {
+        "status": 200,
+        "body": "1",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": 1,
+      "rule": {
+        ".read": "data.isBoolean()"
+      }
+    },
+    {
+      "id": "beginsWith-ok",
+      "round": "r2",
+      "predicate": "data.val().beginsWith('pre-')",
+      "seedBody": "\"pre-item\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"pre-item\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"pre-item\"",
+      "etag": null,
+      "readback": "pre-item",
+      "rule": {
+        ".read": "data.val().beginsWith('pre-')"
+      }
+    },
+    {
+      "id": "beginsWith-deny",
+      "round": "r2",
+      "predicate": "data.val().beginsWith('pre-')",
+      "seedBody": "\"item-pre\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"item-pre\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "item-pre",
+      "rule": {
+        ".read": "data.val().beginsWith('pre-')"
+      }
+    },
+    {
+      "id": "endsWith-ok",
+      "round": "r2",
+      "predicate": "data.val().endsWith('.cfg')",
+      "seedBody": "\"app.cfg\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"app.cfg\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"app.cfg\"",
+      "etag": null,
+      "readback": "app.cfg",
+      "rule": {
+        ".read": "data.val().endsWith('.cfg')"
+      }
+    },
+    {
+      "id": "endsWith-deny",
+      "round": "r2",
+      "predicate": "data.val().endsWith('.cfg')",
+      "seedBody": "\"cfg.app\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"cfg.app\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "cfg.app",
+      "rule": {
+        ".read": "data.val().endsWith('.cfg')"
+      }
+    },
+    {
+      "id": "replace-all-ok",
+      "round": "r2",
+      "predicate": "data.val().replace('.', '%') == 'a%a%a'",
+      "seedBody": "\"a.a.a\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"a.a.a\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"a.a.a\"",
+      "etag": null,
+      "readback": "a.a.a",
+      "rule": {
+        ".read": "data.val().replace('.', '%') == 'a%a%a'"
+      }
+    },
+    {
+      "id": "replace-first-only-deny",
+      "round": "r2",
+      "predicate": "data.val().replace('.', '%') == 'a%a.a'",
+      "seedBody": "\"a.a.a\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"a.a.a\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "a.a.a",
+      "rule": {
+        ".read": "data.val().replace('.', '%') == 'a%a.a'"
+      }
+    },
+    {
+      "id": "toLowerCase-ok",
+      "round": "r2",
+      "predicate": "data.val().toLowerCase() == 'abc'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"AbC\"",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toLowerCase() == 'abc'"
+      }
+    },
+    {
+      "id": "toLowerCase-deny",
+      "round": "r2",
+      "predicate": "data.val().toLowerCase() == 'abC'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toLowerCase() == 'abC'"
+      }
+    },
+    {
+      "id": "toUpperCase-ok",
+      "round": "r2",
+      "predicate": "data.val().toUpperCase() == 'ABC'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"AbC\"",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toUpperCase() == 'ABC'"
+      }
+    },
+    {
+      "id": "toUpperCase-deny",
+      "round": "r2",
+      "predicate": "data.val().toUpperCase() == 'ABc'",
+      "seedBody": "\"AbC\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"AbC\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "AbC",
+      "rule": {
+        ".read": "data.val().toUpperCase() == 'ABc'"
+      }
+    },
+    {
+      "id": "matches-ok",
+      "round": "r2",
+      "predicate": "data.val().matches(/^abc$/)",
+      "seedBody": "\"abc\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"abc\"",
+        "etag": null
+      },
+      "status": 200,
+      "body": "\"abc\"",
+      "etag": null,
+      "readback": "abc",
+      "rule": {
+        ".read": "data.val().matches(/^abc$/)"
+      }
+    },
+    {
+      "id": "matches-deny",
+      "round": "r2",
+      "predicate": "data.val().matches(/^abc$/)",
+      "seedBody": "\"xabc\"",
+      "seedResponse": {
+        "status": 200,
+        "body": "\"xabc\"",
+        "etag": null
+      },
+      "status": 401,
+      "body": "{\n  \"error\" : \"Permission denied\"\n}\n",
+      "etag": null,
+      "readback": "xabc",
+      "rule": {
+        ".read": "data.val().matches(/^abc$/)"
+      }
+    }
+  ]
+}

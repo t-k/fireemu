@@ -57,7 +57,10 @@ def test_current_recorded_artifact_has_a_successful_build_and_current_rust_input
     artifact = value["artifact"]
     assert re.fullmatch(r"[a-f0-9]{40}", artifact["sourceCommit"])
     assert artifact["sourceUnchanged"] is True and artifact["exitCode"] == 0
-    assert artifact["buildCommand"] == ["cargo", "build", "--locked", "-p", "fireemu", "--bin", "fireemu"]
+    assert artifact["buildCommand"] == [
+        "cargo", "build", "--locked", "-p", "fireemu", "--bin", "fireemu",
+        "--manifest-path", "$CUSTODY_MANIFEST",
+    ]
     assert re.fullmatch(r"[a-f0-9]{64}", artifact["artifactSha256"])
     # the debug binary is made from the crates' sources, manifests, lock and toolchain, not from their integration tests: the artifact binds `binary_inputs`
     assert artifact["runtimeInputsScheme"] == BINARY_INPUTS_SCHEME

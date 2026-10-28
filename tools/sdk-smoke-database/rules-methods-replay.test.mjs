@@ -1,0 +1,284 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { normalizeObservation, compareCase, replayCase } from "./rules-methods-replay.mjs";
+const row = () => ({
+  id: "getPriority-number",
+  round: "r1",
+  predicate: "data.getPriority() == 7",
+  seedBody: '{".value":"v",".priority":7}',
+  seedResponse: { status: 200, body: '{".value":"v",".priority":7.0}', etag: null },
+  status: 200,
+  body: '"v"',
+  etag: null,
+  readback: "v",
+  export: { ".value": "v", ".priority": 7 },
+  exportBody: '{".value":"v",".priority":7.0}',
+  rule: { ".read": "data.getPriority() == 7" },
+});
+test("priority metadata and full seed are compared as typed values", () => {
+  const expected = normalizeObservation(row()),
+    local = row();
+  assert.equal(compareCase(expected, local).verdict, "MATCH");
+  for (const mutate of [
+    (x) => {
+      x.export[".priority"] = "7";
+    },
+    (x) => {
+      x.seedResponse.body = '{".value":"v",".priority":"7"}';
+    },
+    (x) => {
+      x.status = 401;
+    },
+    (x) => {
+      x.readback = 7;
+    },
+    (x) => {
+      x.rule[".read"] = "true";
+    },
+  ]) {
+    const bad = structuredClone(local);
+    mutate(bad);
+    assert.notEqual(compareCase(expected, bad).verdict, "MATCH");
+  }
+});
+test("parent marker remains part of the exact seed", () => {
+  const x = {
+    ...row(),
+    id: "parent-ok",
+    seedBody: '{"marker":"ok","leaf":"value"}',
+    seedResponse: { status: 200, body: '{"leaf":"value","marker":"ok"}', etag: null },
+    body: '"value"',
+    readback: "value",
+    predicate: "data.parent().child('marker').val() == 'ok'",
+    rule: { ".read": "data.parent().child('marker').val() == 'ok'" },
+  };
+  delete x.export;
+  delete x.exportBody;
+  const e = normalizeObservation(x),
+    bad = structuredClone(x);
+  bad.seedBody = '{"marker":"no","leaf":"value"}';
+  assert.notEqual(compareCase(e, bad).verdict, "MATCH");
+});
+test("transport uncertainty cannot become a case result", async () => {
+  await assert.rejects(
+    replayCase(
+      normalizeObservation(row()),
+      async () => {
+        throw Error("unknown");
+      },
+      "localroot",
+    ),
+  );
+});
+
+test("all recorded cases retain parent markers and priority values with null-only case override", async () => {
+  const { replay } = await import("./rules-methods-replay.mjs"),
+    { readFile } = await import("node:fs/promises"),
+    fixture = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    );
+  let rules = "old";
+  const calls = [];
+  const fake = async (input, o) => {
+    const u = new URL(input),
+      method = o.method ?? "GET";
+    calls.push({
+      path: u.pathname,
+      query: u.search,
+      method,
+      auth: o.headers.authorization,
+      redirect: o.redirect,
+    });
+    if (u.pathname === "/.settings/rules.json") {
+      if (method === "PUT") rules = o.body;
+      return new Response(rules, { status: 200 });
+    }
+    if (method === "DELETE") return new Response("null", { status: 200 });
+    const parts = u.pathname.split("/");
+    if (parts.length === 2) return new Response("null", { status: 200 });
+    const round = parts[2],
+      id = parts[3].replace(".json", ""),
+      item = fixture.rows.find((x) => x.round === round && x.id === id);
+    if (method === "PUT") return new Response(item.seedResponse.body, { status: 200 });
+    if (u.search.includes("auth_variable_override"))
+      return new Response(item.body, { status: item.status });
+    if (u.search === "?format=export") return new Response(item.exportBody, { status: 200 });
+    if (parts.length === 3) return new Response("null", { status: 200 });
+    return new Response(JSON.stringify(item.readback), { status: 200 });
+  };
+  const result = await replay("http://127.0.0.1:12345", fixture, { fetchImpl: fake });
+  assert.equal(result.rows.length, 58);
+  assert.ok(result.rows.every((x) => x.result.verdict === "MATCH"));
+  assert.equal(rules, "old");
+  assert.deepEqual(result.cleanup, { ownedRootAbsent: true, rulesRestored: true });
+  assert.equal(calls.filter((x) => x.query === "?auth_variable_override=null").length, 58);
+  assert.equal(calls.filter((x) => x.query === "?format=export").length, 6);
+  assert.equal(
+    calls.filter(
+      (x) =>
+        x.query === "?auth_variable_override=null" &&
+        /\/parent-(ok|deny)\/leaf\.json$/.test(x.path),
+    ).length,
+    4,
+  );
+  assert.ok(calls.every((x) => x.auth === "Bearer owner" && x.redirect === "manual"));
+});
+
+test("all generated case, round and profile combinations retain exact typed records", async () => {
+  const { readFile } = await import("node:fs/promises"),
+    f = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    ),
+    lines = (
+      await readFile(
+        new URL("./fixtures/rules-methods-replay.generated.tsv", import.meta.url),
+        "utf8",
+      )
+    )
+      .trim()
+      .split("\n")
+      .slice(1);
+  assert.equal(lines.length, 116);
+  for (const line of lines) {
+    const [id, round, profile] = line.split("\t"),
+      expected = f.rows.find((x) => x.id === id && x.round === round);
+    assert.ok(["strict", "ordinary"].includes(profile));
+    assert.equal(compareCase(expected, structuredClone(expected)).verdict, "MATCH", line);
+  }
+});
+
+test("unknown dispatched seed stops all later requests and preserves owned scope", async () => {
+  const { replay } = await import("./rules-methods-replay.mjs"),
+    { readFile } = await import("node:fs/promises"),
+    fixture = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    );
+  let calls = 0;
+  const fake = async (input, o) => {
+    calls++;
+    if (new URL(input).pathname === "/.settings/rules.json")
+      return new Response(o.method === "PUT" ? "{}" : "old", { status: 200 });
+    throw Error("timeout");
+  };
+  let e;
+  try {
+    await replay("http://127.0.0.1:12345", fixture, { fetchImpl: fake });
+  } catch (err) {
+    e = err;
+  }
+  assert.match(e.message, /unknown/);
+  assert.match(e.ownedRoot, /^methodsreplay[a-f0-9]{16}$/);
+  assert.equal(calls, 3);
+});
+
+test("cleanup unknown does not restore Rules after an uncertain DELETE", async () => {
+  const { replay } = await import("./rules-methods-replay.mjs"),
+    { readFile } = await import("node:fs/promises"),
+    fixture = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    );
+  let calls = 0;
+  const fake = async (input, o) => {
+    calls++;
+    if (new URL(input).pathname === "/.settings/rules.json")
+      return o.method === "PUT" && o.body !== "old"
+        ? new Response("", { status: 403 })
+        : new Response("old", { status: 200 });
+    if (o.method === "DELETE") throw Error("timeout");
+    throw Error("unexpected later request");
+  };
+  await assert.rejects(replay("http://127.0.0.1:12345", fixture, { fetchImpl: fake }), /unknown/);
+  assert.equal(calls, 3);
+});
+
+test("priority values retain their JSON types across a range", () => {
+  for (let i = -50; i <= 50; i++) {
+    const x = row();
+    x.seedBody = JSON.stringify({ ".value": "v", ".priority": i });
+    x.seedResponse.body = x.seedBody;
+    x.export[".priority"] = i;
+    x.exportBody = x.seedBody;
+    const expected = normalizeObservation(x);
+    assert.equal(compareCase(expected, x).verdict, "MATCH");
+    x.export[".priority"] = String(i);
+    x.exportBody = JSON.stringify(x.export);
+    assert.notEqual(compareCase(expected, x).verdict, "MATCH");
+  }
+});
+
+test("seed response failure and inconsistent priority export cannot be accepted", () => {
+  const a = row();
+  a.seedResponse.status = 401;
+  assert.throws(() => normalizeObservation(a));
+  const b = row();
+  b.export[".priority"] = 8;
+  assert.throws(() => normalizeObservation(b));
+});
+
+test("fixture has complete recorded rounds without production identifiers", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const text = await readFile(
+      new URL("./fixtures/production-rules-methods.json", import.meta.url),
+      "utf8",
+    ),
+    f = JSON.parse(text);
+  assert.equal(f.rows.length, 58);
+  assert.equal(new Set(f.rows.map((x) => `${x.round}/${x.id}`)).size, 58);
+  assert.doesNotMatch(text, /rnext1_|firebaseio\.com|Bearer |ya29\./);
+  assert.equal(f.rows.filter((x) => x.status === 200).length, 32);
+  assert.equal(f.rows.filter((x) => x.status === 401).length, 26);
+});
+
+test("duplicate fixture case is refused before network", async () => {
+  const { replay } = await import("./rules-methods-replay.mjs"),
+    { readFile } = await import("node:fs/promises"),
+    fixture = JSON.parse(
+      await readFile(new URL("./fixtures/production-rules-methods.json", import.meta.url), "utf8"),
+    );
+  fixture.rows[1] = fixture.rows[0];
+  let calls = 0;
+  await assert.rejects(
+    replay("http://127.0.0.1:12345", fixture, {
+      fetchImpl: async () => {
+        calls++;
+        throw Error("unexpected");
+      },
+    }),
+    /fixture invalid/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("wrong seed response type or parent marker stops before the client request", async () => {
+  const parent = {
+    ...row(),
+    id: "parent-ok",
+    seedBody: '{"marker":"ok","leaf":"value"}',
+    seedResponse: { status: 200, body: '{"leaf":"value","marker":"ok"}', etag: null },
+    body: '"value"',
+    readback: "value",
+    predicate: "data.parent().child('marker').val() == 'ok'",
+    rule: { ".read": "data.parent().child('marker').val() == 'ok'" },
+  };
+  delete parent.export;
+  delete parent.exportBody;
+  for (const [expected, body] of [
+    [normalizeObservation(parent), '{"leaf":"value","marker":"no"}'],
+    [normalizeObservation(row()), '{".value":"v",".priority":true}'],
+    [normalizeObservation(row()), '{".value":"v",".priority":"7"}'],
+  ]) {
+    let calls = 0;
+    await assert.rejects(
+      replayCase(
+        expected,
+        async () => {
+          calls++;
+          return { status: 200, body };
+        },
+        "ownedroot",
+      ),
+      /seed unresolved/,
+    );
+    assert.equal(calls, 1);
+  }
+});

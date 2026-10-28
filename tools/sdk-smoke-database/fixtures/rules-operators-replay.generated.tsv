@@ -1,0 +1,7 @@
+Profile	Round	Kind	Verdict	Transport
+strict	r1	write	allow	success
+ordinary	r2	query	deny	success
+strict	r2	write	deny	unknown
+ordinary	r1	query	allow	unknown
+strict	r1	query	deny	success
+ordinary	r2	write	allow	success

@@ -1,0 +1,259 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "rawSha256": "3411fb9ff5220a7e3bb680f0674ea2a9242a3abe9f2ae989683d0e1f13e3a92c",
+    "productionReview": "2026-10-29-rtdb-server-values-actual-sol.md"
+  },
+  "rows": [
+    {
+      "id": "timestamp-single",
+      "round": "r1",
+      "preimage": null,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":\"timestamp\"}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": "<timestamp>",
+      "readback": "<timestamp>"
+    },
+    {
+      "id": "increment-numeric",
+      "round": "r1",
+      "preimage": 7,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 12,
+      "readback": 12
+    },
+    {
+      "id": "increment-absent",
+      "round": "r1",
+      "preimage": null,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 5,
+      "readback": 5
+    },
+    {
+      "id": "increment-nonnumeric",
+      "round": "r1",
+      "preimage": "old",
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 5,
+      "readback": 5
+    },
+    {
+      "id": "multipath-one-clock",
+      "round": "r1",
+      "preimage": {
+        "counter": 7
+      },
+      "request": {
+        "method": "PATCH",
+        "body": "{\"first\":{\".sv\":\"timestamp\"},\"second\":{\".sv\":\"timestamp\"},\"counter\":{\".sv\":{\"increment\":5}}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": {
+        "first": "<timestamp>",
+        "second": "<timestamp>",
+        "counter": 12
+      },
+      "readback": {
+        "counter": 12,
+        "first": "<timestamp>",
+        "second": "<timestamp>"
+      }
+    },
+    {
+      "id": "timestamp-single",
+      "round": "r2",
+      "preimage": null,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":\"timestamp\"}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": "<timestamp>",
+      "readback": "<timestamp>"
+    },
+    {
+      "id": "increment-numeric",
+      "round": "r2",
+      "preimage": 7,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 12,
+      "readback": 12
+    },
+    {
+      "id": "increment-absent",
+      "round": "r2",
+      "preimage": null,
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 5,
+      "readback": 5
+    },
+    {
+      "id": "increment-nonnumeric",
+      "round": "r2",
+      "preimage": "old",
+      "request": {
+        "method": "PUT",
+        "body": "{\".sv\":{\"increment\":5}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": 5,
+      "readback": 5
+    },
+    {
+      "id": "multipath-one-clock",
+      "round": "r2",
+      "preimage": {
+        "counter": 7
+      },
+      "request": {
+        "method": "PATCH",
+        "body": "{\"first\":{\".sv\":\"timestamp\"},\"second\":{\".sv\":\"timestamp\"},\"counter\":{\".sv\":{\"increment\":5}}}"
+      },
+      "before": {
+        "status": 200,
+        "etag": null
+      },
+      "response": {
+        "status": 200,
+        "etag": null
+      },
+      "after": {
+        "status": 200,
+        "etag": null
+      },
+      "value": {
+        "first": "<timestamp>",
+        "second": "<timestamp>",
+        "counter": 12
+      },
+      "readback": {
+        "counter": 12,
+        "first": "<timestamp>",
+        "second": "<timestamp>"
+      }
+    }
+  ]
+}

@@ -516,7 +516,7 @@ fn java_double(d: f64) -> Option<String> {
 
 /// An `int64` argument that production would have coerced from a double: it refuses a double
 /// with `Cannot coerce Float64 (x) to Int64`.
-fn int_argument(function: &'static str, arg: &Eval, cx: Context) -> Option<Eval> {
+pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context) -> Option<Eval> {
     let Eval::Value(Value::Double(d)) = arg else {
         return None;
     };

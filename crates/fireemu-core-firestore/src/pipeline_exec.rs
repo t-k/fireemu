@@ -392,6 +392,30 @@ const FUNCTIONS: &[Function] = &[
         "array_get(array: array[any], index: int64): any?",
         eval_array_get,
     ),
+    array_access_function(
+        "array_slice",
+        Arity::Between(2, 3),
+        "array_slice(array: array[any], offset: int64, length: int64?): array[any]",
+        eval_array_slice,
+    ),
+    array_access_function(
+        "array_index_of",
+        Arity::Exact(3),
+        "array_index_of(array: array[any], search: any, direction: (first|last)): int64",
+        eval_array_index_of,
+    ),
+    array_access_function(
+        "array_first_n",
+        Arity::Exact(2),
+        "array_first_n(array: array[any], n: int64): array[any]",
+        eval_array_first_n,
+    ),
+    array_access_function(
+        "array_last_n",
+        Arity::Exact(2),
+        "array_last_n(array: array[any], n: int64): array[any]",
+        eval_array_last_n,
+    ),
     map_family_function(
         "map_set",
         Arity::AtLeast(3),
@@ -950,6 +974,144 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .and_then(|i| values.get(i))
         .cloned()
         .map_or(Eval::Absent, Eval::Value)
+}
+
+fn subsequence_array<'a>(
+    args: &'a [Eval],
+    name: &'static str,
+    cx: Context,
+    search_null_is_value: bool,
+) -> Result<&'a [Value], Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    let missing = args.iter().enumerate().any(|(i, arg)| {
+        !(search_null_is_value && i == 1 && matches!(arg, Eval::Value(Value::Null)))
+            && matches!(arg, Eval::Absent | Eval::Value(Value::Null))
+    });
+    let invalid_array =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null));
+    let invalid_tail = args.iter().enumerate().skip(1).any(|(i, arg)| {
+        if search_null_is_value && i == 1 { return false; }
+        matches!(arg, Eval::Value(value) if !(matches!(value, Value::Integer(_) | Value::Null) || search_null_is_value && i == 2 && matches!(value, Value::String(_))))
+    });
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((invalid_array && (missing || invalid_tail)) || (missing && invalid_tail))
+    {
+        return Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "ambiguous invalid arguments",
+        }));
+    }
+    if let Eval::Value(value) = &args[0] {
+        if invalid_array {
+            return Err(Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Array",
+                got: type_name(value),
+            }));
+        }
+    }
+    if missing {
+        return Err(Eval::Value(Value::Null));
+    }
+    match &args[0] {
+        Eval::Value(Value::Array(values)) => Ok(values),
+        _ => unreachable!(),
+    }
+}
+
+fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i64, Eval> {
+    if let Some(error) = scalar::int_argument(name, arg, cx) {
+        return Err(error);
+    }
+    match arg {
+        Eval::Value(Value::Integer(value)) => Ok(*value),
+        _ => Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "unobserved integer argument",
+        })),
+    }
+}
+
+fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
+    let values = match subsequence_array(args, "array_slice", cx, false) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let offset = match subsequence_integer(&args[1], "array_slice", cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let length = if let Some(arg) = args.get(2) {
+        match subsequence_integer(arg, "array_slice", cx) {
+            Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX),
+            Ok(_) => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "array_slice",
+                    reason: "negative length error text is unobserved",
+                })
+            }
+            Err(e) => return e,
+        }
+    } else {
+        usize::MAX
+    };
+    let len = values.len();
+    let start = if offset < 0 {
+        len.saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX))
+    } else {
+        usize::try_from(offset).unwrap_or(usize::MAX).min(len)
+    };
+    Eval::Value(Value::Array(
+        values[start..start.saturating_add(length).min(len)].to_vec(),
+    ))
+}
+
+fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
+    let values = match subsequence_array(args, "array_index_of", cx, true) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let direction = match &args[2] { Eval::Value(Value::String(direction)) if direction == "first" || direction == "last" => direction.as_str(), _ => return Eval::Error(EvalError::Invalid("The argument 'direction' for function 'array_index_of' must be a literal of type string from the following list: [first, last]".to_owned())) };
+    let matches =
+        |v: &Value| official_order(&Eval::Value(v.clone()), &args[1]) == Some(Ordering::Equal);
+    let index = if direction == "first" {
+        values.iter().position(matches)
+    } else {
+        values.iter().rposition(matches)
+    };
+    Eval::Value(Value::Integer(
+        index.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1),
+    ))
+}
+
+fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let count = match subsequence_integer(&args[1], name, cx) {
+        Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX).min(values.len()),
+        Ok(_) => {
+            return Eval::Error(EvalError::Invalid(format!(
+                "The function `{name}(...)` requires non-negative count."
+            )))
+        }
+        Err(e) => return e,
+    };
+    let selected = if last {
+        &values[values.len() - count..]
+    } else {
+        &values[..count]
+    };
+    Eval::Value(Value::Array(selected.to_vec()))
+}
+fn eval_array_first_n(args: &[Eval], cx: Context) -> Eval {
+    eval_array_count(args, cx, "array_first_n", false)
+}
+fn eval_array_last_n(args: &[Eval], cx: Context) -> Eval {
+    eval_array_count(args, cx, "array_last_n", true)
 }
 
 /// A map function with production's recorded argument-count signature.

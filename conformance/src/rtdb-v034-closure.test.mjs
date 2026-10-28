@@ -20,10 +20,10 @@ test("recorded RTDB profile comparisons retain their source, binary and cleanup"
   for (const [path, digest, count, hasCleanup] of cases) {
     assert.equal(sha(path), digest, path);
     const evidence = json(path);
-    assert.equal(evidence.sourceCommit, "02d0f10adbfdd26014c0c6b7c10df916a7ca2766");
+    assert.equal(evidence.sourceCommit, "81dca801d0f67f002dc7a63e8950f30017f17d9f");
     assert.equal(
       evidence.binarySha256,
-      "238512c0223cd45b9fa218e71282317a724f864fdd9186d4fabab7c3ce940955",
+      "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
     );
     for (const profile of ["strict", "emulator"]) {
       const run = evidence[profile];

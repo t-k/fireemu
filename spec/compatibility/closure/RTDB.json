@@ -898,7 +898,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
-    "sha256": "8e48ad9e9ade6258dd4b9eec36125ae4a2e086ba795c1e5153bbac5d129cef91",
+    "sha256": "b309653deaff635cd2e0de63386993dc9a88938adea93a3e5c2909d7e6ae2d54",
     "rows": 172,
     "summary": {
      "rest": {
@@ -908,36 +908,36 @@
       "MATCH": 48
      }
     },
-    "binding": "Recorded REST replay on signed source 02d0f10adbfdd26014c0c6b7c10df916a7ca2766, binary SHA-256 238512c0223cd45b9fa218e71282317a724f864fdd9186d4fabab7c3ce940955; historical SDK, Auth, residual and S5 evidence is not rebound."
+    "binding": "Recorded REST replay on signed source 81dca801d0f67f002dc7a63e8950f30017f17d9f, binary SHA-256 988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52; historical SDK, Auth, residual and S5 evidence is not rebound."
    }
   ],
   "productionRequests": 0,
   "result": "MATCH_WITH_KNOWN_DIFFERENCES",
   "releaseBindingNote": "The three comparisons were run on one local release build (RUSTC_WRAPPER empty, --locked) whose Rust sources equal origin/main 5a15d1631. The release job cannot rerun them yet (excluded kind rtdb-production-comparison-v1 in conformance/src/release-strict-regression.mjs): the replay tools need an installed-binary check and export-comparison mode, and two of them need Chromium. The residual comparison (production-5, CV08/CV10) is bound to its own release binary, built from origin/main 00abe06b4 (the multi-path order fix). The three older comparisons, which stay bound to the binary above, were re-run on an order-fixed build and reproduce row for row (review 2026-10-27, check 9): REST 120 MATCH and 4 KNOWN_DIFFERENCE with the same rows, M14 48/48, CV07 36/36 and CV11 with 0 differences. The S5 comparison (production-1 of RTDB-S5-20261027-01) is bound to its own release binary, built from the commit named in its evidence.",
   "next4EvidencePath": "spec/compatibility/closure/evidence/RTDB-next4-v034-comparison.json",
-  "next4EvidenceSha256": "6558115e6248dcc47d16db2580b07931f4c2414acea4fccece6975c35f6708b5",
+  "next4EvidenceSha256": "6fcd219e5072eb16424b3846f52de9f8513b019954904329d671f397c717f9a5",
   "next4EvidenceNote": "36 recorded rows match in each profile; unobserved inputs remain unclaimed.",
   "rulesV034Evidence": {
    "path": "spec/compatibility/closure/evidence/RTDB-rules-v034-comparison.json",
-   "sha256": "109bee4b2f5fced75a2b80c489875f8172897cdacc0c242e54b52369310efcb3",
-   "sourceCommit": "02d0f10adbfdd26014c0c6b7c10df916a7ca2766",
-   "binarySha256": "238512c0223cd45b9fa218e71282317a724f864fdd9186d4fabab7c3ce940955",
+   "sha256": "64e2201db60f769a3ecd6107510a33a7e2bf8572c4810c234f1c36b2fcb61082",
+   "sourceCommit": "81dca801d0f67f002dc7a63e8950f30017f17d9f",
+   "binarySha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
    "rowsPerProfile": 56,
    "note": "Finite recorded requests including support and anchor rows; not complete Rules or query parity."
   },
   "queryrulesV034Evidence": {
    "path": "spec/compatibility/closure/evidence/RTDB-query-rules-v034-comparison.json",
-   "sha256": "c267af8ca3f8a9d129b6f83d60aa4ccbb362afcee4899bc95a56b98c036889f8",
-   "sourceCommit": "02d0f10adbfdd26014c0c6b7c10df916a7ca2766",
-   "binarySha256": "238512c0223cd45b9fa218e71282317a724f864fdd9186d4fabab7c3ce940955",
+   "sha256": "82c17bc071a51799353e358216cdff90d31f590771858d2ac662923bbe0df180",
+   "sourceCommit": "81dca801d0f67f002dc7a63e8950f30017f17d9f",
+   "binarySha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
    "rowsPerProfile": 20,
    "note": "Finite recorded requests including support and anchor rows; not complete Rules or query parity."
   },
   "queryboundsV034Evidence": {
    "path": "spec/compatibility/closure/evidence/RTDB-query-bounds-v034-comparison.json",
-   "sha256": "cef4066423eb2d0d534bbcc5ecf050bbdefc04e389cf18c29d02f4b8e7ff6bdf",
-   "sourceCommit": "02d0f10adbfdd26014c0c6b7c10df916a7ca2766",
-   "binarySha256": "238512c0223cd45b9fa218e71282317a724f864fdd9186d4fabab7c3ce940955",
+   "sha256": "84a7e59ef9a0501c70f49ffa4061313366c449ed7d02e91d9d41e075bbed6ece",
+   "sourceCommit": "81dca801d0f67f002dc7a63e8950f30017f17d9f",
+   "binarySha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
    "rowsPerProfile": 20,
    "note": "Finite recorded requests including support and anchor rows; not complete Rules or query parity."
   }

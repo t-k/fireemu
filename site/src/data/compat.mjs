@@ -167,7 +167,7 @@ export function productSurfaceRows(contract) {
 	});
 }
 
-const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress' };
+const AREA_STATUS = { COMPAT_VERIFIED: 'Verified against production', IN_PROGRESS: 'In progress', IMPLEMENTING: 'In progress' };
 const CONDITION_STATUSES = new Set(['VERIFIED', 'KNOWN_DIFFERENCE_APPROVED']);
 
 function differenceTexts(record) {

@@ -92,6 +92,12 @@ test('an area that is not verified is never labelled verified', () => {
 	assert.equal(row.status, 'In progress');
 });
 
+test('a reopened parent remains in progress while retaining verified leaf counts', () => {
+	const [row] = productionAreaRows([{ ...closure('FS-PIPELINE', ['VERIFIED']), parentStatus: 'IMPLEMENTING' }]);
+	assert.equal(row.status, 'In progress');
+	assert.equal(row.verified, 1);
+});
+
 test('an unmapped production area fails the build so it gets a description', () => {
 	assert.throws(() => productionAreaRows([closure('NEW-AREA', ['VERIFIED'])]), /NEW-AREA/);
 });

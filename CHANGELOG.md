@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The RTDB and Firestore Enterprise Pipeline compatibility parents are reopened as `IMPLEMENTING`: earlier approvals covered recorded subsets and do not establish parent-wide compatibility. The recorded leaf evidence and release comparisons remain in place. The Pipeline comparison retains all 1,951 rows: 1,270 matches (including 272 previously unclaimed), 652 mismatches, 27 missing fixtures and two unknowns. Remaining work includes function and stage support, validation and ordering, framing, gRPC cases, and unobserved pipeline features. RTDB still needs the recorded REST ordering and transport differences addressed, broader Rules, SDK, authentication and trigger coverage, and explicit decisions for platform and operational boundaries. Previously described emulator-profile differences are not automatically approved exceptions.
+
 ## [0.32.0] - 2026-10-28
 
 ### Added

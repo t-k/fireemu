@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { validOperation } from './recovery.mjs';
+import { knownPropagation } from './transport.mjs';
+
+export async function waitForRules(probe,sleep,instance) {
+ const waits=[2000,4000,8000,16000,30000,30000,30000];
+ for(let i=0;i<=waits.length;i++){const r=await probe();if(r.status===200){let v;try{v=JSON.parse(r.body);}catch{throw Error('propagation response');}if(v!==null)throw Error('propagation nonempty');return;}if(!knownPropagation(r,instance)||i===waits.length)throw Error('propagation unresolved');await sleep(waits[i]);}
+}
 
 // io must provide counted, durable and sticky-unknown request semantics.
 export async function lifecycle(io, p, corpus) {
@@ -25,6 +31,7 @@ export async function lifecycle(io, p, corpus) {
  await read('prefix-before',p.prefix,v=>v===null);
  await mutate('rules-install','PUT','rules',rules,v=>v?.status==='ok');
  await read('rules-installed','rules',v=>isDeepStrictEqual(v,rules));
+ await waitForRules(p.probe,p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))),p.instance);
  await corpus();
  await mutate('prefix-delete','DELETE',p.prefix,undefined,v=>v===null);
  await read('prefix-after',p.prefix,v=>v===null);

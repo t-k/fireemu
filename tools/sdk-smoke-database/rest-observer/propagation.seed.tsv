@@ -1,0 +1,4 @@
+Method	Step	Result
+GET	propagation	success
+GET	propagation	permission
+PUT	other	unexpected

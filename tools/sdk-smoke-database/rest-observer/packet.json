@@ -52,15 +52,15 @@
     },
     {
       "path": "lifecycle.mjs",
-      "sha256": "bfa3dfdd05ca785a5d0dc1c5ef0636da1712de5fcb1c4f3e556e57b677e75444"
+      "sha256": "4f670badcf07482a732eceb2bba259ee0d1180b314b2fcca92d2adab2ca5dc30"
     },
     {
       "path": "transport.mjs",
-      "sha256": "123560a1492b5de6fa78cef77341766baf4e84aeb4ea6fee8e7240c8cea69629"
+      "sha256": "e609df7daa74349123b8db87c993fbd926092e37bdfd341841ffd26b4aaf578e"
     },
     {
       "path": "orchestrator.mjs",
-      "sha256": "8f52c04ff7d275c7420505691e531339b80e20f812238b87e445d1f600593b4e"
+      "sha256": "3254a319511408d388634f5e4992ec28f12a270a14f6c5af84de4e2a4bf088a7"
     },
     {
       "path": "packet-gate.mjs",

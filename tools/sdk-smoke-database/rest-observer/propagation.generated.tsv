@@ -1,0 +1,10 @@
+Method	Step	Result
+GET	propagation	success
+GET	propagation	permission
+PUT	other	unexpected
+PUT	propagation	permission
+GET	propagation	disabled
+GET	other	permission
+PUT	other	disabled
+PUT	other	success
+GET	propagation	unexpected

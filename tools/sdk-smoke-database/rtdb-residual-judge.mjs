@@ -11,7 +11,7 @@ import { LP_TOLERANCE_SECONDS, WS_FIRE_MAX_SECONDS } from './cv07-ondisconnect.m
 
 export const KEPT = ['step', 'type', 'actor', 'label', 'key', 'prev', 'shape', 'code'];
 export const UNKNOWN_TYPES = new Set(['timeout', 'error']);
-export const SCENARIOS = ['cv08', 'cv10', 'sdk-next'];
+export const SCENARIOS = ['cv08', 'cv10', 'sdk-next', 'sdk-next-startup'];
 export const ROUNDS_BY_TRANSPORT = { ws: ['r1-ws', 'r2-ws'], lp: ['r1-lp', 'r2-lp'] };
 
 /** The comparison key of one row: the kept fields only, so timings and any extra field are ignored. */
@@ -132,7 +132,7 @@ export function judgeRuns(production, local) {
   let missing = false;
   for (const scenario of SCENARIOS) {
     const prod = byName(production, scenario), here = byName(local, scenario);
-    if (scenario === 'sdk-next' && prod.size) { missing = true; continue; }
+    if (['sdk-next', 'sdk-next-startup'].includes(scenario) && prod.size) { missing = true; continue; }
     if (!prod.size) continue;
     for (const transport of ['ws', 'lp']) {
       const [n1, n2] = ROUNDS_BY_TRANSPORT[transport], p1 = prod.get(n1), p2 = prod.get(n2);
@@ -197,4 +197,23 @@ export function validateSdkNext(journal) {
   if (journal.some((r) => ['timeout', 'error', 'rejected'].includes(r.type))) errors.push('unknown outcome');
   if (!journal.some((r) => r.type === 'gap' && r.label === 'transaction-retry' && r.code === 'unobserved')) errors.push('retry gap');
   return { valid: errors.length === 0, errors, retry: 'unobserved', verdict: 'needs-review' };
+}
+
+
+/** A complete read-only host-discovery profile remains evidence for review, never parity. */
+export function validateSdkStartup(journal) {
+  const operations = journal.filter((r) => r.type === 'operation');
+  const reads = journal.filter((r) => r.type === 'startup' && r.label === 'root-read');
+  const controls = journal.filter((r) => r.type === 'raw-control');
+  const guard = journal.find((r) => r.type === 'guard');
+  let state;
+  try { state = JSON.parse(guard?.code); } catch { state = null; }
+  const handshakes = controls.filter((r) => { try { const c = JSON.parse(r.shape); return c?.t === 'c' && c.d?.t === 'h'; } catch { return false; } });
+  const valid = operations.length === 2 && operations.every((r, i) => r.code === String(i + 1) && r.label === ['startup-w', 'startup-o'][i]) &&
+    reads.length === 2 && reads[0].actor === 'w' && reads[1].actor === 'o' && reads.every((r) => r.shape === 'null') &&
+    journal.indexOf(operations[0]) < journal.indexOf(reads[0]) && journal.indexOf(reads[0]) < journal.indexOf(operations[1]) && journal.indexOf(operations[1]) < journal.indexOf(reads[1]) &&
+    controls.length === 2 && handshakes.length === 2 && controls.every((r) => typeof r.shape === 'string' && Buffer.byteLength(r.shape, 'utf8') <= 4096) &&
+    state?.noMutations === true && state?.armed === false && state?.terminal === true && state?.frozen === false && state?.unknown === false && state?.connections === 2 && state?.messages <= 16 && state?.controlCount === 2 && state?.operationIndex === 2 &&
+    !journal.some((r) => ['timeout', 'error', 'rejected'].includes(r.type));
+  return { valid, verdict: 'needs-review' };
 }

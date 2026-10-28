@@ -613,3 +613,38 @@ test('a 423 is retried only when it is that body, on a read-only GET, during set
   const r3 = await prod(w3, { sleep: clocked().sleep, log: (x) => rows3.push(x.step), browser: async (c, h) => { w3.forbid = { path: /\.settings\/rules\.json$/, remaining: 1, status: 423, body: DISABLED_423 }; return fakeBrowser(w3)(c, h); } });
   assert.ok(!rows3.some((x) => x.includes('-retry-')), 'no retry after setup'); assert.ok(r3.errors.length > 0);
 });
+
+test('startup collision never writes Rules, deletes prefix, or runs browser', async () => {
+  const w = fakeWorld();
+  w.data[`${PREFIX}/foreign`] = { keep: 'original' };
+  let browserCalls = 0;
+  const r = await local(w, { scenarios: ['sdk-next-startup'], browser: async () => { browserCalls++; throw Error('must not start'); } });
+  assert.equal(browserCalls, 0);
+  assert.ok(r.errors.some((e) => e.startsWith('prefix-before:')));
+  assert.equal(w.data[`${PREFIX}/foreign`].keep, 'original');
+  assert.equal(w.rules, BASE);
+  assert.ok(!w.sent.some((x) => x.startsWith('PUT ') || x === `DELETE /${PREFIX}.json`), w.sent.join());
+});
+
+test('production baseline collision preserves fake prefix and never issues prefix DELETE or Rules PUT', async () => {
+  const w = fakeWorld();
+  w.data[`${PREFIX}/foreign`] = { keep: 'original' };
+  let browserCalls = 0;
+  const r = await prod(w, { browser: async () => { browserCalls++; throw Error('must not start'); } });
+  assert.equal(browserCalls, 0);
+  assert.ok(r.errors.some((e) => e.startsWith('prefix-before:')));
+  assert.equal(w.data[`${PREFIX}/foreign`].keep, 'original');
+  assert.equal(w.rules, BASE);
+  assert.ok(!w.sent.some((x) => x.startsWith('PUT ') || x === `DELETE /${PREFIX}.json`), w.sent.join());
+  assert.ok(w.sent.some((x) => x === 'DELETE /v1beta/projects/000000000000/locations/us-central1/instances/fireemu-q-rtdb2'), 'separate deleted-instance baseline restoration');
+});
+
+test('active or unexpected instance baseline never disables or deletes that instance', async () => {
+  for (const tweak of [(w) => { w.inst = 'ACTIVE'; }, (w) => { w.foreign = true; }]) {
+    const w = fakeWorld(); tweak(w);
+    await prod(w);
+    assert.ok(!w.sent.some((x) => /instances\/fireemu-q-rtdb2(?::(?:disable|undelete|reenable)|$)/.test(x) && !x.startsWith('GET ')), w.sent.join());
+    assert.ok(!w.sent.some((x) => x.startsWith('DELETE /v1beta/projects/000000000000/locations/')), w.sent.join());
+    assert.equal(w.rules, BASE);
+  }
+});

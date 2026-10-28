@@ -103,7 +103,7 @@ test('typed increment witness rejects alternate numeric and string values', () =
 
 test('production selection is one fixed packet scenario and invalid profiles stop the loop', () => {
   const source = readFileSync(new URL('./rtdb-residual.mjs', import.meta.url), 'utf8');
-  assert.match(source, /packet\.scenario !== 'sdk-next'/);
+  assert.match(source, /!\['sdk-next', 'sdk-next-startup'\]\.includes\(packet\.scenario\)/);
   assert.match(source, /o\.packet\?\.scenario === 'sdk-next' \? \['sdk-next'\]/);
   assert.match(source, /!validateSdkNext\(out\.journal\)\.valid/);
   assert.match(source, /if \(run\.errors\.length \|\| o\.stop\?\.requested\) break/);

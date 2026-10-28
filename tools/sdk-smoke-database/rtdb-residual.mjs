@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { adminClient, assertNoSecrets, LAUNCH, redact } from './cv11-genuine-auth.mjs';
 import { ADC_ARGS, runPreflight } from './adc-preflight.mjs';
 import { DEFAULT_JAR, startJar } from './jar.mjs';
-import { judgeRuns, sanitizeProfiles, SCENARIOS, validateSdkNext } from './rtdb-residual-judge.mjs';
+import { judgeRuns, sanitizeProfiles, SCENARIOS, validateSdkNext, validateSdkStartup } from './rtdb-residual-judge.mjs';
 import { createRtdbAdmin, Stop } from './rtdb-admin.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -36,14 +36,14 @@ export const CAPS = { observe: 80, cleanup: 30, mutations: 40, pollsPerOperation
 // server fires them when it drops the idle long-polling connection (production: about 105 s).
 export const FIRE_GRACE_MS = 150000;
 // Longer than the worst case of the page's own waits (Rules probes up to 60 s each, marker wait 30 s / 240 s).
-export const PROFILE_TIMEOUT_MS = { cv08: 240000, cv10: { ws: 300000, lp: 540000 } };
+export const PROFILE_TIMEOUT_MS = { cv08: 240000, startup: 30000, cv10: { ws: 300000, lp: 540000 } };
 const PROPAGATION_MS = 120000;
 const INSTANCE = 'fireemu-q-rtdb2', LOCATION = 'us-central1', TIMEOUT_MS = 25000;
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
 const OPEN = { '.read': true, '.write': true };
 /** The Rules of one run: the anonymous client owns the run prefix; `deny` closes the writes of e7, e8 and dprobe. */
-export function rulesFor(prefix, { deny = false } = {}) {
+export function rulesFor(prefix, { deny = false, startup = false } = {}) {
   const [top, run] = prefix.split('/'), W = { '.write': true }, flag = { '.write': !deny };
   return {
     rules: {
@@ -51,9 +51,11 @@ export function rulesFor(prefix, { deny = false } = {}) {
       '.write': false,
       [top]: {
         [run]: {
-          cv08: { $cell: { items: { ...OPEN, '.indexOn': ['score'] }, gate: OPEN, gated: { '.read': "data.parent().child('gate').val() === true", '.write': true }, other: OPEN } },
-          'sdk-next': { $cell: { '.read': true, '.write': true, items: { '.indexOn': ['score'] } } },
-          cv10: { $cell: { '.read': true, e1: W, e2: W, e3: W, e4: W, e5: W, e6: W, e7: flag, e8: flag, e9: W, marker: W, dprobe: flag } },
+          ...(startup ? { 'sdk-next-startup': { $cell: { '.read': true, '.write': false } } } : {
+            cv08: { $cell: { items: { ...OPEN, '.indexOn': ['score'] }, gate: OPEN, gated: { '.read': "data.parent().child('gate').val() === true", '.write': true }, other: OPEN } },
+            'sdk-next': { $cell: { '.read': true, '.write': true, items: { '.indexOn': ['score'] } } },
+            cv10: { $cell: { '.read': true, e1: W, e2: W, e3: W, e4: W, e5: W, e6: W, e7: flag, e8: flag, e9: W, marker: W, dprobe: flag } },
+          }),
         },
       },
     },
@@ -88,20 +90,29 @@ async function runProfile(run, o, scenario, prof) {
   // Sticky: a profile that did not observe the writer's disconnect may leave onDisconnect writes pending.
   if (scenario === 'cv10' && !fired(out.journal)) run.fireWait = true;
   if (scenario === 'sdk-next' && (!validateSdkNext(out.journal).valid || !out.journal.some((e) => e.type === 'done'))) run.errors.push('sdk-next profile incomplete');
+  if (scenario === 'sdk-next-startup' && (!validateSdkStartup(out.journal).valid || !out.journal.some((e) => e.type === 'done'))) run.errors.push('sdk-next-startup profile incomplete');
   return { scenario, name: prof.name, ...out };
 }
 
 // Runs setup, the scenarios x profiles and cleanup. The status is 'closed' only when nothing is
 // unknown and every owned resource read back at its starting state; otherwise 'needs-recovery'.
 export async function runScenario(o) {
+  if (o.mode === 'production') {
+    for (const scenario of [o.packet?.scenario, ...(o.scenarios ?? [])]) if (['sdk-next', 'sdk-next-startup'].includes(scenario)) assertProductionSdkNextReady({ scenario });
+  }
   o.secrets ??= [];
-  const admin = adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets, caps: CAPS });
-  const run = { admin, call: admin.call, u: urls(o), propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, unresolved: [], errors: [], fireWait: false };
+  const client = adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets, caps: CAPS });
+  const run = { admin: client, call: client.call, u: urls(o), propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, unresolved: [], errors: [], fireWait: false };
   const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   run.sleep = sleep;
   const profiles = [];
-  // Local runs may be narrowed (--scenarios, --transports); production always runs all eight.
-  const scenarios = o.scenarios ?? (o.mode === 'production' && o.packet?.scenario === 'sdk-next' ? ['sdk-next'] : ['cv08', 'cv10']), profilesToRun = o.profiles ?? PROFILES;
+  // Production startup is blocked above; local startup has exactly two WS profiles.
+  const scenarios = o.scenarios ?? (o.mode === 'production' && o.packet?.scenario === 'sdk-next' ? ['sdk-next'] : ['cv08', 'cv10']);
+  const isStartup = scenarios.includes('sdk-next-startup');
+  if (isStartup && (scenarios.length !== 1 || (o.profiles && (o.profiles.length !== 2 || o.profiles.some((p, i) => p.name !== ['r1-ws', 'r2-ws'][i] || p.transport !== 'ws'))))) throw Error('startup requires exactly two WS profiles');
+  const profilesToRun = isStartup ? PROFILES.filter((p) => p.transport === 'ws') : o.profiles ?? PROFILES;
+  const scoped = isStartup ? createRtdbAdmin({ instance: INSTANCE, location: LOCATION, caps: CAPS, propagationMs: PROPAGATION_MS, fireGraceMs: FIRE_GRACE_MS, rulesFor: (prefix, options) => rulesFor(prefix, { ...options, startup: true }) }) : admin;
+  const { setupProduction, installRules, cleanup } = scoped;
   try {
     if (o.mode === 'production') await setupProduction(run, sleep);
     await installRules(run, o);
@@ -120,8 +131,8 @@ export async function runScenario(o) {
   }
   const restored = Object.values(run.state).every((s) => s === 'baseline');
   // An unexpected error or an unwritten log row means a sent request may be unaccounted for.
-  const accounted = admin.counts.logFailures === 0 && !run.errors.some((e) => e.startsWith('unexpected'));
-  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: admin.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: admin.counts };
+  const accounted = client.counts.logFailures === 0 && !run.errors.some((e) => e.startsWith('unexpected'));
+  return { status: run.unresolved.length === 0 && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: client.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: client.counts };
 }
 
 /** Compares a production and a local journal file's profiles; the timing verdict is part of `match`. */
@@ -149,12 +160,16 @@ export function verifyPacket(file, expected) {
 
 /** Production remains unavailable until the SDK transport retry barrier is reviewed. */
 export function assertProductionSdkNextReady(packet) {
-  if (packet?.scenario === 'sdk-next') throw Error('sdk-next transport guard unverified');
+  if (['sdk-next', 'sdk-next-startup'].includes(packet?.scenario)) throw Error('sdk-next transport guard unverified');
 }
 
 // Conservative fixed-corpus diagnostic. Production remains blocked pending source/transport review.
-export function installSdkNextWsGuard({ host, namespace, base, secure = false, maxConnections = 2, maxMessages = 1250 }) {
+export function installSdkNextWsGuard({ host, namespace, base, secure = false, noMutations = false, maxConnections = 2, maxMessages = 1250, maxControls = 4 }) {
   const Native = globalThis.WebSocket, originalSend = Native.prototype.send;
+  if (noMutations) {
+    if (![maxConnections, maxMessages, maxControls].every((n) => Number.isSafeInteger(n) && n >= 0)) throw Error('invalid startup limits');
+    maxConnections = Math.min(maxConnections, 2); maxMessages = Math.min(maxMessages, 16); maxControls = Math.min(maxControls, 4);
+  }
   Object.defineProperty(globalThis, 'MozWebSocket', { value: undefined, writable: false, configurable: false });
   if (typeof window !== 'undefined' && window.top !== window) {
     Object.defineProperty(globalThis, 'WebSocket', { value: new Proxy(Native, { construct() { throw Error('sdk-next child frame blocked'); } }), writable: false, configurable: false });
@@ -164,7 +179,8 @@ export function installSdkNextWsGuard({ host, namespace, base, secure = false, m
   const order = ['startup-w', 'startup-o', 'seed', 'push-a', 'write-a', 'read-a', 'push-b', 'write-b', 'read-b', 'update', 'get-update-preserves-sibling', 'replace', 'get-set-replaces-node', 'fanout', 'get-atomic-multipath-final', 'change', 'move', 'server-values', 'get-server-values', 'transaction-abort', 'transaction-apply'];
   const writes = { seed: 'p', 'write-a': 'p', 'write-b': 'p', update: 'm', replace: 'p', fanout: 'm', change: 'm', move: 'm', 'server-values': 'm', 'transaction-apply': 'p' };
   let frozen = false, armed = false, terminal = false, unknown = false, connections = 0, messages = 0, operation = null, operationIndex = 0, mutationSent = false;
-  const sockets = new Set(), sessions = new Map(), pending = new Map(), startup = new Set(), seenMutations = new Set(), requests = new WeakMap();
+  const sockets = new Set(), sessions = new Map(), pending = new Map(), startup = new Set(), seenMutations = new Set(), requests = new WeakMap(), pendingReads = new Map(), stats = new Set(), controls = [];
+  let readSent = false;
   const freeze = () => { if (!terminal) { if (pending.size) unknown = true; frozen = true; } };
   const fail = (why) => { freeze(); throw new Error(`sdk-next transport frozen: ${why}`); };
   const within = (p) => typeof p === 'string' && (p === `/${base}` || p.startsWith(`/${base}/`)) && !p.split('/').some((part) => part === '.' || part === '..');
@@ -176,6 +192,15 @@ export function installSdkNextWsGuard({ host, namespace, base, secure = false, m
     try { msg = JSON.parse(data); } catch { return fail('unknown outgoing message'); }
     if (msg?.t !== 'd' || !msg.d || !Number.isSafeInteger(msg.d.r) || typeof msg.d.a !== 'string') return fail('unknown outgoing protocol');
     const { r, a, b } = msg.d;
+    if (noMutations) {
+      if (a === 'p' || a === 'm') return fail('startup-only mutation');
+      if (a === 's') { if (stats.has(socket)) return fail('startup stats retry'); stats.add(socket); }
+      else if (a === 'g') {
+        if (b?.p !== `/${base}`) return fail('startup root scope');
+        if (!operation?.startsWith('startup-') || readSent || pendingReads.size) return fail('startup read retry');
+        readSent = true; pendingReads.set(socket, r);
+      } else return fail('startup-only unsupported action');
+    }
     const tracker = requests.get(socket);
     if (!tracker || tracker.seen.has(r)) return fail('request id reuse');
     tracker.seen.add(r); tracker.waiting.add(r);
@@ -223,6 +248,10 @@ export function installSdkNextWsGuard({ host, namespace, base, secure = false, m
         try { msg = JSON.parse(data); } catch { freeze(); return; }
         if (msg?.t === 'c') {
           const ctrl = msg.d;
+          if (noMutations && ['h', 'r'].includes(ctrl?.t)) {
+            if (controls.length >= maxControls || new TextEncoder().encode(data).length > 4096) { freeze(); return; }
+            controls.push(data);
+          }
           if (ctrl?.t === 'h' && !armed && !sessions.has(ws) && ctrl.d?.h === host && ctrl.d?.v === '5' && typeof ctrl.d?.s === 'string' && ctrl.d.s.length > 0) { sessions.set(ws, ctrl.d.s); return; }
           if (ctrl?.t === 'o') return;
           freeze(); return;
@@ -233,6 +262,7 @@ export function installSdkNextWsGuard({ host, namespace, base, secure = false, m
           if (!Number.isSafeInteger(msg.d.r) || !tracker?.waiting.has(msg.d.r)) { freeze(); return; }
           tracker.waiting.delete(msg.d.r);
           if (msg.d.b?.s !== 'ok') { freeze(); return; }
+          if (pendingReads.has(ws) && msg.d.r === pendingReads.get(ws)) pendingReads.delete(ws);
           if (pending.has(ws) && msg.d.r === pending.get(ws)) pending.delete(ws);
         } else if (!['d', 'm'].includes(msg.d.a) || typeof msg.d.b?.p !== 'string' || !within(msg.d.b.p.startsWith('/') ? msg.d.b.p : `/${msg.d.b.p}`)) { freeze(); }
       });
@@ -242,20 +272,22 @@ export function installSdkNextWsGuard({ host, namespace, base, secure = false, m
   Object.defineProperty(globalThis, 'WebSocket', { value: Guarded, writable: false, configurable: false });
   Object.defineProperty(globalThis, '__sdkNextWsGuard', { value: Object.freeze({
     startupRead(actor, value) { if (frozen || armed || operation || value !== null || !['w', 'o'].includes(actor) || startup.has(actor) || (actor === 'w' ? operationIndex !== 1 : operationIndex !== 2 || !startup.has('w'))) return fail('startup read'); startup.add(actor); },
-    arm() { if (frozen || terminal || operationIndex !== 2 || startup.size !== 2 || sockets.size !== 2 || sessions.size !== 2 || new Set(sessions.values()).size !== 2 || [...sockets].some((s) => s.readyState !== Native.OPEN)) return fail('startup sessions incomplete'); armed = true; },
-    beginOperation(label) { if (frozen || terminal || operation || label !== order[operationIndex] || (!armed && !label.startsWith('startup-'))) return fail('startup or operation order'); operation = label; mutationSent = false; },
-    endOperation() { if (frozen || terminal || !operation || pending.size || (writes[operation] && !mutationSent)) return fail('pending or invalid operation'); operation = null; operationIndex++; },
+    arm() { if (noMutations) return fail('startup-only mutation arm'); if (frozen || terminal || operationIndex !== 2 || startup.size !== 2 || sockets.size !== 2 || sessions.size !== 2 || new Set(sessions.values()).size !== 2 || [...sockets].some((s) => s.readyState !== Native.OPEN)) return fail('startup sessions incomplete'); armed = true; },
+    beginOperation(label) { if (frozen || terminal || operation || label !== order[operationIndex] || (!armed && !label.startsWith('startup-'))) return fail('startup or operation order'); operation = label; mutationSent = false; readSent = false; },
+    endOperation() { if (frozen || terminal || !operation || pending.size || pendingReads.size || (noMutations && operation.startsWith('startup-') && !readSent) || (writes[operation] && !mutationSent)) return fail('pending or invalid operation'); operation = null; operationIndex++; },
+    finishStartup() { if (!noMutations || frozen || terminal || armed || operation || operationIndex !== 2 || startup.size !== 2 || sockets.size !== 2 || sessions.size !== 2 || new Set(sessions.values()).size !== 2 || pendingReads.size || [...sockets].some((socket) => requests.get(socket).waiting.size)) return fail('startup not quiescent'); terminal = true; },
+    controls() { return controls.slice(); },
     freeze,
     assertHealthy() { if (frozen || terminal) return fail('unhealthy'); },
     quiescent() { return pending.size === 0 && [...sockets].every((socket) => requests.get(socket).waiting.size === 0); },
-    finish() { if (pending.size) return fail('pending mutation'); if (frozen || !armed || operation || operationIndex !== order.length || [...sockets].some((socket) => requests.get(socket).waiting.size)) return fail('terminal not quiescent'); terminal = true; },
-    status() { return { frozen, armed, terminal, unknown, connections, messages, pending: pending.size, operationIndex }; },
+    finish() { if (noMutations) return fail('startup-only terminal'); if (pending.size) return fail('pending mutation'); if (frozen || !armed || operation || operationIndex !== order.length || [...sockets].some((socket) => requests.get(socket).waiting.size)) return fail('terminal not quiescent'); terminal = true; },
+    status() { return { frozen, armed, terminal, unknown, noMutations, connections, messages, pending: pending.size, operationIndex, controlCount: controls.length }; },
   }), writable: false, configurable: false });
 }
 
 // Long polling opens no WebSocket; any WebSocket means the SDK used that transport.
 export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
-export const profileTimeout = (cfg) => (cfg.scenario === 'cv10' ? PROFILE_TIMEOUT_MS.cv10[cfg.transport] : PROFILE_TIMEOUT_MS.cv08);
+export const profileTimeout = (cfg) => (cfg.scenario === 'cv10' ? PROFILE_TIMEOUT_MS.cv10[cfg.transport] : cfg.scenario === 'sdk-next-startup' ? PROFILE_TIMEOUT_MS.startup : PROFILE_TIMEOUT_MS.cv08);
 
 // One profile in headless Chromium. The page and SDK bundles are served from loopback; HTTP requests,
 // WebSockets and WebSocket frames are counted against the caps, and Chromium itself resolves nothing
@@ -278,26 +310,26 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
     capped.catch(() => {});
     try {
       const context = await browser.newContext(cfg.scenario === 'sdk-next' ? { serviceWorkers: 'block' } : {});
-      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') {
+      if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws') {
         const target = new URL(pageConfig.databaseURL);
-        await context.addInitScript(installSdkNextWsGuard, { host: target.host, namespace: target.searchParams.get('ns') ?? INSTANCE, base: cfg.base, secure: target.protocol === 'https:' });
+        await context.addInitScript(installSdkNextWsGuard, { host: target.host, namespace: target.searchParams.get('ns') ?? INSTANCE, base: cfg.base, secure: target.protocol === 'https:', noMutations: cfg.scenario === 'sdk-next-startup', maxMessages: cfg.scenario === 'sdk-next-startup' ? 16 : 1250, maxControls: 4 });
       }
-      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.addInitScript(() => { for (const name of ['Worker', 'SharedWorker']) if (name in globalThis) Object.defineProperty(globalThis, name, { value: function () { throw Error('worker blocked'); }, writable: false, configurable: false }); });
+      if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws') await context.addInitScript(() => { for (const name of ['Worker', 'SharedWorker']) if (name in globalThis) Object.defineProperty(globalThis, name, { value: function () { throw Error('worker blocked'); }, writable: false, configurable: false }); });
       if (pageConfig.emulator) await context.grantPermissions(['local-network-access'], { origin: `http://${origin}` }).catch(() => {});
       const page = await context.newPage();
       const routeRequests = (route) => {
         const url = new URL(route.request().url());
         if (url.host === origin) return route.continue();
         if (url.host === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/12.18.0/')) {
-          if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws' && (url.origin !== 'https://www.gstatic.com' || url.search || !['/firebasejs/12.18.0/firebase-app.js', '/firebasejs/12.18.0/firebase-database.js'].includes(url.pathname))) { counts.blocked++; return route.abort(); }
+          if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws' && (url.origin !== 'https://www.gstatic.com' || url.search || !['/firebasejs/12.18.0/firebase-app.js', '/firebasejs/12.18.0/firebase-database.js'].includes(url.pathname))) { counts.blocked++; return route.abort(); }
           return route.fulfill({ contentType: 'text/javascript', body: readFileSync(path.resolve(modules, 'firebase', path.basename(url.pathname))) });
         }
-        if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') { counts.blocked++; return route.abort(); }
+        if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws') { counts.blocked++; return route.abort(); }
         if (!pageConfig.allowHost(url.host)) { counts.blocked++; return route.abort(); }
         if (++counts.http > CAPS.browserHttp) { overCap(); return route.abort(); }
         return route.continue();
       };
-      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.route('**/*', routeRequests);
+      if (['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws') await context.route('**/*', routeRequests);
       else await page.route('**/*', routeRequests);
       page.on('websocket', (ws) => {
         if (++counts.ws > CAPS.browserWs) overCap();
@@ -309,7 +341,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
       await page.waitForFunction(() => typeof window.__rrRun === 'function');
       const timeout = new Promise((_, reject) => setTimeout(() => reject(Error('profile timeout')), profileTimeout(cfg)).unref());
       timeout.catch(() => {});
-      await Promise.race([page.evaluate((c) => window.__rrRun(c), { ...pageConfig, ...cfg, allowHost: undefined, wsGuardRequired: cfg.scenario === 'sdk-next' && cfg.transport === 'ws' }), capped, timeout]);
+      await Promise.race([page.evaluate((c) => window.__rrRun(c), { ...pageConfig, ...cfg, allowHost: undefined, wsGuardRequired: ['sdk-next', 'sdk-next-startup'].includes(cfg.scenario) && cfg.transport === 'ws' }), capped, timeout]);
       // Evidence of the transport the SDK actually used.
       const transport = { scenario: cfg.scenario, step: 'runner', type: 'transport', code: transportOf(counts) };
       journal.push(transport);
@@ -353,8 +385,13 @@ export function narrowing(scenarios, transports) {
     if (!want.length || want.some((w) => !all.includes(w))) throw Error(`${what} must be a comma-separated subset of ${all.join(',')}`);
     return all.filter((a) => want.includes(a));
   };
+  const selected = scenarios ? pick(scenarios, SCENARIOS, '--scenarios') : undefined;
+  if (selected?.includes('sdk-next-startup')) {
+    if (selected.length !== 1 || (transports && transports !== 'ws')) throw Error('startup requires exactly two WS profiles');
+    return { scenarios: selected, profiles: PROFILES.filter((p) => p.transport === 'ws') };
+  }
   return {
-    ...(scenarios ? { scenarios: pick(scenarios, SCENARIOS, '--scenarios') } : {}),
+    ...(selected ? { scenarios: selected } : {}),
     ...(transports ? { profiles: PROFILES.filter((p) => pick(transports, ['ws', 'lp'], '--transports').includes(p.transport)) } : {}),
   };
 }
@@ -385,7 +422,7 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
-  if (packet) { if (packet.scenario !== undefined && packet.scenario !== 'sdk-next') throw Error('invalid fixed packet scenario'); assertProductionSdkNextReady(packet); verifyBundles(packet); }
+  if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); assertProductionSdkNextReady(packet); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.

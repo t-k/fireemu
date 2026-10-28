@@ -45,6 +45,7 @@ window.__rrRun = async (c) => {
   try {
     if (c.scenario === 'cv08') await cv08();
     else if (c.scenario === 'cv10') await cv10();
+    else if (c.scenario === 'sdk-next-startup') await sdkStartup();
     else if (c.scenario === 'sdk-next') {
       await sdkNext();
       if (c.wsGuardRequired) {
@@ -57,7 +58,7 @@ window.__rrRun = async (c) => {
     }
     else throw Error('unknown scenario');
     step = 'end';
-    emit('done');
+    if (c.scenario === 'sdk-next-startup') await emit('done'); else emit('done');
   } catch (error) {
     if (c.wsGuardRequired && globalThis.__sdkNextWsGuard) {
       globalThis.__sdkNextWsGuard.freeze();
@@ -65,7 +66,37 @@ window.__rrRun = async (c) => {
     }
     throw error;
   } finally {
-    await Promise.allSettled(apps.map((a) => deleteApp(a)));
+    try {
+      if (c.scenario === 'sdk-next-startup' && globalThis.__sdkNextWsGuard) {
+        for (const raw of globalThis.__sdkNextWsGuard.controls()) await emit('raw-control', { actor: 'host', shape: raw });
+      }
+    } finally { await Promise.allSettled(apps.map((a) => deleteApp(a))); }
+  }
+
+  async function sdkStartup() {
+    if (!c.wsGuardRequired || c.transport !== 'ws') throw Error('startup requires WS guard');
+    const w = open('w'), o = open('o'), guard = globalThis.__sdkNextWsGuard;
+    for (const [actor, app] of [['w', w], ['o', o]]) {
+      step = 'startup';
+      await emit('operation', { actor, label: `startup-${actor}`, code: actor === 'w' ? '1' : '2' });
+      guard.beginOperation(`startup-${actor}`);
+      let interval, deadline;
+      const watch = new Promise((_, reject) => {
+        interval = setInterval(() => { if (guard.status().frozen) reject(Error('startup guard frozen')); }, 20);
+        deadline = setTimeout(() => reject(Error('startup read timeout')), 20000);
+      });
+      try {
+        const snap = await Promise.race([D.get(at(app, '')), watch]);
+        guard.assertHealthy(); guard.endOperation();
+        const value = snap.val();
+        await emit('startup', { actor, label: 'root-read', shape: JSON.stringify(value) });
+        if (value !== null) throw Error('startup root not empty');
+        guard.startupRead(actor, value);
+      } catch (error) { guard.freeze(); throw error; }
+      finally { clearInterval(interval); clearTimeout(deadline); }
+    }
+    guard.finishStartup();
+    await emit('guard', { actor: 'host', code: JSON.stringify(guard.status()) });
   }
 
   async function sdkNext() {

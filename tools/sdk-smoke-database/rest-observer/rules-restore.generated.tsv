@@ -1,0 +1,13 @@
+Phase	Outcome	Identity
+prefix-delete	unknown	bound
+prefix-read	rejected	bound
+rules-put	unknown	bound
+rules-read	rejected	bound
+prefix-delete	success	foreign
+rules-put	success	foreign
+prefix-read	success	bound
+rules-read	unknown	foreign
+prefix-delete	rejected	foreign
+rules-put	rejected	foreign
+rules-read	success	foreign
+prefix-read	unknown	foreign

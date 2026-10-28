@@ -54,10 +54,13 @@ export async function createTransport({file,max,reserve,wire}) {
  invoke.close=()=>handle.close(); return invoke;
 }
 
-export function makeWire({instance,project,projectNumber,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false,managementOnly=false}) {
+export function makeWire({instance,project,projectNumber,token,fetchImpl=fetch,timeoutMs=25000,serviceOnly=false,managementOnly=false,restorePacket}) {
  if(typeof project!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(project)||typeof instance!=='string'||!/^[a-z][a-z0-9-]{3,62}$/.test(instance)||typeof token!=='string'||!token||typeof fetchImpl!=='function'||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>25000)throw Error('invalid wire config');
+ let restoreOperation;
+ if(restorePacket && (restorePacket.project!==project||restorePacket.projectNumber!==projectNumber||restorePacket.instance!==instance))throw Error('restore identity refused');
  const hosts=new Set(serviceOnly?['serviceusage.googleapis.com']:managementOnly?['firebasedatabase.googleapis.com','serviceusage.googleapis.com']:[`${instance}.firebaseio.com`,'firebasedatabase.googleapis.com','serviceusage.googleapis.com']);
  return async (request,onHeaders=async()=>{})=>{
+  if(restorePacket){const {assertRestoreRequest}=await import('./rules-restore.mjs');assertRestoreRequest(request,restorePacket,restoreOperation);}
   if(request.step==='instance-readiness'&&(request.expectedProject!==project||request.projectNumber!==projectNumber||!/^[0-9]{1,20}$/.test(projectNumber??'')))throw Error('readiness project refused');
   const u=new URL(request.url);if(u.protocol!=='https:'||!hosts.has(u.hostname)||u.port||u.username||u.password||u.hash)throw Error('host refused');
   if(request.step==='operators-rules-install')await validateOperatorInstall(request);if(request.step==='operators-case')await validateOperatorRequest(request);else if(u.searchParams.has('auth_variable_override'))throw Error('auth override refused');
@@ -67,6 +70,7 @@ export function makeWire({instance,project,projectNumber,token,fetchImpl=fetch,t
   await onHeaders(response.status,out);
   const chunks=[];let total=0; if(response.body) { const reader=response.body.getReader(); try { for (;;) { const {done,value}=await reader.read(); if(done)break; total+=value.byteLength; if(total>1048576){await reader.cancel();throw Error('response too large');} chunks.push(value); } } finally { reader.releaseLock(); } }
   const raw=Buffer.concat(chunks,total);if(onHeaders.body)await onHeaders.body(raw);const body=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw);
+  if(restorePacket&&request.step==='api-disable'&&response.status>=200&&response.status<300){let value;try{value=JSON.parse(body);}catch{throw Error('restore operation unreadable');}const {validOperation}=await import('./recovery.mjs');if(!validOperation(value?.name))throw Error('restore operation identity');restoreOperation=value.name;}
   const result={status:response.status,headers:out,body,raw};if((response.status<200||response.status>=300)&&!permittedProbe(request,result)&&!permittedRulesCase(request,result)&&!permittedQueryCase(request,result)&&!permittedBoundsCase(request,result)&&!permittedOperatorCase(request,result)&&!permittedOperatorInstall(request,result)&&!permittedInstanceReadiness(request,result))throw new KnownRejection(response.status);return result;
  };
 }

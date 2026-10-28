@@ -10,6 +10,7 @@ const good = () => [
   row('get', 'update-preserves-sibling', { keep: 1, edit: 2 }), row('get', 'set-replaces-node', { edit: 3 }),
   row('get', 'atomic-multipath-final', { x: 1, y: 2 }), row('get', 'server-values', { numeric: 12, absent: 5, string: 5, at: 1000 }),
   row('interval', 'server-timestamp', { before: 999, after: 1001, value: 1000 }),
+  { type: 'value', label: 'txn-abort', actor: 'w', shape: '3' },
   { type: 'value', label: 'txn-apply', actor: 'w', shape: '4' },
   row('transaction', 'abort', { callbacks: [3], committed: false, value: 3 }), row('transaction', 'applyLocally-false', { callbacks: [4], committed: true, value: 5 }),
   ...['child_added', 'child_changed', 'child_moved'].map((type) => ({ type, key: 'b', prev: 'a' })),
@@ -25,6 +26,9 @@ test('typed obligations and unresolved retry', () => {
 
 test('missing, typed, key, time, failure and cap mutations are rejected', () => {
   const mutations = [
+    (a) => a.splice(a.findIndex((r) => r.label === 'txn-abort'), 1),
+    (a) => { a.find((r) => r.label === 'txn-abort').shape = 'null'; },
+
     (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [], committed: false, value: 999 }); },
     (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [3], committed: false, value: 999 }); },
     (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [], committed: false, value: 3 }); },
@@ -43,6 +47,8 @@ test('script uses fixed cap and no fetch or disconnect recapture', () => {
   const source = readFileSync(new URL('./rtdb-residual-page.js', import.meta.url), 'utf8').split('  async function sdkNext() {')[1].split('  async function cv08() {')[0];
   assert.match(source, /\+\+operations > 24/);
   assert.match(source, /D\.onValue\(at\(w, 'txn\/apply'\)/);
+  assert.match(source, /D\.onValue\(at\(w, 'txn\/abort'\)/);
+  assert.match(source, /abortInitial !== 3/);
   assert.doesNotMatch(source, /\bfetch\s*\(|onDisconnect|goOffline/);
   assert.match(source, /finally \{ for \(const off of unsubs\) off\(\); \}/);
 });

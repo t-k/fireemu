@@ -117,6 +117,10 @@ window.__rrRun = async (c) => {
       const values = await get('server-values', 'values');
       emit('interval', { actor: 'w', label: 'server-timestamp', shape: JSON.stringify({ before, after, value: values?.at }) });
       step = 'transaction';
+      let abortInitial;
+      unsubs.push(D.onValue(at(w, 'txn/abort'), (snap) => { abortInitial = snap.val(); emit('value', { actor: 'w', label: 'txn-abort', shape: JSON.stringify(abortInitial) }); }, (e) => { listenerError = Error('abort listener failed'); emit('error', { label: 'txn-abort', code: errorCode(e) }); }));
+      await need('txn abort initial', () => abortInitial !== undefined, 20000);
+      if (abortInitial !== 3) throw Error('transaction abort seed unavailable');
       const callbacks = [];
       const abort = await perform('transaction-abort', () => D.runTransaction(at(w, 'txn/abort'), (v) => { callbacks.push(v); return undefined; }));
       emit('transaction', { actor: 'w', label: 'abort', shape: JSON.stringify({ callbacks, committed: abort.committed, value: abort.snapshot.val() }) });

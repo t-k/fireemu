@@ -182,6 +182,7 @@ export function validateSdkNext(journal) {
   const callbacks = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => x === null || (typeof x === 'number' && Number.isFinite(x)));
   if (!abort || abort.committed !== false || abort.value !== 3 || !callbacks(abort.callbacks)) errors.push('transaction abort');
   if (!apply || apply.committed !== true || apply.value !== 5 || !callbacks(apply.callbacks)) errors.push('transaction apply');
+  if (!journal.some((r) => r.type === 'value' && r.label === 'txn-abort' && r.actor === 'w' && r.shape === '3')) errors.push('writer abort cache');
   if (!journal.some((r) => r.type === 'value' && r.label === 'txn-apply' && r.actor === 'w')) errors.push('writer transaction listener');
   for (const type of ['child_added', 'child_changed', 'child_moved']) if (!journal.some((r) => r.type === type && typeof r.key === 'string' && (r.prev === null || typeof r.prev === 'string'))) errors.push(type);
   const initial = journal.filter((r) => r.step === 'attach' && r.type === 'child_added' && r.label === 'items');

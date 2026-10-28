@@ -147,6 +147,51 @@ export function verifyPacket(file, expected) {
   return packet;
 }
 
+/** Production remains unavailable until the SDK transport retry barrier is reviewed. */
+export function assertProductionSdkNextReady(packet) {
+  if (packet?.scenario === 'sdk-next') throw Error('sdk-next transport guard unverified');
+}
+
+// Local diagnostic only. Production remains blocked until WS/LP startup and retry barriers are proven.
+export function installSdkNextWsGuard({ host, maxConnections = 2, maxMessages = 2500 }) {
+  const Native = globalThis.WebSocket, originalSend = Native.prototype.send;
+  let frozen = false, armed = false, terminal = false, connections = 0, messages = 0;
+  const sockets = new Set();
+  const freeze = () => { if (!terminal) frozen = true; };
+  const fail = (why) => { freeze(); throw new Error(`sdk-next transport frozen: ${why}`); };
+  const guardedSend = function (...args) {
+    if (frozen || !sockets.has(this)) return fail('send refused');
+    if (++messages > maxMessages) return fail('send limit');
+    try { return Reflect.apply(originalSend, this, args); } catch (e) { freeze(); throw e; }
+  };
+  Object.defineProperty(Native.prototype, 'send', { value: guardedSend, writable: false, configurable: false });
+  const Guarded = new Proxy(Native, {
+    construct(target, args) {
+      if (frozen || armed) return fail('new connection refused');
+      let url;
+      try { url = new URL(String(args[0])); } catch { return fail('invalid URL'); }
+      if (!['ws:', 'wss:'].includes(url.protocol) || url.host !== host) return fail('disallowed host');
+      if (++connections > maxConnections) return fail('connection limit');
+      let ws;
+      try { ws = Reflect.construct(target, args, target); } catch (e) { freeze(); throw e; }
+      sockets.add(ws);
+      ws.addEventListener('error', freeze);
+      ws.addEventListener('close', freeze);
+      ws.addEventListener('message', (event) => {
+        if (typeof event.data !== 'string') return;
+        try { const data = JSON.parse(event.data); if (data?.t === 'c' && ['r', 's'].includes(data.d?.t)) freeze(); } catch { /* RTDB may split messages; semantic barrier remains unverified. */ }
+      });
+      return ws;
+    },
+  });
+  Object.defineProperty(globalThis, 'WebSocket', { value: Guarded, writable: false, configurable: false });
+  Object.defineProperty(globalThis, '__sdkNextWsGuard', { value: Object.freeze({
+    arm() { if (frozen || sockets.size !== 2 || [...sockets].some((s) => s.readyState !== Native.OPEN)) return fail('startup incomplete'); armed = true; },
+    finish() { terminal = true; },
+    status() { return { frozen, armed, terminal, connections, messages }; },
+  }), writable: false, configurable: false });
+}
+
 // Long polling opens no WebSocket; any WebSocket means the SDK used that transport.
 export const transportOf = (counts) => (counts.ws > 0 ? 'ws' : 'lp');
 export const profileTimeout = (cfg) => (cfg.scenario === 'cv10' ? PROFILE_TIMEOUT_MS.cv10[cfg.transport] : PROFILE_TIMEOUT_MS.cv08);
@@ -171,7 +216,8 @@ export function browserRunner({ modules, page: pageConfig, stop = {} }) {
     const capped = new Promise((_, reject) => { overCap = () => reject(Error('browser request cap reached')); });
     capped.catch(() => {});
     try {
-      const context = await browser.newContext();
+      const context = await browser.newContext(cfg.scenario === 'sdk-next' ? { serviceWorkers: 'block' } : {});
+      if (cfg.scenario === 'sdk-next' && cfg.transport === 'ws') await context.addInitScript(installSdkNextWsGuard, { host: new URL(pageConfig.databaseURL).host });
       if (pageConfig.emulator) await context.grantPermissions(['local-network-access'], { origin: `http://${origin}` }).catch(() => {});
       const page = await context.newPage();
       await page.route('**/*', (route) => {
@@ -268,7 +314,7 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
-  if (packet) { if (packet.scenario !== undefined && packet.scenario !== 'sdk-next') throw Error('invalid fixed packet scenario'); verifyBundles(packet); }
+  if (packet) { if (packet.scenario !== undefined && packet.scenario !== 'sdk-next') throw Error('invalid fixed packet scenario'); assertProductionSdkNextReady(packet); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.

@@ -10,6 +10,7 @@ const good = () => [
   row('get', 'update-preserves-sibling', { keep: 1, edit: 2 }), row('get', 'set-replaces-node', { edit: 3 }),
   row('get', 'atomic-multipath-final', { x: 1, y: 2 }), row('get', 'server-values', { numeric: 12, absent: 5, string: 5, at: 1000 }),
   row('interval', 'server-timestamp', { before: 999, after: 1001, value: 1000 }),
+  { type: 'value', label: 'txn-apply', actor: 'w', shape: '4' },
   row('transaction', 'abort', { callbacks: [3], committed: false, value: 3 }), row('transaction', 'applyLocally-false', { callbacks: [4], committed: true, value: 5 }),
   ...['child_added', 'child_changed', 'child_moved'].map((type) => ({ type, key: 'b', prev: 'a' })),
   { step: 'attach', type: 'child_added', label: 'items', key: 'b', prev: 'a' }, { step: 'attach', type: 'child_added', label: 'items', key: 'c', prev: 'b' },
@@ -24,6 +25,11 @@ test('typed obligations and unresolved retry', () => {
 
 test('missing, typed, key, time, failure and cap mutations are rejected', () => {
   const mutations = [
+    (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [], committed: false, value: 999 }); },
+    (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [3], committed: false, value: 999 }); },
+    (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [], committed: false, value: 3 }); },
+    (a) => { a.find((r) => r.label === 'applyLocally-false').shape = shape({ callbacks: ['bad'], committed: true, value: 5 }); },
+    (a) => { a.find((r) => r.label === 'applyLocally-false').shape = shape({ callbacks: [4], committed: true, value: 999 }); },
     (a) => a.splice(0, 1), (a) => { a[1].key = a[0].key; }, (a) => { a[4].shape = shape({ x: 1 }); },
     (a) => { a[5].shape = shape({ numeric: '12', absent: 5, string: 5, at: 1000 }); },
     (a) => { a[6].shape = shape({ before: 1, after: 2, value: 900000 }); },
@@ -36,6 +42,7 @@ test('missing, typed, key, time, failure and cap mutations are rejected', () => 
 test('script uses fixed cap and no fetch or disconnect recapture', () => {
   const source = readFileSync(new URL('./rtdb-residual-page.js', import.meta.url), 'utf8').split('  async function sdkNext() {')[1].split('  async function cv08() {')[0];
   assert.match(source, /\+\+operations > 24/);
+  assert.match(source, /D\.onValue\(at\(w, 'txn\/apply'\)/);
   assert.doesNotMatch(source, /\bfetch\s*\(|onDisconnect|goOffline/);
   assert.match(source, /finally \{ for \(const off of unsubs\) off\(\); \}/);
 });
@@ -136,4 +143,51 @@ test('fixed script completes against a deterministic offline SDK double', async 
   assert.equal(events.filter((r) => r.type === 'operation').length, 19);
   assert.equal(deleted, 2);
   assert.equal(listeners.length, 0);
+  assert.ok(events.some((r) => r.type === 'value' && r.label === 'txn-apply' && r.actor === 'w'));
+});
+
+test('production sdk-next is refused until presend and retry barriers are verified', async () => {
+  const { assertProductionSdkNextReady } = await import('./rtdb-residual.mjs');
+  assert.throws(() => assertProductionSdkNextReady({ scenario: 'sdk-next' }), /transport guard.*unverified/i);
+  assert.doesNotThrow(() => assertProductionSdkNextReady({}));
+});
+
+test('diagnostic WS guard synchronously stops sends, replacement and reset', async () => {
+  const vm = await import('node:vm');
+  const { installSdkNextWsGuard } = await import('./rtdb-residual.mjs');
+  const setup = () => {
+    const context = vm.createContext({ URL, writes: [] });
+    vm.runInContext(`class Socket { static OPEN = 1; constructor(url) { this.url = url; this.readyState = 1; this.listeners = {}; } addEventListener(k, f) { (this.listeners[k] ??= []).push(f); } send(x) { writes.push(x); } fire(k, e = {}) { for (const f of this.listeners[k] ?? []) f(e); } } globalThis.WebSocket = Socket;`, context);
+    vm.runInContext(`(${installSdkNextWsGuard.toString()})({host:'localhost:9000', maxConnections:2, maxMessages:2})`, context);
+    return context;
+  };
+  {
+    const c = setup();
+    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); globalThis.b = new WebSocket('ws://localhost:9000/'); __sdkNextWsGuard.arm(); a.send('a'); b.send('b');`, c);
+    assert.throws(() => vm.runInContext(`a.send('c')`, c), /send limit/);
+    assert.deepEqual([...c.writes], ['a', 'b']);
+    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
+  }
+  {
+    const c = setup();
+    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/');`, c);
+    assert.throws(() => vm.runInContext(`__sdkNextWsGuard.arm()`, c), /startup incomplete/);
+    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
+  }
+  {
+    const c = setup();
+    assert.throws(() => vm.runInContext(`new WebSocket('ws://other:9000/')`, c), /disallowed host/);
+    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
+  }
+  {
+    const c = setup();
+    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); a.fire('close');`, c);
+    assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/')`, c), /frozen/);
+  }
+  {
+    const c = setup();
+    vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/'); globalThis.b = new WebSocket('ws://localhost:9000/'); __sdkNextWsGuard.arm(); a.fire('message', {data: JSON.stringify({t:'c', d:{t:'r'}})});`, c);
+    assert.throws(() => vm.runInContext(`b.send('after-reset')`, c), /frozen/);
+    assert.equal(c.writes.length, 0);
+  }
 });

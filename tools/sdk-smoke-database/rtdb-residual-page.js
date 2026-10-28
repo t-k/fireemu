@@ -121,7 +121,7 @@ window.__rrRun = async (c) => {
       const abort = await perform('transaction-abort', () => D.runTransaction(at(w, 'txn/abort'), (v) => { callbacks.push(v); return undefined; }));
       emit('transaction', { actor: 'w', label: 'abort', shape: JSON.stringify({ callbacks, committed: abort.committed, value: abort.snapshot.val() }) });
       let txnSeen = false;
-      unsubs.push(D.onValue(at(o, 'txn/apply'), (snap) => { txnSeen = true; emit('value', { label: 'txn-apply', shape: JSON.stringify(snap.val()) }); }, (e) => { listenerError = Error('transaction listener failed'); emit('error', { label: 'txn-apply', code: errorCode(e) }); }));
+      unsubs.push(D.onValue(at(w, 'txn/apply'), (snap) => { txnSeen = true; emit('value', { actor: 'w', label: 'txn-apply', shape: JSON.stringify(snap.val()) }); }, (e) => { listenerError = Error('transaction listener failed'); emit('error', { label: 'txn-apply', code: errorCode(e) }); }));
       await need('txn initial', () => txnSeen, 20000);
       if (!txnSeen) throw Error('transaction listener incomplete');
       const applyCalls = [];

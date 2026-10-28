@@ -283,7 +283,7 @@ export function verifyPacket(file, expected) {
 }
 
 export function verifyRootStartup(packet, packetSha256, { root = path.resolve(here, '../../../..'), ownerPid = process.pid, nodePath = process.execPath, baselinePacketSha = 'b4fc959098c7a4dfe3e5294cc22729fbeb052ca369a7d949390b65bbc3fd9652' } = {}) {
-  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-runtime-v1/root-ops');
+  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-runtime-v2/root-ops');
   for (const file of [path.join(ops, 'booked-admission.json'), path.join(ops, 'launch-startup.sh'), path.join(root, 'docs.local/instructions/owner-decisions.md'), path.join(root, 'docs.local/runs/sandbox-ledger.jsonl')]) if (!lstatSync(file).isFile()) throw Error('startup authority must be regular files');
   const booked = readFileSync(path.join(ops, 'booked-admission.json'));
   const admission = JSON.parse(booked);

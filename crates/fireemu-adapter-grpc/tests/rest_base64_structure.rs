@@ -293,7 +293,15 @@ fn valid_empty_and_absent_transaction_and_token_commit_remain_accepted() {
 
 #[test]
 fn typed_bytes_recorded_strict_rejections_preserve_ordinary_behavior() {
-    for text in ["QUJD\nQUJD", "QUJD\rQUJD", "QUJD\r\nQUJD", "+_AA", "-/AA"] {
+    for text in [
+        "QUJD\nQUJD",
+        "QUJD\rQUJD",
+        "QUJD\r\nQUJD",
+        "+_AA",
+        "-/AA",
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD",
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD",
+    ] {
         for strict in [true, false] {
             let s = state(strict);
             let response = call(
@@ -316,6 +324,8 @@ fn typed_bytes_recorded_strict_rejections_preserve_ordinary_behavior() {
             } else {
                 assert_eq!(response.status, 200, "{text:?}: {:?}", response.body);
             }
+            let got = call(&s, "GET", &format!("{DOCS}/base64/test"), Value::Null);
+            assert_eq!(got.status, if strict { 404 } else { 200 }, "{text:?}");
         }
     }
 }

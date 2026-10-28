@@ -9500,13 +9500,24 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .await
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
-    assert_eq!(error.message(), "The 'offset(...)' cannot have a negative value: -1");
+    assert_eq!(
+        error.message(),
+        "The 'offset(...)' cannot have a negative value: -1"
+    );
     for (label, value) in [
-        ("double", pb::Value { value_type: Some(pb::value::ValueType::DoubleValue(1.0)) }),
+        (
+            "double",
+            pb::Value {
+                value_type: Some(pb::value::ValueType::DoubleValue(1.0)),
+            },
+        ),
         ("unset", pb::Value::default()),
     ] {
         let error = strict
-            .execute_pipeline(execute(vec![collection_stage(), pipeline_stage("offset", value)]))
+            .execute_pipeline(execute(vec![
+                collection_stage(),
+                pipeline_stage("offset", value),
+            ]))
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::Unimplemented, "{label}: {error}");

@@ -424,7 +424,7 @@
       "id": "runtime.lazyDatabaseCreation",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/local.rs:2835",
+          "crates/fireemu-adapter-grpc/src/local.rs:2849",
           "crates/fireemu-core-types/src/ids.rs:183"
         ],
         "status": "implemented"
@@ -595,7 +595,7 @@
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
           "crates/fireemu-adapter-grpc/src/admin/fields.rs:72",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:4806"
+          "crates/fireemu-adapter-grpc/src/local.rs:4820"
         ],
         "status": "implemented"
       },
@@ -647,7 +647,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/admin/indexes.rs:377",
-          "crates/fireemu-adapter-grpc/src/local.rs:4161"
+          "crates/fireemu-adapter-grpc/src/local.rs:4175"
         ],
         "status": "implemented"
       },
@@ -756,8 +756,8 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:4642",
-          "crates/fireemu-adapter-grpc/src/local.rs:4684"
+          "crates/fireemu-adapter-grpc/src/local.rs:4656",
+          "crates/fireemu-adapter-grpc/src/local.rs:4698"
         ],
         "status": "partial"
       },
@@ -770,7 +770,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
-          "crates/fireemu-adapter-grpc/src/local.rs:4696"
+          "crates/fireemu-adapter-grpc/src/local.rs:4710"
         ],
         "status": "partial"
       },
@@ -922,8 +922,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:2835",
-        "crates/fireemu-adapter-grpc/src/local.rs:2349",
+        "crates/fireemu-adapter-grpc/src/local.rs:2849",
+        "crates/fireemu-adapter-grpc/src/local.rs:2362",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",

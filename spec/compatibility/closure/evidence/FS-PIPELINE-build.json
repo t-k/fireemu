@@ -9,9 +9,7 @@
   "host": "Darwin arm64",
   "builtOn": "2026-10-28T15:06:57.306851+00:00",
   "buildSeconds": 287,
-  "buildPath": "docs.local/runs/remaining-compat-20261028/v035-custody/fireemu",
-  "workTree": ".worktree/remaining-compat-v035-custody",
-  "targetDirectoryNote": "CARGO_TARGET_DIR was unset; Cargo used the initially absent worktree-local target. The executed command, compiler artifact messages, hashes and copy receipt are retained privately.",
+  "targetDirectoryNote": "CARGO_TARGET_DIR was unset; Cargo used an initially absent exclusive worktree-local target. The executed command, artifact messages and copy receipt are retained privately.",
   "rustSourcesNote": "Evidence children follow the signed source commit.",
   "uiBundled": false,
   "reproducibility": "Not compared with a second build."

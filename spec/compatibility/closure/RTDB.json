@@ -137,10 +137,10 @@
   },
   {
    "id": "R7",
-   "decision": "Owner 1936 accepts the finite re-registration, nested-priority and string-priority observations in two rounds under both local profiles. Other priority shapes remain unverified and RTDB remains IMPLEMENTING.",
-   "decidedBy": "owner",
+   "decision": "Coordinator adjudication 1936 accepts the finite re-registration, nested-priority and string-priority observations in two rounds under both local profiles. Other priority shapes remain unverified and RTDB remains IMPLEMENTING.",
+   "decidedBy": "coordinator",
    "decidedOn": "2026-10-29",
-   "decisionRef": "docs.local/instructions/owner-decisions.md (1936)"
+   "decisionRef": "docs.local/instructions/owner-decisions.md (1936); Coordinator adjudication 1936 under the applicable owner delegations 1858, 1866 and 1899."
   }
  ],
  "conditions": [

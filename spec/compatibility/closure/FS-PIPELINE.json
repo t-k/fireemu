@@ -47,10 +47,10 @@
     },
     {
       "id": "P3",
-      "decision": "Owner 1938 accepts the exact 55 additional strict raw MATCH recipes. Owners 1939 and 1940 accept separate finite strict sample and O-7 contracts without changing raw classification; the parent remains IMPLEMENTING.",
-      "decidedBy": "owner",
+      "decision": "Coordinator adjudication 1938 accepts the exact 55 additional strict raw MATCH recipes. Coordinator adjudications 1939 and 1940 accept separate finite strict sample and O-7 contracts without changing raw classification; the parent remains IMPLEMENTING.",
+      "decidedBy": "coordinator",
       "decidedOn": "2026-10-29",
-      "decisionRef": "docs.local/instructions/owner-decisions.md (1938, 1939, 1940)"
+      "decisionRef": "docs.local/instructions/owner-decisions.md (1938, 1939, 1940); Coordinator adjudications 1938, 1939 and 1940 under owner delegations 1858, 1866, 1899, 1905 and 1929."
     }
   ],
   "conditions": [
@@ -2701,7 +2701,7 @@
     "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
     "binaryProfile": "release",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-PIPELINE-build.json",
-    "buildReceiptSha256": "d7b06edcd26561c2ce9509fdd7bdd2879a1590c6bd26cd4d5e9cd4a70c5eafb7",
+    "buildReceiptSha256": "5a65cb6c993def0d9a2e3215c649edcba8633f0b220bb77b95dd8d10c12122a0",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",

@@ -286,7 +286,10 @@ test("v0.35 promotes exactly the accepted 55 strict rows and preserves all other
   const accepted = json("spec/compatibility/closure/evidence/FS-PIPELINE-v035-55-claims.json");
   assert.equal(accepted.strictRecipeIds.length, 55);
   assert.equal(new Set(accepted.strictRecipeIds).size, 55);
-  assert.equal(sha256(closure.recordedLeafReview.v035Promotion.claimSetPath), closure.recordedLeafReview.v035Promotion.claimSetSha256);
+  assert.equal(
+    sha256(closure.recordedLeafReview.v035Promotion.claimSetPath),
+    closure.recordedLeafReview.v035Promotion.claimSetSha256,
+  );
   const before = new Map(previous.rows.map((row) => [row.row, row.status]));
   assert.deepEqual([...status.keys()].toSorted(), [...before.keys()].toSorted());
   const changed = [...status].filter(([row, value]) => before.get(row) !== value);
@@ -302,7 +305,10 @@ test("v0.35 promotes exactly the accepted 55 strict rows and preserves all other
 
 test("finite contract adjudications preserve their strict-only raw outcomes", () => {
   const contracts = closure.finiteContractEvidence;
-  assert.deepEqual(contracts.map((item) => item.kind), ["sample", "o7-order"]);
+  assert.deepEqual(
+    contracts.map((item) => item.kind),
+    ["sample", "o7-order"],
+  );
   for (const entry of contracts) {
     assert.equal(entry.sha256, sha256(entry.path));
     const proof = json(entry.path);
@@ -319,8 +325,17 @@ test("finite contract adjudications preserve their strict-only raw outcomes", ()
       assert.equal(proof.proofs.filter((row) => row.rawStatus === "MATCH").length, 3);
     } else {
       assert.equal(proof.proofs.length, 23);
-      assert.equal(proof.proofs.filter((row) => row.proofClassification === "FULL_TYPED_RESULT_MULTISET_EQUIVALENT").length, 20);
-      assert.equal(proof.proofs.filter((row) => row.proofClassification === "LEGAL_UNORDERED_SELECTION").length, 3);
+      assert.equal(
+        proof.proofs.filter(
+          (row) => row.proofClassification === "FULL_TYPED_RESULT_MULTISET_EQUIVALENT",
+        ).length,
+        20,
+      );
+      assert.equal(
+        proof.proofs.filter((row) => row.proofClassification === "LEGAL_UNORDERED_SELECTION")
+          .length,
+        3,
+      );
       assert.equal(proof.unresolved.length, 2);
       assert.equal(proof.ordinaryProfile, "unproved");
     }

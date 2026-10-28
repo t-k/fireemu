@@ -2740,9 +2740,7 @@ fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
                         "The 'size' parameter must be between 0.0 and 1.0.",
                     ))
                 }
-                ("percent", Some(V::IntegerValue(_) | V::DoubleValue(_))) => {
-                    None
-                }
+                ("percent", Some(V::IntegerValue(_) | V::DoubleValue(_))) => None,
                 (_, other) => expected("size", "DOUBLE_VALUE", other),
             }
         }
@@ -3872,10 +3870,15 @@ mod tests {
         for name in ["limit", "offset"] {
             let stage = pb::pipeline::Stage {
                 name: name.to_owned(),
-                args: vec![pb::Value { value_type: Some(V::IntegerValue(i64::MAX)) }],
+                args: vec![pb::Value {
+                    value_type: Some(V::IntegerValue(i64::MAX)),
+                }],
                 ..Default::default()
             };
-            assert_eq!(count_argument(&stage).unwrap(), u64::try_from(i64::MAX).unwrap());
+            assert_eq!(
+                count_argument(&stage).unwrap(),
+                u64::try_from(i64::MAX).unwrap()
+            );
         }
     }
 

@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import {
+  compareObservation,
+  loadFixture,
+} from "../../tools/sdk-smoke-database/priority-replay.mjs";
 
 const read = (path) => readFileSync(new URL(`../../${path}`, import.meta.url));
 const json = (path) => JSON.parse(read(path));
@@ -13,7 +17,10 @@ test("v0.35 RTDB finite replays bind the reviewed source and both profiles", () 
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   const binding = closure.integratedRegression.v035RecordedRevalidation;
   assert.equal(binding.sourceCommit, "18f77be8956cccb768adfe8b43cfd0f9a8dfff09");
-  assert.equal(binding.binarySha256, "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83");
+  assert.equal(
+    binding.binarySha256,
+    "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+  );
   assert.equal(binding.productionRequests, 0);
   assert.equal(binding.comparisons.length, 6);
   assert.equal(new Set(binding.comparisons.map((entry) => entry.path)).size, 6);
@@ -33,7 +40,10 @@ test("v0.35 RTDB finite replays bind the reviewed source and both profiles", () 
       for (const profile of ["strict", "emulator"]) {
         const rows = evidence[profile].rows;
         assert.equal(rows.length, 6);
-        assert.deepEqual(new Set(rows.map((row) => row.id)), new Set(["heal-reregister", "nested-priority", "string-priority"]));
+        assert.deepEqual(
+          new Set(rows.map((row) => row.id)),
+          new Set(["heal-reregister", "nested-priority", "string-priority"]),
+        );
         assert.equal(new Set(rows.map((row) => `${row.id}/${row.round}`)).size, 6);
         assert.ok(rows.every((row) => row.verdict === "MATCH"));
       }
@@ -44,6 +54,21 @@ test("v0.35 RTDB finite replays bind the reviewed source and both profiles", () 
         assert.equal(evidence[profile].summary.rows, entry.rowsPerProfile);
         assert.deepEqual(evidence[profile].summary.counts, { MATCH: entry.rowsPerProfile });
       }
+    }
+  }
+});
+
+test("priority evidence recomputes each recorded result from complete observations", () => {
+  const evidence = json("spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json");
+  const fixture = loadFixture(read(evidence.fixturePath).toString("utf8"));
+  for (const profile of ["strict", "emulator"]) {
+    for (const row of evidence[profile].rows) {
+      const expected = fixture.cases.find((item) => item.id === row.id && item.round === row.round);
+      assert.ok(expected, `${row.id}/${row.round}`);
+      assert.equal(compareObservation(expected, row.actual).verdict, "MATCH");
+      const changed = structuredClone(row.actual);
+      changed.readback.s = { corrupt: true };
+      assert.notEqual(compareObservation(expected, changed).verdict, "MATCH");
     }
   }
 });

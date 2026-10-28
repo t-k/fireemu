@@ -30,7 +30,7 @@ export async function recoverInstance(io,p,sleep=ms=>new Promise(resolve=>setTim
  await requireInstance('instance-disabled','GET',instance,'DISABLED');
  await requireInstance('instance-delete','DELETE',instance,'DELETED');
  await requireInstance('instance-deleted','GET',instance,'DELETED');
- const list=await call('active-after','GET',`${management}/-/instances`);if(!list||typeof list!=='object'||(list.instances!==undefined&&(!Array.isArray(list.instances)||list.instances.length!==0))||list.nextPageToken)throw Error('active instances');
+ const list=await call('active-after','GET',`${management}/-/instances`);if(!list||typeof list!=='object'||Array.isArray(list)||(list.instances!==undefined&&(!Array.isArray(list.instances)||list.instances.length!==0))||list.nextPageToken)throw Error('active instances');
  const before=await call('service-before','GET',service);if(before?.name!==serviceName||before.state!=='ENABLED')throw Error('service state');
  const op=await call('api-disable','POST',`${service}:disable`,'{}');if(!validOperation(op?.name)||op.error!==undefined)throw Error('api-disable: invalid operation');
  if(op.done!==true){if(op.done!==undefined&&op.done!==false)throw Error('api-disable: invalid completion');let done=false;for(let i=0;i<10;i++){await sleep(5000);const v=await call(`api-disable-poll-${i}`,'GET',`https://serviceusage.googleapis.com/v1/${op.name}`);if(v?.name!==op.name)throw Error('api-disable: identity');if(v.done===true){if(v.error!==undefined)throw Error('api-disable: terminal error');done=true;break;}if(v.done!==undefined&&v.done!==false)throw Error('api-disable: invalid completion');}if(!done)throw Error('api-disable: unresolved');}

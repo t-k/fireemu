@@ -777,8 +777,8 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
             strict: None,
             emulator: (400, missing),
         },
-        // One refusable key is recorded (O-4 `o4/literals#key-empty`, `#key-reserved`); which
-        // of several production names is not, nor `__name__`.
+        // Recorded single-key and __name__ refusals are known. Multi-key requests without
+        // preserved wire order remain unattributed under strict.
         Case {
             label: "{\"\": 1}",
             stages: vec![select(map(vec![("", int(1))]))],
@@ -816,13 +816,13 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
         Case {
             label: "{__name__: 1}",
             stages: vec![select(map(vec![("__name__", int(1))]))],
-            strict: None,
+            strict: Some((400, "field name '__name__' is reserved.")),
             emulator: (400, "field name '__name__' is reserved."),
         },
         Case {
             label: "{a: {__name__: 1}}",
             stages: vec![select(map(vec![("a", map(vec![("__name__", int(1))]))]))],
-            strict: None,
+            strict: Some((400, "field name '__name__' is reserved.")),
             emulator: (400, "field name '__name__' is reserved."),
         },
     ]);

@@ -106,3 +106,66 @@ test('generated phase/outcome/round table stops on every unknown without retry',
     }
   }
 });
+
+test('session scoped support uses one REST RPC per action and never wipes unrelated paths', async () => {
+  const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
+  const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx = createStageContext({run: 1, database: 'entpipe2-20261029', approvedDatabase: 'entpipe2-20261029', target: {kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
+  const base = `projects/${ctx.project}/databases/${ctx.database}/documents/`;
+  const paths = stageContextSeed().map(([path]) => path);
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    calls.push({url, init});
+    const names = calls.length === 3 ? paths : [];
+    return {ok:true, status:200, text:async () => JSON.stringify(url.endsWith(':runQuery') ? names.map(name => ({document:{name:base+name}})) : {})};
+  };
+  const session = createStageSupport(ctx, {fetchFn, journal:async () => {}, claim:async () => {}});
+  try {
+    for (const [op, detail] of [['baseline',{}], ['seed',{documents:stageContextSeed()}], ['verify',{documents:stageContextSeed()}], ['delete-owned',{paths}], ['verify-absence',{paths}]]) {
+      assert.deepEqual(await session.stageOperation(op, detail), {known:true,ok:true});
+    }
+    assert.equal(calls.length, 5);
+    assert.ok(calls.every(x => !x.url.includes('/emulator/')));
+    const deletes = JSON.parse(calls[3].init.body).writes.map(x => x.delete);
+    assert.deepEqual(deletes, paths.map(path => base + path));
+  } finally { await session.close(); }
+});
+
+test('scoped baseline rejects malformed successful query responses and extra resources', async () => {
+  const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
+  for (const response of [[{error:{message:'x'}}], [null], [{document:{name:'projects/foreign/databases/demo/documents/x/y'}}]]) {
+    const session = createStageSupport(ctx, {fetchFn:async () => ({status:200, text:async () => JSON.stringify(response)}), journal:async () => {}, claim:async () => {}});
+    try { await assert.rejects(session.stageOperation('baseline'), /scoped read/); } finally { await session.close(); }
+  }
+});
+
+test('support journals response status before body failure and never records authorization', async () => {
+  const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const journal = [];
+  const support = createStageSupport(ctx, {claim:async () => {}, journal:async x => journal.push(x), fetchFn:async () => ({status:403, text:async () => {throw Error('interrupted')}})});
+  await assert.rejects(support.stageOperation('baseline'), /unknown/);
+  assert.deepEqual(journal.map(x => x.phase), ['attempt','headers','unknown']);
+  assert.equal(journal[1].status, 403);
+  assert.ok(!JSON.stringify(journal).includes('Bearer owner'));
+});
+
+test('support refuses cleanup before verification and refuses retry after unknown mutation', async () => {
+  const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  let calls = 0;
+  const support = createStageSupport(ctx, {claim:async () => {}, journal:async () => {}, fetchFn:async () => {calls++; if (calls === 1) return {status:200,text:async () => '[]'}; throw Error('lost');}});
+  const paths=stageContextSeed().map(([path])=>path);
+  await assert.rejects(support.stageOperation('delete-owned',{paths}), /sequence/);
+  await support.stageOperation('baseline');
+  await assert.rejects(support.stageOperation('seed',{documents:stageContextSeed()}), /unknown/);
+  await assert.rejects(support.stageOperation('seed',{documents:stageContextSeed()}), /sequence/);
+  await assert.rejects(support.stageOperation('delete-owned',{paths}), /sequence/);
+  assert.equal(calls,2);
+});

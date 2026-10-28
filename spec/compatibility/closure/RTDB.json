@@ -898,7 +898,7 @@
    },
    {
     "path": "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
-    "sha256": "d5ff93cde3acbe9e272edb50e6ee2fdd2200dc68a12f570d73f313bd5351a27c",
+    "sha256": "10f8807a7d2c54dd737c3eed9f157d4dbda777c945453a79dda4142e5df83898",
     "rows": 172,
     "summary": {
      "rest": {
@@ -908,7 +908,7 @@
       "MATCH": 48
      }
     },
-    "binding": "Release binary from signed source e69ba42d87d07b70a532bf12c370fdc86f524f87; SHA-256 fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb. This additional REST replay does not rebind the historical SDK, Auth, residual or S5 comparisons."
+    "binding": "Release binary from signed source 1bc8e560639aaadb1d46e034228737f7ad5edea7; SHA-256 b3de0286328d34868e964233568e8a3d584e40606356e3e92d21758b834c627c. This additional REST replay does not rebind the historical SDK, Auth, residual or S5 comparisons."
    }
   ],
   "productionRequests": 0,

@@ -7179,7 +7179,7 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
             (
                 "unknown function",
                 pipeline_body(
-                    &json!([collection, {"name": "where", "args": [{"functionValue": {"name": "regex_match", "args": [{"fieldReferenceValue": "name"}, {"stringValue": "a"}]}}]}]),
+                    &json!([collection, {"name": "where", "args": [{"functionValue": {"name": "regex_match_unrecognized", "args": [{"fieldReferenceValue": "name"}, {"stringValue": "a"}]}}]}]),
                 ),
                 501,
                 "UNIMPLEMENTED",

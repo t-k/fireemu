@@ -1,17 +1,17 @@
 {
-  "sourceCommit": "e69ba42d87d07b70a532bf12c370fdc86f524f87",
-  "command": "RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=\"$SHARED_TARGET_DIR\" cargo build --release -p fireemu --locked",
-  "binarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+  "sourceCommit": "1bc8e560639aaadb1d46e034228737f7ad5edea7",
+  "command": "RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=\"$CUSTODY_TARGET_DIR\" cargo build --locked --release -p fireemu --bin fireemu --manifest-path \"$CUSTODY_MANIFEST\" --message-format=json-render-diagnostics",
+  "binarySha256": "b3de0286328d34868e964233568e8a3d584e40606356e3e92d21758b834c627c",
   "profile": "release",
   "locked": true,
   "rustcWrapper": "empty",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "host": "Darwin arm64",
-  "builtOn": "2026-10-28T04:03:06+00:00",
-  "buildSeconds": 242,
-  "buildPath": "docs.local/runs/remaining-compat-20261028/pipeline-integration/s-build/fireemu",
-  "workTree": "clean before and after build; ui/dist absent",
+  "builtOn": "2026-10-28T04:53:58+00:00",
+  "buildSeconds": 282,
+  "buildPath": "docs.local/runs/remaining-compat-20261028/pipeline-integration/s3-custody/fireemu",
+  "workTree": "clean before and after build; signed source; ui/dist absent",
+  "targetDirectoryNote": "Variables redact local absolute paths; the exact executed command, compiler artifact messages, hashes and copy receipt are retained privately.",
   "rustSourcesNote": "Evidence child follows the signed source commit.",
-  "reproducibility": "Not compared with a second build.",
-  "targetDirectoryNote": "The variable denotes a redacted local target directory; the exact executed command is retained in the private build receipt."
+  "reproducibility": "Not compared with a second build."
 }

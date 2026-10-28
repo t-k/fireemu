@@ -73,6 +73,59 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
         "array-get-double-index",
         "array-get-int-array",
         "array-get-one",
+        "map-get-key",
+        "map-get-missing-key",
+        "map-get-dotted-key",
+        "map-get-nested-map",
+        "map-get-empty-map",
+        "map-get-null-map",
+        "map-get-absent-map",
+        "map-get-null-key",
+        "map-get-int-key",
+        "map-get-array-map",
+        "map-get-one",
+        "map-merge-two",
+        "map-merge-later-wins",
+        "map-merge-three",
+        "map-merge-with-empty",
+        "map-merge-not-deep",
+        "map-merge-null",
+        "map-merge-absent",
+        "map-merge-array",
+        "map-merge-one",
+        "map-set-add",
+        "map-set-overwrite",
+        "map-set-two-pairs",
+        "map-set-null-value",
+        "map-set-int-key",
+        "map-set-null-map",
+        "map-set-absent-map",
+        "map-set-two",
+        "map-remove-one",
+        "map-remove-missing",
+        "map-remove-two",
+        "map-remove-null-map",
+        "map-remove-absent-map",
+        "map-remove-int-key",
+        "map-remove-map-only",
+        "map-keys-ok",
+        "map-keys-empty",
+        "map-keys-null",
+        "map-keys-absent",
+        "map-keys-array",
+        "map-keys-none",
+        "map-values-ok",
+        "map-values-empty",
+        "map-values-null",
+        "map-values-absent",
+        "map-values-array",
+        "map-values-none",
+        "map-entries-ok",
+        "map-entries-empty",
+        "map-entries-null",
+        "map-entries-absent",
+        "map-entries-array",
+        "map-entries-none",
     ],
     &[
         "array-length-ok",
@@ -101,6 +154,60 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
         "array-get-double-index",
         "array-get-int-array",
         "array-get-one",
+        "map-get-key",
+        "map-get-missing-key",
+        "map-get-dotted-key",
+        "map-get-nested-map",
+        "map-get-empty-map",
+        "map-get-null-map",
+        "map-get-absent-map",
+        "map-get-null-key",
+        "map-get-int-key",
+        "map-get-array-map",
+        "map-get-one",
+        "map-merge-two",
+        "map-merge-later-wins",
+        "map-merge-three",
+        "map-merge-with-empty",
+        "map-merge-not-deep",
+        "map-merge-null",
+        "map-merge-absent",
+        "map-merge-array",
+        "map-merge-one",
+        "map-set-add",
+        "map-set-overwrite",
+        "map-set-two-pairs",
+        "map-set-odd-entries",
+        "map-set-null-value",
+        "map-set-int-key",
+        "map-set-null-map",
+        "map-set-absent-map",
+        "map-set-two",
+        "map-remove-one",
+        "map-remove-missing",
+        "map-remove-two",
+        "map-remove-null-map",
+        "map-remove-absent-map",
+        "map-remove-int-key",
+        "map-remove-map-only",
+        "map-keys-ok",
+        "map-keys-empty",
+        "map-keys-null",
+        "map-keys-absent",
+        "map-keys-array",
+        "map-keys-none",
+        "map-values-ok",
+        "map-values-empty",
+        "map-values-null",
+        "map-values-absent",
+        "map-values-array",
+        "map-values-none",
+        "map-entries-ok",
+        "map-entries-empty",
+        "map-entries-null",
+        "map-entries-absent",
+        "map-entries-array",
+        "map-entries-none",
     ],
 )];
 
@@ -286,248 +393,8 @@ const UNOBSERVED_ORDER_ROWS: &[(&str, &str, usize)] = &[
 /// Rows of recorded programs whose production answer fireemu does not give, each pinned by the
 /// status it answers now under strict and under the emulator profile (so a change in either
 /// shows): the HTTP 500 faults of `dupquote-main`, the base64 forms production refuses in
-/// `base64-main`, and the `regex_*` rows of `strings-main`.
+/// and the base64 forms production refuses in `base64-main`.
 const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-match",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-no-match",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-anchored",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-anchored-no",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-case-sensitive",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-case-flag",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-empty-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-invalid-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-unicode",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-null-input",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-null-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-absent",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-int-input",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-int-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-contains-one",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-full",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-partial",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-anchors",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-empty-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-invalid-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-null",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-absent",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-int",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-match-one",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-first",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-none",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-group",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-empty-match",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-invalid-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-null",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-absent",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-int",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-all",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-none",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-overlapping",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-empty-match",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-invalid-pattern",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-null",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-absent",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
-    (
-        "fs-ent-pipeline/o8b/strings-main#regex-find-all-int",
-        "the four regex_* functions need a regular-expression engine (RE2 syntax) that the std-only core does not have; they stay unsupported until the dependency is decided",
-        501,
-        501,
-    ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#same-1",
         "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
@@ -1096,10 +963,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 217, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 206, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            152,
+            141,
             "finite emulator debt inventory"
         );
     }
@@ -2030,10 +1897,33 @@ fn the_pending_pins_fail_in_both_directions_and_check_themselves() {
 fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
     let production = read("fs-ent-pipeline-production.json");
     let mut checked = 0;
+    let mut compact_checked = 0;
     for (id, program) in production["programs"].as_object().unwrap() {
         let Some(second) = program["second"].as_object() else {
             continue;
         };
+        if id == "fs-ent-pipeline/o8a/framing-small" {
+            assert_eq!(program["compactFramingVersion"], 1);
+            let steps = [
+                "f500-rest",
+                "f500-grpc",
+                "f5000-rest",
+                "f5000-grpc",
+                "f5000-select-rest",
+                "f5000-limit-rest",
+                "f5000-limit-grpc",
+            ];
+            assert_eq!(second.len(), steps.len());
+            for step in steps {
+                let again = second
+                    .get(step)
+                    .expect("missing compact framing second observation");
+                assert_eq!(program["steps"][step]["kind"], "read", "{step}");
+                assert_eq!(again["kind"], "read", "{step}");
+                compact_checked += 1;
+            }
+            continue;
+        }
         for (step, again) in second {
             let row = format!("{id}#{step}");
             let rule = nondeterministic(&row).unwrap_or_else(|| panic!("no rule for {row}"));
@@ -2055,6 +1945,7 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
     }
     // Five `sample` rows and the clock row: the fixture lists no other row that differs.
     assert_eq!(checked, 6);
+    assert_eq!(compact_checked, 7);
 
     let named = |names: &[&str]| {
         json!([{

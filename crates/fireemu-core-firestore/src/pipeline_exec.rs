@@ -18,6 +18,8 @@
 //! what the official emulator answers instead. An input both refuse evaluates to
 //! [`EvalError::Invalid`].
 
+use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
@@ -262,6 +264,8 @@ pub struct RuntimeContext {
     pub zone_resolver: Option<ZoneResolver>,
     /// Adapter-provided regular-expression operations.
     pub regex_resolver: Option<RegexResolver>,
+    /// Independent request-scoped seed for sample stages.
+    pub sample_seed: Option<u64>,
 }
 
 /// What a function sees besides its arguments.
@@ -1806,6 +1810,15 @@ pub struct Accumulator {
     pub argument: Option<Expr>,
 }
 
+/// Validated sampling mode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SampleMode {
+    /// Select up to this many occurrences in random order.
+    Documents(u64),
+    /// Independently select rows while preserving input order.
+    Percent(f64),
+}
+
 /// One stage operator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
@@ -1838,6 +1851,8 @@ pub enum Stage {
         /// Optional array element index destination.
         index_field: Option<FieldPath>,
     },
+    /// Samples the input rows.
+    Sample(SampleMode),
     /// Appends prepared, independently authorized sources to the current stream.
     Union {
         /// Flat branches with row-local transformations and immutable source rows.
@@ -1887,7 +1902,10 @@ impl Stage {
     fn is_blocking(&self) -> bool {
         matches!(
             self,
-            Self::Sort(_) | Self::Distinct(_) | Self::Aggregate { .. }
+            Self::Sort(_)
+                | Self::Distinct(_)
+                | Self::Aggregate { .. }
+                | Self::Sample(SampleMode::Documents(_))
         )
     }
 }
@@ -1903,6 +1921,8 @@ enum StageState {
     Buffer(Vec<Row>),
     /// A union that has already appended its sources.
     UnionDone,
+    /// A documents sample has already emitted.
+    SampleDone,
 }
 
 /// One lazy array expansion retained while its current child runs downstream.
@@ -1922,6 +1942,7 @@ pub struct Cursor {
     unrecorded: Unrecorded,
     runtime: RuntimeContext,
     state: Vec<StageState>,
+    sample_rng: Vec<Option<SplitMix64>>,
 }
 
 impl Cursor {
@@ -1948,15 +1969,30 @@ impl Cursor {
             .iter()
             .map(|stage| match stage {
                 Stage::Offset(n) | Stage::Limit(n) => StageState::Remaining(*n),
-                Stage::Sort(_) | Stage::Distinct(_) | Stage::Aggregate { .. } => {
-                    StageState::Buffer(Vec::new())
-                }
+                Stage::Sort(_)
+                | Stage::Distinct(_)
+                | Stage::Aggregate { .. }
+                | Stage::Sample(SampleMode::Documents(_)) => StageState::Buffer(Vec::new()),
                 Stage::Where(_)
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
                 | Stage::RemoveFields(_)
                 | Stage::Unnest { .. }
-                | Stage::Union { .. } => StageState::Idle,
+                | Stage::Union { .. }
+                | Stage::Sample(SampleMode::Percent(_)) => StageState::Idle,
+            })
+            .collect();
+        let sample_rng = stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                matches!(stage, Stage::Sample(_)).then(|| {
+                    SplitMix64::new(
+                        runtime.sample_seed.unwrap_or(0)
+                            ^ 0x5341_4d50_4c45_0000
+                            ^ u64::try_from(index).unwrap_or(u64::MAX),
+                    )
+                })
             })
             .collect();
         Self {
@@ -1964,6 +2000,7 @@ impl Cursor {
             unrecorded,
             runtime,
             state,
+            sample_rng,
         }
     }
 
@@ -1997,6 +2034,9 @@ impl Cursor {
     pub fn finish(&mut self) -> Result<Vec<Row>, EvalError> {
         let mut out = Vec::new();
         for index in 0..self.stages.len() {
+            if matches!(self.stages[index], Stage::Sample(SampleMode::Percent(_))) {
+                self.state[index] = StageState::SampleDone;
+            }
             if let Stage::Union { branches } = &mut self.stages[index] {
                 if matches!(self.state[index], StageState::UnionDone) {
                     continue;
@@ -2030,12 +2070,28 @@ impl Cursor {
             if !self.stages[index].is_blocking() {
                 continue;
             }
-            let StageState::Buffer(rows) =
-                std::mem::replace(&mut self.state[index], StageState::Buffer(Vec::new()))
+            let replacement =
+                if matches!(self.stages[index], Stage::Sample(SampleMode::Documents(_))) {
+                    StageState::SampleDone
+                } else {
+                    StageState::Buffer(Vec::new())
+                };
+            let StageState::Buffer(rows) = std::mem::replace(&mut self.state[index], replacement)
             else {
                 continue;
             };
             let produced = match &self.stages[index] {
+                Stage::Sample(SampleMode::Documents(count)) => {
+                    let mut rows = rows;
+                    let rng = self.sample_rng[index].as_mut().expect("sample RNG");
+                    for end in (1..rows.len()).rev() {
+                        let bound = u64::try_from(end + 1).unwrap_or(u64::MAX);
+                        let selected = usize::try_from(rng.next_below(bound)).unwrap_or(0);
+                        rows.swap(end, selected);
+                    }
+                    rows.truncate(usize::try_from(*count).unwrap_or(usize::MAX));
+                    rows
+                }
                 Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
                 Stage::Distinct(aliases) => {
                     distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
@@ -2267,7 +2323,36 @@ impl Cursor {
                     }
                     *remaining -= 1;
                 }
-                Stage::Sort(_) | Stage::Distinct(_) | Stage::Aggregate { .. } => {
+                Stage::Sample(SampleMode::Percent(probability)) => {
+                    if matches!(held, StageState::SampleDone) {
+                        return Ok(());
+                    }
+                    let selected = if *probability <= 0.0 {
+                        false
+                    } else if *probability >= 1.0 {
+                        true
+                    } else {
+                        let draw = self.sample_rng[index]
+                            .as_mut()
+                            .expect("sample RNG")
+                            .next_u64()
+                            >> 11;
+                        // A 53-bit integer is exactly representable by f64.
+                        #[allow(clippy::cast_precision_loss)]
+                        let draw = draw as f64;
+                        draw < probability * 9_007_199_254_740_992.0
+                    };
+                    if !selected {
+                        return Ok(());
+                    }
+                }
+                Stage::Sort(_)
+                | Stage::Distinct(_)
+                | Stage::Aggregate { .. }
+                | Stage::Sample(SampleMode::Documents(_)) => {
+                    if matches!(held, StageState::SampleDone) {
+                        return Ok(());
+                    }
                     let StageState::Buffer(rows) = held else {
                         unreachable!("a blocking stage keeps rows");
                     };
@@ -2695,7 +2780,11 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
                     expr.collect_fields(&mut paths);
                 }
             }
-            Stage::Union { .. } | Stage::RemoveFields(_) | Stage::Offset(_) | Stage::Limit(_) => {}
+            Stage::Union { .. }
+            | Stage::RemoveFields(_)
+            | Stage::Offset(_)
+            | Stage::Limit(_)
+            | Stage::Sample(_) => {}
         }
     }
     paths.sort();

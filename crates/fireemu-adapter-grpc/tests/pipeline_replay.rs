@@ -345,6 +345,23 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
     (
         "fs-ent-pipeline/o8d/stages-main",
         &[
+            "sample-documents-2",
+            "sample-documents-0",
+            "sample-documents-10",
+            "sample-documents-negative",
+            "sample-documents-fraction",
+            "sample-percent-0",
+            "sample-percent-50",
+            "sample-percent-100",
+            "sample-percent-150",
+            "sample-percent-negative",
+            "sample-mode-invalid",
+            "sample-mode-int",
+            "sample-rate-string",
+            "sample-one-argument",
+            "sample-three-arguments",
+            "sample-after-where",
+            "sample-then-limit",
             "unnest-tags",
             "unnest-empty-array",
             "unnest-null",
@@ -376,6 +393,23 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
             "union-no-stages",
         ],
         &[
+            "sample-documents-2",
+            "sample-documents-0",
+            "sample-documents-10",
+            "sample-documents-negative",
+            "sample-documents-fraction",
+            "sample-percent-0",
+            "sample-percent-50",
+            "sample-percent-100",
+            "sample-percent-150",
+            "sample-percent-negative",
+            "sample-mode-invalid",
+            "sample-mode-int",
+            "sample-rate-string",
+            "sample-one-argument",
+            "sample-three-arguments",
+            "sample-after-where",
+            "sample-then-limit",
             "unnest-tags",
             "unnest-empty-array",
             "unnest-null",
@@ -448,7 +482,7 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
             })
         }
         "fs-ent-pipeline/o8d/stages-main#sample-percent-50" => Nondeterministic::Sample(SampleOf {
-            count: 2,
+            count: usize::MAX,
             members: SU,
         }),
         "fs-ent-pipeline/o8d/stages-main#sample-after-where" => {
@@ -464,6 +498,53 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
         "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now" => Nondeterministic::ClockSeconds,
         _ => return None,
     })
+}
+
+// The retained percent=1 observation contains every eligible input row in scan order.
+fn sample_contract(rule: &SampleOf, body: &Value, source: &[Value], percent: bool) -> bool {
+    let Some(parts) = body.as_array() else {
+        return false;
+    };
+    let [part] = parts.as_slice() else {
+        return false;
+    };
+    if !part.is_object() {
+        return false;
+    }
+    let rows: &[Value] = match part.get("results") {
+        None => &[],
+        Some(Value::Array(rows)) => rows,
+        _ => return false,
+    };
+    if (!percent && rows.len() != rule.count) || rows.len() > rule.members.len() {
+        return false;
+    }
+    let mut seen = HashSet::new();
+    let mut previous = None;
+    for row in rows {
+        if !row.get("createTime").is_some_and(Value::is_string)
+            || !row.get("updateTime").is_some_and(Value::is_string)
+        {
+            return false;
+        }
+        let Some(name) = row.get("name").and_then(Value::as_str).map(relative) else {
+            return false;
+        };
+        if !rule.members.contains(&name.as_str()) || !seen.insert(name) {
+            return false;
+        }
+        let Some(position) = source
+            .iter()
+            .position(|input| normalize(input) == normalize(row))
+        else {
+            return false;
+        };
+        if percent && previous.is_some_and(|last| last >= position) {
+            return false;
+        }
+        previous = Some(position);
+    }
+    true
 }
 
 /// The clock of the in-process server under test, in seconds since the epoch (`state()` starts
@@ -488,15 +569,17 @@ fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bo
         .flat_map(|element| element["results"].as_array().into_iter().flatten())
         .collect();
     match rule {
-        Nondeterministic::Sample(SampleOf { count, members }) => {
-            let names: Vec<String> = results
-                .iter()
-                .map(|result| relative(result["name"].as_str().unwrap_or("")))
+        Nondeterministic::Sample(sample) => {
+            let production = read("fs-ent-pipeline-production.json");
+            let source_body = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"]
+                ["sample-percent-100"]["body"];
+            let source: Vec<Value> = source_body
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
                 .collect();
-            let distinct: HashSet<&String> = names.iter().collect();
-            names.len() == *count
-                && distinct.len() == names.len()
-                && names.iter().all(|name| members.contains(&name.as_str()))
+            sample_contract(sample, body, &source, sample.count == usize::MAX)
         }
         Nondeterministic::ClockSeconds => {
             let [result] = results.as_slice() else {
@@ -1779,7 +1862,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     // results/metadata): the number of array elements and the results each
                     // holds are part of the answer.
                     let got = framing(&body);
-                    let want = framing(&expected["body"]);
+                    let want = if row.ends_with("#sample-percent-50") {
+                        let count = got.iter().sum();
+                        vec![count]
+                    } else {
+                        framing(&expected["body"])
+                    };
                     if got != want {
                         failures.push(format!(
                             "strict={strict} {row}: framing {got:?}, production {want:?}"
@@ -2210,8 +2298,10 @@ fn program_gap_changed(has_gap: bool, expected_gap: bool) -> bool {
 
 fn expected_program_gap(program: &str, strict: bool) -> bool {
     match (program, strict) {
-        ("fs-ent-pipeline/o8c/collections-main", true) => false,
-        ("fs-ent-pipeline/o8c/collections-main" | "fs-ent-pipeline/o8d/stages-main", _) => true,
+        ("fs-ent-pipeline/o8c/collections-main", true) | ("fs-ent-pipeline/o8d/stages-main", _) => {
+            false
+        }
+        ("fs-ent-pipeline/o8c/collections-main", false) => true,
         _ => panic!("unknown pinned program: {program}"),
     }
 }
@@ -2226,8 +2316,8 @@ fn pinned_program_gaps_are_profile_specific() {
     let stages = "fs-ent-pipeline/o8d/stages-main";
     assert!(!expected_program_gap(collections, true));
     assert!(expected_program_gap(collections, false));
-    assert!(expected_program_gap(stages, true));
-    assert!(expected_program_gap(stages, false));
+    assert!(!expected_program_gap(stages, true));
+    assert!(!expected_program_gap(stages, false));
     assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", true)).is_err());
     assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", false)).is_err());
     assert!(is_pinned(
@@ -2404,38 +2494,6 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
     assert_eq!(checked, 6);
     assert_eq!(compact_checked, 7);
 
-    let named = |names: &[&str]| {
-        json!([{
-            "results": names
-                .iter()
-                .map(|name| json!({"name": format!("projects/p/databases/d/documents/su/{name}"), "fields": {}}))
-                .collect::<Vec<_>>()
-        }])
-    };
-    let two = Nondeterministic::Sample(SampleOf {
-        count: 2,
-        members: SU,
-    });
-    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
-    assert!(!satisfies(&two, 200, &named(&["a"]), 0), "too few");
-    assert!(
-        !satisfies(&two, 200, &named(&["a", "b", "c"]), 0),
-        "too many"
-    );
-    assert!(!satisfies(&two, 200, &named(&["a", "a"]), 0), "a repeat");
-    assert!(
-        !satisfies(&two, 200, &named(&["a", "z"]), 0),
-        "not a member"
-    );
-    let filtered = Nondeterministic::Sample(SampleOf {
-        count: 2,
-        members: SU_AFTER_N_1,
-    });
-    assert!(
-        !satisfies(&filtered, 200, &named(&["a", "b"]), 0),
-        "filtered out"
-    );
-
     let clock = |value: &Value| json!([{"results": [{"fields": {"v": value}}]}]);
     let now = 1_793_029_330;
     let integer = |seconds: i64| json!({"integerValue": seconds.to_string()});
@@ -2502,11 +2560,6 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         &clock(&integer(now)),
         now
     ));
-    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
-    assert!(
-        !satisfies(&two, 400, &named(&["e", "a"]), 0),
-        "a refusal with a body"
-    );
     // The replay judges against the clock of its own server.
     assert!(clock_ok(
         &integer(REPLAY_CLOCK_SECONDS + 5),
@@ -3436,4 +3489,73 @@ fn recorded_literal_key_grpc_refusals_keep_messages_where_order_is_observable() 
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn sample_contract_rejects_typed_row_and_framing_near_misses() {
+    let production = read("fs-ent-pipeline-production.json");
+    let body = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"]
+        ["sample-percent-100"]["body"];
+    let rows: Vec<Value> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
+        .collect();
+    assert_eq!(rows.len(), 5);
+    let sample = |items: Vec<Value>| json!([{"results": items}]);
+    let rule = SampleOf {
+        count: 2,
+        members: SU,
+    };
+    let good = sample(vec![rows[0].clone(), rows[1].clone()]);
+    assert!(sample_contract(&rule, &good, &rows, false));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["fields"]["n"] = json!({"stringValue":"1"});
+    assert!(!sample_contract(&rule, &bad, &rows, false));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["createTime"] = json!(1);
+    assert!(!sample_contract(&rule, &bad, &rows, false));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["name"] = json!("projects/p/databases/d/documents/su/unknown");
+    assert!(!sample_contract(&rule, &bad, &rows, false));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone(), rows[0].clone()]),
+        &rows,
+        false
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone()]),
+        &rows,
+        false
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"results":[rows[0].clone()]},{"results":[rows[1].clone()]}]),
+        &rows,
+        false
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"results":[rows[0].clone(),rows[1].clone()]},{"results":[]}]),
+        &rows,
+        false
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[1].clone(), rows[0].clone()]),
+        &rows,
+        true
+    ));
+    assert!(sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone()]),
+        &rows,
+        true
+    ));
+    assert!(sample_contract(&rule, &sample(rows.clone()), &rows, true));
+    assert!(sample_contract(&rule, &sample(vec![]), &rows, true));
+    assert!(!sample_contract(&rule, &json!([null]), &rows, true));
 }

@@ -1918,3 +1918,225 @@ fn union_generated_core_combinations() {
         );
     }
 }
+
+#[test]
+fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
+    let rows = vec![
+        doc("a", &[("v", int(1))]),
+        doc("b", &[("v", int(2))]),
+        doc("c", &[("v", int(3))]),
+    ];
+    let runtime = RuntimeContext {
+        sample_seed: Some(17),
+        ..RuntimeContext::default()
+    };
+    let mut cursor = Cursor::new_in_with_runtime(
+        vec![Stage::Sample(SampleMode::Documents(2))],
+        Unrecorded::Refuse,
+        runtime,
+    );
+    for row in &rows {
+        assert!(cursor.push(row.clone()).unwrap().is_empty());
+    }
+    let sampled = cursor.finish().unwrap();
+    assert_eq!(sampled.len(), 2);
+    assert!(sampled.iter().all(|row| rows.contains(row)));
+    assert!(cursor.finish().unwrap().is_empty());
+    let mut all = Cursor::new_in_with_runtime(
+        vec![Stage::Sample(SampleMode::Percent(1.0))],
+        Unrecorded::Refuse,
+        runtime,
+    );
+    let mut observed = Vec::new();
+    for row in &rows {
+        observed.extend(all.push(row.clone()).unwrap());
+    }
+    observed.extend(all.finish().unwrap());
+    assert_eq!(observed, rows);
+    let mut none = Cursor::new_in_with_runtime(
+        vec![Stage::Sample(SampleMode::Percent(0.0))],
+        Unrecorded::Refuse,
+        runtime,
+    );
+    for row in rows {
+        assert!(none.push(row).unwrap().is_empty());
+    }
+    assert!(none.finish().unwrap().is_empty());
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn sample_pict_rows_execute_with_seeded_contracts() {
+    let mut tested = 0;
+    for line in include_str!("sample.generated.tsv").lines().skip(1) {
+        let fields: Vec<_> = line.split('\t').collect();
+        let [mode, size, input, placement, profile, seed] = fields.as_slice() else {
+            panic!("invalid row {line}")
+        };
+        let values: Vec<i64> = match *input {
+            "empty" => vec![],
+            "single" => vec![1],
+            "duplicates" => vec![1, 1, 2, 2],
+            _ => vec![1, 2, 3, 4],
+        };
+        let rows: Vec<Row> = values
+            .iter()
+            .enumerate()
+            .map(|(i, n)| doc(&format!("d{i}"), &[("v", int(*n))]))
+            .collect();
+        let count = match *size {
+            "zero" => 0,
+            "middle" => 2,
+            "full" => 4,
+            _ => 10,
+        };
+        let sample = if *mode == "documents" {
+            SampleMode::Documents(count)
+        } else {
+            SampleMode::Percent(match *size {
+                "zero" => 0.0,
+                "middle" => 0.5,
+                _ => 1.0,
+            })
+        };
+        let mut stages = Vec::new();
+        if *placement == "prefix_limit" {
+            stages.push(Stage::Limit(1));
+        }
+        stages.push(Stage::Sample(sample));
+        if *placement == "suffix_limit" {
+            stages.push(Stage::Limit(1));
+        }
+        if *placement == "blocking" {
+            stages.push(Stage::Sort(vec![ascending(field("v"))]));
+        }
+        let runtime = RuntimeContext {
+            sample_seed: Some(if *seed == "first" { 17 } else { 23 }),
+            ..RuntimeContext::default()
+        };
+        let policy = if *profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let execute = || {
+            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime);
+            let mut out = Vec::new();
+            for row in &rows {
+                if cursor.is_exhausted() {
+                    break;
+                }
+                out.extend(cursor.push(row.clone()).unwrap());
+            }
+            out.extend(cursor.finish().unwrap());
+            assert!(cursor.finish().unwrap().is_empty(), "{line}");
+            out
+        };
+        let actual = execute();
+        assert_eq!(actual, execute(), "{line}");
+        let eligible = if *placement == "prefix_limit" {
+            &rows[..rows.len().min(1)]
+        } else {
+            &rows[..]
+        };
+        assert!(actual.iter().all(|row| eligible.contains(row)), "{line}");
+        let got_names = names(&actual);
+        let mut unique = got_names.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), actual.len(), "{line}");
+        if *mode == "documents" {
+            let mut expected = usize::try_from(count).unwrap().min(eligible.len());
+            if *placement == "suffix_limit" {
+                expected = expected.min(1);
+            }
+            assert_eq!(actual.len(), expected, "{line}");
+        }
+        if *mode == "percent" && *placement != "blocking" {
+            let positions: Vec<_> = actual
+                .iter()
+                .map(|row| {
+                    eligible
+                        .iter()
+                        .position(|candidate| candidate == row)
+                        .unwrap()
+                })
+                .collect();
+            assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{line}");
+        }
+        if *mode == "percent" && *size == "zero" {
+            assert!(actual.is_empty(), "{line}");
+        }
+        tested += 1;
+    }
+    assert_eq!(tested, 22);
+}
+
+proptest! {
+    #[test]
+    fn sample_documents_preserve_occurrences_and_metadata(size in 0_u64..16, input in proptest::collection::vec(-3_i64..4, 0..12), seed in any::<u64>()) {
+        let rows: Vec<Row> = input.iter().enumerate().map(|(i, n)| doc(&format!("d{i}"), &[("v", int(*n))])).collect();
+        let runtime = RuntimeContext { sample_seed: Some(seed), ..RuntimeContext::default() };
+        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
+        let out = execute();
+        prop_assert_eq!(out.len(), usize::try_from(size).unwrap().min(rows.len()));
+        prop_assert!(out.iter().all(|row| rows.contains(row)));
+        let mut ids = names(&out); ids.sort(); ids.dedup(); prop_assert_eq!(ids.len(), out.len());
+        prop_assert_eq!(out, execute());
+    }
+}
+
+#[test]
+fn sampling_seed_variation_limit_and_finish_contracts() {
+    let rows: Vec<Row> = (0..12)
+        .map(|i| doc(&format!("d{i}"), &[("v", int(i))]))
+        .collect();
+    let sample = |seed, stages: Vec<Stage>| {
+        let mut cursor = Cursor::new_in_with_runtime(
+            stages,
+            Unrecorded::Refuse,
+            RuntimeContext {
+                sample_seed: Some(seed),
+                ..RuntimeContext::default()
+            },
+        );
+        let mut out = Vec::new();
+        for row in &rows {
+            if cursor.is_exhausted() {
+                break;
+            }
+            out.extend(cursor.push(row.clone()).unwrap());
+        }
+        out.extend(cursor.finish().unwrap());
+        assert!(cursor.finish().unwrap().is_empty());
+        assert!(cursor.push(rows[0].clone()).unwrap().is_empty());
+        out
+    };
+    let samples: Vec<_> = (0..16)
+        .map(|seed| names(&sample(seed, vec![Stage::Sample(SampleMode::Documents(3))])))
+        .collect();
+    assert!(samples.windows(2).any(|pair| pair[0] != pair[1]));
+    let post_limit = sample(
+        4,
+        vec![Stage::Sample(SampleMode::Documents(4)), Stage::Limit(1)],
+    );
+    assert_eq!(post_limit.len(), 1);
+    let pre_limit = sample(
+        4,
+        vec![Stage::Limit(1), Stage::Sample(SampleMode::Documents(4))],
+    );
+    assert_eq!(pre_limit, vec![rows[0].clone()]);
+    let percent_counts: Vec<_> = (0..16)
+        .map(|seed| sample(seed, vec![Stage::Sample(SampleMode::Percent(0.5))]).len())
+        .collect();
+    assert!(percent_counts
+        .iter()
+        .any(|count| *count > 0 && *count < rows.len()));
+    assert!(percent_counts.windows(2).any(|pair| pair[0] != pair[1]));
+    let percent = sample(4, vec![Stage::Sample(SampleMode::Percent(0.5))]);
+    let positions: Vec<_> = percent
+        .iter()
+        .map(|row| rows.iter().position(|r| r == row).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+}

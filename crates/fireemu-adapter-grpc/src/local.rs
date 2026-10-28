@@ -389,6 +389,8 @@ pub struct LocalBackend {
     /// Draws the starting transaction id of each database; separate from `ids` so that the
     /// generated document ids stay what they were for a given seed.
     transaction_ids: Mutex<SplitMix64>,
+    /// Independent request seeds for pipeline sampling.
+    sample_seeds: Mutex<SplitMix64>,
     /// Exact identities of active transactions authenticated by this backend, bounded globally.
     issued_transactions: Mutex<BTreeMap<Vec<u8>, (String, String)>>,
     /// Identity source for logical query streams whose response is split into bounded pages.
@@ -1636,6 +1638,17 @@ mod tests {
         )
     }
 
+    #[test]
+    fn sample_requests_use_a_separate_seed_stream_from_document_ids() {
+        let sampled = admission_backend();
+        let control = admission_backend();
+        let first = sampled.next_sample_seed();
+        assert_ne!(first, sampled.next_sample_seed());
+        assert_eq!(first, control.next_sample_seed());
+        assert_eq!(sampled.auto_id(), control.auto_id());
+        assert_eq!(sampled.auto_id(), control.auto_id());
+    }
+
     fn parent(database: &str) -> Parent {
         parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
     }
@@ -2689,6 +2702,7 @@ impl LocalBackend {
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
+            sample_seeds: Mutex::new(SplitMix64::new(seed ^ 0x5341_4d50_4c45)),
             issued_transactions: Mutex::new(BTreeMap::new()),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -5247,6 +5261,14 @@ impl LocalBackend {
         self.project_boundary
             .as_deref()
             .is_some_and(|only| only != project)
+    }
+
+    /// Draws a request seed without consuming document or transaction identifiers.
+    pub(crate) fn next_sample_seed(&self) -> u64 {
+        self.sample_seeds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_u64()
     }
 
     /// The instant the Admin API stamps a change with, and measures its pending states against:

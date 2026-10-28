@@ -1030,6 +1030,10 @@ pub fn compile_pipeline_in_order(
                         branches: Vec::new(),
                     });
                 }
+                "sample" => {
+                    only_filters_so_far = false;
+                    stages.push(decode_sample(stage)?);
+                }
                 "unnest" => {
                     only_filters_so_far = false;
                     stages.push(decode_unnest(stage, unrecorded)?);
@@ -2724,6 +2728,38 @@ fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
         )))
     };
     match stage.name.as_str() {
+        "sample" => {
+            let mode = match stage.args[1].value_type.as_ref() {
+                Some(V::StringValue(mode)) if mode == "documents" || mode == "percent" => mode,
+                Some(V::StringValue(mode)) => {
+                    return Some(Status::invalid_argument(format!(
+                        "Unsupported Sample Mode: {mode}"
+                    )))
+                }
+                other => return expected("SampleMode", "STRING_VALUE", other),
+            };
+            match (mode.as_str(), stage.args[0].value_type.as_ref()) {
+                ("documents", Some(V::IntegerValue(n))) if *n < 0 => Some(
+                    Status::invalid_argument("The 'size' parameter must be non-negative."),
+                ),
+                ("documents", Some(V::IntegerValue(_))) => None,
+                ("documents", other) => expected("size", "INTEGER_VALUE", other),
+                ("percent", Some(V::IntegerValue(n))) if !(0..=1).contains(n) => Some(
+                    Status::invalid_argument("The 'size' parameter must be between 0.0 and 1.0."),
+                ),
+                ("percent", Some(V::DoubleValue(n)))
+                    if n.is_finite() && !(0.0..=1.0).contains(n) =>
+                {
+                    Some(Status::invalid_argument(
+                        "The 'size' parameter must be between 0.0 and 1.0.",
+                    ))
+                }
+                ("percent", Some(V::IntegerValue(_) | V::DoubleValue(_))) => {
+                    None
+                }
+                (_, other) => expected("size", "DOUBLE_VALUE", other),
+            }
+        }
         "union" => match stage.args[0].value_type.as_ref() {
             Some(V::PipelineValue(_)) => None,
             other => expected("other", "PIPELINE_VALUE", other),
@@ -3013,11 +3049,36 @@ fn decode_unnest(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<
     })
 }
 
+fn decode_sample(stage: &pb::pipeline::Stage) -> Result<Stage, Status> {
+    use pb::value::ValueType as V;
+    if !stage.options.is_empty() {
+        return Err(Status::unimplemented("sample options are unobserved"));
+    }
+    let mode = match stage.args[1].value_type.as_ref() {
+        Some(V::StringValue(value)) => value.as_str(),
+        _ => return Err(Status::unimplemented("sample mode is unobserved")),
+    };
+    let sample = match (mode, stage.args[0].value_type.as_ref()) {
+        ("documents", Some(V::IntegerValue(n))) if *n >= 0 => {
+            pipeline_exec::SampleMode::Documents(u64::try_from(*n).unwrap())
+        }
+        ("percent", Some(V::IntegerValue(n))) if (0..=1).contains(n) => {
+            pipeline_exec::SampleMode::Percent(if *n == 0 { 0.0 } else { 1.0 })
+        }
+        ("percent", Some(V::DoubleValue(n))) if n.is_finite() && (0.0..=1.0).contains(n) => {
+            pipeline_exec::SampleMode::Percent(*n)
+        }
+        _ => return Err(Status::unimplemented("sample arguments are unobserved")),
+    };
+    Ok(Stage::Sample(sample))
+}
+
 /// The arity text production answered for a stage with a signature, before any other check of
 /// the stage (FS-ENT-ORACLE O-6 `sort-wire-errors#no-args`, O-7 `aggregate-args`,
 /// `distinct-main`, `fields-main`, `inputs-*`).
 fn stage_arity_error(stage: &pb::pipeline::Stage) -> Option<Status> {
     let (signature, min, max) = match stage.name.as_str() {
+        "sample" => ("sample(size: int64 | double, mode: SampleMode)", 2, Some(2)),
         "union" => ("union(other: Pipeline)", 1, Some(1)),
         "unnest" => (
             "unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)",

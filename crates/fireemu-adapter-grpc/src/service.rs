@@ -699,7 +699,8 @@ impl Firestore for GatewayService {
                     .local_backend()
                     .cloned()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?;
-                let runtime = crate::pipeline_timezone::runtime(&local);
+                let runtime =
+                    crate::pipeline_timezone::runtime_for_stages(&local, &compiled.stages);
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
                         crate::pipeline::execute_union(local, compiled, guard, unrecorded, runtime)
@@ -725,9 +726,10 @@ impl Firestore for GatewayService {
                     responses.into_iter().map(Ok),
                 ))));
             }
-            let runtime = crate::pipeline_timezone::runtime(
+            let runtime = crate::pipeline_timezone::runtime_for_stages(
                 self.local_backend()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?,
+                &compiled.stages,
             );
             let input: BoxStream<pb::RunQueryResponse> =
                 if let Some(names) = compiled.documents.clone() {

@@ -85,7 +85,24 @@ pub(crate) fn runtime(
         request_timestamp: timestamp,
         zone_resolver: Some(resolve),
         regex_resolver: Some(crate::pipeline_regex::resolve),
+        sample_seed: None,
     }
+}
+
+pub(crate) fn runtime_for_stages(
+    local: &crate::local::LocalBackend,
+    stages: &[fireemu_core_firestore::pipeline_exec::Stage],
+) -> fireemu_core_firestore::pipeline_exec::RuntimeContext {
+    let mut runtime = runtime(local);
+    if stages.iter().any(|stage| {
+        matches!(
+            stage,
+            fireemu_core_firestore::pipeline_exec::Stage::Sample(_)
+        )
+    }) {
+        runtime.sample_seed = Some(local.next_sample_seed());
+    }
+    runtime
 }
 
 #[cfg(test)]

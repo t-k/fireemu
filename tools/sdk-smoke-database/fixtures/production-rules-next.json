@@ -1,0 +1,864 @@
+{
+  "version": 1,
+  "source": {
+    "journalSha256": "f3925a0b6e1030f93635535ee626b5aa215def8039b65c548acfa92fc53998d9",
+    "requestCount": 83,
+    "corpusSupportCount": 56,
+    "otherCount": 27,
+    "observationCount": 16,
+    "anchorCount": 4
+  },
+  "rulesTemplate": "{\"rules\":{\".read\":false,\".write\":false,\"__ROOT__\":{\".read\":false,\"ready\":{\".read\":true},\"r1\":{\"cascade\":{\"parent\":{\".write\":true,\"child\":{\".write\":false}},\"blocked\":{\".write\":false,\"child\":{\".write\":true}}},\"validation\":{\"number\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"},\"negative\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"},\"deletion\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"}},\"snapshot\":{\"allow\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r1/control').val() == 7\"}},\"newdeny\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r1/control').val() == 7\"}},\"rootdeny\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r1/control').val() == 7\"}}},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}},\"r2\":{\"cascade\":{\"parent\":{\".write\":true,\"child\":{\".write\":false}},\"blocked\":{\".write\":false,\"child\":{\".write\":true}}},\"validation\":{\"number\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"},\"negative\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"},\"deletion\":{\".write\":true,\".validate\":\"newData.isNumber() && newData.val() >= 0\"}},\"snapshot\":{\"allow\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r2/control').val() == 7\"}},\"newdeny\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r2/control').val() == 7\"}},\"rootdeny\":{\"counter\":{\".write\":\"data.val() == 1 && newData.val() == 2 && root.child('__ROOT__/r2/control').val() == 7\"}}},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}}}}}",
+  "rounds": [
+    {
+      "round": 1,
+      "rows": [
+        {
+          "id": "cascade-ancestor-seed",
+          "role": "support",
+          "requestId": 16,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"cascade\":{\"parent\":{\"child\":0}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "34"
+          },
+          "bodyBase64": "eyJjYXNjYWRlIjp7InBhcmVudCI6eyJjaGlsZCI6MH19fQ=="
+        },
+        {
+          "id": "cascade-ancestor",
+          "role": "observation",
+          "requestId": 17,
+          "method": "PUT",
+          "path": "/r1/cascade/parent/child.json",
+          "query": "",
+          "requestBody": "1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-ancestor-readback",
+          "role": "support",
+          "requestId": 18,
+          "method": "GET",
+          "path": "/r1/cascade/parent/child.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-descendant-seed",
+          "role": "support",
+          "requestId": 19,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"cascade\":{\"blocked\":{\"child\":0}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "35"
+          },
+          "bodyBase64": "eyJjYXNjYWRlIjp7ImJsb2NrZWQiOnsiY2hpbGQiOjB9fX0="
+        },
+        {
+          "id": "cascade-descendant",
+          "role": "observation",
+          "requestId": 20,
+          "method": "PUT",
+          "path": "/r1/cascade/blocked/child.json",
+          "query": "",
+          "requestBody": "1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-descendant-readback",
+          "role": "support",
+          "requestId": 21,
+          "method": "GET",
+          "path": "/r1/cascade/blocked/child.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "valid-number-seed",
+          "role": "support",
+          "requestId": 22,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"number\":1}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "27"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7Im51bWJlciI6MX19"
+        },
+        {
+          "id": "valid-number",
+          "role": "observation",
+          "requestId": 23,
+          "method": "PUT",
+          "path": "/r1/validation/number.json",
+          "query": "",
+          "requestBody": "4",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "NA=="
+        },
+        {
+          "id": "valid-number-readback",
+          "role": "support",
+          "requestId": 24,
+          "method": "GET",
+          "path": "/r1/validation/number.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "NA=="
+        },
+        {
+          "id": "valid-negative-seed",
+          "role": "support",
+          "requestId": 25,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"negative\":1}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "29"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7Im5lZ2F0aXZlIjoxfX0="
+        },
+        {
+          "id": "valid-negative",
+          "role": "observation",
+          "requestId": 26,
+          "method": "PUT",
+          "path": "/r1/validation/negative.json",
+          "query": "",
+          "requestBody": "-1",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "valid-negative-readback",
+          "role": "support",
+          "requestId": 27,
+          "method": "GET",
+          "path": "/r1/validation/negative.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "valid-delete-seed",
+          "role": "support",
+          "requestId": 28,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"deletion\":4}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "29"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7ImRlbGV0aW9uIjo0fX0="
+        },
+        {
+          "id": "valid-delete",
+          "role": "observation",
+          "requestId": 29,
+          "method": "DELETE",
+          "path": "/r1/validation/deletion.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA=="
+        },
+        {
+          "id": "valid-delete-readback",
+          "role": "support",
+          "requestId": 30,
+          "method": "GET",
+          "path": "/r1/validation/deletion.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA=="
+        },
+        {
+          "id": "snapshot-allow-seed",
+          "role": "support",
+          "requestId": 31,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"control\":7,\"snapshot\":{\"allow\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "48"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo3LCJzbmFwc2hvdCI6eyJhbGxvdyI6eyJjb3VudGVyIjoxfX19"
+        },
+        {
+          "id": "snapshot-allow",
+          "role": "observation",
+          "requestId": 32,
+          "method": "PUT",
+          "path": "/r1/snapshot/allow/counter.json",
+          "query": "",
+          "requestBody": "2",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "Mg=="
+        },
+        {
+          "id": "snapshot-allow-readback",
+          "role": "support",
+          "requestId": 33,
+          "method": "GET",
+          "path": "/r1/snapshot/allow/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "Mg=="
+        },
+        {
+          "id": "snapshot-new-deny-seed",
+          "role": "support",
+          "requestId": 34,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"control\":7,\"snapshot\":{\"newdeny\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo3LCJzbmFwc2hvdCI6eyJuZXdkZW55Ijp7ImNvdW50ZXIiOjF9fX0="
+        },
+        {
+          "id": "snapshot-new-deny",
+          "role": "observation",
+          "requestId": 35,
+          "method": "PUT",
+          "path": "/r1/snapshot/newdeny/counter.json",
+          "query": "",
+          "requestBody": "3",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "snapshot-new-deny-readback",
+          "role": "support",
+          "requestId": 36,
+          "method": "GET",
+          "path": "/r1/snapshot/newdeny/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "snapshot-root-deny-seed",
+          "role": "support",
+          "requestId": 37,
+          "method": "PATCH",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": "{\"control\":8,\"snapshot\":{\"rootdeny\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "51"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo4LCJzbmFwc2hvdCI6eyJyb290ZGVueSI6eyJjb3VudGVyIjoxfX19"
+        },
+        {
+          "id": "snapshot-root-deny",
+          "role": "observation",
+          "requestId": 38,
+          "method": "PUT",
+          "path": "/r1/snapshot/rootdeny/counter.json",
+          "query": "",
+          "requestBody": "2",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "snapshot-root-deny-readback",
+          "role": "support",
+          "requestId": 39,
+          "method": "GET",
+          "path": "/r1/snapshot/rootdeny/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 40,
+          "method": "PUT",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 41,
+          "method": "PUT",
+          "path": "/r1/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 42,
+          "method": "PATCH",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 43,
+          "method": "GET",
+          "path": "/r1/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "rows": [
+        {
+          "id": "cascade-ancestor-seed",
+          "role": "support",
+          "requestId": 44,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"cascade\":{\"parent\":{\"child\":0}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "34"
+          },
+          "bodyBase64": "eyJjYXNjYWRlIjp7InBhcmVudCI6eyJjaGlsZCI6MH19fQ=="
+        },
+        {
+          "id": "cascade-ancestor",
+          "role": "observation",
+          "requestId": 45,
+          "method": "PUT",
+          "path": "/r2/cascade/parent/child.json",
+          "query": "",
+          "requestBody": "1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-ancestor-readback",
+          "role": "support",
+          "requestId": 46,
+          "method": "GET",
+          "path": "/r2/cascade/parent/child.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-descendant-seed",
+          "role": "support",
+          "requestId": 47,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"cascade\":{\"blocked\":{\"child\":0}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "35"
+          },
+          "bodyBase64": "eyJjYXNjYWRlIjp7ImJsb2NrZWQiOnsiY2hpbGQiOjB9fX0="
+        },
+        {
+          "id": "cascade-descendant",
+          "role": "observation",
+          "requestId": 48,
+          "method": "PUT",
+          "path": "/r2/cascade/blocked/child.json",
+          "query": "",
+          "requestBody": "1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "cascade-descendant-readback",
+          "role": "support",
+          "requestId": 49,
+          "method": "GET",
+          "path": "/r2/cascade/blocked/child.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "valid-number-seed",
+          "role": "support",
+          "requestId": 50,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"number\":1}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "27"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7Im51bWJlciI6MX19"
+        },
+        {
+          "id": "valid-number",
+          "role": "observation",
+          "requestId": 51,
+          "method": "PUT",
+          "path": "/r2/validation/number.json",
+          "query": "",
+          "requestBody": "4",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "NA=="
+        },
+        {
+          "id": "valid-number-readback",
+          "role": "support",
+          "requestId": 52,
+          "method": "GET",
+          "path": "/r2/validation/number.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "NA=="
+        },
+        {
+          "id": "valid-negative-seed",
+          "role": "support",
+          "requestId": 53,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"negative\":1}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "29"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7Im5lZ2F0aXZlIjoxfX0="
+        },
+        {
+          "id": "valid-negative",
+          "role": "observation",
+          "requestId": 54,
+          "method": "PUT",
+          "path": "/r2/validation/negative.json",
+          "query": "",
+          "requestBody": "-1",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "valid-negative-readback",
+          "role": "support",
+          "requestId": 55,
+          "method": "GET",
+          "path": "/r2/validation/negative.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "valid-delete-seed",
+          "role": "support",
+          "requestId": 56,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"validation\":{\"deletion\":4}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "29"
+          },
+          "bodyBase64": "eyJ2YWxpZGF0aW9uIjp7ImRlbGV0aW9uIjo0fX0="
+        },
+        {
+          "id": "valid-delete",
+          "role": "observation",
+          "requestId": 57,
+          "method": "DELETE",
+          "path": "/r2/validation/deletion.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA=="
+        },
+        {
+          "id": "valid-delete-readback",
+          "role": "support",
+          "requestId": 58,
+          "method": "GET",
+          "path": "/r2/validation/deletion.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA=="
+        },
+        {
+          "id": "snapshot-allow-seed",
+          "role": "support",
+          "requestId": 59,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"control\":7,\"snapshot\":{\"allow\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "48"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo3LCJzbmFwc2hvdCI6eyJhbGxvdyI6eyJjb3VudGVyIjoxfX19"
+        },
+        {
+          "id": "snapshot-allow",
+          "role": "observation",
+          "requestId": 60,
+          "method": "PUT",
+          "path": "/r2/snapshot/allow/counter.json",
+          "query": "",
+          "requestBody": "2",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "Mg=="
+        },
+        {
+          "id": "snapshot-allow-readback",
+          "role": "support",
+          "requestId": 61,
+          "method": "GET",
+          "path": "/r2/snapshot/allow/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "Mg=="
+        },
+        {
+          "id": "snapshot-new-deny-seed",
+          "role": "support",
+          "requestId": 62,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"control\":7,\"snapshot\":{\"newdeny\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo3LCJzbmFwc2hvdCI6eyJuZXdkZW55Ijp7ImNvdW50ZXIiOjF9fX0="
+        },
+        {
+          "id": "snapshot-new-deny",
+          "role": "observation",
+          "requestId": 63,
+          "method": "PUT",
+          "path": "/r2/snapshot/newdeny/counter.json",
+          "query": "",
+          "requestBody": "3",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "snapshot-new-deny-readback",
+          "role": "support",
+          "requestId": 64,
+          "method": "GET",
+          "path": "/r2/snapshot/newdeny/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "snapshot-root-deny-seed",
+          "role": "support",
+          "requestId": 65,
+          "method": "PATCH",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": "{\"control\":8,\"snapshot\":{\"rootdeny\":{\"counter\":1}}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "51"
+          },
+          "bodyBase64": "eyJjb250cm9sIjo4LCJzbmFwc2hvdCI6eyJyb290ZGVueSI6eyJjb3VudGVyIjoxfX19"
+        },
+        {
+          "id": "snapshot-root-deny",
+          "role": "observation",
+          "requestId": 66,
+          "method": "PUT",
+          "path": "/r2/snapshot/rootdeny/counter.json",
+          "query": "",
+          "requestBody": "2",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "snapshot-root-deny-readback",
+          "role": "support",
+          "requestId": 67,
+          "method": "GET",
+          "path": "/r2/snapshot/rootdeny/counter.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1"
+          },
+          "bodyBase64": "MQ=="
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 68,
+          "method": "PUT",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 69,
+          "method": "PUT",
+          "path": "/r2/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 70,
+          "method": "PATCH",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 71,
+          "method": "GET",
+          "path": "/r2/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    }
+  ]
+}

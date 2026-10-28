@@ -2019,11 +2019,12 @@ impl Cursor {
     pub fn finish(&mut self) -> Result<Vec<Row>, EvalError> {
         let mut out = Vec::new();
         for index in 0..self.stages.len() {
-            if let Stage::Union { branches } = self.stages[index].clone() {
+            if let Stage::Union { branches } = &mut self.stages[index] {
                 if matches!(self.state[index], StageState::UnionDone) {
                     continue;
                 }
                 self.state[index] = StageState::UnionDone;
+                let branches = std::mem::take(branches);
                 for branch in branches {
                     if branch
                         .stages

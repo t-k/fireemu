@@ -1450,6 +1450,22 @@ fn unnest_expands_arrays_preserves_rows_and_stops_at_downstream_limit() {
 }
 
 #[test]
+fn unnest_absent_source_removes_existing_alias() {
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let source = doc("x", &[("v", int(9)), ("keep", int(8))]);
+        let stages = vec![Stage::Unnest {
+            expression: field("missing"),
+            alias: alias("v"),
+            index_field: None,
+        }];
+        let rows = Cursor::new_in(stages, profile).push(source).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].fields.contains_key("v"));
+        assert_eq!(rows[0].fields["keep"], int(8));
+    }
+}
+
+#[test]
 fn unnest_pict_generated_cases() {
     let cases = [
         ("array", "new", "present", "none", "strict"),

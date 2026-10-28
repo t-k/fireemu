@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "source": {
+    "journalSha256": "cb673bcddb8d28277d23c2b3a27a9d2e744353a504fe6e2e82f6ab52d607e184",
+    "requestCount": 47,
+    "corpusSupportCount": 20,
+    "otherCount": 27,
+    "observationCount": 8,
+    "anchorCount": 4
+  },
+  "rulesTemplate": "{\"rules\":{\".read\":false,\".write\":false,\"__ROOT__\":{\".read\":false,\"ready\":{\".read\":true},\"r1\":{\"queryrule\":{\".read\":true,\".indexOn\":[\"h\"]},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}},\"r2\":{\"queryrule\":{\".read\":true,\".indexOn\":[\"h\"]},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}}}}}",
+  "rounds": [
+    {
+      "round": 1,
+      "rows": [
+        {
+          "id": "query-seed",
+          "role": "support",
+          "requestId": 16,
+          "method": "PUT",
+          "path": "/r1/queryrule.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-readback",
+          "role": "support",
+          "requestId": 17,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "equalTo",
+          "role": "observation",
+          "requestId": 18,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&equalTo=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "endAt",
+          "role": "observation",
+          "requestId": 19,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&endAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "25"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "startAfter",
+          "role": "observation",
+          "requestId": 20,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&startAfter=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9fQ=="
+        },
+        {
+          "id": "endBefore",
+          "role": "observation",
+          "requestId": 21,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&endBefore=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9fQ=="
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 22,
+          "method": "PUT",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 23,
+          "method": "PUT",
+          "path": "/r1/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 24,
+          "method": "PATCH",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 25,
+          "method": "GET",
+          "path": "/r1/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "rows": [
+        {
+          "id": "query-seed",
+          "role": "support",
+          "requestId": 26,
+          "method": "PUT",
+          "path": "/r2/queryrule.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-readback",
+          "role": "support",
+          "requestId": 27,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "equalTo",
+          "role": "observation",
+          "requestId": 28,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&equalTo=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "endAt",
+          "role": "observation",
+          "requestId": 29,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&endAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "25"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "startAfter",
+          "role": "observation",
+          "requestId": 30,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&startAfter=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9fQ=="
+        },
+        {
+          "id": "endBefore",
+          "role": "observation",
+          "requestId": 31,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&endBefore=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "13"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9fQ=="
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 32,
+          "method": "PUT",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 33,
+          "method": "PUT",
+          "path": "/r2/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 34,
+          "method": "PATCH",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 35,
+          "method": "GET",
+          "path": "/r2/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    }
+  ]
+}

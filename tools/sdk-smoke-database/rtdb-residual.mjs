@@ -103,10 +103,7 @@ export async function runScenario(o) {
   o.secrets ??= [];
   const u = urls(o);
   if (o.strictStartup && (o.scenarios?.length !== 1 || o.scenarios[0] !== 'sdk-next-startup' || typeof o.strictJournal !== 'function')) throw Error('strict startup requires fixed scenario and durable journal');
-  const fixedTargets = new Map([[u.data(o.prefix), ['GET', 'DELETE']], [u.data('.settings/rules'), ['GET', 'PUT']], [u.service, ['GET']], [u.list, ['GET']], [u.instance, ['GET', 'DELETE']], [u.service && `${u.service}:enable`, ['POST']], [u.service && `${u.service}:disable`, ['POST']], [u.instance && `${u.instance}:undelete`, ['POST']], [u.instance && `${u.instance}:reenable`, ['POST']], [u.instance && `${u.instance}:disable`, ['POST']]]);
-  const operations = new Set();
-  const allowed = (url, method) => (fixedTargets.get(url) ?? []).includes(method) || (method === 'GET' && operations.has(url));
-  allowed.register = (name) => { if (u.op && /^operations\/[A-Za-z0-9_-]+$/.test(name)) operations.add(u.op(name)); };
+  const allowed = startupAllowedTargets(u, o.prefix);
   const client = o.strictStartup ? createStartupStrictClient({ fetchImpl: o.fetchImpl, headers: o.headers, stop: o.stop, caps: CAPS, allowed, journal: o.strictJournal }) : adminClient({ fetchImpl: o.fetchImpl, headers: o.headers, log: o.log, stop: o.stop, secrets: o.secrets, caps: CAPS });
   const run = { admin: client, call: client.call, u, propagation: false, propagationWaited: 0, state: { api: 'baseline', instance: 'baseline', rules: 'baseline', data: 'baseline' }, unresolved: [], errors: [], fireWait: false };
   const sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -141,7 +138,27 @@ export async function runScenario(o) {
   return { status: run.unresolved.length === 0 && (!o.strictStartup || (client.unknownAnswers.length === 0 && run.errors.length === 0)) && restored && accounted ? 'closed' : 'needs-recovery', unknownAnswers: client.unknownAnswers, observationComplete: profiles.length === scenarios.length * profilesToRun.length && !run.errors.length, profiles, state: run.state, unresolved: run.unresolved, errors: run.errors, counts: client.counts };
 }
 
+export function startupAllowedTargets(u, prefix) {
+  const fixedTargets = new Map([[u.data(prefix), ['GET', 'DELETE']], [u.data('.settings/rules'), ['GET', 'PUT']], [u.service, ['GET']], [u.list, ['GET']], [u.instance, ['GET', 'DELETE']], [u.service && `${u.service}:enable`, ['POST']], [u.service && `${u.service}:disable`, ['POST']], [u.instance && `${u.instance}:undelete`, ['POST']], [u.instance && `${u.instance}:reenable`, ['POST']], [u.instance && `${u.instance}:disable`, ['POST']]]);
+  const operations = new Set();
+  const allowed = (url, method) => (fixedTargets.get(url) ?? []).includes(method) || (method === 'GET' && operations.has(url));
+  allowed.register = (name) => { if (!u.op || !validStartupOperation(name)) throw Error('invalid startup operation'); operations.add(u.op(name)); };
+  return allowed;
+}
+
 // This opt-in client is still disarmed from production until packet and lifecycle admission.
+export const validStartupOperation = (name) => typeof name === 'string' && /^operations\/[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(name);
+
+// The Root-owned launcher must read and pin the real ledger and carry; caller-supplied rows alone are not authority.
+export function validateStartupAdmission({ admission: a, packetSha256, sourceSha256, carrySha256, ledger }) {
+  const hash = (x) => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x);
+  if (!a || a.booked !== true || a.scenario !== 'sdk-next-startup' || ![packetSha256, sourceSha256, carrySha256].every(hash) || a.packetSha256 !== packetSha256 || a.sourceSha256 !== sourceSha256 || a.carrySha256 !== carrySha256 || a.previousDirect !== 1177 || a.previousAdc !== 20 || a.previousUsd !== 19 || a.incrementUsd !== 1 || a.totalCap !== 1399 || JSON.stringify(a.profiles) !== JSON.stringify(['r1-ws', 'r2-ws']) || !Array.isArray(a.ownerRows) || a.ownerRows.length !== 3 || !Array.isArray(ledger)) throw Error('startup admission mismatch');
+  if (typeof a.envelopeId !== 'string' || !/^RTDB-SDK-STARTUP-[A-Z0-9-]+$/.test(a.envelopeId)) throw Error('startup envelope');
+  const positions = a.ownerRows.map((row, i) => { const fields = typeof row === 'string' ? row.split(' | ') : []; if (fields.length !== 5 || fields[1] !== `${['A', 'E', 'V'][i]} ${a.envelopeId}` || ledger.filter((x) => x === row).length !== 1 || !row.includes(packetSha256)) throw Error('startup admission row'); return ledger.indexOf(row); });
+  if (!(positions[0] < positions[1] && positions[1] < positions[2]) || ledger.some((x) => /REVOKED/i.test(x) && (x.includes(packetSha256) || x.includes(a.envelopeId)))) throw Error('startup admission order or revocation');
+  return true;
+}
+
 export function createStartupStrictClient({ caps, allowed, journal, fetchImpl = fetch, headers = {}, stop = {} }) {
   const counts = { observe: 0, cleanup: 0, mutations: 0, unknown: 0, logFailures: 0 }, unknownAnswers = [];
   let phase = 'observe', latched = false;
@@ -156,11 +173,13 @@ export function createStartupStrictClient({ caps, allowed, journal, fetchImpl = 
     try {
       await journal({ kind: 'before', step, phase, method, url, body: sent ?? null });
       const response = await fetchImpl(url, { method, body: sent, redirect: 'manual', headers: { 'content-type': 'application/json', ...headers }, signal: AbortSignal.timeout(30000) });
-      status = response.status; text = await response.text();
+      status = response.status;
+      await journal({ kind: 'headers', step, phase, method, url, status, headers: Object.fromEntries(response.headers?.entries?.() ?? []) });
+      text = await response.text();
       await journal({ kind: 'after', step, phase, method, url, status, body: text });
       if (status < 200 || status >= 300) throw Error('non-success response');
       if (!raw && text !== '') value = JSON.parse(text);
-      if (['api-enable', 'api-disable'].includes(step) && method === 'POST' && typeof value?.name === 'string') allowed.register?.(value.name);
+      if (['api-enable', 'api-disable'].includes(step) && method === 'POST') { if (!validStartupOperation(value?.name)) throw Error('invalid startup operation'); allowed.register?.(value.name); }
       return { outcome: 'ok', status, text, value };
     } catch {
       latched = true; counts.unknown++; unknownAnswers.push(step);

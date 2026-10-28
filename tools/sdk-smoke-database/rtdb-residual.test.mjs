@@ -654,3 +654,12 @@ test('strict startup collision retains prefix and sends no cleanup writes',async
  const r=await local(w,{scenarios:['sdk-next-startup'],strictStartup:true,strictJournal:(row)=>journal.push(row),browser:async()=>{browserCalls++;throw Error('unexpected')}});
  assert.equal(browserCalls,0);assert.equal(w.data[`${PREFIX}/foreign`].keep,'original');assert.equal(w.rules,BASE);assert.ok(!w.sent.some((x)=>x.startsWith('PUT ')||x.startsWith('DELETE ')));assert.equal(r.status,'needs-recovery');assert.ok(journal.some((x)=>x.kind==='after'));
 });
+
+test('startup strict administration full fake lifecycle stays within separate caps',async()=>{
+ const {createRtdbAdmin}=await import('./rtdb-admin.mjs');const {createStartupStrictClient,startupAllowedTargets}=await import('./rtdb-residual.mjs');const w=fakeWorld(),journal=[];
+ const a=createRtdbAdmin({instance:'fireemu-q-rtdb2',location:'us-central1',caps:CAPS,propagationMs:0,fireGraceMs:0,strictStartup:true,rulesFor:(p)=>rulesFor(p,{startup:true})});const u=a.urls({mode:'production',packet});const allowed=startupAllowedTargets(u,PREFIX);
+ const client=createStartupStrictClient({caps:CAPS,allowed,journal:(r)=>journal.push(r),fetchImpl:w.fetch,headers:{}});const run={admin:client,call:client.call,u,propagation:false,propagationWaited:0,state:{api:'baseline',instance:'baseline',rules:'baseline',data:'baseline'},unresolved:[],errors:[],sleep:async()=>{}};
+ await a.setupProduction(run,run.sleep);await a.installRules(run,{mode:'production',packet,prefix:PREFIX});await a.cleanup(run,{mode:'production',packet,prefix:PREFIX},run.sleep);
+ assert.deepEqual(run.errors,[]);assert.equal(w.baseline(),true);assert.equal(client.counts.observe+client.counts.cleanup,w.sent.length);assert.ok(client.counts.observe<=80&&client.counts.cleanup<=30&&client.counts.mutations<=40);assert.equal(journal.filter((x)=>x.kind==='before').length,w.sent.length);assert.equal(journal.filter((x)=>x.kind==='headers').length,w.sent.length);assert.equal(journal.filter((x)=>x.kind==='after').length,w.sent.length);
+ console.log(`strict fake lifecycle observe=${client.counts.observe} cleanup=${client.counts.cleanup} mutations=${client.counts.mutations}`);
+});

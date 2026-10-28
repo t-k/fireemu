@@ -8,7 +8,7 @@ const setup=(options={})=>{
  const rows=[],wire=[];const client=createStartupStrictClient({caps,allowed:(url)=>url==='https://owned.test/a',journal:(row)=>rows.push(row),fetchImpl:async(url,init)=>{wire.push({url,method:init.method});return new Response('{"ok":true}',{status:200})},...options});return {client,rows,wire};
 };
 test('strict client journals before and complete response, rejects foreign target and latches unknown',async()=>{
- const {client,rows,wire}=setup();await client.call('first','GET','https://owned.test/a');assert.equal(rows[0].kind,'before');assert.equal(rows[1].body,'{"ok":true}');
+ const {client,rows,wire}=setup();await client.call('first','GET','https://owned.test/a');assert.equal(rows[0].kind,'before');assert.equal(rows[1].kind,'headers');assert.equal(rows[2].body,'{"ok":true}');
  await assert.rejects(client.call('foreign','GET','https://foreign.test/a'),/target/i);await assert.rejects(client.call('later','GET','https://owned.test/a'),/stop|unknown|latched/i);assert.equal(wire.length,1);
 });
 test('failed journal or unknown response prevents later sends even in cleanup',async()=>{
@@ -43,4 +43,39 @@ test('strict cleanup stops after known response with mismatched readback',async(
  const a=createRtdbAdmin({instance:'x',location:'y',caps,propagationMs:0,fireGraceMs:0,rulesFor:()=>({}),strictStartup:true});const calls=[];
  const run={admin:{cleanup(){}},state:{data:'ours',rules:'ours',instance:'baseline',api:'baseline'},u:{data:(p)=>p},call:async(step)=>{calls.push(step);return {outcome:'ok',value:step==='prefix-delete'?null:{foreign:true},text:'{}'}},errors:[],unresolved:[]};
  await a.cleanup(run,{mode:'local',prefix:'owned'},async()=>{});assert.deepEqual(calls,['prefix-delete','prefix-null']);
+});
+
+test('strict client journals headers before consuming response body',async()=>{
+ const order=[];const {client}=setup({journal:(row)=>order.push(row.kind),fetchImpl:async()=>({status:200,headers:new Headers({'content-type':'application/json'}),text:async()=>{order.push('read-body');return '{}'}})});
+ await client.call('one','GET','https://owned.test/a');assert.deepEqual(order,['before','headers','read-body','after']);
+});
+
+test('header journal failure stops without reading body or subsequent wire',async()=>{
+ let reads=0,sends=0;const {client}=setup({journal:(row)=>{if(row.kind==='headers')throw Error('disk')},fetchImpl:async()=>{sends++;return {status:200,headers:new Headers(),text:async()=>{reads++;return '{}'}}}});await client.call('one','GET','https://owned.test/a');client.cleanup();await assert.rejects(client.call('later','GET','https://owned.test/a'));assert.equal(sends,1);assert.equal(reads,0);
+});
+
+test('operation names accept reviewed dotted grammar and refuse foreign names',async()=>{
+ const {validStartupOperation}=await import('./rtdb-residual.mjs');assert.equal(validStartupOperation('operations/acat.p17-abc_xyz'),true);for(const s of ['https://foreign.test/operations/a','operations/../foreign','operations/a..b','operations/a?x=1'])assert.equal(validStartupOperation(s),false);
+ const allowed=()=>true;allowed.register=(name)=>{if(!validStartupOperation(name))throw Error('bad operation')};let count=0;
+ const c=createStartupStrictClient({caps,allowed,journal:()=>{},fetchImpl:async()=>{count++;return new Response(JSON.stringify({name:'https://foreign.test/operations/a'}),{status:200})}});assert.equal((await c.call('api-enable','POST','https://owned.test/a')).outcome,'unknown');await assert.rejects(c.call('later','GET','https://owned.test/a'));assert.equal(count,1);
+});
+
+test('body interruption preserves recorded headers and freezes cleanup',async()=>{
+ const rows=[];let sends=0;const {client}=setup({journal:(row)=>rows.push(row),fetchImpl:async()=>{sends++;return {status:200,headers:new Headers({'content-type':'application/json'}),text:async()=>{throw Error('interrupted')}}}});const result=await client.call('one','GET','https://owned.test/a');assert.equal(result.outcome,'unknown');assert.deepEqual(rows.map((r)=>r.kind),['before','headers']);client.cleanup();await assert.rejects(client.call('later','GET','https://owned.test/a'));assert.equal(sends,1);
+});
+
+test('external startup admission rejects unbooked, stale, duplicated, revoked and self-supplied claims',async()=>{
+ const {validateStartupAdmission}=await import('./rtdb-residual.mjs');const hash='a'.repeat(64),carry='b'.repeat(64);const id='RTDB-SDK-STARTUP-TEST';const rows=['A','E','V'].map((x)=>`- 2026-10-29 | ${x} ${id} | packetSha256=${hash} | test | test`);const a={envelopeId:id,booked:true,scenario:'sdk-next-startup',packetSha256:hash,sourceSha256:hash,carrySha256:carry,previousDirect:1177,previousAdc:20,previousUsd:19,incrementUsd:1,totalCap:1399,profiles:['r1-ws','r2-ws'],ownerRows:rows};
+ assert.equal(validateStartupAdmission({admission:a,packetSha256:hash,sourceSha256:hash,carrySha256:carry,ledger:rows}),true);
+ for(const changed of [{booked:false},{carrySha256:hash},{packetSha256:carry},{scenario:'sdk-next'},{totalCap:1398}])assert.throws(()=>validateStartupAdmission({admission:{...a,...changed},packetSha256:hash,sourceSha256:hash,carrySha256:carry,ledger:rows}));
+ for(const ledger of [rows.slice(1),[...rows,rows[0]],[...rows,'REVOKED startup '+hash],rows.toReversed()])assert.throws(()=>validateStartupAdmission({admission:a,packetSha256:hash,sourceSha256:hash,carrySha256:carry,ledger}));
+});
+
+test('seeded admission matrix requires all independent gates',async()=>{
+ if(!process.env.ADMISSION_PICT)return;const {readFileSync}=await import('node:fs');const {validateStartupAdmission}=await import('./rtdb-residual.mjs');const hash='a'.repeat(64),carry='b'.repeat(64),id='RTDB-SDK-STARTUP-TEST';const rows=['A','E','V'].map((x)=>`- 2026-10-29 | ${x} ${id} | packetSha256=${hash} | test | test`);
+ for(const line of readFileSync(process.env.ADMISSION_PICT,'utf8').trim().split(/\r?\n/).slice(1)){const [booking,c,l]=line.split('\t');const a={envelopeId:id,booked:booking==='booked',scenario:'sdk-next-startup',packetSha256:hash,sourceSha256:hash,carrySha256:c==='current'?carry:hash,previousDirect:1177,previousAdc:20,previousUsd:19,incrementUsd:1,totalCap:1399,profiles:['r1-ws','r2-ws'],ownerRows:rows};const ledger=l==='missing'?rows.slice(1):l==='duplicate'?[...rows,rows[0]]:l==='revoked'?[...rows,'REVOKED '+hash]:rows;const evaluate=()=>validateStartupAdmission({admission:a,packetSha256:hash,sourceSha256:hash,carrySha256:carry,ledger});if(booking==='booked'&&c==='current'&&l==='ordered')assert.equal(evaluate(),true);else assert.throws(evaluate);}
+});
+
+test('actual target gate admits only a registered dotted operation on fixed host',async()=>{
+ const {startupAllowedTargets}=await import('./rtdb-residual.mjs');const u={data:(p)=>`https://db.test/${p}`,service:'https://serviceusage.googleapis.com/v1/projects/123/services/rtdb',instance:'https://management.test/instance',list:'https://management.test/list',op:(name)=>`https://serviceusage.googleapis.com/v1/${name}`};const allowed=startupAllowedTargets(u,'owned');const op=u.op('operations/acat.p17-abc');assert.equal(allowed(op,'GET'),false);allowed.register('operations/acat.p17-abc');assert.equal(allowed(op,'GET'),true);assert.equal(allowed(op,'POST'),false);assert.equal(allowed('https://foreign.test/v1/operations/acat.p17-abc','GET'),false);assert.throws(()=>allowed.register('https://foreign.test/operations/a'));
 });

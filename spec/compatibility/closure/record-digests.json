@@ -22,7 +22,7 @@
     "conformance/scheduled-delivery/local/production-run3.json": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
     "conformance/scheduled-delivery/local/production-run4.json": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
     "conformance/src/fs-ent-text-refusal-evidence.test.mjs": "142b80fd6a7ee87c85efdb32d3a99fd7a0b00619cc31178ed9f73daa288ba03e",
-    "conformance/src/fs-pipeline-closure.test.mjs": "64f05649976c4d1d6b85f8037bd54575b52c01734b718dc2961e5f3adc4b2ea4",
+    "conformance/src/fs-pipeline-closure.test.mjs": "8ba46df4f9d3e7ce860f0f988559cc184326b521bc567459f169549fc66f3148",
     "conformance/src/fs-query-index/run.mjs": "296d781dbdad9af5636573f253df2a97fd666b02372ceb3f5bc126301d474255",
     "conformance/src/rtdb-functions/compare-local.mjs": "1e951dbf0c9e3f936cb386d5207c3be58f6cb8f7f1267d4a32910a6b7248eeae",
     "conformance/src/rtdb-functions/compare-local.test.mjs": "c9bd92e6b2ae2f74934454467171a1cbbb6fb3ebc8cabb236ab19b0ca341dc8c",

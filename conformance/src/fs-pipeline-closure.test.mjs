@@ -256,3 +256,27 @@ test("v0.34 preserves the complete comparison and keeps the controlled clock sep
   assert.equal(clock.derivedSeconds, "1927857906");
   assert.equal(clock.response[0].results[0].fields.v.integerValue, clock.derivedSeconds);
 });
+
+test("the capability and generated inventory describe recorded unnest and base64 behavior", () => {
+  const capabilities = text("crates/fireemu/src/capabilities.json");
+  const features = text("spec/compatibility/features.json");
+  const inventory = text("docs/compatibility/firestore-enterprise-native.md");
+  for (const source of [capabilities, features, inventory]) {
+    assert.ok(!source.includes("union, unnest and sample remain unsupported"));
+    assert.ok(source.includes("recorded unnest"));
+  }
+  const unimplemented = json("crates/fireemu/src/capabilities.json")["FS-PIPE-RPC-1"].unimplemented;
+  assert.ok(!unimplemented[0].includes("union, unnest, sample"));
+  for (const name of [
+    "array_slice",
+    "array_first_n",
+    "array_last_n",
+    "array_index_of",
+    "join",
+    "maximum_n",
+    "minimum_n",
+  ])
+    assert.ok(unimplemented[1].includes(name));
+  assert.ok(!capabilities.includes("paths accept base64 values with line breaks"));
+  assert.ok(capabilities.includes("recorded CR/LF and mixed alphabets"));
+});

@@ -23,10 +23,10 @@ test('local replay uses manual redirects and restores Rules after all ten typed 
 
 test('failed Rules setup restores baseline and cleanup failure is not success',async()=>{
  const {replay}=await import('./rest-server-values-replay.mjs');let rules='old',deleteCount=0;const fixture={schemaVersion:1,rows:Array(10).fill({})};
- const fake=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json'){if(options.method==='PUT'){if(options.body!=='old'){rules=options.body;return new Response('',{status:500});}rules=options.body;}return new Response(rules,{status:200});}if(options.method==='DELETE')deleteCount++;return new Response('null',{status:200});};
+ const fake=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json'){if(options.method==='PUT'){if(options.body!=='old'){rules=options.body;return new Response('',{status:403});}rules=options.body;}return new Response(rules,{status:200});}if(options.method==='DELETE')deleteCount++;return new Response('null',{status:200});};
  await assert.rejects(replay('http://127.0.0.1:12345',fixture,{fetchImpl:fake}),/rules setup unresolved/);assert.equal(rules,'old');assert.equal(deleteCount,1);
- const bad=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json')return options.method==='PUT'&&options.body!=='old'?new Response('',{status:500}):new Response('old',{status:200});return new Response('',{status:500});};
- await assert.rejects(replay('http://127.0.0.1:12345',fixture,{fetchImpl:bad}),/cleanup unresolved/);
+ const bad=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json')return options.method==='PUT'&&options.body!=='old'?new Response('',{status:403}):new Response('old',{status:200});return new Response('',{status:500});};
+ await assert.rejects(replay('http://127.0.0.1:12345',fixture,{fetchImpl:bad}),/unknown/);
 });
 
 test('each generated case, round and profile comparison is exercised',async()=>{
@@ -38,12 +38,25 @@ test('timestamp relation is independent of clock value while one changed leaf fa
  const expected=maskObservation(observed());for(let time=-100;time<=100;time++){const row=observed();row.value.first=row.value.second=row.readback.first=row.readback.second=time;assert.equal(compareCase(expected,row).verdict,'MATCH');row.readback.second=time+1;assert.notEqual(compareCase(expected,row).verdict,'MATCH');}
 });
 
-test('remote origins and redirected baseline are refused',async()=>{const {replay}=await import('./rest-server-values-replay.mjs');await assert.rejects(replay('https://example.invalid',{schemaVersion:1,rows:[]}),/local origin/);let calls=0;await assert.rejects(replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({})},{fetchImpl:async(_url,options)=>{calls++;assert.equal(options.redirect,'manual');return new Response('',{status:302});}}),/baseline unresolved/);assert.equal(calls,1);});
+test('remote origins and redirected baseline are refused',async()=>{const {replay}=await import('./rest-server-values-replay.mjs');await assert.rejects(replay('https://example.invalid',{schemaVersion:1,rows:[]}),/local origin/);let calls=0;await assert.rejects(replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({})},{fetchImpl:async(_url,options)=>{calls++;assert.equal(options.redirect,'manual');return new Response('',{status:302});}}),/unknown/);assert.equal(calls,1);});
 
 test('both timestamps must match even when the entire write and readback agree',()=>{const row=observed();row.value.second=101;row.readback.second=101;assert.throws(()=>maskObservation(row),/timestamp relation/);});
 
 test('single timestamp must be an integer even when write and readback agree',()=>{const row={...observed(),id:'timestamp-single',value:'100',readback:'100'};assert.throws(()=>maskObservation(row),/timestamp type/);});
 
 test('failed root deletion cannot be hidden by a null cleanup read',async()=>{
- const {replay}=await import('./rest-server-values-replay.mjs');let rules='old';const fake=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json'){if(options.method==='PUT'){if(options.body!=='old'){rules=options.body;return new Response('',{status:500});}rules=options.body;}return new Response(rules,{status:200});}if(options.method==='DELETE')return new Response('',{status:500});return new Response('null',{status:200});};await assert.rejects(replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({})},{fetchImpl:fake}),/cleanup unresolved/);assert.equal(rules,'old');
+ const {replay}=await import('./rest-server-values-replay.mjs');let rules='old';const fake=async(input,options)=>{const u=new URL(input);if(u.pathname==='/.settings/rules.json'){if(options.method==='PUT'){if(options.body!=='old'){rules=options.body;return new Response('',{status:403});}rules=options.body;}return new Response(rules,{status:200});}if(options.method==='DELETE')return new Response('',{status:403});return new Response('null',{status:200});};await assert.rejects(replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({})},{fetchImpl:fake}),/cleanup unresolved/);assert.equal(rules,'old');
 });
+
+test('unknown write or interrupted response prevents any subsequent cleanup request',async()=>{
+ const {replay}=await import('./rest-server-values-replay.mjs');const {readFile}=await import('node:fs/promises');const fixture=JSON.parse(await readFile(new URL('./fixtures/production-rest-server-values.json',import.meta.url),'utf8'));
+ for(const fault of ['reject','body']){let n=0;const calls=[];const fake=async(input,options)=>{const path=new URL(input).pathname;calls.push({path,method:options.method??'GET'});if(path==='/.settings/rules.json')return new Response(options.method==='PUT'?'{}':'old',{status:200});if(++n===1)return new Response('null',{status:200});if(n===2){if(fault==='reject')throw Error('timeout');return {status:200,headers:new Headers(),text:async()=>{throw Error('body interrupted');}};}throw Error('later request');};await assert.rejects(replay('http://127.0.0.1:12345',fixture,{fetchImpl:fake}),/unknown/);assert.equal(calls.length,4);}
+});
+
+test('unknown root DELETE prevents later cleanup reads and Rules restoration',async()=>{
+ const {replay}=await import('./rest-server-values-replay.mjs');let calls=[];const fake=async(input,options)=>{const path=new URL(input).pathname;calls.push({path,method:options.method??'GET'});if(path==='/.settings/rules.json'){if(options.method==='PUT'&&options.body!=='old')return new Response('',{status:403});return new Response('old',{status:200});}if(options.method==='DELETE')throw Error('timeout');throw Error('later request');};await assert.rejects(replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({})},{fetchImpl:fake}),/unknown/);assert.equal(calls.length,3);
+});
+
+test('unreadable JSON after a dispatched write is unknown and stops cleanup',async()=>{const {replay}=await import('./rest-server-values-replay.mjs');const {readFile}=await import('node:fs/promises');const fixture=JSON.parse(await readFile(new URL('./fixtures/production-rest-server-values.json',import.meta.url),'utf8'));let calls=0;const fake=async(input,options)=>{calls++;const path=new URL(input).pathname;if(path==='/.settings/rules.json')return new Response(options.method==='PUT'?'{}':'old',{status:200});return new Response('invalid json',{status:200});};await assert.rejects(replay('http://127.0.0.1:12345',fixture,{fetchImpl:fake}),/unknown/);assert.equal(calls,3);});
+
+test('unknown error retains owned scope for recovery without exposing request values',async()=>{const {replay}=await import('./rest-server-values-replay.mjs');const fake=async(input,options)=>{const path=new URL(input).pathname;if(path==='/.settings/rules.json')return new Response(options.method==='PUT'?'{}':'old',{status:200});throw Error('timeout');};let error;try{await replay('http://127.0.0.1:12345',{schemaVersion:1,rows:Array(10).fill({id:'timestamp-single',round:'r1',preimage:null,request:{method:'PUT',body:'{}'}})},{fetchImpl:fake});}catch(e){error=e;}assert.match(error.message,/unknown/);assert.match(error.ownedRoot,/^svreplay[a-f0-9]{16}$/);});

@@ -47,22 +47,28 @@ export async function replay(origin,fixture,{fetchImpl=fetch}={}) {
  if(fixture?.schemaVersion!==1||fixture.rows?.length!==10)throw Error('fixture invalid');
  const root=`svreplay${randomBytes(8).toString('hex')}`,rulesUrl=`${url.origin}/.settings/rules.json`,rootUrl=`${url.origin}/${root}.json`;
  const headers={authorization:'Bearer owner','content-type':'application/json'};
- const fetchLocal=(u,o={})=>fetchImpl(u,{...o,redirect:'manual',signal:AbortSignal.timeout(10000)});
+ let unknown=false;
+ const unknownError=()=>Object.assign(Error('local outcome unknown'),{ownedRoot:root});
+ const fetchLocal=async(u,o={})=>{if(unknown)throw unknownError();let res;try{res=await fetchImpl(u,{...o,redirect:'manual',signal:AbortSignal.timeout(10000)});if(res.status<200||res.status>=500||(res.status>=300&&res.status<400)){unknown=true;throw unknownError();}return {status:res.status,headers:res.headers,text:async()=>{try{return await res.text();}catch{unknown=true;throw unknownError();}}};}catch{unknown=true;throw unknownError();}};
+ const parseLocal=text=>{try{return parsed(text);}catch{unknown=true;throw unknownError();}};
  const baseline=await fetchLocal(rulesUrl,{headers});if(baseline.status!==200)throw Error('rules baseline unresolved');const original=await baseline.text();let rows;
  try {
   const configured=await fetchLocal(rulesUrl,{method:'PUT',headers,body:JSON.stringify({rules:{'.read':false,'.write':false,[root]:{'.read':true,'.write':true}}})});if(configured.status!==200)throw Error('rules setup unresolved');
-  const send=async req=>{const res=await fetchLocal(`${url.origin}${req.path}`,{method:req.method,headers,body:req.body});return {status:res.status,etag:res.headers.get('etag'),body:await res.text()};};
+  const send=async req=>{const res=await fetchLocal(`${url.origin}${req.path}`,{method:req.method,headers,body:req.body});const body=await res.text();parseLocal(body);return {status:res.status,etag:res.headers.get('etag'),body};};
   rows=[];for(const item of fixture.rows)rows.push(await replayCase(item,send,root));
  } finally {
-  let failed=false;try{const del=await fetchLocal(rootUrl,{method:'DELETE',headers});const read=await fetchLocal(rootUrl,{headers});if(del.status!==200||read.status!==200||parsed(await read.text())!==null)failed=true;}catch{failed=true;}
+  if(unknown)throw unknownError();
+  let failed=false;try{const del=await fetchLocal(rootUrl,{method:'DELETE',headers});const read=await fetchLocal(rootUrl,{headers});if(del.status!==200||read.status!==200||parseLocal(await read.text())!==null)failed=true;}catch{failed=true;}
+  if(unknown)throw unknownError();
   try{const put=await fetchLocal(rulesUrl,{method:'PUT',headers,body:original});const read=await fetchLocal(rulesUrl,{headers});if(put.status!==200||read.status!==200||await read.text()!==original)failed=true;}catch{failed=true;}
+  if(unknown)throw unknownError();
   if(failed)throw Error('cleanup unresolved');
  }
  return {rows,cleanup:{ownedRootAbsent:true,rulesRestored:true}};
 }
 async function main(args){
  if(args[0]==='fixture'&&args.length===3){const bytes=await readFile(args[1]);await writeFile(args[2],JSON.stringify(extractFixture(bytes),null,2)+'\n',{flag:'wx'});return;}
- if(args[0]==='local'&&args.length===4&&['strict','ordinary'].includes(args[2])){const fixture=JSON.parse(await readFile(new URL('./fixtures/production-rest-server-values.json',import.meta.url),'utf8'));await mkdir(args[3]);const result=await replay(args[1],fixture);await writeFile(`${args[3]}/comparison.json`,JSON.stringify({profile:args[2],...result},null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({profile:args[2],rows:result.rows.length,matched:result.rows.filter(x=>x.result.verdict==='MATCH').length}));if(result.rows.some(x=>x.result.verdict!=='MATCH'))process.exitCode=1;return;}
+ if(args[0]==='local'&&args.length===4&&['strict','ordinary'].includes(args[2])){const fixture=JSON.parse(await readFile(new URL('./fixtures/production-rest-server-values.json',import.meta.url),'utf8'));await mkdir(args[3]);let result;try{result=await replay(args[1],fixture);}catch(error){if(error.ownedRoot)await writeFile(`${args[3]}/unknown.json`,JSON.stringify({status:'UNKNOWN',ownedRoot:error.ownedRoot})+'\n',{flag:'wx'});throw error;}await writeFile(`${args[3]}/comparison.json`,JSON.stringify({profile:args[2],...result},null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({profile:args[2],rows:result.rows.length,matched:result.rows.filter(x=>x.result.verdict==='MATCH').length}));if(result.rows.some(x=>x.result.verdict!=='MATCH'))process.exitCode=1;return;}
  throw Error('usage');
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv.slice(2)).catch(()=>{console.error('server value replay stopped');process.exitCode=2;});

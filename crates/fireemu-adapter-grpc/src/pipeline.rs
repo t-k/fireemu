@@ -4795,6 +4795,23 @@ mod tests {
         );
     }
 
+    proptest::proptest! {
+        #[test]
+        fn generated_reserved_key_stems_preserve_literal_diagnostics(stem in "[a-z]{1,12}") {
+            use pb::value::ValueType as V;
+            let map = |key: String| pb::Value { value_type: Some(V::MapValue(pb::MapValue {
+                fields: [(key, pb::Value { value_type: Some(V::IntegerValue(1)) })].into_iter().collect(),
+            })) };
+            let reserved = format!("__{stem}__");
+            let expected = format!("field name '{reserved}' is reserved.");
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let error = decode_operand_tree(&map(reserved.clone()), mode).unwrap_err();
+                proptest::prop_assert_eq!(error.message(), expected.as_str());
+                proptest::prop_assert!(decode_operand_tree(&map(stem.clone()), mode).is_ok());
+            }
+        }
+    }
+
     #[test]
     fn literal_keys_follow_the_wire_order_while_it_is_known() {
         let fields = |keys: &[&str]| -> std::collections::HashMap<String, pb::Value> {

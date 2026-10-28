@@ -179,12 +179,21 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
             emulator: (400, EMPTY_SELECT),
         },
         Case {
+            label: "select {} then where(unregistered_probe(\"a\"))",
+            stages: vec![
+                empty(),
+                stage("where", vec![func("unregistered_probe", vec![string("a")])]),
+            ],
+            strict: None,
+            emulator: (400, EMPTY_SELECT),
+        },
+        Case {
             label: "select {} then where(sqrt(\"a\"))",
             stages: vec![
                 empty(),
                 stage("where", vec![func("sqrt", vec![string("a")])]),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {

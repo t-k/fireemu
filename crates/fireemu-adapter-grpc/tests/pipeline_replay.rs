@@ -641,22 +641,6 @@ fn satisfies_in(
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "fs-ent-pipeline/px1/select#is-error-sqrt-s",
-        "sqrt is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#select-sqrt-a",
-        "sqrt is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/static-refusals#where-sqrt-a",
-        "sqrt is outside the subset",
-    ),
-    (
-        "fs-ent-pipeline/px1/where#sqrt-s-positive",
-        "sqrt is outside the subset",
-    ),
-    (
         "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
         "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
     ),
@@ -1224,7 +1208,7 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 155, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 154, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
             120,

@@ -1,11 +1,12 @@
 //! The string and math functions of a pipeline (`FS-PIPELINE`): `concat`, `to_lower`,
 //! `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`,
 //! `trim`, `ltrim`, `rtrim`, `split`, `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`,
-//! `round`, `floor`, `ceil` and `pow`.
+//! `round`, `floor`, `ceil`, `pow` and `sqrt`.
 //!
-//! Everything here was observed in production by FS-ENT-ORACLE O-8B (2026-10-26, an Enterprise
+//! The existing functions were observed in production by FS-ENT-ORACLE O-8B (2026-10-26, an Enterprise
 //! database, two identical recordings; `fs-ent-pipeline/o8b/strings-main` and `math-main`).
-//! The rules those rows show:
+//! SQRT has only a recorded wrong-type refusal and empty-input witnesses (O-1); numeric
+//! behavior is not established by those rows. The rules the O-8B rows show:
 //!
 //! - A null or a missing argument gives null.
 //! - An argument of the wrong type fails the whole request with
@@ -25,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 38] = [
+pub const NAMES: [&str; 39] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -64,6 +65,7 @@ pub const NAMES: [&str; 38] = [
     "floor",
     "ceil",
     "pow",
+    "sqrt",
 ];
 
 pub(super) const CURRENT_TIMESTAMP: Function = function(
@@ -395,6 +397,15 @@ pub(super) const POW: Function = function(
     "pow(base: number, exponent: number): float64",
     &[],
     eval_pow,
+);
+
+pub(super) const SQRT: Function = function(
+    "sqrt",
+    Arity::Exact(1),
+    false,
+    "sqrt(number: float64): float64",
+    &[],
+    eval_sqrt,
 );
 
 fn unobserved(function: &'static str, reason: &'static str) -> Eval {
@@ -1774,4 +1785,35 @@ fn eval_pow(args: &[Eval], cx: Context) -> Eval {
         );
     }
     double(base.powf(exponent))
+}
+
+fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match &args[0] {
+        Eval::Value(Value::String(_)) => Eval::Error(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING",
+        }),
+        _ if strict(cx) => unobserved("sqrt", "numeric and other argument behavior is unobserved"),
+        Eval::Value(Value::Null) | Eval::Absent => null(),
+        Eval::Value(Value::Integer(value)) => sqrt_number(Num::Int(*value).double()),
+        Eval::Value(Value::Double(value)) => sqrt_number(*value),
+        Eval::Value(value) => Eval::Error(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: type_name(value),
+        }),
+        Eval::Error(_) => unreachable!("errors are returned above"),
+    }
+}
+
+fn sqrt_number(value: f64) -> Eval {
+    if value < 0.0 {
+        invalid("sqrt(...) requires a non-negative number")
+    } else {
+        double(value.sqrt())
+    }
 }

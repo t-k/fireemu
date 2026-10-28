@@ -287,35 +287,6 @@
     }
   },
   {
-    "category": "unsupported-subset",
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'select(...)' stage requires at least one field.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/stage-order#select-empty-then-where-sqrt-string",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "where expression is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "validation-order-or-subset",
     "emulator": {
       "body": [
@@ -1936,18 +1907,18 @@
     }
   },
   {
-    "category": "unsupported-subset",
+    "category": "arity-wording",
     "emulator": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"sqrt\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'sqrt(number: float64): float64' takes [1..1] argument(s), but 0 were provided.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -1961,14 +1932,14 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "The observed local zero-argument arity refusal uses a different signature from the retained production recording.",
     "row": "fs-ent-pipeline/o5/function-names#fn-sqrt",
     "strict": {
       "body": [
         {
           "error": {
             "code": 501,
-            "message": "function \"sqrt\" is unsupported locally",
+            "message": "The function 'sqrt(number: float64): float64' takes [1..1] argument(s), but 0 were provided.; production has not refused a request of this shape with this text, so this refusal is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }

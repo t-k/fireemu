@@ -82,8 +82,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 38);
-    assert!(function("sqrt").is_none());
+    assert_eq!(NAMES.len(), 39);
+    assert!(function("sqrt").is_some());
 }
 
 #[test]
@@ -3135,4 +3135,241 @@ fn map_set_odd_count_is_recorded_arity_and_minimum_still_precedes_it() {
     );
     let args = vec![Expr::Constant(Value::Null); 3];
     assert!(Expr::call("map_set", args, Placement::Value).is_ok());
+}
+
+#[test]
+fn sqrt_observed_wrong_type_and_unobserved_strict_numeric() {
+    assert!(function("sqrt").is_some(), "sqrt must be registered");
+    assert_eq!(both("sqrt", &[text("s")]), wrong("sqrt", "Float", "STRING"));
+    for value in [
+        int(25),
+        dbl(0.0),
+        dbl(-1.0),
+        dbl(f64::NAN),
+        dbl(f64::INFINITY),
+        null(),
+        Eval::Absent,
+    ] {
+        assert!(
+            is_unobserved(&strict("sqrt", &[value])),
+            "strict sqrt must not claim unobserved values"
+        );
+    }
+}
+
+#[test]
+fn sqrt_ordinary_numeric_examples_and_domain() {
+    assert_eq!(emulator("sqrt", &[int(25)]), dbl(5.0));
+    assert_eq!(emulator("sqrt", &[dbl(0.0)]), dbl(0.0));
+    assert!(
+        matches!(emulator("sqrt", &[dbl(f64::NAN)]), Eval::Value(Value::Double(x)) if x.is_nan())
+    );
+    assert!(
+        matches!(emulator("sqrt", &[dbl(f64::INFINITY)]), Eval::Value(Value::Double(x)) if x == f64::INFINITY)
+    );
+    assert!(matches!(
+        emulator("sqrt", &[dbl(-1.0)]),
+        Eval::Error(EvalError::Invalid(_))
+    ));
+    assert!(matches!(
+        emulator("sqrt", &[dbl(f64::NEG_INFINITY)]),
+        Eval::Error(EvalError::Invalid(_))
+    ));
+    assert!(matches!(
+        emulator("sqrt", &[dbl(-0.0)]),
+        Eval::Value(Value::Double(value)) if value == 0.0 && value.is_sign_negative()
+    ));
+    assert!(is_unobserved(&strict("sqrt", &[dbl(f64::NEG_INFINITY)])));
+    assert!(is_unobserved(&strict("sqrt", &[dbl(-0.0)])));
+}
+
+#[test]
+fn sqrt_seeded_pairwise_cases_cover_registered_execution() {
+    let cases = r"Input	Profile	Position	Rows	Arity
+string	strict	is_error	populated	valid
+string	strict	where	populated	valid
+string	strict	select	empty	valid
+string	strict	where	empty	valid
+positive	ordinary	select	populated	valid
+zero	ordinary	select	populated	valid
+negative	ordinary	select	populated	valid
+nan	ordinary	select	populated	valid
+infinity	ordinary	select	populated	valid
+zero	ordinary	is_error	empty	invalid
+negative	strict	where	empty	invalid
+missing	strict	is_error	populated	invalid
+infinity	ordinary	where	empty	invalid
+nan	strict	where	empty	invalid
+other	ordinary	select	populated	invalid
+null	ordinary	select	populated	valid
+positive	strict	is_error	empty	invalid
+positive	strict	where	populated	valid
+other	strict	is_error	empty	valid
+infinity	strict	is_error	populated	invalid
+missing	ordinary	select	empty	valid
+null	strict	is_error	empty	invalid
+negative	ordinary	is_error	empty	invalid
+missing	ordinary	where	populated	invalid
+zero	strict	where	empty	invalid
+nan	ordinary	is_error	empty	invalid
+null	strict	where	empty	valid
+string	ordinary	is_error	populated	invalid
+other	strict	where	empty	valid
+";
+    for line in cases.lines().skip(1) {
+        let columns: Vec<_> = line.split('\t').collect();
+        assert_eq!(columns.len(), 5, "{line}");
+        let [kind, profile, position, rows, arity] = columns.as_slice() else {
+            unreachable!()
+        };
+        if *arity == "invalid" {
+            assert!(
+                Expr::call("sqrt", vec![], Placement::Value).is_err(),
+                "{line}"
+            );
+            continue;
+        }
+        let value = match *kind {
+            "string" => Some(Value::String("s".to_owned())),
+            "positive" => Some(Value::Double(25.0)),
+            "zero" => Some(Value::Double(0.0)),
+            "negative" => Some(Value::Double(-1.0)),
+            "nan" => Some(Value::Double(f64::NAN)),
+            "infinity" => Some(Value::Double(f64::INFINITY)),
+            "null" => Some(Value::Null),
+            "missing" => None,
+            "other" => Some(Value::Boolean(true)),
+            _ => panic!("unknown input: {line}"),
+        };
+        let row = Row::derived(value.map_or_else(BTreeMap::new, |v| {
+            [("v".to_owned(), v)].into_iter().collect()
+        }));
+        let arg = Expr::Field(FieldPath::parse("v").unwrap());
+        let sqrt = Expr::call("sqrt", vec![arg], Placement::Value).unwrap();
+        let expr = if *position == "is_error" {
+            Expr::call("is_error", vec![sqrt], Placement::Value).unwrap()
+        } else {
+            sqrt
+        };
+        let stage = if *position == "where" {
+            Stage::Where(expr)
+        } else {
+            Stage::Select {
+                aliases: vec![(FieldPath::parse("out").unwrap(), expr)],
+                keeps_name: false,
+            }
+        };
+        let input = if *rows == "empty" { vec![] } else { vec![row] };
+        let strict_profile = *profile == "strict";
+        let unrecorded = if strict_profile {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let result = execute_rows_in(vec![stage], input, unrecorded);
+        if *rows == "empty" {
+            assert_eq!(result.unwrap().len(), 0, "{line}");
+            continue;
+        }
+        if strict_profile && *kind != "string" {
+            assert!(
+                matches!(result, Err(EvalError::Unobserved { .. })),
+                "{line}: {result:?}"
+            );
+        } else if (*kind == "string"
+            || *kind == "other"
+            || (!strict_profile && *kind == "negative"))
+            && *position != "is_error"
+        {
+            assert!(result.is_err(), "{line}: {result:?}");
+        } else {
+            assert!(result.is_ok(), "{line}: {result:?}");
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn ordinary_sqrt_squares_nonnegative_finite_inputs(value in 0_u32..1_000_000) {
+        let result = emulator("sqrt", &[dbl(f64::from(value))]);
+        let Eval::Value(Value::Double(root)) = result else { panic!("expected numeric result") };
+        prop_assert!((root * root - f64::from(value)).abs() <= 1e-8);
+        prop_assert!(is_unobserved(&strict("sqrt", &[dbl(f64::from(value))])));
+    }
+}
+
+#[test]
+fn sqrt_declares_one_argument_without_claiming_unobserved_error_text() {
+    assert!(Expr::call("sqrt", vec![], Placement::Value).is_err());
+    assert!(Expr::call(
+        "sqrt",
+        vec![
+            Expr::Constant(Value::Double(1.0)),
+            Expr::Constant(Value::Double(2.0))
+        ],
+        Placement::Value
+    )
+    .is_err());
+    assert!(Expr::call(
+        "sqrt",
+        vec![Expr::Constant(Value::Double(1.0))],
+        Placement::Value
+    )
+    .is_ok());
+}
+
+#[test]
+fn sqrt_propagates_an_existing_error_before_inspecting_the_input() {
+    let previous = Eval::Error(EvalError::WrongType {
+        function: "inner",
+        expected: "String",
+        got: "LONG",
+    });
+    assert_eq!(strict("sqrt", std::slice::from_ref(&previous)), previous);
+    assert_eq!(emulator("sqrt", std::slice::from_ref(&previous)), previous);
+}
+
+#[test]
+fn sqrt_where_propagates_the_observed_wrong_type_class() {
+    let sqrt = || {
+        Expr::call(
+            "sqrt",
+            vec![Expr::Field(FieldPath::parse("v").unwrap())],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let gt = |arg| {
+        Expr::call(
+            "greater_than",
+            vec![sqrt(), Expr::Constant(Value::Integer(arg))],
+            Placement::Condition,
+        )
+        .unwrap()
+    };
+    let row = || {
+        Row::derived(
+            [("v".to_owned(), Value::String("s".to_owned()))]
+                .into_iter()
+                .collect(),
+        )
+    };
+    let recorded = execute_rows_in(vec![Stage::Where(gt(0))], vec![row()], Unrecorded::Refuse);
+    assert!(matches!(
+        recorded,
+        Err(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING"
+        })
+    ));
+    let same_error = execute_rows_in(vec![Stage::Where(gt(1))], vec![row()], Unrecorded::Refuse);
+    assert!(matches!(
+        same_error,
+        Err(EvalError::WrongType {
+            function: "sqrt",
+            expected: "Float",
+            got: "STRING"
+        })
+    ));
 }

@@ -559,6 +559,7 @@ const FUNCTIONS: &[Function] = &[
     scalar::FLOOR,
     scalar::CEIL,
     scalar::POW,
+    scalar::SQRT,
 ];
 
 /// Looks a function up in the static table.
@@ -2210,6 +2211,11 @@ impl Cursor {
                                         | EvalError::WrongType {
                                             function: "and" | "or" | "not",
                                             ..
+                                        }
+                                        | EvalError::WrongType {
+                                            function: "sqrt",
+                                            expected: "Float",
+                                            got: "STRING",
                                         }
                                 ) =>
                         {

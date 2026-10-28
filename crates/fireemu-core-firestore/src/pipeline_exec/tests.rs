@@ -139,6 +139,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "floor",
             "ceil",
             "pow",
+            "sqrt",
         ]
     );
     assert_eq!(function("equal").unwrap().arity, Arity::Exact(2));
@@ -148,7 +149,7 @@ fn table_lists_exactly_the_recorded_functions() {
     for name in [
         "eq",
         "between",
-        "sqrt",
+        "unregistered_probe",
         "REGEX_MATCH",
         "MAXIMUM_N",
         "MINIMUM_N",
@@ -164,11 +165,11 @@ fn table_lists_exactly_the_recorded_functions() {
 #[test]
 fn call_refuses_unknown_misplaced_and_misarity_functions() {
     assert!(matches!(
-        Expr::call("sqrt", vec![field("a")], Placement::Value),
-        Err(ExprError::Unsupported(m)) if m.contains("sqrt")
+        Expr::call("unregistered_probe", vec![field("a")], Placement::Value),
+        Err(ExprError::Unsupported(m)) if m.contains("unregistered_probe")
     ));
     assert!(matches!(
-        Expr::call("sqrt", vec![field("a")], Placement::Condition),
+        Expr::call("unregistered_probe", vec![field("a")], Placement::Condition),
         Err(ExprError::Unsupported(_))
     ));
     // A comparison stands anywhere; a value function is no whole where condition.

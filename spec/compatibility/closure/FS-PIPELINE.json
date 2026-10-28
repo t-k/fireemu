@@ -28,7 +28,7 @@
         "outcome": "Independent Sol review: APPROVE, Must 0; nonblocking clock mutation coverage remains outside the verified scope."
       }
     ],
-    "note": "The independent review approved the 998 claimed rows at the reviewed commit. The integrated release comparison has been refreshed after string and math support; newly matching rows remain explicitly unclaimed pending independent review."
+    "note": "The historical review approved 998 claimed rows. Owner decision 1897 and the recorded leaf review approved the 430 additional matching rows in the signed S comparison; parent-wide compatibility remains unproven."
   },
   "scopeDecisions": [
     {
@@ -414,10 +414,10 @@
       "note": "Selects of expressions, comparisons of every pair of kinds, numbers, aliases and the 64-field width, literals and map keys, document functions, where conditions, limit and offset (O-1 to O-4), for the rows that match.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -485,24 +485,27 @@
         "fs-ent-pipeline/o5/appendix#original-n21-count-zero",
         "fs-ent-pipeline/o5/appendix#original-q3-top-level-parent-chain",
         "fs-ent-pipeline/o5/appendix#original-h9-two-failing-calls",
-        "fs-ent-pipeline/o5/subcollection#proposed-q3-subcollection-parent-chain"
+        "fs-ent-pipeline/o5/subcollection#proposed-q3-subcollection-parent-chain",
+        "fs-ent-pipeline/o5/appendix#proposed-limit-zero",
+        "fs-ent-pipeline/o5/appendix#proposed-offset-zero",
+        "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"
       ],
       "status": "VERIFIED",
       "note": "The arity, argument-shape and stage-order refusals of the recorded shapes that match, with production's texts (strict answers a refusal only for a recorded request shape).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
         "rows": {
-          "MATCH": 46,
-          "NOT_CLAIMED": 72
+          "MATCH": 49,
+          "NOT_CLAIMED": 69
         }
       }
     },
@@ -529,24 +532,63 @@
         "fs-ent-pipeline/o5/function-names#fn-equal_any",
         "fs-ent-pipeline/o5/function-names#fn-not_equal_any",
         "fs-ent-pipeline/o5/function-names#fn-type",
-        "fs-ent-pipeline/o5/function-names#fn-is_type"
+        "fs-ent-pipeline/o5/function-names#fn-is_type",
+        "fs-ent-pipeline/o5/function-names#fn-abs",
+        "fs-ent-pipeline/o5/function-names#fn-add",
+        "fs-ent-pipeline/o5/function-names#fn-array_first",
+        "fs-ent-pipeline/o5/function-names#fn-array_get",
+        "fs-ent-pipeline/o5/function-names#fn-array_last",
+        "fs-ent-pipeline/o5/function-names#fn-array_length",
+        "fs-ent-pipeline/o5/function-names#fn-ceil",
+        "fs-ent-pipeline/o5/function-names#fn-char_length",
+        "fs-ent-pipeline/o5/function-names#fn-concat",
+        "fs-ent-pipeline/o5/function-names#fn-divide",
+        "fs-ent-pipeline/o5/function-names#fn-ends_with",
+        "fs-ent-pipeline/o5/function-names#fn-floor",
+        "fs-ent-pipeline/o5/function-names#fn-map_entries",
+        "fs-ent-pipeline/o5/function-names#fn-map_get",
+        "fs-ent-pipeline/o5/function-names#fn-map_keys",
+        "fs-ent-pipeline/o5/function-names#fn-map_merge",
+        "fs-ent-pipeline/o5/function-names#fn-map_remove",
+        "fs-ent-pipeline/o5/function-names#fn-map_set",
+        "fs-ent-pipeline/o5/function-names#fn-map_values",
+        "fs-ent-pipeline/o5/function-names#fn-mod",
+        "fs-ent-pipeline/o5/function-names#fn-multiply",
+        "fs-ent-pipeline/o5/function-names#fn-pow",
+        "fs-ent-pipeline/o5/function-names#fn-regex_contains",
+        "fs-ent-pipeline/o5/function-names#fn-regex_find",
+        "fs-ent-pipeline/o5/function-names#fn-regex_find_all",
+        "fs-ent-pipeline/o5/function-names#fn-regex_match",
+        "fs-ent-pipeline/o5/function-names#fn-round",
+        "fs-ent-pipeline/o5/function-names#fn-split",
+        "fs-ent-pipeline/o5/function-names#fn-starts_with",
+        "fs-ent-pipeline/o5/function-names#fn-string_contains",
+        "fs-ent-pipeline/o5/function-names#fn-substring",
+        "fs-ent-pipeline/o5/function-names#fn-subtract",
+        "fs-ent-pipeline/o5/function-names#fn-to_lower",
+        "fs-ent-pipeline/o5/function-names#fn-to_upper",
+        "fs-ent-pipeline/o5/function-names#fn-trim",
+        "fs-ent-pipeline/o5/function-order#arity-around-unknown-argument",
+        "fs-ent-pipeline/o5/function-order#select-arity-before-unknown",
+        "fs-ent-pipeline/o5/function-order#select-arity-then-select-unknown",
+        "fs-ent-pipeline/o5/function-order#select-empty-then-where-arity"
       ],
       "status": "VERIFIED",
       "note": "The registry text (name, signature and argument count) of exactly these 15 functions: and, array_contains, array_contains_all, array_contains_any, equal_any, exists, is_absent, is_error, is_type, nor, not, not_equal_any, or, type, xor; and the 2 function-order rows select-empty-then-where-type, unknown-in-array-literal. The other functions' registry texts, including those of functions fireemu runs, are not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
         "rows": {
-          "MATCH": 17,
-          "NOT_CLAIMED": 175
+          "MATCH": 56,
+          "NOT_CLAIMED": 136
         }
       }
     },
@@ -641,10 +683,10 @@
       "note": "sort on any value kind, multi-key, missing and null placement, expression keys, limit and offset after a sort and the malformed forms with production's texts, for the rows that match (rows tied on every sort key follow the CRC-32 scan order).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -686,10 +728,10 @@
       "note": "where before and after select, sort before limit, repeated where and the other SDK chains.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -752,10 +794,10 @@
       "note": "and, or, not, xor, nor, exists, is_absent, is_error, type, is_type, array_contains*, equal_any and not_equal_any in a where, with truth tables, non-boolean operands and kinds.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -880,24 +922,25 @@
         "fs-ent-pipeline/o7/aggregate-args#sum-string-literal",
         "fs-ent-pipeline/o7/aggregate-args#count-null-literal",
         "fs-ent-pipeline/o7/aggregate-args#count-of-expression",
-        "fs-ent-pipeline/o7/aggregate-args#after-select"
+        "fs-ent-pipeline/o7/aggregate-args#after-select",
+        "fs-ent-pipeline/o7/aggregate-args#sum-of-add"
       ],
       "status": "VERIFIED",
       "note": "count, count(x), count_distinct, sum, average, minimum and maximum with and without groups for the rows that match: empty input, numbers (overflow, NaN, mixed kinds), group-key equalities, aliases and the argument errors fireemu answers.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
         "rows": {
-          "MATCH": 108,
-          "NOT_CLAIMED": 26
+          "MATCH": 109,
+          "NOT_CLAIMED": 25
         }
       }
     },
@@ -973,10 +1016,10 @@
       "note": "distinct on aliases and expressions, add_fields (overwrite, nested alias, missing source) and remove_fields.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1027,10 +1070,10 @@
       "note": "collection_group (any depth, the root and a document ancestor) and documents for the rows that match (existing documents, malformed and duplicate paths refused).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1065,10 +1108,10 @@
       "note": "select of __name__ alone, beside an alias, quoted, as a second alias and followed by limit or where.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1105,10 +1148,10 @@
       "note": "The order in which malformed bodies, malformed values and unknown stages and functions are refused, on the Enterprise database for the owner caller.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1145,10 +1188,10 @@
       "note": "Literal container depth and expression nesting for these 14 rows only: chain-20, chain-20-grpc, chain-32, chain-32-grpc, chain-33, chain-47, chain-48, chain-100, array-20, map-20, array-21, map-21, array-21-grpc, map-21-grpc. That is a literal array or map of 20 levels accepted and of 21 levels refused (REST and gRPC) with production's text, REST bodies with an expression chain of 32 levels or more refused by the JSON depth limit with production's text, and gRPC chains of 20 and 32 levels answered. The 32-level expression limit over gRPC is not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1178,10 +1221,10 @@
       "note": "The base64 control rows only: write-control, get-control, write-urlsafe, get-urlsafe, write-unpadded, get-unpadded, cursor-control (the standard, URL-safe and unpadded alphabets in a commit and its read-back, and a cursor control). No refusal of a broken form is claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1261,10 +1304,10 @@
       "note": "A read without a sort lists the documents of one collection in ascending CRC-32 (IEEE, as zlib computes it) of the UTF-8 bytes of the document id, whatever the collection, the values, the write order and rewrites; limit and offset cut that order; a collection group is listed by parent path, each parent in the same order. The 52 rows are 32 unsorted executePipeline reads, 3 sorted reads, 15 commits and 2 gRPC reads; six of the reads were predicted before the O-9b send from this rule and matched exactly (three fresh sets of 12 ids and three collections). Not claimed: non-ASCII ids and CRC-32 ties.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1314,10 +1357,10 @@
       "note": "A group or distinct key of equal values shows the value of the first member in scan order (-0.0 and 0.0, 1 and 1.0), in 9 collections.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1355,10 +1398,10 @@
       "note": "A nested alias of a missing value creates the parent as an empty map and sets nothing; a top-level alias of a missing value removes an existing field; overlapping aliases are refused with production's text.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1419,10 +1462,10 @@
       "note": "or and and are three-valued; xor with 3 to 5 operands is odd parity; nor is true only when all operands are false; xor and nor with a null or missing operand are null; evaluation stops at the first decisive operand; equal_any, not_equal_any and array_contains refuse a non-array.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1459,10 +1502,10 @@
       "note": "The ancestor of collection_group must be a reference whose path is a valid document path and is otherwise ignored; the refusals carry production's texts.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1499,10 +1542,10 @@
       "note": "is_type of a missing field is null for every one of the 20 type names (also under not(...)) and is_error of it is false; a stored value is true for its own kind (an integer or a double is also number) and false for every other name.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1545,10 +1588,10 @@
       "note": "is_absent takes a field reference: a select that gives it a function value (here is_absent(is_type(...)) beside other aliases) is refused as a whole with production's text, for each of the 20 O-9 steps.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1589,10 +1632,10 @@
       "note": "An answer of up to 50 small documents is one response (gRPC) or one element (REST), as production, for these 18 rows. Larger answers are not claimed (see notClaimed_response_framing_large).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1612,143 +1655,235 @@
       "recipeIds": [
         "fs-ent-pipeline/o8a/dupquote-main#dotted",
         "fs-ent-pipeline/o8a/dupquote-main#quoted-alone",
-        "fs-ent-pipeline/o8a/dupquote-main#plain-pair"
+        "fs-ent-pipeline/o8a/dupquote-main#plain-pair",
+        "fs-ent-pipeline/o8a/dupquote-main#different-values",
+        "fs-ent-pipeline/o8a/dupquote-main#same-1",
+        "fs-ent-pipeline/o8a/dupquote-main#same-2",
+        "fs-ent-pipeline/o8a/dupquote-main#same-3",
+        "fs-ent-pipeline/o8a/dupquote-main#swapped-order"
       ],
       "status": "VERIFIED",
-      "note": "The controls of the duplicate-quoted-alias program that answer the same as production: dotted, quoted-alone, plain-pair (a dotted pair, a quoted alias alone and a plain pair).",
+      "note": "The three recorded alias controls and five recorded strict INTERNAL responses are matched; no general claim is made for other alias shapes.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
-        "fixtureSha256": "11a74950fbeb2d84ec5711d89cb422f71206c688c1ad228cceacb7b2e0a004dc",
-        "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
         "rows": {
-          "MATCH": 3,
-          "NOT_CLAIMED": 5
+          "MATCH": 8,
+          "NOT_CLAIMED": 0
         }
       }
-    }
-  ],
-  "perCaseAdjudication": {
-    "mode": "replay-comparison",
-    "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-    "sha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
-    "summary": {
-      "MATCH": 1270,
-      "MISMATCH": 652,
-      "MISSING_FIXTURE": 27,
-      "UNKNOWN": 2
     },
-    "profile": "strict"
-  },
-  "knownDifferences": {
-    "notClaimed_select_expressions_o1_o4": {
-      "statement": "Not claimed: 6 of the 358 recorded rows of this condition do not match under strict: four rows that use sqrt, which fireemu does not run (px1/select#is-error-sqrt-s, px1/where#sqrt-s-positive, px1/static-refusals#select-sqrt-a and #where-sqrt-a); o4/stages#select-empty-then-unknown-function; and the gRPC row o2/select-width#select-65-grpc (production answers code 3, fireemu code 12 with the text that production has not refused this shape, although the shape is recorded)."
+    {
+      "conditionId": "FS-PIPELINE/recorded-strings",
+      "rowPrefixes": [
+        "o8b/strings-main"
+      ],
+      "recipeIds": [
+        "fs-ent-pipeline/o8b/strings-main#char-length-absent",
+        "fs-ent-pipeline/o8b/strings-main#char-length-bytes",
+        "fs-ent-pipeline/o8b/strings-main#char-length-combining",
+        "fs-ent-pipeline/o8b/strings-main#char-length-emoji",
+        "fs-ent-pipeline/o8b/strings-main#char-length-empty",
+        "fs-ent-pipeline/o8b/strings-main#char-length-int",
+        "fs-ent-pipeline/o8b/strings-main#char-length-none",
+        "fs-ent-pipeline/o8b/strings-main#char-length-null",
+        "fs-ent-pipeline/o8b/strings-main#char-length-ok",
+        "fs-ent-pipeline/o8b/strings-main#char-length-two",
+        "fs-ent-pipeline/o8b/strings-main#char-length-unicode-field",
+        "fs-ent-pipeline/o8b/strings-main#concat-absent",
+        "fs-ent-pipeline/o8b/strings-main#concat-arrays",
+        "fs-ent-pipeline/o8b/strings-main#concat-bytes",
+        "fs-ent-pipeline/o8b/strings-main#concat-empty",
+        "fs-ent-pipeline/o8b/strings-main#concat-fields",
+        "fs-ent-pipeline/o8b/strings-main#concat-null",
+        "fs-ent-pipeline/o8b/strings-main#concat-one",
+        "fs-ent-pipeline/o8b/strings-main#concat-string-bytes",
+        "fs-ent-pipeline/o8b/strings-main#concat-string-int",
+        "fs-ent-pipeline/o8b/strings-main#concat-three",
+        "fs-ent-pipeline/o8b/strings-main#concat-two",
+        "fs-ent-pipeline/o8b/strings-main#concat-unicode",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-absent",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-bytes",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-empty-suffix",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-false",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-int-value",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-null-suffix",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-null-value",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-one",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-suffix-longer",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-true",
+        "fs-ent-pipeline/o8b/strings-main#ends-with-unicode",
+        "fs-ent-pipeline/o8b/strings-main#ltrim-absent",
+        "fs-ent-pipeline/o8b/strings-main#ltrim-custom-chars",
+        "fs-ent-pipeline/o8b/strings-main#ltrim-default",
+        "fs-ent-pipeline/o8b/strings-main#ltrim-int",
+        "fs-ent-pipeline/o8b/strings-main#ltrim-null",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-absent",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-anchored",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-anchored-no",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-case-flag",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-case-sensitive",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-empty-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-int-input",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-int-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-invalid-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-match",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-no-match",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-null-input",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-null-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-one",
+        "fs-ent-pipeline/o8b/strings-main#regex-contains-unicode",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-absent",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-absent",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-all",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-empty-match",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-int",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-invalid-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-none",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-null",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-all-overlapping",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-empty-match",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-first",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-group",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-int",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-invalid-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-none",
+        "fs-ent-pipeline/o8b/strings-main#regex-find-null",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-absent",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-anchors",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-empty-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-full",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-int",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-invalid-pattern",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-null",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-one",
+        "fs-ent-pipeline/o8b/strings-main#regex-match-partial",
+        "fs-ent-pipeline/o8b/strings-main#rtrim-absent",
+        "fs-ent-pipeline/o8b/strings-main#rtrim-custom-chars",
+        "fs-ent-pipeline/o8b/strings-main#rtrim-default",
+        "fs-ent-pipeline/o8b/strings-main#rtrim-int",
+        "fs-ent-pipeline/o8b/strings-main#rtrim-null",
+        "fs-ent-pipeline/o8b/strings-main#split-absent",
+        "fs-ent-pipeline/o8b/strings-main#split-bytes",
+        "fs-ent-pipeline/o8b/strings-main#split-comma",
+        "fs-ent-pipeline/o8b/strings-main#split-consecutive",
+        "fs-ent-pipeline/o8b/strings-main#split-empty-delimiter",
+        "fs-ent-pipeline/o8b/strings-main#split-empty-input",
+        "fs-ent-pipeline/o8b/strings-main#split-int",
+        "fs-ent-pipeline/o8b/strings-main#split-multi-char",
+        "fs-ent-pipeline/o8b/strings-main#split-none",
+        "fs-ent-pipeline/o8b/strings-main#split-not-found",
+        "fs-ent-pipeline/o8b/strings-main#split-null-delimiter",
+        "fs-ent-pipeline/o8b/strings-main#split-null-input",
+        "fs-ent-pipeline/o8b/strings-main#split-one-argument",
+        "fs-ent-pipeline/o8b/strings-main#split-three",
+        "fs-ent-pipeline/o8b/strings-main#split-unicode",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-absent-prefix",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-absent-value",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-bytes",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-case",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-empty-prefix",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-empty-value",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-false",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-int-prefix",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-int-value",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-null-prefix",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-null-value",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-one",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-prefix-longer",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-true",
+        "fs-ent-pipeline/o8b/strings-main#starts-with-unicode",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-absent",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-case",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-empty-substring",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-false",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-int",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-null",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-one",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-three",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-true",
+        "fs-ent-pipeline/o8b/strings-main#string-contains-unicode",
+        "fs-ent-pipeline/o8b/strings-main#substring-absent-input",
+        "fs-ent-pipeline/o8b/strings-main#substring-bytes-input",
+        "fs-ent-pipeline/o8b/strings-main#substring-double-position",
+        "fs-ent-pipeline/o8b/strings-main#substring-from",
+        "fs-ent-pipeline/o8b/strings-main#substring-huge-length",
+        "fs-ent-pipeline/o8b/strings-main#substring-int-input",
+        "fs-ent-pipeline/o8b/strings-main#substring-negative-length",
+        "fs-ent-pipeline/o8b/strings-main#substring-negative-position",
+        "fs-ent-pipeline/o8b/strings-main#substring-null-input",
+        "fs-ent-pipeline/o8b/strings-main#substring-null-position",
+        "fs-ent-pipeline/o8b/strings-main#substring-one",
+        "fs-ent-pipeline/o8b/strings-main#substring-position-beyond",
+        "fs-ent-pipeline/o8b/strings-main#substring-unicode",
+        "fs-ent-pipeline/o8b/strings-main#substring-with-length",
+        "fs-ent-pipeline/o8b/strings-main#substring-zero-length",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-absent",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-bytes",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-dotted-capital-i",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-empty",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-field",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-int",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-none",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-null",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-ok",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-two",
+        "fs-ent-pipeline/o8b/strings-main#to-lower-unicode",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-absent",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-bytes",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-empty",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-int",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-none",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-null",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-ok",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-sharp-s",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-two",
+        "fs-ent-pipeline/o8b/strings-main#to-upper-unicode",
+        "fs-ent-pipeline/o8b/strings-main#trim-absent",
+        "fs-ent-pipeline/o8b/strings-main#trim-bytes",
+        "fs-ent-pipeline/o8b/strings-main#trim-custom-chars",
+        "fs-ent-pipeline/o8b/strings-main#trim-default",
+        "fs-ent-pipeline/o8b/strings-main#trim-empty",
+        "fs-ent-pipeline/o8b/strings-main#trim-int",
+        "fs-ent-pipeline/o8b/strings-main#trim-multi-char-set",
+        "fs-ent-pipeline/o8b/strings-main#trim-no-break-space",
+        "fs-ent-pipeline/o8b/strings-main#trim-none",
+        "fs-ent-pipeline/o8b/strings-main#trim-null",
+        "fs-ent-pipeline/o8b/strings-main#trim-only-spaces",
+        "fs-ent-pipeline/o8b/strings-main#trim-tabs-newlines",
+        "fs-ent-pipeline/o8b/strings-main#trim-three"
+      ],
+      "status": "VERIFIED",
+      "note": "Recorded string and regex cases only; regex grammar and semantics beyond the observed cases are not claimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+        "fixturePath": "conformance/fs-ent-pipeline-production.json",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+        "tests": [
+          "conformance/src/fs-pipeline-closure.test.mjs"
+        ],
+        "rows": {
+          "MATCH": 173,
+          "NOT_CLAIMED": 0
+        }
+      }
     },
-    "notClaimed_o5_refusals": {
-      "statement": "Not claimed: 223 of the 310 O-5 rows (stage-grammar-refusals and function-names-and-arity) do not match under strict; strict answers UNIMPLEMENTED for each. By the category of the committed debt file pipeline_o5_known_differences.json: 205 unsupported-subset, 10 arity-wording, 5 validation-order-or-subset, 1 unsupported-current-document, 1 environment-reference-comparison, 1 unknown-production-outcome. The arity-wording rows are functions fireemu runs (among them equal, not_equal, less_than, less_than_or_equal, greater_than, greater_than_or_equal, parent, collection_id and document_id) whose recorded wrong-count text strict does not produce; the unknown-production-outcome row is the HTTP 500 of select with a repeated quoted alias (see notClaimed_duplicate_quoted_path)."
-    },
-    "notClaimed_sort": {
-      "statement": "Not claimed: 3 of the 83 recorded rows of this condition do not match under strict: o6/sort-kinds-cross#v-desc and o6/sort-ties#g-asc-limit2, where production's order of rows tied on every sort key under a descending sort or a limit is not shown by the recordings, and o6/sort-wire-errors#expression-unknown-fn, which strict answers UNIMPLEMENTED."
-    },
-    "notClaimed_aggregate": {
-      "statement": "Not claimed: 25 of the 134 recorded rows of this condition do not match under strict: 23 rows whose answer depends on the order of the groups (production's own order is unobserved and fireemu returns the order the groups were first met: 20 of them hold the same groups in another order, 3 keep other groups under a limit or an offset), and 2 argument errors (o7/aggregate-args) that strict answers UNIMPLEMENTED."
-    },
-    "notClaimed_inputs_collection_group_documents": {
-      "statement": "Not claimed: 1 of the 29 recorded rows of this condition do not match under strict: o7/inputs-documents#missing: a documents input whose only path is missing answers [{executionTime}] in production and [{}] without executionTime in fireemu."
-    },
-    "notClaimed_nesting_limits": {
-      "statement": "Not claimed: 4 of the 18 recorded rows of this condition do not match under strict: all four rows are gRPC: chain-33-grpc (production refuses 33 levels with INVALID_ARGUMENT, fireemu answers results), chain-47-grpc (production \"Request contains an invalid argument.\", fireemu the protobuf decoder's text), and chain-48-grpc and chain-100-grpc, whose request the recorder's own client failed to serialize (marked unknown in the fixture, so neither match nor mismatch)."
-    },
-    "notClaimed_base64_commit_and_cursor": {
-      "statement": "Not claimed: 18 of the 25 recorded rows of this condition do not match under strict: 16 broken forms that production refuses (400, nothing written) and fireemu accepts (line breaks lf, cr, crlf, mime-76 and mime-76-lf, the mixed alphabets plus-underscore and minus-slash, each as a commit and its read-back, and the cursor-lf and cursor-crlf cursors), and 2 rows with the proto field name bytes_value (write-proto-name and get-proto-name), which production accepts and reads back and fireemu refuses."
-    },
-    "notClaimed_duplicate_quoted_path": {
-      "statement": "Not claimed: select with an alias and the same alias in quotes answers HTTP 500 INTERNAL in production (10 of 10 observations over 6 rows: the five dupquote shapes in two recordings and o5/appendix#proposed-select-duplicate-quoted-path). fireemu does not reproduce a server error: strict answers UNIMPLEMENTED (\"select aliases ... set the same field; production has not refused a request of this shape ...\") and the emulator profile 400. No approval is given for this difference."
-    },
-    "notClaimed_response_framing_large": {
-      "statement": "Not claimed: the framing of answers larger than 50 small documents (owner 1794 states large-answer batching UNVERIFIED). Production cuts a large answer into units of 5 to 199 results (2 KB to 37 KB) whose boundaries differ between two reads of the same data (500 small documents came in 3 to 9 units, 5000 in 26 to 40; a document of 400 KB or more is a unit of its own and 100 KB documents come two to a unit); fireemu cuts at about 1 MiB. The 27 recorded framing steps are kept as a summary, not as rows.",
-      "framingSummaryPath": "conformance/fs-ent-pipeline-framing.json",
-      "framingSummarySha256": "85b4db894388ab51ebfae4f396daa24e0aa593d7f8666feef50b55d85652f63a"
-    },
-    "notClaimed_string_functions": {
-      "statement": "Not claimed: the string function family (O-8B): 173 rows recorded; 133 match the integrated comparison and 40 regex rows remain UNIMPLEMENTED under strict. The 133 matching rows are not included in the verified conditions."
-    },
-    "notClaimed_math_functions": {
-      "statement": "Not claimed: the math function family (O-8B): 114 rows recorded, all 114 match the integrated comparison but are not included in the verified conditions."
-    },
-    "notClaimed_timestamp_functions": {
-      "statement": "Not claimed: the timestamp function family (O-8C): 137 rows recorded, none runs locally (every function and stage of the family answers UNIMPLEMENTED under strict; owner 1794 puts these families out of scope)."
-    },
-    "notClaimed_map_and_array_functions": {
-      "statement": "Not claimed: the map and array function families (O-8C): 146 rows recorded, none runs locally (every function and stage of the family answers UNIMPLEMENTED under strict; owner 1794 puts these families out of scope). array_reverse() with no argument answers HTTP 500 in production (2 of 2 observations); the other count errors answer 400."
-    },
-    "notClaimed_union_unnest_sample": {
-      "statement": "Not claimed: the stages union, unnest and sample (O-8D): 46 rows recorded, none runs locally (every function and stage of the family answers UNIMPLEMENTED under strict; owner 1794 puts these families out of scope)."
-    },
-    "notClaimed_N4_standard_and_non_owner": {
-      "statement": "Not claimed: Error precedence on the Standard (default) database and from a non-owner caller under Security Rules: the recorder addresses one Enterprise database and one caller."
-    },
-    "notClaimed_N6_other_write_methods": {
-      "statement": "Not claimed: base64 decoding in createDocument, patch and batchWrite was not recorded (not methods the recorder issues)."
-    },
-    "notClaimed_function_names_beyond_recorded": {
-      "statement": "Not claimed: Other registry names (vector, geospatial, search beyond FS-TEXT-SEARCH, about 100 names) were not exercised; timestamp functions saw one instant and one zone."
-    },
-    "notClaimed_stages_outside_scope": {
-      "statement": "Not claimed: find_nearest, replace_with, define and nested pipelines, write stages, readTime and transactions, a Standard-edition database and index requirements for pipelines were not observed."
-    },
-    "notClaimed_sample_distribution": {
-      "statement": "Not claimed: sample is random: counts (2 of 5 at 0.5) and membership are recorded; the distribution for larger inputs and the shuffle of an oversized sample are not."
-    },
-    "notClaimed_scan_order_edges": {
-      "statement": "Not claimed: Non-ASCII ids and CRC-32 ties were not asked (the ids tested are ASCII and have distinct CRC-32 values)."
-    },
-    "notClaimed_is_type_vector": {
-      "statement": "Not claimed: is_type of a stored vector value was not asked."
-    },
-    "notClaimed_collection_group_other_database": {
-      "statement": "Not claimed: An ancestor naming another database was not asked: the recorder's guard refuses a body naming another project."
-    },
-    "notClaimed_grpc_only_differences": {
-      "statement": "Not claimed: gRPC-only differences are out of scope (owner 1794): the claimed rows include 26 gRPC rows that match, and the gRPC rows that differ are listed in the comparison."
-    },
-    "parentScope": {
-      "statement": "FS-PIPELINE covers the Firestore Enterprise option-A read subset only (ledger 1794), under the strict profile, and is COMPAT_VERIFIED only for the 998 comparison rows its conditions list. Of the 1951 recorded rows, 953 are not claimed, including 272 newly matching rows, 27 large-answer framing steps kept as a summary, and the remaining rows described in the statements above."
-    },
-    "notClaimed_newly_matching": {
-      "statement": "Not claimed: 272 additional recorded rows match in this comparison after the string and math implementation. They have not been independently reviewed for inclusion in the verified conditions.",
-      "matchingRows": [
-        "fs-ent-pipeline/o5/function-names#fn-abs",
-        "fs-ent-pipeline/o5/function-names#fn-add",
-        "fs-ent-pipeline/o5/function-names#fn-ceil",
-        "fs-ent-pipeline/o5/function-names#fn-char_length",
-        "fs-ent-pipeline/o5/function-names#fn-concat",
-        "fs-ent-pipeline/o5/function-names#fn-divide",
-        "fs-ent-pipeline/o5/function-names#fn-ends_with",
-        "fs-ent-pipeline/o5/function-names#fn-floor",
-        "fs-ent-pipeline/o5/function-names#fn-mod",
-        "fs-ent-pipeline/o5/function-names#fn-multiply",
-        "fs-ent-pipeline/o5/function-names#fn-pow",
-        "fs-ent-pipeline/o5/function-names#fn-round",
-        "fs-ent-pipeline/o5/function-names#fn-split",
-        "fs-ent-pipeline/o5/function-names#fn-starts_with",
-        "fs-ent-pipeline/o5/function-names#fn-string_contains",
-        "fs-ent-pipeline/o5/function-names#fn-substring",
-        "fs-ent-pipeline/o5/function-names#fn-subtract",
-        "fs-ent-pipeline/o5/function-names#fn-to_lower",
-        "fs-ent-pipeline/o5/function-names#fn-to_upper",
-        "fs-ent-pipeline/o5/function-names#fn-trim",
-        "fs-ent-pipeline/o5/function-order#arity-around-unknown-argument",
-        "fs-ent-pipeline/o5/function-order#select-arity-before-unknown",
-        "fs-ent-pipeline/o5/function-order#select-arity-then-select-unknown",
-        "fs-ent-pipeline/o5/function-order#select-empty-then-where-arity",
-        "fs-ent-pipeline/o7/aggregate-args#sum-of-add",
+    {
+      "conditionId": "FS-PIPELINE/recorded-math",
+      "rowPrefixes": [
+        "o8b/math-main"
+      ],
+      "recipeIds": [
         "fs-ent-pipeline/o8b/math-main#abs-absent",
         "fs-ent-pipeline/o8b/math-main#abs-double",
         "fs-ent-pipeline/o8b/math-main#abs-inf",
@@ -1862,158 +1997,300 @@
         "fs-ent-pipeline/o8b/math-main#subtract-one",
         "fs-ent-pipeline/o8b/math-main#subtract-overflow",
         "fs-ent-pipeline/o8b/math-main#subtract-string",
-        "fs-ent-pipeline/o8b/math-main#subtract-underflow",
-        "fs-ent-pipeline/o8b/strings-main#char-length-absent",
-        "fs-ent-pipeline/o8b/strings-main#char-length-bytes",
-        "fs-ent-pipeline/o8b/strings-main#char-length-combining",
-        "fs-ent-pipeline/o8b/strings-main#char-length-emoji",
-        "fs-ent-pipeline/o8b/strings-main#char-length-empty",
-        "fs-ent-pipeline/o8b/strings-main#char-length-int",
-        "fs-ent-pipeline/o8b/strings-main#char-length-none",
-        "fs-ent-pipeline/o8b/strings-main#char-length-null",
-        "fs-ent-pipeline/o8b/strings-main#char-length-ok",
-        "fs-ent-pipeline/o8b/strings-main#char-length-two",
-        "fs-ent-pipeline/o8b/strings-main#char-length-unicode-field",
-        "fs-ent-pipeline/o8b/strings-main#concat-absent",
-        "fs-ent-pipeline/o8b/strings-main#concat-arrays",
-        "fs-ent-pipeline/o8b/strings-main#concat-bytes",
-        "fs-ent-pipeline/o8b/strings-main#concat-empty",
-        "fs-ent-pipeline/o8b/strings-main#concat-fields",
-        "fs-ent-pipeline/o8b/strings-main#concat-null",
-        "fs-ent-pipeline/o8b/strings-main#concat-one",
-        "fs-ent-pipeline/o8b/strings-main#concat-string-bytes",
-        "fs-ent-pipeline/o8b/strings-main#concat-string-int",
-        "fs-ent-pipeline/o8b/strings-main#concat-three",
-        "fs-ent-pipeline/o8b/strings-main#concat-two",
-        "fs-ent-pipeline/o8b/strings-main#concat-unicode",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-absent",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-bytes",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-empty-suffix",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-false",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-int-value",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-null-suffix",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-null-value",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-one",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-suffix-longer",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-true",
-        "fs-ent-pipeline/o8b/strings-main#ends-with-unicode",
-        "fs-ent-pipeline/o8b/strings-main#ltrim-absent",
-        "fs-ent-pipeline/o8b/strings-main#ltrim-custom-chars",
-        "fs-ent-pipeline/o8b/strings-main#ltrim-default",
-        "fs-ent-pipeline/o8b/strings-main#ltrim-int",
-        "fs-ent-pipeline/o8b/strings-main#ltrim-null",
-        "fs-ent-pipeline/o8b/strings-main#rtrim-absent",
-        "fs-ent-pipeline/o8b/strings-main#rtrim-custom-chars",
-        "fs-ent-pipeline/o8b/strings-main#rtrim-default",
-        "fs-ent-pipeline/o8b/strings-main#rtrim-int",
-        "fs-ent-pipeline/o8b/strings-main#rtrim-null",
-        "fs-ent-pipeline/o8b/strings-main#split-absent",
-        "fs-ent-pipeline/o8b/strings-main#split-bytes",
-        "fs-ent-pipeline/o8b/strings-main#split-comma",
-        "fs-ent-pipeline/o8b/strings-main#split-consecutive",
-        "fs-ent-pipeline/o8b/strings-main#split-empty-delimiter",
-        "fs-ent-pipeline/o8b/strings-main#split-empty-input",
-        "fs-ent-pipeline/o8b/strings-main#split-int",
-        "fs-ent-pipeline/o8b/strings-main#split-multi-char",
-        "fs-ent-pipeline/o8b/strings-main#split-none",
-        "fs-ent-pipeline/o8b/strings-main#split-not-found",
-        "fs-ent-pipeline/o8b/strings-main#split-null-delimiter",
-        "fs-ent-pipeline/o8b/strings-main#split-null-input",
-        "fs-ent-pipeline/o8b/strings-main#split-one-argument",
-        "fs-ent-pipeline/o8b/strings-main#split-three",
-        "fs-ent-pipeline/o8b/strings-main#split-unicode",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-absent-prefix",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-absent-value",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-bytes",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-case",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-empty-prefix",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-empty-value",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-false",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-int-prefix",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-int-value",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-null-prefix",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-null-value",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-one",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-prefix-longer",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-true",
-        "fs-ent-pipeline/o8b/strings-main#starts-with-unicode",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-absent",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-case",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-empty-substring",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-false",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-int",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-null",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-one",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-three",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-true",
-        "fs-ent-pipeline/o8b/strings-main#string-contains-unicode",
-        "fs-ent-pipeline/o8b/strings-main#substring-absent-input",
-        "fs-ent-pipeline/o8b/strings-main#substring-bytes-input",
-        "fs-ent-pipeline/o8b/strings-main#substring-double-position",
-        "fs-ent-pipeline/o8b/strings-main#substring-from",
-        "fs-ent-pipeline/o8b/strings-main#substring-huge-length",
-        "fs-ent-pipeline/o8b/strings-main#substring-int-input",
-        "fs-ent-pipeline/o8b/strings-main#substring-negative-length",
-        "fs-ent-pipeline/o8b/strings-main#substring-negative-position",
-        "fs-ent-pipeline/o8b/strings-main#substring-null-input",
-        "fs-ent-pipeline/o8b/strings-main#substring-null-position",
-        "fs-ent-pipeline/o8b/strings-main#substring-one",
-        "fs-ent-pipeline/o8b/strings-main#substring-position-beyond",
-        "fs-ent-pipeline/o8b/strings-main#substring-unicode",
-        "fs-ent-pipeline/o8b/strings-main#substring-with-length",
-        "fs-ent-pipeline/o8b/strings-main#substring-zero-length",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-absent",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-bytes",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-dotted-capital-i",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-empty",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-field",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-int",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-none",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-null",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-ok",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-two",
-        "fs-ent-pipeline/o8b/strings-main#to-lower-unicode",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-absent",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-bytes",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-empty",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-int",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-none",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-null",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-ok",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-sharp-s",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-two",
-        "fs-ent-pipeline/o8b/strings-main#to-upper-unicode",
-        "fs-ent-pipeline/o8b/strings-main#trim-absent",
-        "fs-ent-pipeline/o8b/strings-main#trim-bytes",
-        "fs-ent-pipeline/o8b/strings-main#trim-custom-chars",
-        "fs-ent-pipeline/o8b/strings-main#trim-default",
-        "fs-ent-pipeline/o8b/strings-main#trim-empty",
-        "fs-ent-pipeline/o8b/strings-main#trim-int",
-        "fs-ent-pipeline/o8b/strings-main#trim-multi-char-set",
-        "fs-ent-pipeline/o8b/strings-main#trim-no-break-space",
-        "fs-ent-pipeline/o8b/strings-main#trim-none",
-        "fs-ent-pipeline/o8b/strings-main#trim-null",
-        "fs-ent-pipeline/o8b/strings-main#trim-only-spaces",
-        "fs-ent-pipeline/o8b/strings-main#trim-tabs-newlines",
-        "fs-ent-pipeline/o8b/strings-main#trim-three"
-      ]
+        "fs-ent-pipeline/o8b/math-main#subtract-underflow"
+      ],
+      "status": "VERIFIED",
+      "note": "Recorded math cases only; unobserved argument shapes remain unclaimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+        "fixturePath": "conformance/fs-ent-pipeline-production.json",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+        "tests": [
+          "conformance/src/fs-pipeline-closure.test.mjs"
+        ],
+        "rows": {
+          "MATCH": 114,
+          "NOT_CLAIMED": 0
+        }
+      }
+    },
+    {
+      "conditionId": "FS-PIPELINE/recorded-collections",
+      "rowPrefixes": [
+        "o8c/collections-main"
+      ],
+      "recipeIds": [
+        "fs-ent-pipeline/o8c/collections-main#array-first-absent",
+        "fs-ent-pipeline/o8c/collections-main#array-first-empty",
+        "fs-ent-pipeline/o8c/collections-main#array-first-int",
+        "fs-ent-pipeline/o8c/collections-main#array-first-null",
+        "fs-ent-pipeline/o8c/collections-main#array-first-ok",
+        "fs-ent-pipeline/o8c/collections-main#array-get-absent",
+        "fs-ent-pipeline/o8c/collections-main#array-get-double-index",
+        "fs-ent-pipeline/o8c/collections-main#array-get-first",
+        "fs-ent-pipeline/o8c/collections-main#array-get-int-array",
+        "fs-ent-pipeline/o8c/collections-main#array-get-last",
+        "fs-ent-pipeline/o8c/collections-main#array-get-negative",
+        "fs-ent-pipeline/o8c/collections-main#array-get-null-array",
+        "fs-ent-pipeline/o8c/collections-main#array-get-null-index",
+        "fs-ent-pipeline/o8c/collections-main#array-get-one",
+        "fs-ent-pipeline/o8c/collections-main#array-get-out-of-range",
+        "fs-ent-pipeline/o8c/collections-main#array-last-absent",
+        "fs-ent-pipeline/o8c/collections-main#array-last-empty",
+        "fs-ent-pipeline/o8c/collections-main#array-last-int",
+        "fs-ent-pipeline/o8c/collections-main#array-last-null",
+        "fs-ent-pipeline/o8c/collections-main#array-last-ok",
+        "fs-ent-pipeline/o8c/collections-main#array-length-absent",
+        "fs-ent-pipeline/o8c/collections-main#array-length-empty",
+        "fs-ent-pipeline/o8c/collections-main#array-length-none",
+        "fs-ent-pipeline/o8c/collections-main#array-length-null",
+        "fs-ent-pipeline/o8c/collections-main#array-length-ok",
+        "fs-ent-pipeline/o8c/collections-main#array-length-string",
+        "fs-ent-pipeline/o8c/collections-main#array-reverse-none",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-absent",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-array",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-empty",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-none",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-null",
+        "fs-ent-pipeline/o8c/collections-main#map-entries-ok",
+        "fs-ent-pipeline/o8c/collections-main#map-get-absent-map",
+        "fs-ent-pipeline/o8c/collections-main#map-get-array-map",
+        "fs-ent-pipeline/o8c/collections-main#map-get-dotted-key",
+        "fs-ent-pipeline/o8c/collections-main#map-get-empty-map",
+        "fs-ent-pipeline/o8c/collections-main#map-get-int-key",
+        "fs-ent-pipeline/o8c/collections-main#map-get-key",
+        "fs-ent-pipeline/o8c/collections-main#map-get-missing-key",
+        "fs-ent-pipeline/o8c/collections-main#map-get-nested-map",
+        "fs-ent-pipeline/o8c/collections-main#map-get-null-key",
+        "fs-ent-pipeline/o8c/collections-main#map-get-null-map",
+        "fs-ent-pipeline/o8c/collections-main#map-get-one",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-absent",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-array",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-empty",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-none",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-null",
+        "fs-ent-pipeline/o8c/collections-main#map-keys-ok",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-absent",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-array",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-later-wins",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-not-deep",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-null",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-one",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-three",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-two",
+        "fs-ent-pipeline/o8c/collections-main#map-merge-with-empty",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-absent-map",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-int-key",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-map-only",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-missing",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-null-map",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-one",
+        "fs-ent-pipeline/o8c/collections-main#map-remove-two",
+        "fs-ent-pipeline/o8c/collections-main#map-set-absent-map",
+        "fs-ent-pipeline/o8c/collections-main#map-set-add",
+        "fs-ent-pipeline/o8c/collections-main#map-set-int-key",
+        "fs-ent-pipeline/o8c/collections-main#map-set-null-map",
+        "fs-ent-pipeline/o8c/collections-main#map-set-null-value",
+        "fs-ent-pipeline/o8c/collections-main#map-set-overwrite",
+        "fs-ent-pipeline/o8c/collections-main#map-set-two",
+        "fs-ent-pipeline/o8c/collections-main#map-set-two-pairs",
+        "fs-ent-pipeline/o8c/collections-main#map-values-absent",
+        "fs-ent-pipeline/o8c/collections-main#map-values-array",
+        "fs-ent-pipeline/o8c/collections-main#map-values-empty",
+        "fs-ent-pipeline/o8c/collections-main#map-values-none",
+        "fs-ent-pipeline/o8c/collections-main#map-values-null",
+        "fs-ent-pipeline/o8c/collections-main#map-values-ok"
+      ],
+      "status": "VERIFIED",
+      "note": "Recorded map and array cases only; unsupported forms, unobserved values and map output ordering remain unclaimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+        "fixturePath": "conformance/fs-ent-pipeline-production.json",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+        "tests": [
+          "conformance/src/fs-pipeline-closure.test.mjs"
+        ],
+        "rows": {
+          "MATCH": 80,
+          "NOT_CLAIMED": 66
+        }
+      }
+    },
+    {
+      "conditionId": "FS-PIPELINE/recovered-framing-small",
+      "rowPrefixes": [
+        "o8a/framing-small"
+      ],
+      "recipeIds": [
+        "fs-ent-pipeline/o8a/framing-small#f5-grpc",
+        "fs-ent-pipeline/o8a/framing-small#f5-rest",
+        "fs-ent-pipeline/o8a/framing-small#f50-grpc",
+        "fs-ent-pipeline/o8a/framing-small#f50-rest"
+      ],
+      "status": "VERIFIED",
+      "note": "Recorded matches cover whole-response hash or bounded-read semantics as reviewed; they do not claim raw wire equality or general batching parity.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+        "fixturePath": "conformance/fs-ent-pipeline-production.json",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+        "tests": [
+          "conformance/src/fs-pipeline-closure.test.mjs"
+        ],
+        "rows": {
+          "MATCH": 4,
+          "NOT_CLAIMED": 8
+        }
+      }
+    },
+    {
+      "conditionId": "FS-PIPELINE/recovered-framing-large",
+      "rowPrefixes": [
+        "o8a/framing-large"
+      ],
+      "recipeIds": [
+        "fs-ent-pipeline/o8a/framing-large#l3-grpc",
+        "fs-ent-pipeline/o8a/framing-large#l3-rest",
+        "fs-ent-pipeline/o8a/framing-large#seed-l12-1",
+        "fs-ent-pipeline/o8a/framing-large#seed-l12-2",
+        "fs-ent-pipeline/o8a/framing-large#seed-l12-3",
+        "fs-ent-pipeline/o8a/framing-large#seed-l3-1",
+        "fs-ent-pipeline/o8a/framing-large#seed-l3-2",
+        "fs-ent-pipeline/o8a/framing-large#seed-l3-3",
+        "fs-ent-pipeline/o8a/framing-large#seed-m30-1",
+        "fs-ent-pipeline/o8a/framing-large#seed-m30-2",
+        "fs-ent-pipeline/o8a/framing-large#seed-m30-3"
+      ],
+      "status": "VERIFIED",
+      "note": "Recorded matches cover whole-response hash or bounded-read semantics as reviewed; they do not claim raw wire equality or general batching parity.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+        "fixturePath": "conformance/fs-ent-pipeline-production.json",
+        "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+        "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+        "tests": [
+          "conformance/src/fs-pipeline-closure.test.mjs"
+        ],
+        "rows": {
+          "MATCH": 11,
+          "NOT_CLAIMED": 4
+        }
+      }
+    }
+  ],
+  "perCaseAdjudication": {
+    "mode": "replay-comparison",
+    "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+    "sha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+    "summary": {
+      "MATCH": 1428,
+      "MISMATCH": 509,
+      "INDETERMINATE": 12,
+      "UNKNOWN": 2
+    },
+    "profile": "strict"
+  },
+  "knownDifferences": {
+    "notClaimed_select_expressions_o1_o4": {
+      "statement": "Not claimed: 6 of the 358 recorded rows of this condition do not match under strict: four rows that use sqrt, which fireemu does not run (px1/select#is-error-sqrt-s, px1/where#sqrt-s-positive, px1/static-refusals#select-sqrt-a and #where-sqrt-a); o4/stages#select-empty-then-unknown-function; and the gRPC row o2/select-width#select-65-grpc (production answers code 3, fireemu code 12 with the text that production has not refused this shape, although the shape is recorded)."
+    },
+    "notClaimed_o5_refusals": {
+      "statement": "Not claimed: 223 of the 310 O-5 rows (stage-grammar-refusals and function-names-and-arity) do not match under strict; strict answers UNIMPLEMENTED for each. By the category of the committed debt file pipeline_o5_known_differences.json: 205 unsupported-subset, 10 arity-wording, 5 validation-order-or-subset, 1 unsupported-current-document, 1 environment-reference-comparison, 1 unknown-production-outcome. The arity-wording rows are functions fireemu runs (among them equal, not_equal, less_than, less_than_or_equal, greater_than, greater_than_or_equal, parent, collection_id and document_id) whose recorded wrong-count text strict does not produce; the unknown-production-outcome row is the HTTP 500 of select with a repeated quoted alias (see notClaimed_duplicate_quoted_path)."
+    },
+    "notClaimed_sort": {
+      "statement": "Not claimed: 3 of the 83 recorded rows of this condition do not match under strict: o6/sort-kinds-cross#v-desc and o6/sort-ties#g-asc-limit2, where production's order of rows tied on every sort key under a descending sort or a limit is not shown by the recordings, and o6/sort-wire-errors#expression-unknown-fn, which strict answers UNIMPLEMENTED."
+    },
+    "notClaimed_aggregate": {
+      "statement": "Not claimed: 25 of the 134 recorded rows of this condition do not match under strict: 23 rows whose answer depends on the order of the groups (production's own order is unobserved and fireemu returns the order the groups were first met: 20 of them hold the same groups in another order, 3 keep other groups under a limit or an offset), and 2 argument errors (o7/aggregate-args) that strict answers UNIMPLEMENTED."
+    },
+    "notClaimed_inputs_collection_group_documents": {
+      "statement": "Not claimed: 1 of the 29 recorded rows of this condition do not match under strict: o7/inputs-documents#missing: a documents input whose only path is missing answers [{executionTime}] in production and [{}] without executionTime in fireemu."
+    },
+    "notClaimed_nesting_limits": {
+      "statement": "Not claimed: 4 of the 18 recorded rows of this condition do not match under strict: all four rows are gRPC: chain-33-grpc (production refuses 33 levels with INVALID_ARGUMENT, fireemu answers results), chain-47-grpc (production \"Request contains an invalid argument.\", fireemu the protobuf decoder's text), and chain-48-grpc and chain-100-grpc, whose request the recorder's own client failed to serialize (marked unknown in the fixture, so neither match nor mismatch)."
+    },
+    "notClaimed_base64_commit_and_cursor": {
+      "statement": "Not claimed: 18 of the 25 recorded rows of this condition do not match under strict: 16 broken forms that production refuses (400, nothing written) and fireemu accepts (line breaks lf, cr, crlf, mime-76 and mime-76-lf, the mixed alphabets plus-underscore and minus-slash, each as a commit and its read-back, and the cursor-lf and cursor-crlf cursors), and 2 rows with the proto field name bytes_value (write-proto-name and get-proto-name), which production accepts and reads back and fireemu refuses."
+    },
+    "notClaimed_duplicate_quoted_path": {
+      "statement": "The five recorded repeated quoted-alias cases return HTTP 500 INTERNAL under strict with a fixed console explanation; the emulator profile returns 400. Other alias shapes and unobserved gRPC behavior remain unclaimed."
+    },
+    "notClaimed_response_framing_large": {
+      "statement": "Not claimed: production response-unit boundaries for the recovered framing recordings vary across repeated reads. All 27 recovered steps are present in the comparison: 15 match and 12 are INDETERMINATE because the production boundaries differ. These outcomes do not establish general production batching parity; the earlier framing summary is retained.",
+      "framingSummaryPath": "conformance/fs-ent-pipeline-framing.json",
+      "framingSummarySha256": "85b4db894388ab51ebfae4f396daa24e0aa593d7f8666feef50b55d85652f63a"
+    },
+    "notClaimed_string_functions": {
+      "statement": "The recorded string and regex matches are claimed only for the listed recipe IDs; unrecorded RE2 grammar and semantic behavior remain unclaimed."
+    },
+    "notClaimed_math_functions": {
+      "statement": "Not claimed: the math function family (O-8B): 114 rows recorded, all 114 match the integrated comparison but are not included in the verified conditions."
+    },
+    "notClaimed_timestamp_functions": {
+      "statement": "Not claimed: the timestamp function family (O-8C): 137 rows recorded, none runs locally (every function and stage of the family answers UNIMPLEMENTED under strict; owner 1794 puts these families out of scope)."
+    },
+    "notClaimed_map_and_array_functions": {
+      "statement": "Recorded cases of array_length, array_first, array_last, array_get, map_get, map_set, map_remove, map_merge, map_keys, map_values and map_entries execute locally. Strict returns the recorded HTTP 500 for zero-argument array_reverse with empty options; other unimplemented forms and unobserved behavior remain unclaimed."
+    },
+    "notClaimed_union_unnest_sample": {
+      "statement": "Not claimed: the stages union, unnest and sample (O-8D): 46 rows recorded, none runs locally (every function and stage of the family answers UNIMPLEMENTED under strict; owner 1794 puts these families out of scope)."
+    },
+    "notClaimed_N4_standard_and_non_owner": {
+      "statement": "Not claimed: Error precedence on the Standard (default) database and from a non-owner caller under Security Rules: the recorder addresses one Enterprise database and one caller."
+    },
+    "notClaimed_N6_other_write_methods": {
+      "statement": "Not claimed: base64 decoding in createDocument, patch and batchWrite was not recorded (not methods the recorder issues)."
+    },
+    "notClaimed_function_names_beyond_recorded": {
+      "statement": "Not claimed: Other registry names (vector, geospatial, search beyond FS-TEXT-SEARCH, about 100 names) were not exercised; timestamp functions saw one instant and one zone."
+    },
+    "notClaimed_stages_outside_scope": {
+      "statement": "Not claimed: find_nearest, replace_with, define and nested pipelines, write stages, readTime and transactions, a Standard-edition database and index requirements for pipelines were not observed."
+    },
+    "notClaimed_sample_distribution": {
+      "statement": "Not claimed: sample is random: counts (2 of 5 at 0.5) and membership are recorded; the distribution for larger inputs and the shuffle of an oversized sample are not."
+    },
+    "notClaimed_scan_order_edges": {
+      "statement": "Not claimed: Non-ASCII ids and CRC-32 ties were not asked (the ids tested are ASCII and have distinct CRC-32 values)."
+    },
+    "notClaimed_is_type_vector": {
+      "statement": "Not claimed: is_type of a stored vector value was not asked."
+    },
+    "notClaimed_collection_group_other_database": {
+      "statement": "Not claimed: An ancestor naming another database was not asked: the recorder's guard refuses a body naming another project."
+    },
+    "notClaimed_grpc_only_differences": {
+      "statement": "Not claimed: gRPC-only differences are out of scope (owner 1794): the claimed rows include 26 gRPC rows that match, and the gRPC rows that differ are listed in the comparison."
+    },
+    "parentScope": {
+      "statement": "FS-PIPELINE remains IMPLEMENTING. The 1428 independently reviewed matching recipe IDs cover only the recorded cases; all 1951 rows remain in the comparison, including 509 mismatches, 12 INDETERMINATE framing rows and two UNKNOWN client-side observations."
+    },
+    "notClaimed_newly_matching": {
+      "statement": "All 1428 matching recorded rows in this comparison were independently reviewed and included in conditions; unobserved and nonmatching rows remain unclaimed.",
+      "matchingRows": []
     }
   },
   "integratedRegression": {
-    "integrationCommit": "42f9aa89d2268f7638aef01d792b57e82e78b3bd",
-    "releaseBinarySha256": "bd3db40f483df0420f3f684513628eaabd6a787c80ff31843e0086891799f315",
+    "integrationCommit": "e69ba42d87d07b70a532bf12c370fdc86f524f87",
+    "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
     "binaryProfile": "release",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-PIPELINE-build.json",
-    "buildReceiptSha256": "e8f561ad1440bc97782b53324157235704077eff5653507ed784fe8c96c8fbc7",
+    "buildReceiptSha256": "d3f264e8c0aeb4ef0ff2ce292de6aee869df550b6dee62f3f5a4e724ee6f0e3a",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "sha256": "685663de5b9ff460d54aa244ef92c16894ec197b542920274899f5b3f20d158f",
+        "sha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
         "rows": 1951,
         "summary": {
-          "MATCH": 1270,
-          "MISMATCH": 652,
-          "MISSING_FIXTURE": 27,
+          "MATCH": 1428,
+          "MISMATCH": 509,
+          "INDETERMINATE": 12,
           "UNKNOWN": 2
         }
       }
@@ -2021,5 +2298,16 @@
     "productionRequests": 0,
     "result": "COMPARED_PER_CASE_ON_RELEASE_BINARY",
     "releaseBindingNote": "The comparison is check and export-comparison of the fs-ent-pipeline lane against the release binary named above (RUSTC_WRAPPER empty, --locked) built from integrationCommit; the release job reruns it (R21, check exits 1 because unclaimed rows mismatch) and compares the export row by row."
+  },
+  "recordedLeafReview": {
+    "decision": "APPROVED_RECORDED_ROWS_ONLY",
+    "ownerDecision": "docs.local/instructions/owner-decisions.md (1897)",
+    "claimSetPath": "docs.local/reviews/2026-10-28-fs-recorded-claimset-sol.json",
+    "claimSetSha256": "5ea8b2c02a603dd08fdc2b5268095380dca73aad1a9ad1e549e3977b71af101c",
+    "sourceCommit": "e69ba42d87d07b70a532bf12c370fdc86f524f87",
+    "binarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
+    "comparisonSha256": "8ba26ea9afb1d9e112e3f64ab9e550b4c0a1ba5be4e04e2abd10a392f6974480",
+    "addedRecipeCount": 430,
+    "framingScope": "Nine whole-response hash and six bounded-read matches; no raw wire equality or general batching claim."
   }
 }

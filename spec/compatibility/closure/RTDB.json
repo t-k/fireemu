@@ -895,6 +895,20 @@
      "emulator": "44 MATCH, 28 declared DIFFERENCE"
     },
     "binding": "Reviewed release binary 3385153b069c4c5ad379f3ca7dd4e3c7dacd15e684f99f1a11dfe39f8d6b3cf5 built at source 0158be06b1667414234015b3307ca51cb5a835a7; tool commit 5dafdade28bdc89c1db48e248c304b943719a8e1."
+   },
+   {
+    "path": "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
+    "sha256": "d5ff93cde3acbe9e272edb50e6ee2fdd2200dc68a12f570d73f313bd5351a27c",
+    "rows": 172,
+    "summary": {
+     "rest": {
+      "MATCH": 124
+     },
+     "m14": {
+      "MATCH": 48
+     }
+    },
+    "binding": "Release binary from signed source e69ba42d87d07b70a532bf12c370fdc86f524f87; SHA-256 fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb. This additional REST replay does not rebind the historical SDK, Auth, residual or S5 comparisons."
    }
   ],
   "productionRequests": 0,
@@ -903,7 +917,7 @@
  },
  "knownDifferences": {
   "restMemberOrder": {
-   "statement": "Two REST answers differ from production only in the member order of the JSON body, in both rounds: the PATCH answer for `{\"y/z\":\"t\",\"w\":3}` (production keeps the request's order, fireemu answers in key order) and GET query.json?orderBy=\"h\"&startAt=2 (production lists children in orderBy order, fireemu in key order). Status, parsed JSON and ETag are equal; the JS SDK parses both into the same snapshot.",
+   "statement": "The recorded strict PATCH response now preserves request-member order for the covered cases. The recorded filtered GET query may retain a different raw member order: the comparison uses the documented filtered-get semantic JSON policy and reports raw differences separately; no general ordering parity is claimed.",
    "rows": [
     "rest r1/r2 patch-update-nested-and-add",
     "rest r1/r2 query-get-1"
@@ -916,7 +930,7 @@
    "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step (and only that step) unordered; every other step, including the multi-event steps signin-a, signout, resignin-a and refresh-after-delete, is judged in recorded order. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
   },
   "sseFraming": {
-   "statement": "Production sends event streams with Connection: close and closes the socket after the cancel event; fireemu uses chunked transfer encoding, ends the chunked body after cancel and keeps the connection. The event bytes are identical. Tracked in docs.local/issues/open/rtdb-sse-connection-close-framing.md."
+   "statement": "Production sends close-delimited event streams and closes after the cancel event. Under strict, fireemu closes after cancellation but uses native HTTP/1.1 chunked framing; the recorded event bytes agree. The emulator profile retains its existing transport behavior."
   },
   "googleSignedTokens": {
    "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."

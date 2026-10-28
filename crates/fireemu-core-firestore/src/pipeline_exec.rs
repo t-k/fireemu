@@ -603,7 +603,8 @@ impl Expr {
                 "The function '{name}' does not accept {got} argument(s). Valid options are:{options}"
             )));
         }
-        if !fits && !function.signature.is_empty() {
+        if !fits && !function.signature.is_empty() && !matches!(function.arity, Arity::Between(..))
+        {
             let range = match function.arity {
                 Arity::Exact(n) => format!("[{n}..{n}]"),
                 Arity::AtLeast(n) => format!("[{n}..+\u{221e})"),
@@ -701,6 +702,17 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
+                if unrecorded == Unrecorded::Refuse
+                    && function.name == "array_index_of"
+                    && args
+                        .get(2)
+                        .is_some_and(|arg| !matches!(arg, Self::Constant(_)))
+                {
+                    return Eval::Error(EvalError::Unobserved {
+                        function: "array_index_of",
+                        reason: "a nonliteral direction is unobserved",
+                    });
+                }
                 let args: Vec<Eval> = args
                     .iter()
                     .map(|arg| arg.eval_at(row, unrecorded, false, runtime))

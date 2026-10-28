@@ -2785,3 +2785,40 @@ fn array_slice_bad_arity_returns_error_without_panicking() {
         .is_err());
     }
 }
+
+#[test]
+fn array_index_of_dynamic_direction_is_unobserved_only_in_strict() {
+    let mut fields = BTreeMap::new();
+    fields.insert("direction".to_owned(), Value::String("first".to_owned()));
+    let row = Row::derived(fields);
+    let value = Expr::Constant(Value::Array(vec![Value::Integer(7)]));
+    let needle = Expr::Constant(Value::Integer(7));
+    let field = Expr::Field(FieldPath::parse("direction").unwrap());
+    let computed = Expr::call(
+        "to_lower",
+        vec![Expr::Constant(Value::String("FIRST".to_owned()))],
+        Placement::Value,
+    )
+    .unwrap();
+    for direction in [field, computed] {
+        let expr = Expr::call(
+            "array_index_of",
+            vec![value.clone(), needle.clone(), direction],
+            Placement::Value,
+        )
+        .unwrap();
+        assert!(is_unobserved(&expr.eval_in(&row, Unrecorded::Refuse)));
+        assert_eq!(expr.eval_in(&row, Unrecorded::OfficialEmulator), int(0));
+    }
+    let literal = Expr::call(
+        "array_index_of",
+        vec![
+            value,
+            needle,
+            Expr::Constant(Value::String("first".to_owned())),
+        ],
+        Placement::Value,
+    )
+    .unwrap();
+    assert_eq!(literal.eval_in(&row, Unrecorded::Refuse), int(0));
+}

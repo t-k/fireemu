@@ -1884,6 +1884,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn union_generated_captured_guard_combinations() {
+        let cases = [
+            ("allow", "different", "strict"),
+            ("allow", "same", "strict"),
+            ("allow", "empty", "strict"),
+            ("deny", "different", "strict"),
+            ("stale", "different", "strict"),
+            ("allow", "different", "ordinary"),
+            ("stale", "empty", "ordinary"),
+            ("stale", "same", "ordinary"),
+            ("deny", "same", "ordinary"),
+            ("deny", "empty", "ordinary"),
+        ];
+        for (mode, branch, profile) in cases {
+            let mut gateway = test_gateway();
+            gateway.enforce_limits = profile == "strict";
+            let local = Arc::new(LocalBackend::new(
+                gateway,
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+                7,
+            ));
+            let epoch = local.barrier().epoch();
+            if mode == "stale" {
+                drop(local.barrier().exclusive());
+            }
+            let caller = Caller {
+                principal: Principal::Owner,
+                epoch,
+            };
+            let query = |collection: &str| pb::RunQueryRequest {
+                parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+                query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![pb::structured_query::CollectionSelector {
+                            collection_id: collection.to_owned(),
+                            all_descendants: false,
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            let second = match branch {
+                "different" => "right",
+                "same" => "left",
+                "empty" => "empty",
+                _ => unreachable!(),
+            };
+            let queries = vec![query("left"), query(second)];
+            let outcome = blocking_read(local, None, caller, move |local, guard| {
+                let count = std::cell::Cell::new(0);
+                let checked = |db: &FirestoreState, version, check: crate::rules::ReadCheck<'_>| {
+                    guard(db, version, check)?;
+                    count.set(count.get() + 1);
+                    if mode == "deny" && count.get() == 2 {
+                        return Err(Status::permission_denied("second branch denied"));
+                    }
+                    Ok(())
+                };
+                local.run_pipeline_sources(&queries, &checked)
+            })
+            .await;
+            match mode {
+                "allow" => assert_eq!(outcome.unwrap().len(), 2, "{branch} {profile}"),
+                "deny" => assert_eq!(
+                    outcome.unwrap_err().code(),
+                    tonic::Code::PermissionDenied,
+                    "{branch} {profile}"
+                ),
+                "stale" => assert_eq!(
+                    outcome.unwrap_err().code(),
+                    tonic::Code::Unavailable,
+                    "{branch} {profile}"
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn union_snapshot_read_refuses_stale_epoch_before_access() {
         let local = test_backend();
         let old_epoch = local.barrier().epoch();

@@ -3123,3 +3123,220 @@ fn union_limit_zero_still_denies_nonowner_on_both_routes() {
     });
     assert_eq!(code, tonic::Code::PermissionDenied);
 }
+
+#[test]
+fn union_generated_route_combinations() {
+    use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let cases = [
+        ("different", "plain", "none", "allow", "rest", "strict"),
+        ("same", "plain", "none", "allow", "grpc", "strict"),
+        ("empty", "plain", "none", "allow", "rest", "strict"),
+        ("different", "where", "none", "allow", "rest", "strict"),
+        ("different", "select", "none", "allow", "rest", "strict"),
+        ("different", "nested", "none", "allow", "rest", "strict"),
+        (
+            "different",
+            "plain",
+            "prefix_limit",
+            "allow",
+            "rest",
+            "strict",
+        ),
+        (
+            "different",
+            "plain",
+            "suffix_limit",
+            "allow",
+            "rest",
+            "strict",
+        ),
+        ("different", "plain", "blocking", "allow", "rest", "strict"),
+        ("different", "plain", "none", "deny", "grpc", "strict"),
+        ("different", "plain", "none", "allow", "rest", "ordinary"),
+        (
+            "empty",
+            "select",
+            "prefix_limit",
+            "deny",
+            "grpc",
+            "ordinary",
+        ),
+        ("same", "nested", "blocking", "deny", "grpc", "ordinary"),
+        ("empty", "where", "suffix_limit", "deny", "grpc", "ordinary"),
+        ("same", "nested", "prefix_limit", "deny", "rest", "ordinary"),
+        (
+            "empty",
+            "nested",
+            "suffix_limit",
+            "deny",
+            "grpc",
+            "ordinary",
+        ),
+        ("same", "select", "suffix_limit", "deny", "rest", "ordinary"),
+        ("same", "where", "blocking", "deny", "rest", "ordinary"),
+        ("empty", "select", "blocking", "allow", "grpc", "strict"),
+        ("empty", "where", "prefix_limit", "allow", "grpc", "strict"),
+    ];
+    for (branch, child, boundary, guard, transport, profile) in cases {
+        let mut s = state(profile == "strict");
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }").unwrap()));
+        let rules = Arc::new(
+            RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+        );
+        s.rules = Some(rules.clone());
+        for (name, n) in [("left/a", 1), ("right/b", 2)] {
+            let (status, _) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/{name}"),
+                &json!({"fields":{"n":{"integerValue":n.to_string()}}}),
+            );
+            assert_eq!(status, 200);
+        }
+        let collection = |name: &str| json!({"name":"collection","args":[{"referenceValue":format!("/{name}")}]});
+        let source = match branch {
+            "different" => "right",
+            "same" => "left",
+            "empty" => "empty",
+            _ => unreachable!(),
+        };
+        let mut child_stages = vec![collection(source)];
+        if child == "where" {
+            child_stages.push(json!({"name":"where","args":[{"functionValue":{"name":"equal","args":[{"fieldReferenceValue":"n"},{"integerValue":"2"}]}}]}));
+        }
+        if child == "select" {
+            child_stages.push(json!({"name":"select","args":[{"mapValue":{"fields":{"n":{"fieldReferenceValue":"n"}}}}]}));
+        }
+        if child == "nested" {
+            child_stages.push(
+                json!({"name":"union","args":[{"pipelineValue":{"stages":[collection("left")]}}]}),
+            );
+        }
+        let mut stages = vec![collection("left")];
+        if boundary == "prefix_limit" {
+            stages.push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
+        }
+        stages.push(json!({"name":"union","args":[{"pipelineValue":{"stages":child_stages}}]}));
+        if boundary == "suffix_limit" {
+            stages.push(json!({"name":"limit","args":[{"integerValue":"2"}]}));
+        }
+        if boundary == "blocking" {
+            stages.push(json!({"name":"sort","args":[{"mapValue":{"fields":{"direction":{"stringValue":"ascending"},"expression":{"fieldReferenceValue":"n"}}}}]}));
+        }
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+        let result = if transport == "rest" {
+            let response = s.handle(&RestRequest {
+                method: "POST".to_owned(),
+                path: format!("/v1/{DOCS}:executePipeline"),
+                query: String::new(),
+                authorization: (guard == "allow").then(|| "Bearer owner".to_owned()),
+                origin: None,
+                remote_peer: false,
+                browser_metadata: false,
+                app_check: Vec::new(),
+                body: body.clone(),
+                batch_field_order: Vec::new(),
+                key_order: KeyOrder::default(),
+            });
+            if guard == "deny" {
+                assert_eq!(
+                    response.status, 403,
+                    "{branch} {child} {boundary} {transport} {profile}"
+                );
+                continue;
+            }
+            assert_eq!(response.status, 200, "{:?}", response.body);
+            response.body
+        } else {
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service =
+                GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local)).with_rules(rules);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let response = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut request = tonic::Request::new(req);
+                if guard == "allow" {
+                    request
+                        .metadata_mut()
+                        .insert("authorization", "Bearer owner".parse().unwrap());
+                }
+                match Firestore::execute_pipeline(&service, request).await {
+                    Err(error) => Err(error.code()),
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        let mut items = Vec::new();
+                        while let Some(item) = stream.next().await {
+                            items.push(
+                                fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                                    &item.unwrap(),
+                                ),
+                            );
+                        }
+                        Ok(Value::Array(items))
+                    }
+                }
+            });
+            if guard == "deny" {
+                assert_eq!(response.unwrap_err(), tonic::Code::PermissionDenied);
+                continue;
+            }
+            response.unwrap()
+        };
+        let mut expected = vec![1];
+        let right = match branch {
+            "different" => Some(2),
+            "same" => Some(1),
+            "empty" => None,
+            _ => unreachable!(),
+        };
+        if let Some(n) = right {
+            if child != "where" || n == 2 {
+                expected.push(n);
+            }
+        }
+        if child == "nested" {
+            expected.push(1);
+        }
+        if boundary == "suffix_limit" {
+            expected.truncate(2);
+        }
+        if boundary == "blocking" {
+            expected.sort();
+        }
+        let got = result
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|response| response["results"].as_array().into_iter().flatten())
+            .map(|row| {
+                row["fields"]["n"]["integerValue"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            got, expected,
+            "{branch} {child} {boundary} {guard} {transport} {profile}"
+        );
+    }
+}

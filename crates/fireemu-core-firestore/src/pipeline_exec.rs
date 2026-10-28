@@ -674,7 +674,7 @@ impl Expr {
             )));
         }
         if name == "map_set" && args.len() % 2 == 0 {
-            return Err(ExprError::Invalid(
+            return Err(ExprError::Arity(
                 "'map_set' function must have an odd number of arguments".to_owned(),
             ));
         }

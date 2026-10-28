@@ -2385,3 +2385,168 @@ fn current_timestamp_comparison_checks_clock_and_full_shape() {
         assert_ne!(answer_in(200, &got, true), answer_in(200, &other, true));
     }
 }
+
+#[test]
+fn map_set_odd_count_recorded_refusal_and_shape_gate_pict() {
+    use fireemu_adapter_grpc::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+    use tonic::{Code, Status};
+    const MESSAGE: &str = "'map_set' function must have an odd number of arguments";
+    let fixture = read("fs-ent-pipeline-requests.json");
+    let program = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8c/collections-main")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "map-set-odd-entries")
+        .unwrap();
+    let body = fill(&step["body"]);
+    let cases = [
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+        (true, true, true),
+        (false, false, false),
+        (false, true, false),
+        (false, false, true),
+    ];
+    for (strict, grpc, near) in cases {
+        if !near {
+            let (status, response) =
+                internal_case(strict, "o8c/collections-main", "map-set-odd-entries", grpc);
+            assert_eq!(status, 400, "strict={strict} grpc={grpc}: {response}");
+            let message = if grpc {
+                response["grpcMessage"].as_str()
+            } else {
+                response.pointer("/0/error/message").and_then(Value::as_str)
+            };
+            assert_eq!(message, Some(MESSAGE));
+            if !grpc {
+                let production = read("fs-ent-pipeline-production.json");
+                let expected = &production["programs"]["fs-ent-pipeline/o8c/collections-main"]
+                    ["steps"]["map-set-odd-entries"];
+                assert_eq!(response, expected["body"], "recorded REST error envelope");
+            }
+        }
+        let mut chosen = body.clone();
+        if near {
+            *chosen.pointer_mut("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields/v/functionValue/args/3").unwrap() = json!({"integerValue":"1"});
+        }
+        let shape = if grpc {
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &chosen,
+            )
+            .unwrap();
+            shape_of_request(&request)
+        } else {
+            let (parsed, order) = fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(
+                chosen.to_string().as_bytes(),
+            )
+            .unwrap();
+            shape_of_json(&parsed, &order)
+        };
+        let gate = if strict {
+            RefusalGate::Recorded(shape, "projects/demo-app/databases/(default)".into())
+        } else {
+            RefusalGate::Open
+        };
+        let expected = if strict && near {
+            Code::Unimplemented
+        } else {
+            Code::InvalidArgument
+        };
+        assert_eq!(
+            gate.answer(Status::invalid_argument(MESSAGE)).code(),
+            expected,
+            "strict={strict} grpc={grpc} near={near}"
+        );
+        if strict {
+            assert_eq!(
+                gate.answer(Status::invalid_argument(format!("{MESSAGE}!")))
+                    .code(),
+                Code::Unimplemented
+            );
+        }
+    }
+}
+
+#[test]
+fn map_set_odd_count_recorded_grpc_is_invalid_argument() {
+    let (status, body) = internal_case(true, "o8c/collections-main", "map-set-odd-entries", true);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["grpcMessage"],
+        "'map_set' function must have an odd number of arguments"
+    );
+}
+
+#[test]
+fn map_set_odd_count_near_shape_remains_refused_by_strict_routes() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let fixture = read("fs-ent-pipeline-requests.json");
+    let program = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8c/collections-main")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "map-set-odd-entries")
+        .unwrap();
+    let mut body = fill(&step["body"]);
+    *body
+        .pointer_mut(
+            "/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields/v/functionValue/args/3",
+        )
+        .unwrap() = json!({"integerValue":"1"});
+    for strict in [true, false] {
+        let s = state(strict);
+        let (status, _) = call(&s, "POST", &format!("{DOCS}:executePipeline"), &body);
+        assert_eq!(
+            status,
+            if strict { 501 } else { 400 },
+            "REST strict={strict}"
+        );
+        let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap();
+        let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let code = runtime.block_on(async {
+            use tokio_stream::StreamExt as _;
+            match Firestore::execute_pipeline(&service, tonic::Request::new(req)).await {
+                Err(error) => error.code(),
+                Ok(response) => response
+                    .into_inner()
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap_err()
+                    .code(),
+            }
+        });
+        assert_eq!(
+            code,
+            if strict {
+                tonic::Code::Unimplemented
+            } else {
+                tonic::Code::InvalidArgument
+            },
+            "gRPC strict={strict}"
+        );
+    }
+}

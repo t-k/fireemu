@@ -3118,3 +3118,17 @@ fn extrema_distinguishable_signed_zero_ties_are_unobserved() {
         }
     }
 }
+
+#[test]
+fn map_set_odd_count_is_recorded_arity_and_minimum_still_precedes_it() {
+    let args = vec![Expr::Constant(Value::Null); 4];
+    assert!(
+        matches!(Expr::call("map_set", args, Placement::Value), Err(ExprError::Arity(message)) if message == "'map_set' function must have an odd number of arguments")
+    );
+    let args = vec![Expr::Constant(Value::Null); 2];
+    assert!(
+        matches!(Expr::call("map_set", args, Placement::Value), Err(ExprError::Arity(message)) if message.contains("takes [3..+∞)"))
+    );
+    let args = vec![Expr::Constant(Value::Null); 3];
+    assert!(Expr::call("map_set", args, Placement::Value).is_ok());
+}

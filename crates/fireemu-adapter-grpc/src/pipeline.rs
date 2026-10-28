@@ -28,6 +28,10 @@ const OFFICIAL_ONLY_STAGES: &[&str] = &["let", "insert", "upsert", "literals"];
 
 /// Bounds nested union planning before recursive validation and shape inspection.
 pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
+    enum Item<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Value(&'a pb::Value),
+    }
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         &request.pipeline_type
     else {
@@ -60,10 +64,6 @@ pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), St
             }
         }
     }
-    enum Item<'a> {
-        Pipeline(&'a pb::Pipeline),
-        Value(&'a pb::Value),
-    }
     let mut nodes = vec![(Item::Pipeline(root), 0_usize)];
     let mut seen = 0_usize;
     while let Some((item, depth)) = nodes.pop() {
@@ -83,7 +83,7 @@ pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), St
             }
             Item::Value(value) => match value.value_type.as_ref() {
                 Some(pb::value::ValueType::PipelineValue(pipeline)) => {
-                    nodes.push((Item::Pipeline(pipeline), depth + 1))
+                    nodes.push((Item::Pipeline(pipeline), depth + 1));
                 }
                 Some(pb::value::ValueType::ArrayValue(array)) => {
                     for value in &array.values {
@@ -164,10 +164,10 @@ pub(crate) fn admit_union_json(body: &serde_json::Value) -> Result<(), Status> {
         }
         match value {
             serde_json::Value::Array(items) => {
-                nodes.extend(items.iter().map(|value| (value, depth + 1)))
+                nodes.extend(items.iter().map(|value| (value, depth + 1)));
             }
             serde_json::Value::Object(items) => {
-                nodes.extend(items.values().map(|value| (value, depth + 1)))
+                nodes.extend(items.values().map(|value| (value, depth + 1)));
             }
             _ => {}
         }

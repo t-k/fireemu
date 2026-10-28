@@ -1,0 +1,13 @@
+Case	Round	Failure
+heal-reregister	r1	none
+nested-priority	r2	ack
+string-priority	r1	close
+heal-reregister	r2	capture
+heal-reregister	r1	ack
+nested-priority	r1	close
+nested-priority	r1	capture
+string-priority	r2	none
+heal-reregister	r2	close
+string-priority	r2	capture
+nested-priority	r2	none
+string-priority	r1	ack

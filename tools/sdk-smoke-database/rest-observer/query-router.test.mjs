@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {queryRequest} from './orchestrator.mjs';
+const prefix='rnext1_0123456789abcdef01234567',base='https://demo-observer.firebaseio.com';
+test('query router refuses foreign paths, methods and unlisted query',()=>{const req={step:'query-case',method:'GET',path:`/${prefix}/r1/queryrule.json`,query:'orderBy=%22h%22&limitToFirst=2',phase:'normal'};assert.equal(queryRequest(base,prefix,req).url,base+req.path+'?'+req.query);for(const bad of [{...req,method:'POST'},{...req,path:'/foreign.json'},{...req,query:'orderBy=%22h%22&limitToFirst=4'},{...req,phase:'cleanup'}])assert.throws(()=>queryRequest(base,prefix,bad));});

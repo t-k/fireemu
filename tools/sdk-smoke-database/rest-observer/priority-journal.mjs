@@ -1,0 +1,3 @@
+import {open} from 'node:fs/promises';
+const SECRET=/(?:AIza[\w-]{15,}|ya29\.[\w.-]+|eyJ[\w-]{15,}\.[\w-]+|Bearer\s+\S+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})/i;
+export async function createPriorityJournal(path){const file=await open(path,'wx',0o600);let stopped=false,tail=Promise.resolve();return {append(row){const next=tail.then(async()=>{if(stopped)throw Error('priority journal stopped');try{const line=JSON.stringify(row);if(typeof line!=='string'||line.length>1048576||SECRET.test(line))throw Error('priority journal refused');await file.write(`${line}\n`);await file.sync();}catch(e){stopped=true;throw e;}});tail=next.catch(()=>{});return next;},async close(){await tail;await file.close();}};}

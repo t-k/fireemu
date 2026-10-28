@@ -16,10 +16,10 @@ test("v0.35 RTDB finite replays bind the reviewed source and both profiles", () 
   const closure = json("spec/compatibility/closure/RTDB.json");
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   const binding = closure.integratedRegression.v035RecordedRevalidation;
-  assert.equal(binding.sourceCommit, "18f77be8956cccb768adfe8b43cfd0f9a8dfff09");
+  assert.equal(binding.sourceCommit, "8220a36ad88c136592551ebb94f358d6abe4d909");
   assert.equal(
     binding.binarySha256,
-    "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+    "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
   );
   assert.equal(binding.productionRequests, 0);
   assert.equal(binding.comparisons.length, 6);

@@ -2,8 +2,8 @@
   "kind": "rtdb-production-comparison-v1",
   "parent": "RTDB",
   "comparison": "rest",
-  "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-  "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
   "command": "node tools/sdk-smoke-database/rest-replay.mjs local --fireemu <binary> --out <dir>",
   "productionRequests": 0,
   "comparisonPolicy": {

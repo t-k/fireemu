@@ -777,9 +777,9 @@
     "scope": "the two rounds r1-ws and r2-ws of the S5 recording; the recorded shape only",
     "v035RecordedPriority": {
      "path": "spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json",
-     "sha256": "bf2f051465bf95ac81920a5825e77f44cf0115f243c97f8980c908d9b811c907",
-     "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-     "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+     "sha256": "7375f338b22d042890bc0f2ed298fd61f9dd56536081a337c99095175867b897",
+     "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+     "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
      "rowsPerProfile": 6,
      "tests": [
       "tools/sdk-smoke-database/priority-replay.test.mjs"
@@ -961,13 +961,13 @@
    "note": "Finite recorded requests including support and anchor rows; not complete Rules or query parity."
   },
   "v035RecordedRevalidation": {
-   "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-   "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+   "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+   "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
    "productionRequests": 0,
    "comparisons": [
     {
      "path": "spec/compatibility/closure/evidence/RTDB-rest-v035-comparison.json",
-     "sha256": "d476909357a313d4131f3f82c180665593ff39dedb0bb15cb868d9b41060dedd",
+     "sha256": "13280ec98104d0bb7a6c33869da977ca11830ac81d4830c004698fce8075e987",
      "rows": 172,
      "summary": {
       "rest": {
@@ -981,31 +981,31 @@
     },
     {
      "path": "spec/compatibility/closure/evidence/RTDB-next4-v035-comparison.json",
-     "sha256": "cece19b6bde9ef9fb8b9452bed3145a42e65a2771b8d56507dbd2dd07261f471",
+     "sha256": "b5bcee217f826c2af9f8a8b6452fb0f925a6b1d7e46019ff1d3ebb92a1c47db9",
      "rowsPerProfile": 36,
      "note": "Finite recorded rows, including support and anchor requests; not general parity."
     },
     {
      "path": "spec/compatibility/closure/evidence/RTDB-rules-v035-comparison.json",
-     "sha256": "c75e68f275ea70680fa22a6433a30d24c3b3b46c8aa7404ddfadc9f0ce520263",
+     "sha256": "73aee352e66e0e02cc6f5bde2c0abdcd6787d8f711f49190724fd52a4981491e",
      "rowsPerProfile": 56,
      "note": "Finite recorded rows, including support and anchor requests; not general parity."
     },
     {
      "path": "spec/compatibility/closure/evidence/RTDB-query-rules-v035-comparison.json",
-     "sha256": "a180780125bfde0f08316690a7f5bda9c00bc08066f4451fa5c970aa51979f21",
+     "sha256": "ac9c2c651aab691cc2b7fe089a048078991bdc4a2ee266a4d1484edc24490e70",
      "rowsPerProfile": 20,
      "note": "Finite recorded rows, including support and anchor requests; not general parity."
     },
     {
      "path": "spec/compatibility/closure/evidence/RTDB-query-bounds-v035-comparison.json",
-     "sha256": "a292e67a4ed40715393809f7e58751fe151dee46c2c7f08042a88baac10ecf16",
+     "sha256": "92916e4bcd6cb486d46656440c09dbacb6bed4581c8167789c9a8111df04e77e",
      "rowsPerProfile": 20,
      "note": "Finite recorded rows, including support and anchor requests; not general parity."
     },
     {
      "path": "spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json",
-     "sha256": "bf2f051465bf95ac81920a5825e77f44cf0115f243c97f8980c908d9b811c907",
+     "sha256": "7375f338b22d042890bc0f2ed298fd61f9dd56536081a337c99095175867b897",
      "rowsPerProfile": 6,
      "note": "Three recorded shapes in two rounds; no broader priority claim."
     }

@@ -1,12 +1,12 @@
 {
   "kind": "rtdb-rules-recorded-comparison-v1",
-  "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-  "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
   "productionRequests": 0,
   "strict": {
     "profile": "strict",
-    "sourceHead": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-    "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+    "sourceHead": "8220a36ad88c136592551ebb94f358d6abe4d909",
+    "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
     "source": {
       "journalSha256": "f3925a0b6e1030f93635535ee626b5aa215def8039b65c548acfa92fc53998d9",
       "requestCount": 83,
@@ -1339,8 +1339,8 @@
   },
   "emulator": {
     "profile": "emulator",
-    "sourceHead": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-    "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+    "sourceHead": "8220a36ad88c136592551ebb94f358d6abe4d909",
+    "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
     "source": {
       "journalSha256": "f3925a0b6e1030f93635535ee626b5aa215def8039b65c548acfa92fc53998d9",
       "requestCount": 83,

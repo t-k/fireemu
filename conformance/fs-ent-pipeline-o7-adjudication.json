@@ -1,14 +1,14 @@
 {
   "kind": "fs-ent-pipeline-o7-contract-adjudication-v1",
   "decision": "ACCEPTED_FINITE_STRICT_CONTRACT",
-  "decisionAuthority": "owner1940",
+  "decisionAuthority": "coordinator under owner delegation; ledger row 1949",
   "technicalCandidate": {
-    "sha256": "1aabbdff54ef5a6ee21457d4506216400eeb5b1f646dc99c1d43bd6eee3fa978",
+    "sha256": "ded6164dd7c8fb3d509759e7f8912ad8798b1e8b2e943f9ebd8cbe1b864bb3ea",
     "binding": "PENDING_REVIEW"
   },
-  "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-  "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
-  "actualIndexSha256": "622691a41d139d58199b97df54518fb79ec911f311b68e65607b7e1c9de5b340",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+  "actualIndexSha256": "076030b1d5d2c4e2bd90aa6e63c81670e391030d459837e093d45eba8aa702d0",
   "rawSummary": {
     "MATCH": 1740,
     "MISMATCH": 197,

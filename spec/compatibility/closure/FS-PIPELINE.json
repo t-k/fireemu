@@ -421,10 +421,10 @@
       "note": "Selects of expressions, comparisons of every pair of kinds, numbers, aliases and the 64-field width, literals and map keys, document functions, where conditions, limit and offset (O-1 to O-4), for the rows that match.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -531,10 +531,10 @@
       "note": "The arity, argument-shape and stage-order refusals of the recorded shapes that match, with production's texts (strict answers a refusal only for a recorded request shape).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -635,10 +635,10 @@
       "note": "The registry text (name, signature and argument count) of exactly these 15 functions: and, array_contains, array_contains_all, array_contains_any, equal_any, exists, is_absent, is_error, is_type, nor, not, not_equal_any, or, type, xor; and the 2 function-order rows select-empty-then-where-type, unknown-in-array-literal. The other functions' registry texts, including those of functions fireemu runs, are not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -741,10 +741,10 @@
       "note": "sort on any value kind, multi-key, missing and null placement, expression keys, limit and offset after a sort and the malformed forms with production's texts, for the rows that match (rows tied on every sort key follow the CRC-32 scan order).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -786,10 +786,10 @@
       "note": "where before and after select, sort before limit, repeated where and the other SDK chains.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -852,10 +852,10 @@
       "note": "and, or, not, xor, nor, exists, is_absent, is_error, type, is_type, array_contains*, equal_any and not_equal_any in a where, with truth tables, non-boolean operands and kinds.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -987,10 +987,10 @@
       "note": "count, count(x), count_distinct, sum, average, minimum and maximum with and without groups for the rows that match: empty input, numbers (overflow, NaN, mixed kinds), group-key equalities, aliases and the argument errors fireemu answers.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1074,10 +1074,10 @@
       "note": "distinct on aliases and expressions, add_fields (overwrite, nested alias, missing source) and remove_fields.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1128,10 +1128,10 @@
       "note": "collection_group (any depth, the root and a document ancestor) and documents for the rows that match (existing documents, malformed and duplicate paths refused).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1166,10 +1166,10 @@
       "note": "select of __name__ alone, beside an alias, quoted, as a second alias and followed by limit or where.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1206,10 +1206,10 @@
       "note": "The order in which malformed bodies, malformed values and unknown stages and functions are refused, on the Enterprise database for the owner caller.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1246,10 +1246,10 @@
       "note": "Literal container depth and expression nesting for these 14 rows only: chain-20, chain-20-grpc, chain-32, chain-32-grpc, chain-33, chain-47, chain-48, chain-100, array-20, map-20, array-21, map-21, array-21-grpc, map-21-grpc. That is a literal array or map of 20 levels accepted and of 21 levels refused (REST and gRPC) with production's text, REST bodies with an expression chain of 32 levels or more refused by the JSON depth limit with production's text, and gRPC chains of 20 and 32 levels answered. The 32-level expression limit over gRPC is not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1297,10 +1297,10 @@
       "note": "The base64 control rows only: write-control, get-control, write-urlsafe, get-urlsafe, write-unpadded, get-unpadded, cursor-control (the standard, URL-safe and unpadded alphabets in a commit and its read-back, and a cursor control). No refusal of a broken form is claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1380,10 +1380,10 @@
       "note": "A read without a sort lists the documents of one collection in ascending CRC-32 (IEEE, as zlib computes it) of the UTF-8 bytes of the document id, whatever the collection, the values, the write order and rewrites; limit and offset cut that order; a collection group is listed by parent path, each parent in the same order. The 52 rows are 32 unsorted executePipeline reads, 3 sorted reads, 15 commits and 2 gRPC reads; six of the reads were predicted before the O-9b send from this rule and matched exactly (three fresh sets of 12 ids and three collections). Not claimed: non-ASCII ids and CRC-32 ties.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1433,10 +1433,10 @@
       "note": "A group or distinct key of equal values shows the value of the first member in scan order (-0.0 and 0.0, 1 and 1.0), in 9 collections.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1474,10 +1474,10 @@
       "note": "A nested alias of a missing value creates the parent as an empty map and sets nothing; a top-level alias of a missing value removes an existing field; overlapping aliases are refused with production's text.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1538,10 +1538,10 @@
       "note": "or and and are three-valued; xor with 3 to 5 operands is odd parity; nor is true only when all operands are false; xor and nor with a null or missing operand are null; evaluation stops at the first decisive operand; equal_any, not_equal_any and array_contains refuse a non-array.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1578,10 +1578,10 @@
       "note": "The ancestor of collection_group must be a reference whose path is a valid document path and is otherwise ignored; the refusals carry production's texts.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1618,10 +1618,10 @@
       "note": "is_type of a missing field is null for every one of the 20 type names (also under not(...)) and is_error of it is false; a stored value is true for its own kind (an integer or a double is also number) and false for every other name.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1664,10 +1664,10 @@
       "note": "is_absent takes a field reference: a select that gives it a function value (here is_absent(is_type(...)) beside other aliases) is refused as a whole with production's text, for each of the 20 O-9 steps.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1708,10 +1708,10 @@
       "note": "An answer of up to 50 small documents is one response (gRPC) or one element (REST), as production, for these 18 rows. Larger answers are not claimed (see notClaimed_response_framing_large).",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1742,10 +1742,10 @@
       "note": "The three recorded alias controls and five recorded strict INTERNAL responses are matched; no general claim is made for other alias shapes.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "crates/fireemu-adapter-grpc/tests/pipeline_replay.rs#the_pipeline_corpus_replays_as_production_answered",
           "crates/fireemu-adapter-grpc/src/pipeline_shape/tests.rs#every_recorded_refusal_has_a_shape",
@@ -1941,10 +1941,10 @@
       "note": "Recorded string and regex cases only; regex grammar and semantics beyond the observed cases are not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2079,10 +2079,10 @@
       "note": "Recorded math cases only; unobserved argument shapes remain unclaimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2249,10 +2249,10 @@
       "note": "Recorded map and array cases only; unsupported forms, unobserved values and map output ordering remain unclaimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2277,10 +2277,10 @@
       "note": "Recorded matches cover whole-response hash or bounded-read semantics as reviewed; they do not claim raw wire equality or general batching parity.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2312,10 +2312,10 @@
       "note": "Recorded matches cover whole-response hash or bounded-read semantics as reviewed; they do not claim raw wire equality or general batching parity.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2472,10 +2472,10 @@
       "note": "These claims cover only the listed recorded recipes; current_timestamp additionally has the source-bound raw clock control. The timestamp-diff-now mismatch and unobserved inputs remain unclaimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2484,7 +2484,7 @@
           "NOT_CLAIMED": 1
         },
         "clockControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-clock-v035.json",
-        "clockControlSha256": "77414332f51cf7e26e4438c8a8dfac84a869926e9bd9b3df189eb4f1d1d16b8b"
+        "clockControlSha256": "f4dac0e877807ad40c25bc2ab95e9ae89428fb1865e61b81ab49803b8d648af1"
       }
     },
     {
@@ -2514,10 +2514,10 @@
       "note": "Only the listed recorded unnest recipes are claimed; unobserved inputs remain unclaimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2551,10 +2551,10 @@
       "note": "Only the listed recorded union recipes are claimed; unrecorded child inputs and shapes remain unverified.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2587,10 +2587,10 @@
       "note": "Only the listed recorded raw MATCH recipes are claimed; randomized sample contracts and unrecorded shapes remain separate.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "fixturePath": "conformance/fs-ent-pipeline-production.json",
         "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
-        "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+        "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
         "tests": [
           "conformance/src/fs-pipeline-closure.test.mjs"
         ],
@@ -2604,7 +2604,7 @@
   "perCaseAdjudication": {
     "mode": "replay-comparison",
     "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-    "sha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+    "sha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
     "summary": {
       "MATCH": 1740,
       "MISMATCH": 197,
@@ -2697,15 +2697,15 @@
     }
   },
   "integratedRegression": {
-    "integrationCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-    "releaseBinarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
+    "integrationCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+    "releaseBinarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
     "binaryProfile": "release",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-PIPELINE-build.json",
-    "buildReceiptSha256": "5a65cb6c993def0d9a2e3215c649edcba8633f0b220bb77b95dd8d10c12122a0",
+    "buildReceiptSha256": "61962dc682d3a920865f10bcebe3c2741b340ea9b280112f5fc9dd67bcaad230",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
-        "sha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+        "sha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
         "rows": 1951,
         "summary": {
           "MATCH": 1740,
@@ -2719,9 +2719,9 @@
     "result": "COMPARED_PER_CASE_ON_RELEASE_BINARY",
     "releaseBindingNote": "The comparison is check and export-comparison of the fs-ent-pipeline lane against the release binary named above (RUSTC_WRAPPER empty, --locked) built from integrationCommit; the release job reruns it (R21, check exits 1 because unclaimed rows mismatch) and compares the export row by row.",
     "clockControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-clock-v035.json",
-    "clockControlSha256": "77414332f51cf7e26e4438c8a8dfac84a869926e9bd9b3df189eb4f1d1d16b8b",
+    "clockControlSha256": "f4dac0e877807ad40c25bc2ab95e9ae89428fb1865e61b81ab49803b8d648af1",
     "clockDiffControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-clock-diff-v035.json",
-    "clockDiffControlSha256": "e45337fb8ddede95f389956c36b281ff966cca784c05b9ab8bfcb032e3a2347a"
+    "clockDiffControlSha256": "d91c16d7b7886abfc68957ba8d107a970a058dea2d700ef0c355f8be83ed9449"
   },
   "recordedLeafReview": {
     "decision": "APPROVED_RECORDED_ROWS_ONLY",
@@ -2762,10 +2762,10 @@
     },
     "v035Promotion": {
       "claimSetPath": "spec/compatibility/closure/evidence/FS-PIPELINE-v035-55-claims.json",
-      "claimSetSha256": "433d83b592bdb34b8dc730254c12a1fb29d69a581f0a7894ad7e3f47a9d239a0",
-      "sourceCommit": "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
-      "binarySha256": "39c5825519174115b9cff3da75c0473deea5ed5f8c85e79d5fdf8cba580eda83",
-      "comparisonSha256": "abf614076a420030008eba45182f5f58e9ba3566980b040bb094a7bf04e988a3",
+      "claimSetSha256": "77825833d1cec283ee170ac5119b600acccde92cb3a16beaf1cfc32176318e74",
+      "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+      "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+      "comparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
       "addedRecipeCount": 55,
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1938)",
       "result": "Exactly 55 prior MISMATCH rows now MATCH; all 1951 row identities and prior matches remain. Random sample contracts remain separate and parent remains IMPLEMENTING."
@@ -2775,14 +2775,14 @@
     {
       "kind": "sample",
       "path": "conformance/fs-ent-pipeline-sample-adjudication.json",
-      "sha256": "61f52db31a74fc8a6adb4874502cbf861d5c93dcf382fd29271ce2aad0839ae7",
+      "sha256": "8f25887df568b0a07b68b2018596f9095c190ac5e1d773e55d0cea7dfedc97fe",
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1939)",
       "scope": "Eight strict request contracts, five raw MISMATCH and three raw MATCH; no production random sequence or ordinary-profile claim."
     },
     {
       "kind": "o7-order",
       "path": "conformance/fs-ent-pipeline-o7-adjudication.json",
-      "sha256": "b4a7f4f61635ddfd889b3dcbe560b2a8177894f82aa7fff858fbc82b5622b894",
+      "sha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f",
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1940)",
       "scope": "Twenty strict typed-result bags and three legal selections; all remain raw MISMATCH, and two aggregate error recipes and ordinary profile remain unclaimed."
     }

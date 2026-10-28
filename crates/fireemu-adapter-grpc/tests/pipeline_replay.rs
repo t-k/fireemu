@@ -2853,3 +2853,273 @@ fn recorded_unnest_grpc_preserves_rows_order_and_errors() {
         }
     }
 }
+
+#[test]
+fn recorded_union_thirteen_cases_replay_in_both_profiles() {
+    let production = read("fs-ent-pipeline-production.json");
+    let ids = [
+        "union-other",
+        "union-itself",
+        "union-then-sort",
+        "union-then-limit",
+        "union-inner-where",
+        "union-inner-select",
+        "union-empty-input",
+        "union-of-union",
+        "union-after-select",
+        "union-int-argument",
+        "union-no-arguments",
+        "union-two-arguments",
+        "union-no-stages",
+    ];
+    let mut failures = Vec::new();
+    for strict in [true, false] {
+        for id in ids {
+            let (status, body) = internal_case(strict, "o8d/stages-main", id, false);
+            let expected = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id];
+            let expected_status = u16::try_from(expected["status"].as_u64().unwrap()).unwrap();
+            if answer_in(status, &body, true) != answer_in(expected_status, &expected["body"], true)
+                || framing(&body) != framing(&expected["body"])
+            {
+                failures.push(format!(
+                    "strict={strict} {id}: got {} expected {}",
+                    answer_in(status, &body, true),
+                    answer_in(expected_status, &expected["body"], true)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_union_grpc_preserves_rows_order_and_errors() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8d/stages-main")
+        .unwrap();
+    for strict in [true, false] {
+        for id in [
+            "union-other",
+            "union-inner-select",
+            "union-of-union",
+            "union-then-limit",
+        ] {
+            let state = state(strict);
+            for seed in program["seed"].as_array().unwrap() {
+                let (status, body) = call(
+                    &state,
+                    "PATCH",
+                    &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                    &json!({"fields": fill(&seed[1])}),
+                );
+                assert_eq!(status, 200, "{body}");
+            }
+            let step = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["id"] == id)
+                .unwrap();
+            let body = fill(&step["body"]);
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let responses = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.next().await {
+                    out.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                        &response.unwrap(),
+                    ));
+                }
+                Value::Array(out)
+            });
+            let expected =
+                &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id]["body"];
+            assert_eq!(
+                answer_in(200, &responses, true),
+                answer_in(200, expected, true),
+                "{id} strict={strict}"
+            );
+            assert_eq!(framing(&responses), framing(expected));
+        }
+        for id in [
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
+        ] {
+            let (status, _) = internal_case(strict, "o8d/stages-main", id, true);
+            assert_eq!(status, 400, "{id} strict={strict}");
+        }
+    }
+}
+
+#[test]
+fn union_direct_grpc_and_rest_depth_are_bounded_before_shape_walk() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1 as pb;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let collection = || pb::pipeline::Stage {
+        name: "collection".to_owned(),
+        args: vec![pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue("/su".to_owned())),
+        }],
+        ..Default::default()
+    };
+    let mut nested = pb::Pipeline {
+        stages: vec![collection()],
+    };
+    for _ in 0..40 {
+        nested = pb::Pipeline {
+            stages: vec![
+                collection(),
+                pb::pipeline::Stage {
+                    name: "union".to_owned(),
+                    args: vec![pb::Value {
+                        value_type: Some(pb::value::ValueType::PipelineValue(nested)),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+    }
+    let req = pb::ExecutePipelineRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(nested),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let state = state(true);
+    let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        match Firestore::execute_pipeline(&service, tonic::Request::new(req)).await {
+            Err(status) => status.code(),
+            Ok(_) => panic!("deep union was accepted"),
+        }
+    });
+    assert_eq!(code, tonic::Code::Unimplemented);
+
+    let mut child = json!({"stages":[{"name":"collection","args":[{"referenceValue":"/su"}]}]});
+    for _ in 0..40 {
+        child = json!({"stages":[{"name":"collection","args":[{"referenceValue":"/su"}]},{"name":"union","args":[{"pipelineValue":child}]}]});
+    }
+    let body = json!({"structuredPipeline":{"pipeline":child}});
+    let (status, _) = call(&state, "POST", &format!("{DOCS}:executePipeline"), &body);
+    assert_eq!(status, 501);
+}
+
+#[test]
+fn union_relative_child_source_does_not_allow_foreign_literal_reference() {
+    let s = state(true);
+    let query = |reference: &str| {
+        json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/left"}]},
+            {"name":"union","args":[{"pipelineValue":{"stages":[
+                {"name":"collection","args":[{"referenceValue":"/right"}]},
+                {"name":"select","args":[{"mapValue":{"fields":{"v":{"referenceValue":reference}}}}]}
+            ]}}]}
+        ]}}})
+    };
+    let (ok, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &query("projects/demo-app/databases/(default)/documents/right/doc"),
+    );
+    assert_eq!(ok, 200);
+    let (foreign, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &query("projects/foreign/databases/(default)/documents/right/doc"),
+    );
+    assert_eq!(foreign, 501);
+}
+
+#[test]
+fn union_limit_zero_still_denies_nonowner_on_both_routes() {
+    use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let mut s = state(true);
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }").unwrap()));
+    let rules = Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+    );
+    s.rules = Some(rules.clone());
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/left"}]},
+        {"name":"union","args":[{"pipelineValue":{"stages":[{"name":"collection","args":[{"referenceValue":"/right"}]}]}}]},
+        {"name":"limit","args":[{"integerValue":"0"}]}
+    ]}}});
+    let rest = s.handle(&RestRequest {
+        method: "POST".to_owned(),
+        path: format!("/v1/{DOCS}:executePipeline"),
+        query: String::new(),
+        authorization: None,
+        origin: None,
+        remote_peer: false,
+        browser_metadata: false,
+        app_check: Vec::new(),
+        body: body.clone(),
+        batch_field_order: Vec::new(),
+        key_order: KeyOrder::default(),
+    });
+    assert_eq!(rest.status, 403);
+    let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+        "projects/demo-app/databases/(default)",
+        &body,
+    )
+    .unwrap();
+    let service =
+        GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local)).with_rules(rules);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+            Err(error) => error.code(),
+            Ok(_) => panic!("nonowner accepted"),
+        }
+    });
+    assert_eq!(code, tonic::Code::PermissionDenied);
+}

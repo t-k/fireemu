@@ -26,6 +26,155 @@ const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 /// Stages the official emulator 1.22.0 knows (probed 2026-10-27) and the registry does not.
 const OFFICIAL_ONLY_STAGES: &[&str] = &["let", "insert", "upsert", "literals"];
 
+/// Bounds nested union planning before recursive validation and shape inspection.
+pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return Ok(());
+    };
+    let Some(root) = &structured.pipeline else {
+        return Ok(());
+    };
+    if !root.stages.iter().any(|stage| stage.name == "union") {
+        return Ok(());
+    }
+    let mut stack = vec![(root, 0_usize)];
+    let mut count = 0_usize;
+    while let Some((pipeline, depth)) = stack.pop() {
+        count = count.saturating_add(pipeline.stages.len());
+        if depth > 32 || count > 256 {
+            return Err(Status::unimplemented(
+                "union nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        for stage in &pipeline.stages {
+            if stage.name == "union" {
+                if let Some(pb::value::ValueType::PipelineValue(child)) = stage
+                    .args
+                    .first()
+                    .and_then(|value| value.value_type.as_ref())
+                {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    enum Item<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Value(&'a pb::Value),
+    }
+    let mut nodes = vec![(Item::Pipeline(root), 0_usize)];
+    let mut seen = 0_usize;
+    while let Some((item, depth)) = nodes.pop() {
+        seen += 1;
+        if depth > 100 || seen > 32768 {
+            return Err(Status::unimplemented(
+                "union value nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        match item {
+            Item::Pipeline(pipeline) => {
+                for stage in &pipeline.stages {
+                    for value in stage.args.iter().chain(stage.options.values()) {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+            }
+            Item::Value(value) => match value.value_type.as_ref() {
+                Some(pb::value::ValueType::PipelineValue(pipeline)) => {
+                    nodes.push((Item::Pipeline(pipeline), depth + 1))
+                }
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    for value in &array.values {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    for value in map.fields.values() {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                Some(pb::value::ValueType::FunctionValue(function)) => {
+                    for value in function.args.iter().chain(function.options.values()) {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
+/// Bounds REST union trees before inspecting their recursive request shape.
+pub(crate) fn admit_union_json(body: &serde_json::Value) -> Result<(), Status> {
+    let Some(root) = body
+        .get("structuredPipeline")
+        .or_else(|| body.get("structured_pipeline"))
+        .and_then(|value| value.get("pipeline"))
+    else {
+        return Ok(());
+    };
+    let Some(stages) = root.get("stages").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    if !stages
+        .iter()
+        .any(|stage| stage.get("name").and_then(serde_json::Value::as_str) == Some("union"))
+    {
+        return Ok(());
+    }
+    let mut stack = vec![(root, 0_usize)];
+    let mut count = 0_usize;
+    while let Some((pipeline, depth)) = stack.pop() {
+        let Some(stages) = pipeline.get("stages").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        count = count.saturating_add(stages.len());
+        if depth > 32 || count > 256 {
+            return Err(Status::unimplemented(
+                "union nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        for stage in stages {
+            if stage.get("name").and_then(serde_json::Value::as_str) == Some("union") {
+                if let Some(child) = stage
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|args| args.first())
+                    .and_then(|arg| {
+                        arg.get("pipelineValue")
+                            .or_else(|| arg.get("pipeline_value"))
+                    })
+                {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    let mut nodes = vec![(root, 0_usize)];
+    let mut seen = 0_usize;
+    while let Some((value, depth)) = nodes.pop() {
+        seen += 1;
+        if depth > 100 || seen > 32768 {
+            return Err(Status::unimplemented(
+                "union value nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        match value {
+            serde_json::Value::Array(items) => {
+                nodes.extend(items.iter().map(|value| (value, depth + 1)))
+            }
+            serde_json::Value::Object(items) => {
+                nodes.extend(items.values().map(|value| (value, depth + 1)))
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
 /// the `fireemu-code` metadata like the gateway's rejections. The stage registry's refusals
 /// (a stage's argument count, argument shape, options, input position) are fireemu's own
@@ -36,6 +185,7 @@ pub fn validate_pipeline(
     req: &pb::ExecutePipelineRequest,
     unrecorded: Unrecorded,
 ) -> Result<PipelineAst, Status> {
+    admit_union(req)?;
     if req.database.is_empty() {
         return Err(with_code(
             Status::invalid_argument("ExecutePipeline requires a database"),
@@ -521,6 +671,15 @@ fn collection_query(
     }
 }
 
+/// One raw union source and its branch-local row transformations.
+#[derive(Debug, Clone)]
+pub struct UnionSource {
+    /// Query authorized independently under the request's selected snapshot.
+    pub input: pb::RunQueryRequest,
+    /// Where and select stages local to this source.
+    pub stages: Vec<Stage>,
+}
+
 /// Compiles the finite local Enterprise subset into the equivalent `RunQuery`: collection,
 /// exact top-level field equality, top-level field-reference select aliases, offset and
 /// limit. This lowering no longer serves requests; it is the baseline the executor is
@@ -683,6 +842,8 @@ pub struct CompiledExecution {
     pub stages: Vec<Stage>,
     /// A local lexical search before the existing streaming suffix.
     pub search: Option<crate::text_search::SearchPlan>,
+    /// Source plans for each union stage, indexed by executor stage position.
+    pub unions: Vec<(usize, Vec<UnionSource>)>,
 }
 
 /// Compiles the finite local Enterprise subset for the core executor: collection input,
@@ -765,6 +926,7 @@ pub fn compile_pipeline_in_order(
     }
     let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
+    let mut unions = Vec::new();
     let mut search = None;
     // The equality filter of the first `where` is pushed into the scan while only filters have
     // run before it (a filter commutes with another filter, not with a limit or a sort).
@@ -830,6 +992,43 @@ pub fn compile_pipeline_in_order(
                         }
                         Err(error) => return Err(error),
                     }
+                }
+                "union" => {
+                    only_filters_so_far = false;
+                    let Some(pb::value::ValueType::PipelineValue(child)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::unimplemented("union requires a pipeline argument"));
+                    };
+                    if child.stages.is_empty() {
+                        return Err(Status::invalid_argument(
+                            "The 'union(...)' stage must have at least one stage.",
+                        ));
+                    }
+                    let mut nested = req.clone();
+                    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        ref mut structured,
+                    )) = nested.pipeline_type
+                    else {
+                        return Err(Status::internal("missing structured pipeline"));
+                    };
+                    structured.pipeline = Some(child.clone());
+                    validate_pipeline(&nested, unrecorded)?;
+                    let nested_order = order.map(|o| o.rebased(
+                        &format!("/structuredPipeline/pipeline/stages/{position}/args/0/pipelineValue"),
+                        "/structuredPipeline/pipeline",
+                    ));
+                    let branch = compile_pipeline_in_order(
+                        &nested,
+                        parent,
+                        unrecorded,
+                        nested_order.as_ref(),
+                    )?;
+                    let sources = flatten_union_sources(branch)?;
+                    unions.push((stages.len(), sources));
+                    stages.push(Stage::Union {
+                        branches: Vec::new(),
+                    });
                 }
                 "unnest" => {
                     only_filters_so_far = false;
@@ -951,10 +1150,14 @@ pub fn compile_pipeline_in_order(
                 })
                 .collect(),
         });
-    if search.is_some() {
+    if search.is_some() || !unions.is_empty() {
         pushdown = None;
     }
-    let projection = if search.is_some() { None } else { projection };
+    let projection = if search.is_some() || !unions.is_empty() {
+        None
+    } else {
+        projection
+    };
     let mut input = collection_query(query_parent, collection_id, pushdown, projection, 0, None);
     if all_descendants {
         if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
@@ -972,7 +1175,123 @@ pub fn compile_pipeline_in_order(
         documents,
         stages,
         search,
+        unions,
     })
+}
+
+fn flatten_union_sources(compiled: CompiledExecution) -> Result<Vec<UnionSource>, Status> {
+    if compiled.documents.is_some() || compiled.search.is_some() {
+        return Err(Status::unimplemented(
+            "union child input is not a supported collection",
+        ));
+    }
+    let mut first = compiled.input;
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        first.query_type.as_mut()
+    {
+        if query.from.iter().any(|selector| selector.all_descendants) {
+            return Err(Status::unimplemented(
+                "union collection group input is unobserved",
+            ));
+        }
+        query.select = None;
+        query.r#where = None;
+    }
+    let mut result = vec![UnionSource {
+        input: first,
+        stages: Vec::new(),
+    }];
+    let mut unions = compiled.unions.into_iter();
+    for (index, stage) in compiled.stages.into_iter().enumerate() {
+        match stage {
+            Stage::Where(_) | Stage::Select { .. } => {
+                for source in &mut result {
+                    source.stages.push(stage.clone());
+                }
+            }
+            Stage::Union { .. } => {
+                let Some((position, branches)) = unions.next() else {
+                    return Err(Status::internal("missing union source plan"));
+                };
+                if position != index {
+                    return Err(Status::internal("misordered union source plan"));
+                }
+                result.extend(branches);
+            }
+            _ => {
+                return Err(Status::unimplemented(
+                    "union child contains a non-row-local stage",
+                ))
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Executes the admitted union plan from one guarded, immutable snapshot.
+pub(crate) fn execute_union(
+    local: &crate::local::LocalBackend,
+    mut compiled: CompiledExecution,
+    guard: crate::rules::ReadGuard<'_>,
+    unrecorded: Unrecorded,
+    runtime: pipeline_exec::RuntimeContext,
+) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
+    if compiled.documents.is_some() || compiled.search.is_some() {
+        return Err(Status::unimplemented(
+            "union parent input is not a supported collection",
+        ));
+    }
+    let mut requests = vec![compiled.input.clone()];
+    for (_, branches) in &compiled.unions {
+        requests.extend(branches.iter().map(|branch| branch.input.clone()));
+    }
+    let mut results = local.run_pipeline_sources(&requests, guard)?.into_iter();
+    let primary = in_scan_order(
+        results
+            .next()
+            .ok_or_else(|| Status::internal("missing union input"))?,
+    );
+    let execution_time = primary.iter().find_map(|row| row.read_time);
+    for (position, branches) in compiled.unions {
+        let mut prepared = Vec::with_capacity(branches.len());
+        for branch in branches {
+            let rows = in_scan_order(
+                results
+                    .next()
+                    .ok_or_else(|| Status::internal("missing union branch"))?,
+            )
+            .iter()
+            .filter_map(|row| row.document.as_ref())
+            .map(document_row)
+            .collect::<Result<Vec<_>, _>>()?;
+            prepared.push(pipeline_exec::PreparedUnionBranch {
+                stages: branch.stages,
+                rows,
+            });
+        }
+        let Some(Stage::Union { branches }) = compiled.stages.get_mut(position) else {
+            return Err(Status::internal("invalid union stage position"));
+        };
+        *branches = prepared;
+    }
+    let mut cursor =
+        pipeline_exec::Cursor::new_in_with_runtime(compiled.stages, unrecorded, runtime);
+    let mut output = Vec::new();
+    for row in primary.iter().filter_map(|row| row.document.as_ref()) {
+        if cursor.is_exhausted() {
+            break;
+        }
+        output.extend(
+            cursor
+                .push(document_row(row)?)
+                .map_err(|error| eval_status(&error))?,
+        );
+    }
+    output.extend(cursor.finish().map_err(|error| eval_status(&error))?);
+    Ok(pack_results(
+        output.iter().map(row_document).collect(),
+        execution_time,
+    ))
 }
 
 /// The status of an expression error. fireemu's own argument-count texts are not
@@ -1415,6 +1734,7 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
         Some(V::PipelineValue(pipeline)) => pipeline
             .stages
             .iter()
+            .skip(1)
             .flat_map(|stage| stage.args.iter().chain(stage.options.values()))
             .find_map(|v| reference_outside(v, own)),
         _ => None,
@@ -2377,6 +2697,10 @@ fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
         )))
     };
     match stage.name.as_str() {
+        "union" => match stage.args[0].value_type.as_ref() {
+            Some(V::PipelineValue(_)) => None,
+            other => expected("other", "PIPELINE_VALUE", other),
+        },
         "distinct" => match stage.args[0].value_type.as_ref() {
             Some(V::MapValue(_)) => None,
             other => expected("fields", "MAP_VALUE", other),
@@ -2667,6 +2991,7 @@ fn decode_unnest(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<
 /// `distinct-main`, `fields-main`, `inputs-*`).
 fn stage_arity_error(stage: &pb::pipeline::Stage) -> Option<Status> {
     let (signature, min, max) = match stage.name.as_str() {
+        "union" => ("union(other: Pipeline)", 1, Some(1)),
         "unnest" => (
             "unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)",
             2,

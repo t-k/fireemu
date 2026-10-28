@@ -6851,6 +6851,62 @@ impl LocalBackend {
         self.run_query_authorized_as(req, req, guard)
     }
 
+    /// Reads all prepared union sources under one snapshot and the original read guard.
+    pub(crate) fn run_pipeline_sources(
+        &self,
+        requests: &[pb::RunQueryRequest],
+        guard: ReadGuard<'_>,
+    ) -> Result<Vec<Vec<pb::RunQueryResponse>>, Status> {
+        let mut queries = Vec::with_capacity(requests.len());
+        for request in requests {
+            let parent =
+                crate::query_messages::parse_query_parent(&request.parent).map_err(status)?;
+            self.fault(parent.project.as_str(), "firestore.read")?;
+            let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                &request.query_type
+            else {
+                return Err(Status::invalid_argument(
+                    crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
+                ));
+            };
+            let accepted = self.accepted_query(&parent, query)?;
+            queries.push((parent, accepted));
+        }
+        let Some((first, _)) = queries.first() else {
+            return Ok(Vec::new());
+        };
+        if queries
+            .iter()
+            .any(|(parent, _)| parent.project != first.project || parent.database != first.database)
+        {
+            return Err(Status::unimplemented(
+                "union sources must use one database snapshot",
+            ));
+        }
+        let now = self.write_time();
+        self.with_selected_snapshot(first, SnapshotSelector::Latest, now, |access| {
+            let version = access.version()?;
+            for (parent, accepted) in &queries {
+                guard(
+                    access.db(),
+                    version,
+                    ReadCheck::Query {
+                        parent,
+                        query: &accepted.query,
+                    },
+                )?;
+            }
+            let read_time = Some(encode_instant(access.read_time(now)?));
+            let mut result = Vec::with_capacity(queries.len());
+            for (_, accepted) in &queries {
+                let (docs, _) =
+                    access.run_query_with_stats(&accepted.query, &accepted.query, false)?;
+                result.push(query_responses(&docs, read_time, access.report(), 0));
+            }
+            Ok(result)
+        })
+    }
+
     /// Executes a bounded page while authorizing the caller's original query shape.
     /// Synthetic pagination limits and offsets are an adapter implementation detail and must
     /// not change `request.query` as observed by Security Rules.
@@ -8246,6 +8302,45 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    #[test]
+    fn union_sources_use_each_query_guard_and_one_snapshot() {
+        let backend = backend();
+        let request = |collection: &str| pb::RunQueryRequest {
+            parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let seen = std::cell::RefCell::new(Vec::new());
+        let guard = |_: &FirestoreState, version, check: ReadCheck<'_>| {
+            let ReadCheck::Query { query, .. } = check else {
+                panic!("expected query authorization");
+            };
+            let name = query.scope.collection_id().unwrap().as_str().to_owned();
+            seen.borrow_mut().push((name.clone(), version));
+            if name == "right" {
+                return Err(Status::permission_denied("right denied"));
+            }
+            Ok(())
+        };
+        let error = backend
+            .run_pipeline_sources(&[request("left"), request("right")], &guard)
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, "left");
+        assert_eq!(seen[1].0, "right");
+        assert_eq!(seen[0].1, seen[1].1);
     }
 
     #[test]

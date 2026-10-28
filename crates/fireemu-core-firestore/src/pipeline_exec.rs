@@ -2001,7 +2001,7 @@ impl Cursor {
             .iter()
             .zip(&self.state)
             .skip(from)
-            .take_while(|(stage, _)| !stage.is_blocking() && !matches!(stage, Stage::Union { .. }))
+            .take_while(|(stage, _)| !stage.is_blocking())
             .any(|(stage, state)| {
                 matches!(stage, Stage::Limit(_)) && matches!(state, StageState::Remaining(0))
             })

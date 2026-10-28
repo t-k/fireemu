@@ -1750,3 +1750,71 @@ fn union_refuses_non_row_local_prepared_children() {
         })
     ));
 }
+
+#[test]
+fn union_blocking_prefix_and_suffix_keep_order_and_child_is_lazy_after_limit() {
+    let source = |n| doc(&format!("n{n}"), &[("n", int(n))]);
+    let branch = || PreparedUnionBranch {
+        stages: Vec::new(),
+        rows: vec![source(2)],
+    };
+    let mut cursor = Cursor::new(vec![
+        Stage::Sort(vec![ascending(field("n"))]),
+        Stage::Union {
+            branches: vec![branch()],
+        },
+        Stage::Sort(vec![ascending(field("n"))]),
+    ]);
+    cursor.push(source(3)).unwrap();
+    cursor.push(source(1)).unwrap();
+    let rows = cursor.finish().unwrap();
+    assert_eq!(
+        rows.iter().map(|r| &r.fields["n"]).collect::<Vec<_>>(),
+        vec![&int(1), &int(2), &int(3)]
+    );
+    let failing = Expr::call("not", vec![field("n")], Placement::Value).unwrap();
+    let mut cursor = Cursor::new(vec![
+        Stage::Union {
+            branches: vec![PreparedUnionBranch {
+                stages: vec![Stage::Where(failing)],
+                rows: vec![source(2)],
+            }],
+        },
+        Stage::Limit(0),
+    ]);
+    assert!(cursor.finish().unwrap().is_empty());
+}
+
+proptest! {
+    #[test]
+    fn union_preserves_order_duplicates_and_empty_identity(left in proptest::collection::vec(-10_i64..10, 0..20), right in proptest::collection::vec(-10_i64..10, 0..20)) {
+        let rows = |values: &[i64]| values.iter().enumerate().map(|(i, n)| doc(&format!("x{i}"), &[("n", int(*n))])).collect::<Vec<_>>();
+        let mut cursor = Cursor::new(vec![Stage::Union { branches: vec![PreparedUnionBranch { stages: Vec::new(), rows: rows(&right) }] }]);
+        let mut output = Vec::new();
+        for row in rows(&left) { output.extend(cursor.push(row).unwrap()); }
+        output.extend(cursor.finish().unwrap());
+        let actual = output.iter().map(|row| row.fields["n"].clone()).collect::<Vec<_>>();
+        let expected = left.iter().chain(&right).map(|n| int(*n)).collect::<Vec<_>>();
+        prop_assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn union_stops_lazy_children_across_later_union_when_limit_is_full() {
+    let row = doc("left", &[("n", int(1))]);
+    let failing = Expr::call("not", vec![field("n")], Placement::Value).unwrap();
+    let mut cursor = Cursor::new(vec![
+        Stage::Union {
+            branches: vec![PreparedUnionBranch {
+                stages: vec![Stage::Where(failing)],
+                rows: vec![row.clone()],
+            }],
+        },
+        Stage::Union {
+            branches: Vec::new(),
+        },
+        Stage::Limit(1),
+    ]);
+    assert_eq!(cursor.push(row).unwrap().len(), 1);
+    assert!(cursor.finish().unwrap().is_empty());
+}

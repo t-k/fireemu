@@ -1812,6 +1812,9 @@ impl RestState {
             transaction: transaction_bytes(body.get("transaction"))?,
             request_options: None,
         };
+        if self.gateway.production_refusals() {
+            validate_commit_typed_bytes(body)?;
+        }
         let guard = self.write_guard(principal);
         let response = self.local.commit_with(&req, &*guard)?;
         Ok(ok(commit_to_json(
@@ -1962,6 +1965,9 @@ impl RestState {
         };
         let structured = structured_query_from_json(sq)
             .map_err(|e| self.query_parse_status("runQuery", body, &e))?;
+        if self.gateway.production_refusals() {
+            validate_cursor_typed_bytes(sq)?;
+        }
         crate::query_messages::check_find_nearest_request(
             &structured,
             self.gateway.production_refusals(),
@@ -2333,6 +2339,83 @@ fn transaction_bytes(v: Option<&Value>) -> Result<Vec<u8>, Status> {
             "transaction must be a base64 string",
         )),
     }
+}
+
+// Apply recorded strict typed-value refusals without changing the shared token decoder.
+fn validate_typed_bytes(value: &Value, path: &str) -> Result<(), Status> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    if object.len() != 1 {
+        return Ok(());
+    }
+    if let Some(text) = object
+        .get("bytesValue")
+        .or_else(|| object.get("bytes_value"))
+        .and_then(Value::as_str)
+    {
+        let standard = text.bytes().any(|b| matches!(b, b'+' | b'/'));
+        let url = text.bytes().any(|b| matches!(b, b'-' | b'_'));
+        if text.bytes().any(|b| matches!(b, b'\r' | b'\n')) || (standard && url) {
+            let field = format!("{path}.bytes_value");
+            let message = format!(
+                "Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for \"{}\"",
+                fireemu_core_types::codec::echo(text)
+            );
+            return Err(crate::production_status::bad_request(&[(field, message)]));
+        }
+    }
+    if let Some(items) = object
+        .get("arrayValue")
+        .and_then(|v| v.get("values"))
+        .and_then(Value::as_array)
+    {
+        for (i, item) in items.iter().enumerate() {
+            validate_typed_bytes(item, &format!("{path}.array_value.values[{i}]"))?;
+        }
+    }
+    if let Some(fields) = object
+        .get("mapValue")
+        .and_then(|v| v.get("fields"))
+        .and_then(Value::as_object)
+    {
+        for (i, item) in fields.values().enumerate() {
+            validate_typed_bytes(item, &format!("{path}.map_value.fields[{i}].value"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_commit_typed_bytes(body: &Value) -> Result<(), Status> {
+    if let Some(writes) = body.get("writes").and_then(Value::as_array) {
+        for (i, write) in writes.iter().enumerate() {
+            if let Some(fields) = write
+                .get("update")
+                .and_then(|v| v.get("fields"))
+                .and_then(Value::as_object)
+            {
+                for (j, value) in fields.values().enumerate() {
+                    validate_typed_bytes(value, &format!("writes[{i}].update.fields[{j}].value"))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_cursor_typed_bytes(query: &Value) -> Result<(), Status> {
+    for (json, proto) in [("startAt", "start_at"), ("endAt", "end_at")] {
+        if let Some(values) = query
+            .get(json)
+            .and_then(|v| v.get("values"))
+            .and_then(Value::as_array)
+        {
+            for (i, value) in values.iter().enumerate() {
+                validate_typed_bytes(value, &format!("structured_query.{proto}.values[{i}]"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {

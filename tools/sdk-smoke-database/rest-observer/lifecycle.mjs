@@ -19,7 +19,7 @@ export async function lifecycle(io, p, corpus) {
  const instance = (v, state) => v?.name === p.instanceName && v.type === 'USER_DATABASE' && v.state === state;
  const read = async (step, path, accept) => { const v=await io(step,'GET',path); if (!accept(v)) throw Error(`${step}: guard`); return v; };
  const mutate = async (step, method, path, body, accept) => { const v=await io(step,method,path,body); if (!accept(v)) throw Error(`${step}: unknown mutation outcome`); return v; };
- const rules=p.mode==='rules-observation'?(await import('./rules-corpus.mjs')).buildRules(p.prefix):{rules:{[p.prefix]:{'.read':true,'.write':true,r1:{query:{'.indexOn':['h']}},r2:{query:{'.indexOn':['h']}}}}};
+ const rules=p.mode==='query-rules'?(await import('./query-rules.mjs')).queryRules(p.prefix):p.mode==='rules-observation'?(await import('./rules-corpus.mjs')).buildRules(p.prefix):{rules:{[p.prefix]:{'.read':true,'.write':true,r1:{query:{'.indexOn':['h']}},r2:{query:{'.indexOn':['h']}}}}};
  const state = (want) => v => v?.state === want && v?.name === p.serviceName;
  const op = v => validOperation(v?.name) && !v.error;
  const finishOp = async (step, initial) => { let current=initial; for(let i=0;i<10 && current.done!==true;i++) { await (p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))))(5000); current=await read(`${step}-poll-${i}`,initial.name,v=>op(v)&&v.name===initial.name); } if(current.done!==true) throw Error(`${step}: operation unresolved`); };

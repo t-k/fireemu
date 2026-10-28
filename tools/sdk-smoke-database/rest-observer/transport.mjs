@@ -14,6 +14,9 @@ function permittedProbe(request,response){
 function permittedRulesCase(request,response){
  try{const u=new URL(request.url);if(request.step!=='rules-case'||![401,403].includes(response?.status)||u.protocol!=='https:'||!/^([a-z][a-z0-9-]{3,62})\.firebaseio\.com$/.test(u.hostname)||u.port||u.username||u.password||u.search||u.hash)return false;const path=u.pathname;return request.method==='PUT'&&/^\/rnext1_[a-f0-9]{24}\/r[12]\/(?:cascade\/(?:parent|blocked)\/child|validation\/(?:number|negative)|snapshot\/(?:allow|newdeny|rootdeny)\/counter)\.json$/.test(path)||request.method==='DELETE'&&/^\/rnext1_[a-f0-9]{24}\/r[12]\/validation\/deletion\.json$/.test(path);}catch{return false;}
 }
+function permittedQueryCase(request,response){
+ try{const u=new URL(request.url);return request.step==='query-case'&&request.method==='GET'&&[401,403].includes(response?.status)&&u.protocol==='https:'&&/^([a-z][a-z0-9-]{3,62})\.firebaseio\.com$/.test(u.hostname)&&!u.port&&!u.username&&!u.password&&!u.hash&&/^\/rnext1_[a-f0-9]{24}\/r[12]\/queryrule\.json$/.test(u.pathname)&&['?orderBy=%22h%22&limitToFirst=2','?orderBy=%22h%22&limitToFirst=3','?orderBy=%22h%22','?orderBy=%22%24key%22&limitToFirst=2'].includes(u.search);}catch{return false;}
+}
 export async function createTransport({file,max,reserve,wire}) {
  if (!Number.isInteger(max)||max<1||!Number.isInteger(reserve)||reserve<0||reserve>=max||typeof wire!=='function') throw Error('invalid transport config');
  const handle=await open(file,'wx',0o600); let used=0,unknown=false;
@@ -25,7 +28,7 @@ export async function createTransport({file,max,reserve,wire}) {
   used++; const id=used; await append({state:'before-send',id,method:request.method,url:request.url,phase:request.phase,body:request.body});
   let receipt=false, bodyCaptured=false; const onHeaders=async (status,headers)=>{if(receipt||!Number.isInteger(status))throw Error('invalid headers'); const safe={};for(const k of ['etag','content-type','content-length'])if(typeof headers[k]==='string'&&!SECRET.test(headers[k]))safe[k]=headers[k];await append({state:'response-headers',id,status,headers:safe});receipt=true;};
   onHeaders.body=async raw=>{if(!receipt||bodyCaptured||!Buffer.isBuffer(raw)||raw.length>1048576||SECRET.test(raw.toString('latin1')))throw Error('body refused');await append({state:'response-persisted',id,redacted:request.step==='auth-preflight',bodyBase64:raw.toString('base64'),bodyBytes:raw.length,bodySha256:createHash('sha256').update(raw).digest('hex')});bodyCaptured=true;};
-  let response; try{response=await wire(request,onHeaders); if(!receipt)throw Error('missing headers'); if(!response||!Number.isInteger(response.status)||(response.status<200||response.status>=300)&&!permittedProbe(request,response)&&!permittedRulesCase(request,response)||!Buffer.isBuffer(response.raw)||response.raw.length>1048576||typeof response.body!=='string'||!response.headers||SECRET.test(response.body))throw Error('unknown response');if(!bodyCaptured)await onHeaders.body(response.raw);}catch(e){unknown=true;try{if(e instanceof KnownRejection && receipt && bodyCaptured){await append({state:'known-rejection',id,status:e.status});if(e.status<400||e.status>=500)await append({state:'unknown',id});}else await append({state:'unknown',id});}catch{}throw Error('request stopped');}
+  let response; try{response=await wire(request,onHeaders); if(!receipt)throw Error('missing headers'); if(!response||!Number.isInteger(response.status)||(response.status<200||response.status>=300)&&!permittedProbe(request,response)&&!permittedRulesCase(request,response)&&!permittedQueryCase(request,response)||!Buffer.isBuffer(response.raw)||response.raw.length>1048576||typeof response.body!=='string'||!response.headers||SECRET.test(response.body))throw Error('unknown response');if(!bodyCaptured)await onHeaders.body(response.raw);}catch(e){unknown=true;try{if(e instanceof KnownRejection && receipt && bodyCaptured){await append({state:'known-rejection',id,status:e.status});if(e.status<400||e.status>=500)await append({state:'unknown',id});}else await append({state:'unknown',id});}catch{}throw Error('request stopped');}
   return response;
  };
  invoke.close=()=>handle.close(); return invoke;
@@ -36,12 +39,12 @@ export function makeWire({instance,project,token,fetchImpl=fetch,timeoutMs=25000
  const hosts=new Set(serviceOnly?['serviceusage.googleapis.com']:managementOnly?['firebasedatabase.googleapis.com','serviceusage.googleapis.com']:[`${instance}.firebaseio.com`,'firebasedatabase.googleapis.com','serviceusage.googleapis.com']);
  return async (request,onHeaders=async()=>{})=>{
   const u=new URL(request.url);if(u.protocol!=='https:'||!hosts.has(u.hostname)||u.port||u.username||u.password||u.hash)throw Error('host refused');
-  const headers={};if(request.step!=='corpus'&&request.step!=='rules-case'&&request.step!=='rules-anchor'&&request.step!=='rules-propagation'){headers.authorization=`Bearer ${token}`;headers['x-goog-user-project']=project;}if(request.body!==undefined)headers['content-type']='application/json';
+  const headers={};if(request.step!=='corpus'&&request.step!=='rules-case'&&request.step!=='query-case'&&request.step!=='rules-anchor'&&request.step!=='rules-propagation'){headers.authorization=`Bearer ${token}`;headers['x-goog-user-project']=project;}if(request.body!==undefined)headers['content-type']='application/json';
   const response=await fetchImpl(u,{method:request.method,headers,body:request.body,redirect:'manual',signal:AbortSignal.timeout(timeoutMs)});
   const out={};for(const k of ['etag','content-type','content-length']){const v=response.headers.get(k);if(v!==null&&!SECRET.test(v))out[k]=v;}
   await onHeaders(response.status,out);
   const chunks=[];let total=0; if(response.body) { const reader=response.body.getReader(); try { for (;;) { const {done,value}=await reader.read(); if(done)break; total+=value.byteLength; if(total>1048576){await reader.cancel();throw Error('response too large');} chunks.push(value); } } finally { reader.releaseLock(); } }
   const raw=Buffer.concat(chunks,total);if(onHeaders.body)await onHeaders.body(raw);const body=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(raw);
-  const result={status:response.status,headers:out,body,raw};if((response.status<200||response.status>=300)&&!permittedProbe(request,result)&&!permittedRulesCase(request,result))throw new KnownRejection(response.status);return result;
+  const result={status:response.status,headers:out,body,raw};if((response.status<200||response.status>=300)&&!permittedProbe(request,result)&&!permittedRulesCase(request,result)&&!permittedQueryCase(request,result))throw new KnownRejection(response.status);return result;
  };
 }

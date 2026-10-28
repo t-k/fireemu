@@ -242,7 +242,7 @@ fn execute_at_snapshot(
     unrecorded: Unrecorded,
     after_snapshot: impl FnOnce(),
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
-    let runtime = crate::pipeline_timezone::runtime(local);
+    let runtime = crate::pipeline_timezone::runtime_for_stages(local, &compiled.stages);
     let plan = compiled
         .search
         .as_ref()

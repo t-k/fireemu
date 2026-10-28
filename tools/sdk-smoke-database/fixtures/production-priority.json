@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "provenance": {
+    "source": "reviewed production priority-r1",
+    "sdk": "firebase 12.18.0",
+    "reviewSha256": "08cc42a85070a60628f4d2278844b212cc63516f22ff4ccab9bcf0a9eba0f152",
+    "eventsSha256": "b9014b11abf9ca813e7959e703e5a9b2178045be431d607e068107187a0718ab",
+    "requestsSha256": "b2949aa7236fec81ce3d3ffdeee6a7857e8cbf7ef221ca54ea28c4b8b6b3d085"
+  },
+  "cases": [
+    {
+      "id": "heal-reregister",
+      "round": "r1",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "b": 1,
+            "c": 2,
+            ".priority": 1
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/b"
+        },
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "z": 1
+          }
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [
+        {
+          "path": "s",
+          "value": {
+            "z": 1
+          }
+        },
+        {
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "readback": {
+        "s": {
+          "z": 1
+        },
+        "t": 1
+      }
+    },
+    {
+      "id": "nested-priority",
+      "round": "r1",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "k": 1,
+            "a": {
+              "x": 1,
+              "y": 2,
+              ".priority": 1
+            }
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/a/x"
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [],
+      "readback": {
+        "s": null,
+        "t": null
+      }
+    },
+    {
+      "id": "string-priority",
+      "round": "r1",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "b": 1,
+            "c": 2,
+            ".priority": "p"
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/b"
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [],
+      "readback": {
+        "s": null,
+        "t": null
+      }
+    },
+    {
+      "id": "heal-reregister",
+      "round": "r2",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "b": 1,
+            "c": 2,
+            ".priority": 1
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/b"
+        },
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "z": 1
+          }
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [
+        {
+          "path": "s",
+          "value": {
+            "z": 1
+          }
+        },
+        {
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "readback": {
+        "s": {
+          "z": 1
+        },
+        "t": 1
+      }
+    },
+    {
+      "id": "nested-priority",
+      "round": "r2",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "k": 1,
+            "a": {
+              "x": 1,
+              "y": 2,
+              ".priority": 1
+            }
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/a/x"
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [],
+      "readback": {
+        "s": null,
+        "t": null
+      }
+    },
+    {
+      "id": "string-priority",
+      "round": "r2",
+      "operations": [
+        {
+          "action": "o",
+          "path": "s",
+          "value": {
+            "b": 1,
+            "c": 2,
+            ".priority": "p"
+          }
+        },
+        {
+          "action": "oc",
+          "path": "s/b"
+        },
+        {
+          "action": "o",
+          "path": "t",
+          "value": 1
+        }
+      ],
+      "acknowledgements": [
+        0,
+        1,
+        2
+      ],
+      "writerClosed": true,
+      "observerLive": true,
+      "observerClosed": true,
+      "initial": {
+        "s": null,
+        "t": null
+      },
+      "updates": [],
+      "readback": {
+        "s": null,
+        "t": null
+      }
+    }
+  ]
+}

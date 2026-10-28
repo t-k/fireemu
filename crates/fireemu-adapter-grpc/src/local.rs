@@ -389,6 +389,8 @@ pub struct LocalBackend {
     /// Draws the starting transaction id of each database; separate from `ids` so that the
     /// generated document ids stay what they were for a given seed.
     transaction_ids: Mutex<SplitMix64>,
+    /// Independent request seeds for pipeline sampling.
+    sample_seeds: Mutex<SplitMix64>,
     /// Exact identities of active transactions authenticated by this backend, bounded globally.
     issued_transactions: Mutex<BTreeMap<Vec<u8>, (String, String)>>,
     /// Identity source for logical query streams whose response is split into bounded pages.
@@ -1636,6 +1638,17 @@ mod tests {
         )
     }
 
+    #[test]
+    fn sample_requests_use_a_separate_seed_stream_from_document_ids() {
+        let sampled = admission_backend();
+        let control = admission_backend();
+        let first = sampled.next_sample_seed();
+        assert_ne!(first, sampled.next_sample_seed());
+        assert_eq!(first, control.next_sample_seed());
+        assert_eq!(sampled.auto_id(), control.auto_id());
+        assert_eq!(sampled.auto_id(), control.auto_id());
+    }
+
     fn parent(database: &str) -> Parent {
         parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
     }
@@ -2689,6 +2702,7 @@ impl LocalBackend {
             generations: Mutex::new(BTreeMap::new()),
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
+            sample_seeds: Mutex::new(SplitMix64::new(seed ^ 0x5341_4d50_4c45)),
             issued_transactions: Mutex::new(BTreeMap::new()),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -5249,6 +5263,14 @@ impl LocalBackend {
             .is_some_and(|only| only != project)
     }
 
+    /// Draws a request seed without consuming document or transaction identifiers.
+    pub(crate) fn next_sample_seed(&self) -> u64 {
+        self.sample_seeds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_u64()
+    }
+
     /// The instant the Admin API stamps a change with, and measures its pending states against:
     /// the clock documents are written at, so an unpinned daemon follows the wall clock.
     pub fn admin_now(&self) -> fireemu_core_types::time::LogicalInstant {
@@ -6851,6 +6873,62 @@ impl LocalBackend {
         self.run_query_authorized_as(req, req, guard)
     }
 
+    /// Reads all prepared union sources under one snapshot and the original read guard.
+    pub(crate) fn run_pipeline_sources(
+        &self,
+        requests: &[pb::RunQueryRequest],
+        guard: ReadGuard<'_>,
+    ) -> Result<Vec<Vec<pb::RunQueryResponse>>, Status> {
+        let mut queries = Vec::with_capacity(requests.len());
+        for request in requests {
+            let parent =
+                crate::query_messages::parse_query_parent(&request.parent).map_err(status)?;
+            self.fault(parent.project.as_str(), "firestore.read")?;
+            let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                &request.query_type
+            else {
+                return Err(Status::invalid_argument(
+                    crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
+                ));
+            };
+            let accepted = self.accepted_query(&parent, query)?;
+            queries.push((parent, accepted));
+        }
+        let Some((first, _)) = queries.first() else {
+            return Ok(Vec::new());
+        };
+        if queries
+            .iter()
+            .any(|(parent, _)| parent.project != first.project || parent.database != first.database)
+        {
+            return Err(Status::unimplemented(
+                "union sources must use one database snapshot",
+            ));
+        }
+        let now = self.write_time();
+        self.with_selected_snapshot(first, SnapshotSelector::Latest, now, |access| {
+            let version = access.version()?;
+            for (parent, accepted) in &queries {
+                guard(
+                    access.db(),
+                    version,
+                    ReadCheck::Query {
+                        parent,
+                        query: &accepted.query,
+                    },
+                )?;
+            }
+            let read_time = Some(encode_instant(access.read_time(now)?));
+            let mut result = Vec::with_capacity(queries.len());
+            for (_, accepted) in &queries {
+                let (docs, _) =
+                    access.run_query_with_stats(&accepted.query, &accepted.query, false)?;
+                result.push(query_responses(&docs, read_time, access.report(), 0));
+            }
+            Ok(result)
+        })
+    }
+
     /// Executes a bounded page while authorizing the caller's original query shape.
     /// Synthetic pagination limits and offsets are an adapter implementation detail and must
     /// not change `request.query` as observed by Security Rules.
@@ -8246,6 +8324,129 @@ mod lock_tests {
             ))),
             7,
         ))
+    }
+
+    #[test]
+    fn union_sources_use_each_query_guard_and_one_snapshot() {
+        let backend = backend();
+        let request = |collection: &str| pb::RunQueryRequest {
+            parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let seen = std::cell::RefCell::new(Vec::new());
+        let guard = |_: &FirestoreState, version, check: ReadCheck<'_>| {
+            let ReadCheck::Query { query, .. } = check else {
+                panic!("expected query authorization");
+            };
+            let name = query.scope.collection_id().unwrap().as_str().to_owned();
+            seen.borrow_mut().push((name.clone(), version));
+            if name == "right" {
+                return Err(Status::permission_denied("right denied"));
+            }
+            Ok(())
+        };
+        let error = backend
+            .run_pipeline_sources(&[request("left"), request("right")], &guard)
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        let seen = seen.into_inner();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, "left");
+        assert_eq!(seen[1].0, "right");
+        assert_eq!(seen[0].1, seen[1].1);
+    }
+
+    #[test]
+    fn union_sources_do_not_resample_after_concurrent_write_begins() {
+        let backend = backend();
+        let database = "projects/demo-app/databases/(default)";
+        let doc = move |collection: &str, value: i64| pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{database}/documents/{collection}/doc"),
+                fields: [(
+                    "n".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::IntegerValue(value)),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        backend
+            .commit(&pb::CommitRequest {
+                database: database.to_owned(),
+                writes: vec![doc("left", 1), doc("right", 2)],
+                ..Default::default()
+            })
+            .unwrap();
+        let request = |collection: &str| pb::RunQueryRequest {
+            parent: format!("{database}/documents"),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        let thread = std::cell::RefCell::new(None);
+        let guard = |_: &FirestoreState, _, _: ReadCheck<'_>| {
+            if thread.borrow().is_none() {
+                let writer = backend.clone();
+                let tx = tx.clone();
+                *thread.borrow_mut() = Some(std::thread::spawn(move || {
+                    tx.send(()).unwrap();
+                    writer
+                        .commit(&pb::CommitRequest {
+                            database: database.to_owned(),
+                            writes: vec![doc("right", 99)],
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }));
+                rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+            Ok(())
+        };
+        let responses = backend
+            .run_pipeline_sources(&[request("left"), request("right")], &guard)
+            .unwrap();
+        thread.into_inner().unwrap().join().unwrap();
+        let right = responses[1]
+            .iter()
+            .find_map(|response| response.document.as_ref())
+            .unwrap();
+        assert_eq!(
+            right.fields["n"].value_type,
+            Some(pb::value::ValueType::IntegerValue(2))
+        );
+        let after = backend
+            .run_pipeline_sources(&[request("right")], &crate::rules::allow_all_reads)
+            .unwrap();
+        let right = after[0]
+            .iter()
+            .find_map(|response| response.document.as_ref())
+            .unwrap();
+        assert_eq!(
+            right.fields["n"].value_type,
+            Some(pb::value::ValueType::IntegerValue(99))
+        );
     }
 
     #[test]

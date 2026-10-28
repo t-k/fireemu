@@ -1,0 +1,1091 @@
+{
+  "kind": "rtdb-priority-recorded-comparison-v1",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+  "fixturePath": "tools/sdk-smoke-database/fixtures/production-priority.json",
+  "fixtureSha256": "3957b787fe86b4d37cd89f6756b709577e847471538f54a85d742ba1052e684e",
+  "productionRequests": 0,
+  "strict": {
+    "profile": "strict",
+    "rows": [
+      {
+        "id": "heal-reregister",
+        "round": "r1",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "heal-reregister",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": 1
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [
+            {
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "readback": {
+            "s": {
+              "z": 1
+            },
+            "t": 1
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            },
+            {
+              "requestId": 4,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "nested-priority",
+        "round": "r1",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "nested-priority",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "k": 1,
+                "a": {
+                  "x": 1,
+                  "y": 2,
+                  ".priority": 1
+                }
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/a/x"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "string-priority",
+        "round": "r1",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "string-priority",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": "p"
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "heal-reregister",
+        "round": "r2",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "heal-reregister",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": 1
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [
+            {
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "readback": {
+            "s": {
+              "z": 1
+            },
+            "t": 1
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            },
+            {
+              "requestId": 4,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "nested-priority",
+        "round": "r2",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "nested-priority",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "k": 1,
+                "a": {
+                  "x": 1,
+                  "y": 2,
+                  ".priority": 1
+                }
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/a/x"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "string-priority",
+        "round": "r2",
+        "profile": "strict",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "string-priority",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": "p"
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      }
+    ]
+  },
+  "emulator": {
+    "profile": "ordinary",
+    "rows": [
+      {
+        "id": "heal-reregister",
+        "round": "r1",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "heal-reregister",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": 1
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [
+            {
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "readback": {
+            "s": {
+              "z": 1
+            },
+            "t": 1
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            },
+            {
+              "requestId": 4,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "nested-priority",
+        "round": "r1",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "nested-priority",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "k": 1,
+                "a": {
+                  "x": 1,
+                  "y": 2,
+                  ".priority": 1
+                }
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/a/x"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "string-priority",
+        "round": "r1",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "string-priority",
+          "round": "r1",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": "p"
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "heal-reregister",
+        "round": "r2",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "heal-reregister",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": 1
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [
+            {
+              "path": "s",
+              "value": {
+                "z": 1
+              }
+            },
+            {
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "readback": {
+            "s": {
+              "z": 1
+            },
+            "t": 1
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            },
+            {
+              "requestId": 4,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "nested-priority",
+        "round": "r2",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "nested-priority",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "k": 1,
+                "a": {
+                  "x": 1,
+                  "y": 2,
+                  ".priority": 1
+                }
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/a/x"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      },
+      {
+        "id": "string-priority",
+        "round": "r2",
+        "profile": "ordinary",
+        "verdict": "MATCH",
+        "actual": {
+          "id": "string-priority",
+          "round": "r2",
+          "operations": [
+            {
+              "action": "o",
+              "path": "s",
+              "value": {
+                "b": 1,
+                "c": 2,
+                ".priority": "p"
+              }
+            },
+            {
+              "action": "oc",
+              "path": "s/b"
+            },
+            {
+              "action": "o",
+              "path": "t",
+              "value": 1
+            }
+          ],
+          "acknowledgements": [
+            0,
+            1,
+            2
+          ],
+          "writerClosed": true,
+          "observerLive": true,
+          "observerClosed": true,
+          "initial": {
+            "s": null,
+            "t": null
+          },
+          "updates": [],
+          "readback": {
+            "s": null,
+            "t": null
+          }
+        },
+        "evidence": {
+          "writerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            },
+            {
+              "requestId": 3,
+              "status": "ok"
+            }
+          ],
+          "observerAcks": [
+            {
+              "requestId": 1,
+              "status": "ok"
+            },
+            {
+              "requestId": 2,
+              "status": "ok"
+            }
+          ],
+          "writerCloseObserved": true,
+          "observerLiveAtReadback": true,
+          "observerCloseObserved": true,
+          "initialDataFrames": 0,
+          "initialEvidence": "correlated subscription ACK, live observer, empty-cache hash and independent REST null; SDK callback is not a wire frame",
+          "ownedRootAbsent": true,
+          "rulesRestored": true
+        }
+      }
+    ]
+  },
+  "scope": "Two recorded rounds of the three named onDisconnect priority shapes in each local profile; no general priority or transport parity."
+}

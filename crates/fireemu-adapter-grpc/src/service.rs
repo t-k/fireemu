@@ -669,6 +669,7 @@ impl Firestore for GatewayService {
         // Strict answers a refusal only for a request of a shape production refused, with
         // production's text (coordinator ruling of 2026-10-21); a decoded gRPC map keeps no
         // wire order.
+        crate::pipeline::admit_union(request.get_ref())?;
         let gate = if self.gateway.production_refusals() {
             crate::pipeline_shape::RefusalGate::Recorded(
                 crate::pipeline_shape::shape_of_request(request.get_ref()),
@@ -693,6 +694,23 @@ impl Firestore for GatewayService {
             let compiled =
                 crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+            if !compiled.unions.is_empty() {
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let runtime =
+                    crate::pipeline_timezone::runtime_for_stages(&local, &compiled.stages);
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::pipeline::execute_union(local, compiled, guard, unrecorded, runtime)
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                return Ok(Response::new(Box::pin(tokio_stream::iter(
+                    responses.into_iter().map(Ok),
+                ))));
+            }
             if compiled.search.is_some() {
                 let local = self
                     .local_backend()
@@ -708,9 +726,10 @@ impl Firestore for GatewayService {
                     responses.into_iter().map(Ok),
                 ))));
             }
-            let runtime = crate::pipeline_timezone::runtime(
+            let runtime = crate::pipeline_timezone::runtime_for_stages(
                 self.local_backend()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?,
+                &compiled.stages,
             );
             let input: BoxStream<pb::RunQueryResponse> =
                 if let Some(names) = compiled.documents.clone() {
@@ -1864,6 +1883,117 @@ mod tests {
                 .code(),
             tonic::Code::Unavailable
         );
+    }
+
+    #[tokio::test]
+    async fn union_generated_captured_guard_combinations() {
+        let cases = [
+            ("allow", "different", "strict"),
+            ("allow", "same", "strict"),
+            ("allow", "empty", "strict"),
+            ("deny", "different", "strict"),
+            ("stale", "different", "strict"),
+            ("allow", "different", "ordinary"),
+            ("stale", "empty", "ordinary"),
+            ("stale", "same", "ordinary"),
+            ("deny", "same", "ordinary"),
+            ("deny", "empty", "ordinary"),
+        ];
+        for (mode, branch, profile) in cases {
+            let mut gateway = test_gateway();
+            gateway.enforce_limits = profile == "strict";
+            let local = Arc::new(LocalBackend::new(
+                gateway,
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+                7,
+            ));
+            let epoch = local.barrier().epoch();
+            if mode == "stale" {
+                drop(local.barrier().exclusive());
+            }
+            let caller = Caller {
+                principal: Principal::Owner,
+                epoch,
+            };
+            let query = |collection: &str| pb::RunQueryRequest {
+                parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+                query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![pb::structured_query::CollectionSelector {
+                            collection_id: collection.to_owned(),
+                            all_descendants: false,
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            let second = match branch {
+                "different" => "right",
+                "same" => "left",
+                "empty" => "empty",
+                _ => unreachable!(),
+            };
+            let queries = vec![query("left"), query(second)];
+            let outcome = blocking_read(local, None, caller, move |local, guard| {
+                let count = std::cell::Cell::new(0);
+                let checked = |db: &FirestoreState, version, check: crate::rules::ReadCheck<'_>| {
+                    guard(db, version, check)?;
+                    count.set(count.get() + 1);
+                    if mode == "deny" && count.get() == 2 {
+                        return Err(Status::permission_denied("second branch denied"));
+                    }
+                    Ok(())
+                };
+                local.run_pipeline_sources(&queries, &checked)
+            })
+            .await;
+            match mode {
+                "allow" => assert_eq!(outcome.unwrap().len(), 2, "{branch} {profile}"),
+                "deny" => assert_eq!(
+                    outcome.unwrap_err().code(),
+                    tonic::Code::PermissionDenied,
+                    "{branch} {profile}"
+                ),
+                "stale" => assert_eq!(
+                    outcome.unwrap_err().code(),
+                    tonic::Code::Unavailable,
+                    "{branch} {profile}"
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn union_snapshot_read_refuses_stale_epoch_before_access() {
+        let local = test_backend();
+        let old_epoch = local.barrier().epoch();
+        drop(local.barrier().exclusive());
+        let caller = Caller {
+            principal: Principal::Owner,
+            epoch: old_epoch,
+        };
+        let request = |collection: &str| pb::RunQueryRequest {
+            parent: "projects/demo-app/databases/(default)/documents".to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        let queries = vec![request("left"), request("right")];
+        let error = blocking_read(local, None, caller, move |local, guard| {
+            local.run_pipeline_sources(&queries, guard)
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
     }
 
     #[tokio::test]

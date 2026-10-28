@@ -1,0 +1,65 @@
+{
+  "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "requestExportSha256": "8e0591940bd2fb6f879ef02609dff2ab2285ef3f27729fec7092a0b1b4917a17",
+  "seedSha256": "d7549025562a145e897f8c5e4a6a389f46ce2eb048a5b31aa200e1ef3e1b7b39",
+  "companionRequestSha256": "03f73e6bc985d501c1e217c929e51453e408364c0f5d4d290dae3185ec6d5fb5",
+  "companionFixtureSha256": "c7b5996b63b75ed9c02db6e0a6b6815eb15ceb69cc06c0db592f23eec1a0f5af",
+  "recipes": [
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-2",
+      "requestSha256": "3f485987de929efe97f0ccc4b872560b8ea383a60a0f8d8d5a252f569a4f2589",
+      "mode": "documents",
+      "size": 2,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-0",
+      "requestSha256": "bce1c9d4ff5bc9d6369264173ba11dc3d92702b04fb155d9807517eb8c67f918",
+      "mode": "documents",
+      "size": 0,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-10",
+      "requestSha256": "89da6239e139a6d75a7e0fbeb92380c955376c6808bba0f410a52368fc86d021",
+      "mode": "documents",
+      "size": 10,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-0",
+      "requestSha256": "80b920b36139b8868d4ce37fd17796cacb9c350cd2feeb782c797e80ce4adccf",
+      "mode": "percent",
+      "size": 0,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-50",
+      "requestSha256": "1ce16da10216dc4343d400404690396e1c9f7c0b36e50cbcdd22c9bd4b94a139",
+      "mode": "percent",
+      "size": 0.5,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-100",
+      "requestSha256": "03f73e6bc985d501c1e217c929e51453e408364c0f5d4d290dae3185ec6d5fb5",
+      "mode": "percent",
+      "size": 1,
+      "placement": null
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-after-where",
+      "requestSha256": "fe09516b7c757baee069c00850bce3a41332bfc7604b14cf44cd400cb6ca3b24",
+      "mode": "documents",
+      "size": 2,
+      "placement": "where"
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-then-limit",
+      "requestSha256": "c7e03cf98296a31bff15dd5ec5ddd000cea448994bfbe089559e19d62302446e",
+      "mode": "documents",
+      "size": 4,
+      "placement": "limit"
+    }
+  ]
+}

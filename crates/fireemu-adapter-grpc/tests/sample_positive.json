@@ -1,0 +1,1116 @@
+[
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-2",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-0",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "0"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-10",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "10"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-0",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "0"
+                },
+                {
+                  "stringValue": "percent"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-50",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "doubleValue": 0.5
+                },
+                {
+                  "stringValue": "percent"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-100",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "1"
+                },
+                {
+                  "stringValue": "percent"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-after-where",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "where",
+              "args": [
+                {
+                  "functionValue": {
+                    "name": "greater_than",
+                    "args": [
+                      {
+                        "fieldReferenceValue": "n"
+                      },
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-then-limit",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "4"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            },
+            {
+              "name": "limit",
+              "args": [
+                {
+                  "integerValue": "1"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "seed": [
+      [
+        "su/a",
+        {
+          "n": {
+            "integerValue": "1"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "x"
+                },
+                {
+                  "stringValue": "y"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/b",
+        {
+          "n": {
+            "integerValue": "2"
+          },
+          "tags": {
+            "arrayValue": {}
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/c",
+        {
+          "n": {
+            "integerValue": "3"
+          },
+          "tags": {
+            "nullValue": null
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "su/d",
+        {
+          "n": {
+            "integerValue": "4"
+          },
+          "tags": {
+            "stringValue": "str"
+          },
+          "g": {
+            "stringValue": "q"
+          }
+        }
+      ],
+      [
+        "su/e",
+        {
+          "n": {
+            "integerValue": "5"
+          },
+          "g": {
+            "stringValue": "p"
+          }
+        }
+      ],
+      [
+        "sv/y",
+        {
+          "n": {
+            "integerValue": "11"
+          }
+        }
+      ],
+      [
+        "sv/z",
+        {
+          "n": {
+            "integerValue": "10"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "z"
+                }
+              ]
+            }
+          },
+          "g": {
+            "stringValue": "r"
+          }
+        }
+      ]
+    ]
+  }
+]

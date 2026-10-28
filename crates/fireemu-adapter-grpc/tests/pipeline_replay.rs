@@ -345,6 +345,23 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
     (
         "fs-ent-pipeline/o8d/stages-main",
         &[
+            "sample-documents-2",
+            "sample-documents-0",
+            "sample-documents-10",
+            "sample-documents-negative",
+            "sample-documents-fraction",
+            "sample-percent-0",
+            "sample-percent-50",
+            "sample-percent-100",
+            "sample-percent-150",
+            "sample-percent-negative",
+            "sample-mode-invalid",
+            "sample-mode-int",
+            "sample-rate-string",
+            "sample-one-argument",
+            "sample-three-arguments",
+            "sample-after-where",
+            "sample-then-limit",
             "unnest-tags",
             "unnest-empty-array",
             "unnest-null",
@@ -361,8 +378,38 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
             "unnest-twice",
             "unnest-one-argument",
             "unnest-three-arguments",
+            "union-other",
+            "union-itself",
+            "union-then-sort",
+            "union-then-limit",
+            "union-inner-where",
+            "union-inner-select",
+            "union-empty-input",
+            "union-of-union",
+            "union-after-select",
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
         ],
         &[
+            "sample-documents-2",
+            "sample-documents-0",
+            "sample-documents-10",
+            "sample-documents-negative",
+            "sample-documents-fraction",
+            "sample-percent-0",
+            "sample-percent-50",
+            "sample-percent-100",
+            "sample-percent-150",
+            "sample-percent-negative",
+            "sample-mode-invalid",
+            "sample-mode-int",
+            "sample-rate-string",
+            "sample-one-argument",
+            "sample-three-arguments",
+            "sample-after-where",
+            "sample-then-limit",
             "unnest-tags",
             "unnest-empty-array",
             "unnest-null",
@@ -379,6 +426,19 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
             "unnest-twice",
             "unnest-one-argument",
             "unnest-three-arguments",
+            "union-other",
+            "union-itself",
+            "union-then-sort",
+            "union-then-limit",
+            "union-inner-where",
+            "union-inner-select",
+            "union-empty-input",
+            "union-of-union",
+            "union-after-select",
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
         ],
     ),
 ];
@@ -422,7 +482,7 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
             })
         }
         "fs-ent-pipeline/o8d/stages-main#sample-percent-50" => Nondeterministic::Sample(SampleOf {
-            count: 2,
+            count: usize::MAX,
             members: SU,
         }),
         "fs-ent-pipeline/o8d/stages-main#sample-after-where" => {
@@ -440,6 +500,82 @@ fn nondeterministic(row: &str) -> Option<Nondeterministic> {
     })
 }
 
+// The retained percent=1 observation contains every eligible input row in scan order.
+fn sample_timestamp(value: Option<&Value>, placeholder: &str, recorded: bool) -> bool {
+    let Some(text) = value.and_then(Value::as_str) else {
+        return false;
+    };
+    if recorded && text == placeholder {
+        return true;
+    }
+    chrono::DateTime::parse_from_rfc3339(text).is_ok_and(|time| {
+        fireemu_core_firestore::value::Timestamp::new(
+            time.timestamp(),
+            time.timestamp_subsec_nanos(),
+        )
+        .is_ok()
+    })
+}
+
+fn sample_contract(
+    rule: &SampleOf,
+    body: &Value,
+    source: &[Value],
+    percent: bool,
+    recorded: bool,
+) -> bool {
+    let Some(parts) = body.as_array() else {
+        return false;
+    };
+    let [part] = parts.as_slice() else {
+        return false;
+    };
+    let Some(unit) = part.as_object() else {
+        return false;
+    };
+    if unit
+        .keys()
+        .any(|key| key != "executionTime" && key != "results")
+        || !sample_timestamp(unit.get("executionTime"), "<t1>", recorded)
+    {
+        return false;
+    }
+    let rows: &[Value] = match part.get("results") {
+        None => &[],
+        Some(Value::Array(rows)) => rows,
+        _ => return false,
+    };
+    if (!percent && rows.len() != rule.count) || rows.len() > rule.members.len() {
+        return false;
+    }
+    let mut seen = HashSet::new();
+    let mut previous = None;
+    for row in rows {
+        if !sample_timestamp(row.get("createTime"), "<t2>", recorded)
+            || !sample_timestamp(row.get("updateTime"), "<t2>", recorded)
+        {
+            return false;
+        }
+        let Some(name) = row.get("name").and_then(Value::as_str).map(relative) else {
+            return false;
+        };
+        if !rule.members.contains(&name.as_str()) || !seen.insert(name) {
+            return false;
+        }
+        let Some(position) = source
+            .iter()
+            .position(|input| normalize(input) == normalize(row))
+        else {
+            return false;
+        };
+        if percent && previous.is_some_and(|last| last >= position) {
+            return false;
+        }
+        previous = Some(position);
+    }
+    true
+}
+
 /// The clock of the in-process server under test, in seconds since the epoch (`state()` starts
 /// its `VirtualClock` here); a clock row is judged against it, not against the wall clock.
 const REPLAY_CLOCK_SECONDS: i64 = 1_788_004_860;
@@ -452,6 +588,16 @@ const CLOCK_WINDOW_SECONDS: i64 = 120;
 /// Whether an answer satisfies the rule of its row.
 /// `now` is the clock in seconds since the epoch that a clock row is judged against.
 fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bool {
+    satisfies_in(rule, status, body, now, false)
+}
+
+fn satisfies_in(
+    rule: &Nondeterministic,
+    status: u16,
+    body: &Value,
+    now: i64,
+    recorded: bool,
+) -> bool {
     if status != 200 {
         return false;
     }
@@ -462,15 +608,17 @@ fn satisfies(rule: &Nondeterministic, status: u16, body: &Value, now: i64) -> bo
         .flat_map(|element| element["results"].as_array().into_iter().flatten())
         .collect();
     match rule {
-        Nondeterministic::Sample(SampleOf { count, members }) => {
-            let names: Vec<String> = results
-                .iter()
-                .map(|result| relative(result["name"].as_str().unwrap_or("")))
+        Nondeterministic::Sample(sample) => {
+            let production = read("fs-ent-pipeline-production.json");
+            let source_body = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"]
+                ["sample-percent-100"]["body"];
+            let source: Vec<Value> = source_body
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
                 .collect();
-            let distinct: HashSet<&String> = names.iter().collect();
-            names.len() == *count
-                && distinct.len() == names.len()
-                && names.iter().all(|name| members.contains(&name.as_str()))
+            sample_contract(sample, body, &source, sample.count == usize::MAX, recorded)
         }
         Nondeterministic::ClockSeconds => {
             let [result] = results.as_slice() else {
@@ -1076,7 +1224,7 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 185, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 155, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
             120,
@@ -1753,7 +1901,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     // results/metadata): the number of array elements and the results each
                     // holds are part of the answer.
                     let got = framing(&body);
-                    let want = framing(&expected["body"]);
+                    let want = if row.ends_with("#sample-percent-50") {
+                        let count = got.iter().sum();
+                        vec![count]
+                    } else {
+                        framing(&expected["body"])
+                    };
                     if got != want {
                         failures.push(format!(
                             "strict={strict} {row}: framing {got:?}, production {want:?}"
@@ -2184,8 +2337,10 @@ fn program_gap_changed(has_gap: bool, expected_gap: bool) -> bool {
 
 fn expected_program_gap(program: &str, strict: bool) -> bool {
     match (program, strict) {
-        ("fs-ent-pipeline/o8c/collections-main", true) => false,
-        ("fs-ent-pipeline/o8c/collections-main" | "fs-ent-pipeline/o8d/stages-main", _) => true,
+        ("fs-ent-pipeline/o8c/collections-main", true) | ("fs-ent-pipeline/o8d/stages-main", _) => {
+            false
+        }
+        ("fs-ent-pipeline/o8c/collections-main", false) => true,
         _ => panic!("unknown pinned program: {program}"),
     }
 }
@@ -2200,8 +2355,8 @@ fn pinned_program_gaps_are_profile_specific() {
     let stages = "fs-ent-pipeline/o8d/stages-main";
     assert!(!expected_program_gap(collections, true));
     assert!(expected_program_gap(collections, false));
-    assert!(expected_program_gap(stages, true));
-    assert!(expected_program_gap(stages, false));
+    assert!(!expected_program_gap(stages, true));
+    assert!(!expected_program_gap(stages, false));
     assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", true)).is_err());
     assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", false)).is_err());
     assert!(is_pinned(
@@ -2366,7 +2521,10 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
                 .map_or(0, |text| text.parse::<i64>().unwrap());
             for recording in [&program["steps"][step], again] {
                 let status = u16::try_from(recording["status"].as_u64().unwrap()).unwrap();
-                assert!(satisfies(&rule, status, &recording["body"], now), "{row}");
+                assert!(
+                    satisfies_in(&rule, status, &recording["body"], now, true),
+                    "{row}"
+                );
             }
             // A refusal is no answer to a request production accepted.
             assert!(!satisfies(&rule, 400, &json!([]), now), "{row}");
@@ -2377,38 +2535,6 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
     // Five `sample` rows and the clock row: the fixture lists no other row that differs.
     assert_eq!(checked, 6);
     assert_eq!(compact_checked, 7);
-
-    let named = |names: &[&str]| {
-        json!([{
-            "results": names
-                .iter()
-                .map(|name| json!({"name": format!("projects/p/databases/d/documents/su/{name}"), "fields": {}}))
-                .collect::<Vec<_>>()
-        }])
-    };
-    let two = Nondeterministic::Sample(SampleOf {
-        count: 2,
-        members: SU,
-    });
-    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
-    assert!(!satisfies(&two, 200, &named(&["a"]), 0), "too few");
-    assert!(
-        !satisfies(&two, 200, &named(&["a", "b", "c"]), 0),
-        "too many"
-    );
-    assert!(!satisfies(&two, 200, &named(&["a", "a"]), 0), "a repeat");
-    assert!(
-        !satisfies(&two, 200, &named(&["a", "z"]), 0),
-        "not a member"
-    );
-    let filtered = Nondeterministic::Sample(SampleOf {
-        count: 2,
-        members: SU_AFTER_N_1,
-    });
-    assert!(
-        !satisfies(&filtered, 200, &named(&["a", "b"]), 0),
-        "filtered out"
-    );
 
     let clock = |value: &Value| json!([{"results": [{"fields": {"v": value}}]}]);
     let now = 1_793_029_330;
@@ -2476,11 +2602,6 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         &clock(&integer(now)),
         now
     ));
-    assert!(satisfies(&two, 200, &named(&["e", "a"]), 0));
-    assert!(
-        !satisfies(&two, 400, &named(&["e", "a"]), 0),
-        "a refusal with a body"
-    );
     // The replay judges against the clock of its own server.
     assert!(clock_ok(
         &integer(REPLAY_CLOCK_SECONDS + 5),
@@ -2852,4 +2973,696 @@ fn recorded_unnest_grpc_preserves_rows_order_and_errors() {
             assert_eq!(status, 400, "{id} strict={strict}");
         }
     }
+}
+
+#[test]
+fn recorded_union_thirteen_cases_replay_in_both_profiles() {
+    let production = read("fs-ent-pipeline-production.json");
+    let ids = [
+        "union-other",
+        "union-itself",
+        "union-then-sort",
+        "union-then-limit",
+        "union-inner-where",
+        "union-inner-select",
+        "union-empty-input",
+        "union-of-union",
+        "union-after-select",
+        "union-int-argument",
+        "union-no-arguments",
+        "union-two-arguments",
+        "union-no-stages",
+    ];
+    let mut failures = Vec::new();
+    for strict in [true, false] {
+        for id in ids {
+            let (status, body) = internal_case(strict, "o8d/stages-main", id, false);
+            let expected = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id];
+            let expected_status = u16::try_from(expected["status"].as_u64().unwrap()).unwrap();
+            if answer_in(status, &body, true) != answer_in(expected_status, &expected["body"], true)
+                || framing(&body) != framing(&expected["body"])
+            {
+                failures.push(format!(
+                    "strict={strict} {id}: got {} expected {}",
+                    answer_in(status, &body, true),
+                    answer_in(expected_status, &expected["body"], true)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_union_grpc_preserves_rows_order_and_errors() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8d/stages-main")
+        .unwrap();
+    for strict in [true, false] {
+        for id in [
+            "union-other",
+            "union-inner-select",
+            "union-of-union",
+            "union-then-limit",
+        ] {
+            let state = state(strict);
+            for seed in program["seed"].as_array().unwrap() {
+                let (status, body) = call(
+                    &state,
+                    "PATCH",
+                    &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                    &json!({"fields": fill(&seed[1])}),
+                );
+                assert_eq!(status, 200, "{body}");
+            }
+            let step = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["id"] == id)
+                .unwrap();
+            let body = fill(&step["body"]);
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let responses = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.next().await {
+                    out.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                        &response.unwrap(),
+                    ));
+                }
+                Value::Array(out)
+            });
+            let expected =
+                &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id]["body"];
+            assert_eq!(
+                answer_in(200, &responses, true),
+                answer_in(200, expected, true),
+                "{id} strict={strict}"
+            );
+            assert_eq!(framing(&responses), framing(expected));
+        }
+        for id in [
+            "union-int-argument",
+            "union-no-arguments",
+            "union-two-arguments",
+            "union-no-stages",
+        ] {
+            let (status, _) = internal_case(strict, "o8d/stages-main", id, true);
+            assert_eq!(status, 400, "{id} strict={strict}");
+        }
+    }
+}
+
+#[test]
+fn union_direct_grpc_and_rest_depth_are_bounded_before_shape_walk() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1 as pb;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let collection = || pb::pipeline::Stage {
+        name: "collection".to_owned(),
+        args: vec![pb::Value {
+            value_type: Some(pb::value::ValueType::ReferenceValue("/su".to_owned())),
+        }],
+        ..Default::default()
+    };
+    let mut nested = pb::Pipeline {
+        stages: vec![collection()],
+    };
+    for _ in 0..40 {
+        nested = pb::Pipeline {
+            stages: vec![
+                collection(),
+                pb::pipeline::Stage {
+                    name: "union".to_owned(),
+                    args: vec![pb::Value {
+                        value_type: Some(pb::value::ValueType::PipelineValue(nested)),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+    }
+    let req = pb::ExecutePipelineRequest {
+        database: "projects/demo-app/databases/(default)".to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(nested),
+                    ..Default::default()
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    let state = state(true);
+    let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        match Firestore::execute_pipeline(&service, tonic::Request::new(req)).await {
+            Err(status) => status.code(),
+            Ok(_) => panic!("deep union was accepted"),
+        }
+    });
+    assert_eq!(code, tonic::Code::Unimplemented);
+
+    let mut child = json!({"stages":[{"name":"collection","args":[{"referenceValue":"/su"}]}]});
+    for _ in 0..40 {
+        child = json!({"stages":[{"name":"collection","args":[{"referenceValue":"/su"}]},{"name":"union","args":[{"pipelineValue":child}]}]});
+    }
+    let body = json!({"structuredPipeline":{"pipeline":child}});
+    let (status, _) = call(&state, "POST", &format!("{DOCS}:executePipeline"), &body);
+    assert_eq!(status, 501);
+}
+
+#[test]
+fn union_relative_child_source_does_not_allow_foreign_literal_reference() {
+    let s = state(true);
+    let query = |reference: &str| {
+        json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/left"}]},
+            {"name":"union","args":[{"pipelineValue":{"stages":[
+                {"name":"collection","args":[{"referenceValue":"/right"}]},
+                {"name":"select","args":[{"mapValue":{"fields":{"v":{"referenceValue":reference}}}}]}
+            ]}}]}
+        ]}}})
+    };
+    let (ok, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &query("projects/demo-app/databases/(default)/documents/right/doc"),
+    );
+    assert_eq!(ok, 200);
+    let (foreign, _) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &query("projects/foreign/databases/(default)/documents/right/doc"),
+    );
+    assert_eq!(foreign, 501);
+}
+
+#[test]
+fn union_limit_zero_still_denies_nonowner_on_both_routes() {
+    use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let mut s = state(true);
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }").unwrap()));
+    let rules = Arc::new(
+        RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+    );
+    s.rules = Some(rules.clone());
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/left"}]},
+        {"name":"union","args":[{"pipelineValue":{"stages":[{"name":"collection","args":[{"referenceValue":"/right"}]}]}}]},
+        {"name":"limit","args":[{"integerValue":"0"}]}
+    ]}}});
+    let rest = s.handle(&RestRequest {
+        method: "POST".to_owned(),
+        path: format!("/v1/{DOCS}:executePipeline"),
+        query: String::new(),
+        authorization: None,
+        origin: None,
+        remote_peer: false,
+        browser_metadata: false,
+        app_check: Vec::new(),
+        body: body.clone(),
+        batch_field_order: Vec::new(),
+        key_order: KeyOrder::default(),
+    });
+    assert_eq!(rest.status, 403);
+    let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+        "projects/demo-app/databases/(default)",
+        &body,
+    )
+    .unwrap();
+    let service =
+        GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local)).with_rules(rules);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let code = rt.block_on(async {
+        match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+            Err(error) => error.code(),
+            Ok(_) => panic!("nonowner accepted"),
+        }
+    });
+    assert_eq!(code, tonic::Code::PermissionDenied);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn union_generated_route_combinations() {
+    use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+    use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
+    use fireemu_core_types::determinism::SplitMix64;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let cases = [
+        ("different", "plain", "none", "allow", "rest", "strict"),
+        ("same", "plain", "none", "allow", "grpc", "strict"),
+        ("empty", "plain", "none", "allow", "rest", "strict"),
+        ("different", "where", "none", "allow", "rest", "strict"),
+        ("different", "select", "none", "allow", "rest", "strict"),
+        ("different", "nested", "none", "allow", "rest", "strict"),
+        (
+            "different",
+            "plain",
+            "prefix_limit",
+            "allow",
+            "rest",
+            "strict",
+        ),
+        (
+            "different",
+            "plain",
+            "suffix_limit",
+            "allow",
+            "rest",
+            "strict",
+        ),
+        ("different", "plain", "blocking", "allow", "rest", "strict"),
+        ("different", "plain", "none", "deny", "grpc", "strict"),
+        ("different", "plain", "none", "allow", "rest", "ordinary"),
+        (
+            "empty",
+            "select",
+            "prefix_limit",
+            "deny",
+            "grpc",
+            "ordinary",
+        ),
+        ("same", "nested", "blocking", "deny", "grpc", "ordinary"),
+        ("empty", "where", "suffix_limit", "deny", "grpc", "ordinary"),
+        ("same", "nested", "prefix_limit", "deny", "rest", "ordinary"),
+        (
+            "empty",
+            "nested",
+            "suffix_limit",
+            "deny",
+            "grpc",
+            "ordinary",
+        ),
+        ("same", "select", "suffix_limit", "deny", "rest", "ordinary"),
+        ("same", "where", "blocking", "deny", "rest", "ordinary"),
+        ("empty", "select", "blocking", "allow", "grpc", "strict"),
+        ("empty", "where", "prefix_limit", "allow", "grpc", "strict"),
+    ];
+    for (branch, child, boundary, guard, transport, profile) in cases {
+        let mut s = state(profile == "strict");
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let loaded = Arc::new(RulesetSlot::new(LoadedRules::from_source("rules_version = '2'; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; } } }").unwrap()));
+        let rules = Arc::new(
+            RulesEnforcer::new(loaded, auth, clock).with_token_semantics(TokenSemantics::Firestore),
+        );
+        s.rules = Some(rules.clone());
+        for (name, n) in [("left/a", 1), ("right/b", 2)] {
+            let (status, _) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/{name}"),
+                &json!({"fields":{"n":{"integerValue":n.to_string()}}}),
+            );
+            assert_eq!(status, 200);
+        }
+        let collection = |name: &str| json!({"name":"collection","args":[{"referenceValue":format!("/{name}")}]});
+        let source = match branch {
+            "different" => "right",
+            "same" => "left",
+            "empty" => "empty",
+            _ => unreachable!(),
+        };
+        let mut child_stages = vec![collection(source)];
+        if child == "where" {
+            child_stages.push(json!({"name":"where","args":[{"functionValue":{"name":"equal","args":[{"fieldReferenceValue":"n"},{"integerValue":"2"}]}}]}));
+        }
+        if child == "select" {
+            child_stages.push(json!({"name":"select","args":[{"mapValue":{"fields":{"n":{"fieldReferenceValue":"n"}}}}]}));
+        }
+        if child == "nested" {
+            child_stages.push(
+                json!({"name":"union","args":[{"pipelineValue":{"stages":[collection("left")]}}]}),
+            );
+        }
+        let mut stages = vec![collection("left")];
+        if boundary == "prefix_limit" {
+            stages.push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
+        }
+        stages.push(json!({"name":"union","args":[{"pipelineValue":{"stages":child_stages}}]}));
+        if boundary == "suffix_limit" {
+            stages.push(json!({"name":"limit","args":[{"integerValue":"2"}]}));
+        }
+        if boundary == "blocking" {
+            stages.push(json!({"name":"sort","args":[{"mapValue":{"fields":{"direction":{"stringValue":"ascending"},"expression":{"fieldReferenceValue":"n"}}}}]}));
+        }
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+        let result = if transport == "rest" {
+            let response = s.handle(&RestRequest {
+                method: "POST".to_owned(),
+                path: format!("/v1/{DOCS}:executePipeline"),
+                query: String::new(),
+                authorization: (guard == "allow").then(|| "Bearer owner".to_owned()),
+                origin: None,
+                remote_peer: false,
+                browser_metadata: false,
+                app_check: Vec::new(),
+                body: body.clone(),
+                batch_field_order: Vec::new(),
+                key_order: KeyOrder::default(),
+            });
+            if guard == "deny" {
+                assert_eq!(
+                    response.status, 403,
+                    "{branch} {child} {boundary} {transport} {profile}"
+                );
+                continue;
+            }
+            assert_eq!(response.status, 200, "{:?}", response.body);
+            response.body
+        } else {
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service =
+                GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local)).with_rules(rules);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let response = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut request = tonic::Request::new(req);
+                if guard == "allow" {
+                    request
+                        .metadata_mut()
+                        .insert("authorization", "Bearer owner".parse().unwrap());
+                }
+                match Firestore::execute_pipeline(&service, request).await {
+                    Err(error) => Err(error.code()),
+                    Ok(response) => {
+                        let mut stream = response.into_inner();
+                        let mut items = Vec::new();
+                        while let Some(item) = stream.next().await {
+                            items.push(
+                                fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                                    &item.unwrap(),
+                                ),
+                            );
+                        }
+                        Ok(Value::Array(items))
+                    }
+                }
+            });
+            if guard == "deny" {
+                assert_eq!(response.unwrap_err(), tonic::Code::PermissionDenied);
+                continue;
+            }
+            response.unwrap()
+        };
+        let mut expected = vec![1];
+        let right = match branch {
+            "different" => Some(2),
+            "same" => Some(1),
+            "empty" => None,
+            _ => unreachable!(),
+        };
+        if let Some(n) = right {
+            if child != "where" || n == 2 {
+                expected.push(n);
+            }
+        }
+        if child == "nested" {
+            expected.push(1);
+        }
+        if boundary == "suffix_limit" {
+            expected.truncate(2);
+        }
+        if boundary == "blocking" {
+            expected.sort_unstable();
+        }
+        let got = result
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|response| response["results"].as_array().into_iter().flatten())
+            .map(|row| {
+                row["fields"]["n"]["integerValue"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            got, expected,
+            "{branch} {child} {boundary} {guard} {transport} {profile}"
+        );
+    }
+}
+
+#[test]
+fn recorded_literal_key_eleven_refusals_match_production() {
+    let production = read("fs-ent-pipeline-production.json");
+    let cases = [
+        ("o5/value-shapes", "keys-empty-and-reserved"),
+        ("o5/value-shapes", "keys-two-reserved"),
+        ("o5/value-shapes", "keys-reserved-inner-and-outer"),
+        ("o5/value-shapes", "key-name"),
+        ("o5/value-shapes", "key-inner-name"),
+        ("o5/literal-keys", "key-reserved-with-field"),
+        ("o5/literal-keys", "key-empty-with-field"),
+        ("o5/literal-keys", "key-type-with-field"),
+        ("o5/literal-keys", "key-dotted-with-function"),
+        ("o5/literal-keys", "nested-key-name-with-field"),
+        ("o5/literal-keys", "array-of-map-reserved-key-with-field"),
+    ];
+    let mut failures = Vec::new();
+    for (family, id) in cases {
+        let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]["steps"][id];
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, family, id, false);
+            if status != 400 || body != expected["body"] {
+                failures.push(format!("{family}#{id} strict={strict}: {status} {body}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_literal_key_grpc_refusals_keep_messages_where_order_is_observable() {
+    let production = read("fs-ent-pipeline-production.json");
+    let cases = [
+        ("o5/value-shapes", "keys-empty-and-reserved"),
+        ("o5/value-shapes", "keys-two-reserved"),
+        ("o5/value-shapes", "keys-reserved-inner-and-outer"),
+        ("o5/value-shapes", "key-name"),
+        ("o5/value-shapes", "key-inner-name"),
+        ("o5/literal-keys", "key-reserved-with-field"),
+        ("o5/literal-keys", "key-empty-with-field"),
+        ("o5/literal-keys", "key-type-with-field"),
+        ("o5/literal-keys", "key-dotted-with-function"),
+        ("o5/literal-keys", "nested-key-name-with-field"),
+        ("o5/literal-keys", "array-of-map-reserved-key-with-field"),
+    ];
+    let mut failures = Vec::new();
+    for (family, id) in cases {
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, family, id, true);
+            let unordered = matches!(
+                id,
+                "keys-empty-and-reserved" | "keys-two-reserved" | "keys-reserved-inner-and-outer"
+            );
+            let wanted = if strict && unordered { 501 } else { 400 };
+            if status != wanted {
+                failures.push(format!("{family}#{id} strict={strict}: {status} {body}"));
+                continue;
+            }
+            if !unordered {
+                let expected = &production["programs"][format!("fs-ent-pipeline/{family}")]
+                    ["steps"][id]["body"][0]["error"]["message"];
+                if &body["grpcMessage"] != expected {
+                    failures.push(format!("{family}#{id} strict={strict}: {body}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn sample_contract_rejects_typed_row_and_framing_near_misses() {
+    let production = read("fs-ent-pipeline-production.json");
+    let body = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"]
+        ["sample-percent-100"]["body"];
+    let rows: Vec<Value> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|part| part["results"].as_array().into_iter().flatten().cloned())
+        .collect();
+    assert_eq!(rows.len(), 5);
+    let sample = |items: Vec<Value>| json!([{"executionTime":"<t1>", "results": items}]);
+    let rule = SampleOf {
+        count: 2,
+        members: SU,
+    };
+    let good = sample(vec![rows[0].clone(), rows[1].clone()]);
+    assert!(sample_contract(&rule, &good, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["fields"]["n"] = json!({"stringValue":"1"});
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["createTime"] = json!(1);
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["name"] = json!("projects/p/databases/d/documents/su/unknown");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone(), rows[0].clone()]),
+        &rows,
+        false,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone()]),
+        &rows,
+        false,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"<t1>","results":[rows[0].clone()]},{"executionTime":"<t1>","results":[rows[1].clone()]}]),
+        &rows,
+        false,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"<t1>","results":[rows[0].clone(),rows[1].clone()]},{"executionTime":"<t1>","results":[]}]),
+        &rows,
+        false,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &sample(vec![rows[1].clone(), rows[0].clone()]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(sample_contract(
+        &rule,
+        &sample(vec![rows[0].clone()]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(sample_contract(
+        &rule,
+        &sample(rows.clone()),
+        &rows,
+        true,
+        true
+    ));
+    assert!(sample_contract(&rule, &sample(vec![]), &rows, true, true));
+    assert!(!sample_contract(&rule, &json!([null]), &rows, true, true));
+    assert!(!sample_contract(&rule, &good, &rows, false, false));
+    let mut live = good.clone();
+    live[0]["executionTime"] = json!("2026-01-01T00:00:00Z");
+    for row in live[0]["results"].as_array_mut().unwrap() {
+        row["createTime"] = json!("2026-01-01T00:00:00Z");
+        row["updateTime"] = json!("2026-01-01T00:00:00Z");
+    }
+    assert!(sample_contract(&rule, &live, &rows, false, false));
+    live[0]["results"][0]["createTime"] = json!("<t2>");
+    assert!(!sample_contract(&rule, &live, &rows, false, false));
+
+    assert!(!sample_contract(&rule, &json!([{}]), &rows, true, true));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"error":{"message":"bad"}}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"broken"}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":7}]),
+        &rows,
+        true,
+        true
+    ));
+    assert!(!sample_contract(
+        &rule,
+        &json!([{"executionTime":"<t1>","error":{}}]),
+        &rows,
+        true,
+        true
+    ));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["createTime"] = json!("broken");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]["updateTime"] = json!("broken");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
+    let mut bad = good.clone();
+    bad[0]["results"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("updateTime");
+    assert!(!sample_contract(&rule, &bad, &rows, false, true));
 }

@@ -1612,6 +1612,7 @@ impl RestState {
                 error
             }
         };
+        crate::pipeline::admit_union_json(body)?;
         // Strict answers a refusal only for a request of a shape production refused, with
         // production's text (coordinator ruling of 2026-10-21), the transcoder's refusals
         // included (ruling (c) of the r6 review).
@@ -1653,6 +1654,19 @@ impl RestState {
         )
         .map_err(refuse)?;
         let guard = self.read_guard(principal);
+        if !compiled.unions.is_empty() {
+            let runtime =
+                crate::pipeline_timezone::runtime_for_stages(&self.local, &compiled.stages);
+            let responses =
+                crate::pipeline::execute_union(&self.local, compiled, &*guard, unrecorded, runtime)
+                    .map_err(refuse)?;
+            return Ok(ok(Value::Array(
+                responses
+                    .iter()
+                    .map(pipeline_json::response_to_json)
+                    .collect(),
+            )));
+        }
         if compiled.search.is_some() {
             let responses =
                 crate::text_search::execute(&self.local, &parent, compiled, &*guard, unrecorded)
@@ -1664,7 +1678,7 @@ impl RestState {
                     .collect(),
             )));
         }
-        let runtime = crate::pipeline_timezone::runtime(&self.local);
+        let runtime = crate::pipeline_timezone::runtime_for_stages(&self.local, &compiled.stages);
         let responses = if let Some(names) = &compiled.documents {
             crate::pipeline::documents_input(&self.local, database, names, &*guard)
                 .map_err(refuse)?

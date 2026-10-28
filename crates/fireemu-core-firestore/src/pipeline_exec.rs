@@ -18,6 +18,8 @@
 //! what the official emulator answers instead. An input both refuse evaluates to
 //! [`EvalError::Invalid`].
 
+use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
@@ -262,6 +264,8 @@ pub struct RuntimeContext {
     pub zone_resolver: Option<ZoneResolver>,
     /// Adapter-provided regular-expression operations.
     pub regex_resolver: Option<RegexResolver>,
+    /// Independent request-scoped seed for sample stages.
+    pub sample_seed: Option<u64>,
 }
 
 /// What a function sees besides its arguments.
@@ -1592,19 +1596,6 @@ fn type_name(value: &Value) -> &'static str {
 /// `functions#map-integer-key`, O-4 `functions#map-key-boolean`).
 const RECORDED_MAP_KEY_TYPES: [&str; 2] = ["LONG", "BOOLEAN"];
 
-/// The argument types production named, per document function, when it refused one: the
-/// text names the function, so each pair is its own row (FS-ENT-ORACLE O-3
-/// `functions#document-id-string`, `#collection-id-string`, `#parent-string`, O-4
-/// `functions#document-id-integer`, `#collection-id-map`, `#parent-boolean`).
-const RECORDED_DOCUMENT_ARGUMENT_TYPES: [(&str, &str); 6] = [
-    ("document_id", "STRING"),
-    ("document_id", "LONG"),
-    ("collection_id", "STRING"),
-    ("collection_id", "MAP"),
-    ("parent", "STRING"),
-    ("parent", "BOOLEAN"),
-];
-
 /// `map(key, value, ...)`, as production answered it (FS-ENT-ORACLE O-1, O-3 and O-4
 /// `functions#map-*`) and the official emulator alike: a key whose value is absent is left out
 /// (`map("k", i, "k2", x)` is `{k: 1}`), only two present values repeat a key (a missing value
@@ -1665,8 +1656,8 @@ fn eval_map(args: &[Eval], cx: Context) -> Eval {
 /// - a collection at any depth: `INVALID_ARGUMENT` naming the reference and its length in
 ///   UTF-16 units as the index where the separator is missing (strict answers ASCII names
 ///   only, the ones production recorded);
-/// - another type: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail (strict answers the
-///   recorded types only).
+/// - another type: `INVALID_ARGUMENT` with a `FUNCTION_WRONG_TYPE` detail naming the concrete
+///   nonreference type. Only the recorded pairs establish production behavior.
 ///
 /// A malformed reference is unrecorded in both profiles.
 fn document_argument(
@@ -1704,15 +1695,6 @@ fn document_argument(
             None => unobserved("the reference does not name a document"),
         },
         [Eval::Absent | Eval::Value(Value::Null)] => Err(Eval::Value(Value::Null)),
-        // Production refused every argument type it was given but a reference, naming the
-        // type (O-3 a string, O-4 an integer, a map and a boolean, each with one function);
-        // strict refuses the other pairs as unobserved.
-        [Eval::Value(other)]
-            if unrecorded == Unrecorded::Refuse
-                && !RECORDED_DOCUMENT_ARGUMENT_TYPES.contains(&(function, type_name(other))) =>
-        {
-            unobserved("an argument of this type")
-        }
         [Eval::Value(other)] => Err(Eval::Error(EvalError::WrongType {
             function,
             expected: "Reference",
@@ -1828,6 +1810,15 @@ pub struct Accumulator {
     pub argument: Option<Expr>,
 }
 
+/// Validated sampling mode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SampleMode {
+    /// Select up to this many occurrences in random order.
+    Documents(u64),
+    /// Independently select rows while preserving input order.
+    Percent(f64),
+}
+
 /// One stage operator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
@@ -1860,6 +1851,13 @@ pub enum Stage {
         /// Optional array element index destination.
         index_field: Option<FieldPath>,
     },
+    /// Samples the input rows.
+    Sample(SampleMode),
+    /// Appends prepared, independently authorized sources to the current stream.
+    Union {
+        /// Flat branches with row-local transformations and immutable source rows.
+        branches: Vec<PreparedUnionBranch>,
+    },
     /// Drops the first rows.
     Offset(u64),
     /// Keeps at most this many rows.
@@ -1881,6 +1879,15 @@ pub enum Stage {
     },
 }
 
+/// One prepared union source and its row-local transformations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedUnionBranch {
+    /// Row-local where and select stages, evaluated when the branch is consumed.
+    pub stages: Vec<Stage>,
+    /// Rows from the shared request snapshot.
+    pub rows: Vec<Row>,
+}
+
 impl Stage {
     /// A `select` that does not keep the document name.
     #[must_use]
@@ -1895,7 +1902,10 @@ impl Stage {
     fn is_blocking(&self) -> bool {
         matches!(
             self,
-            Self::Sort(_) | Self::Distinct(_) | Self::Aggregate { .. }
+            Self::Sort(_)
+                | Self::Distinct(_)
+                | Self::Aggregate { .. }
+                | Self::Sample(SampleMode::Documents(_))
         )
     }
 }
@@ -1909,6 +1919,10 @@ enum StageState {
     Remaining(u64),
     /// The rows a blocking stage has received.
     Buffer(Vec<Row>),
+    /// A union that has already appended its sources.
+    UnionDone,
+    /// A documents sample has already emitted.
+    SampleDone,
 }
 
 /// One lazy array expansion retained while its current child runs downstream.
@@ -1928,6 +1942,7 @@ pub struct Cursor {
     unrecorded: Unrecorded,
     runtime: RuntimeContext,
     state: Vec<StageState>,
+    sample_rng: Vec<Option<SplitMix64>>,
 }
 
 impl Cursor {
@@ -1954,14 +1969,30 @@ impl Cursor {
             .iter()
             .map(|stage| match stage {
                 Stage::Offset(n) | Stage::Limit(n) => StageState::Remaining(*n),
-                Stage::Sort(_) | Stage::Distinct(_) | Stage::Aggregate { .. } => {
-                    StageState::Buffer(Vec::new())
-                }
+                Stage::Sort(_)
+                | Stage::Distinct(_)
+                | Stage::Aggregate { .. }
+                | Stage::Sample(SampleMode::Documents(_)) => StageState::Buffer(Vec::new()),
                 Stage::Where(_)
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
                 | Stage::RemoveFields(_)
-                | Stage::Unnest { .. } => StageState::Idle,
+                | Stage::Unnest { .. }
+                | Stage::Union { .. }
+                | Stage::Sample(SampleMode::Percent(_)) => StageState::Idle,
+            })
+            .collect();
+        let sample_rng = stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                matches!(stage, Stage::Sample(_)).then(|| {
+                    SplitMix64::new(
+                        runtime.sample_seed.unwrap_or(0)
+                            ^ 0x5341_4d50_4c45_0000
+                            ^ u64::try_from(index).unwrap_or(u64::MAX),
+                    )
+                })
             })
             .collect();
         Self {
@@ -1969,6 +2000,7 @@ impl Cursor {
             unrecorded,
             runtime,
             state,
+            sample_rng,
         }
     }
 
@@ -2002,15 +2034,64 @@ impl Cursor {
     pub fn finish(&mut self) -> Result<Vec<Row>, EvalError> {
         let mut out = Vec::new();
         for index in 0..self.stages.len() {
+            if matches!(self.stages[index], Stage::Sample(SampleMode::Percent(_))) {
+                self.state[index] = StageState::SampleDone;
+            }
+            if let Stage::Union { branches } = &mut self.stages[index] {
+                if matches!(self.state[index], StageState::UnionDone) {
+                    continue;
+                }
+                self.state[index] = StageState::UnionDone;
+                let branches = std::mem::take(branches);
+                for branch in branches {
+                    if branch
+                        .stages
+                        .iter()
+                        .any(|stage| !matches!(stage, Stage::Where(_) | Stage::Select { .. }))
+                    {
+                        return Err(EvalError::Unobserved {
+                            function: "union",
+                            reason: "prepared branch contains a non-row-local stage",
+                        });
+                    }
+                    let mut child =
+                        Self::new_in_with_runtime(branch.stages, self.unrecorded, self.runtime);
+                    for row in branch.rows {
+                        if self.exhausted_from(index + 1) {
+                            break;
+                        }
+                        for produced in child.push(row)? {
+                            self.run(index + 1, produced, &mut out)?;
+                        }
+                    }
+                }
+                continue;
+            }
             if !self.stages[index].is_blocking() {
                 continue;
             }
-            let StageState::Buffer(rows) =
-                std::mem::replace(&mut self.state[index], StageState::Buffer(Vec::new()))
+            let replacement =
+                if matches!(self.stages[index], Stage::Sample(SampleMode::Documents(_))) {
+                    StageState::SampleDone
+                } else {
+                    StageState::Buffer(Vec::new())
+                };
+            let StageState::Buffer(rows) = std::mem::replace(&mut self.state[index], replacement)
             else {
                 continue;
             };
             let produced = match &self.stages[index] {
+                Stage::Sample(SampleMode::Documents(count)) => {
+                    let mut rows = rows;
+                    let rng = self.sample_rng[index].as_mut().expect("sample RNG");
+                    for end in (1..rows.len()).rev() {
+                        let bound = u64::try_from(end + 1).unwrap_or(u64::MAX);
+                        let selected = usize::try_from(rng.next_below(bound)).unwrap_or(0);
+                        rows.swap(end, selected);
+                    }
+                    rows.truncate(usize::try_from(*count).unwrap_or(usize::MAX));
+                    rows
+                }
                 Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
                 Stage::Distinct(aliases) => {
                     distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
@@ -2069,6 +2150,7 @@ impl Cursor {
             let stage = &self.stages[index];
             let held = &mut self.state[index];
             match stage {
+                Stage::Union { .. } => {}
                 Stage::Unnest {
                     expression,
                     alias,
@@ -2241,7 +2323,36 @@ impl Cursor {
                     }
                     *remaining -= 1;
                 }
-                Stage::Sort(_) | Stage::Distinct(_) | Stage::Aggregate { .. } => {
+                Stage::Sample(SampleMode::Percent(probability)) => {
+                    if matches!(held, StageState::SampleDone) {
+                        return Ok(());
+                    }
+                    let selected = if *probability <= 0.0 {
+                        false
+                    } else if *probability >= 1.0 {
+                        true
+                    } else {
+                        let draw = self.sample_rng[index]
+                            .as_mut()
+                            .expect("sample RNG")
+                            .next_u64()
+                            >> 11;
+                        // A 53-bit integer is exactly representable by f64.
+                        #[allow(clippy::cast_precision_loss)]
+                        let draw = draw as f64;
+                        draw < probability * 9_007_199_254_740_992.0
+                    };
+                    if !selected {
+                        return Ok(());
+                    }
+                }
+                Stage::Sort(_)
+                | Stage::Distinct(_)
+                | Stage::Aggregate { .. }
+                | Stage::Sample(SampleMode::Documents(_)) => {
+                    if matches!(held, StageState::SampleDone) {
+                        return Ok(());
+                    }
                     let StageState::Buffer(rows) = held else {
                         unreachable!("a blocking stage keeps rows");
                     };
@@ -2630,6 +2741,12 @@ fn parent_map<'a>(
 /// reads no field still names `__name__`, so the scan reads names only.
 #[must_use]
 pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
+    if stages
+        .iter()
+        .any(|stage| matches!(stage, Stage::Union { .. }))
+    {
+        return None;
+    }
     let narrowing = stages.iter().position(|stage| {
         matches!(
             stage,
@@ -2663,7 +2780,11 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
                     expr.collect_fields(&mut paths);
                 }
             }
-            Stage::RemoveFields(_) | Stage::Offset(_) | Stage::Limit(_) => {}
+            Stage::Union { .. }
+            | Stage::RemoveFields(_)
+            | Stage::Offset(_)
+            | Stage::Limit(_)
+            | Stage::Sample(_) => {}
         }
     }
     paths.sort();

@@ -308,9 +308,7 @@ fn document_functions_answer_recorded_inputs_and_refuse_the_rest() {
             }),
             "{name}(str)"
         );
-        // Every other argument type too in the emulator profile (O-4 recorded an integer for
-        // document_id; strict refuses the other pairs, see
-        // strict_answers_only_the_argument_and_key_types_production_recorded).
+        // Concrete nonreference types retain their type-specific error in both profiles.
         assert_eq!(
             call(name, vec![field("num")]).eval_in(&r, Unrecorded::OfficialEmulator),
             Eval::Error(EvalError::WrongType {
@@ -930,8 +928,8 @@ fn document_functions_name_why_an_input_is_unobserved() {
 
 /// The official emulator (firebase-tools 15.28.2, Enterprise) refuses every argument type but a
 /// reference with `INVALID_ARGUMENT`; the emulator profile follows it. Production refused a
-/// string the same way (FS-ENT-ORACLE O-3), so strict refuses a string and leaves the other
-/// types unrecorded. Both answer null for a missing or null value, as production does.
+/// string the same way (FS-ENT-ORACLE O-3); concrete nonreference types use the same typed
+/// error in both profiles. Both answer null for a missing or null value, as production does.
 #[test]
 fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers() {
     let r = row(
@@ -961,12 +959,7 @@ fn the_official_emulator_answers_replace_unobserved_errors_only_where_it_answers
         assert_eq!(text.eval(&r), wrong(name, "STRING"));
         let number = call(name, vec![field("num")]);
         assert_eq!(official(&number), wrong(name, "LONG"));
-        // Strict answers the integer for document_id only (O-4 `functions#document-id-integer`).
-        if name == "document_id" {
-            assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
-        } else {
-            assert!(unobserved(&number.eval(&r)), "{name}(num)");
-        }
+        assert_eq!(number.eval(&r), wrong(name, "LONG"), "{name}(num)");
     }
     assert_eq!(
         wrong("parent", "STRING"),
@@ -1144,58 +1137,29 @@ fn strict_answers_only_the_argument_and_key_types_production_recorded() {
     ];
     let map = Value::Map(BTreeMap::from([("a".to_owned(), Value::Integer(1))]));
     let r = row("c/x", &[]);
-    for (name, recorded, unrecorded) in [
-        (
-            "document_id",
-            vec![s("c/x"), Value::Integer(1)],
-            vec![map.clone(), Value::Boolean(true)],
-        ),
-        (
-            "collection_id",
-            vec![s("c/x"), map.clone()],
-            vec![Value::Integer(1), Value::Boolean(true)],
-        ),
-        (
-            "parent",
-            vec![s("c/x"), Value::Boolean(true)],
-            vec![Value::Integer(1), map.clone()],
-        ),
-    ] {
-        // The pairs production did not record for this function are refused under strict.
-        for value in &unrecorded {
-            let e = call(name, vec![constant(value.clone())]);
-            assert!(
-                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
-                "{name}({value:?})"
-            );
-        }
-        for value in &recorded {
+    for name in ["document_id", "collection_id", "parent"] {
+        let mut values = others.to_vec();
+        values.extend([
+            s("c/x"),
+            Value::Integer(1),
+            map.clone(),
+            Value::Boolean(true),
+        ]);
+        for value in values {
             let e = call(name, vec![constant(value.clone())]);
             let wrong = Eval::Error(EvalError::WrongType {
                 function: name,
                 expected: "Reference",
-                got: type_name(value),
+                got: type_name(&value),
             });
             assert_eq!(
                 e.eval_in(&r, Unrecorded::Refuse),
                 wrong,
                 "{name}({value:?})"
             );
-            assert_eq!(e.eval_in(&r, Unrecorded::OfficialEmulator), wrong);
-        }
-        for value in &others {
-            let e = call(name, vec![constant(value.clone())]);
-            assert!(
-                unobserved(&e.eval_in(&r, Unrecorded::Refuse)),
-                "{name}({value:?})"
-            );
             assert_eq!(
                 e.eval_in(&r, Unrecorded::OfficialEmulator),
-                Eval::Error(EvalError::WrongType {
-                    function: name,
-                    expected: "Reference",
-                    got: type_name(value),
-                }),
+                wrong,
                 "{name}({value:?})"
             );
         }
@@ -1271,4 +1235,95 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn document_argument_generated_type_profile_origin_cases() {
+    let table = include_str!("document_argument.generated.tsv");
+    let mut count = 0;
+    for line in table.lines().skip(1) {
+        let columns: Vec<_> = line.split('\t').collect();
+        let [function, kind, profile, origin] = columns.as_slice() else {
+            panic!("invalid row {line}")
+        };
+        let mode = if *profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let value = match *kind {
+            "string" => Some(s("x")),
+            "long" => Some(Value::Integer(1)),
+            "double" => Some(Value::Double(1.5)),
+            "boolean" => Some(Value::Boolean(true)),
+            "timestamp" => Some(Value::Timestamp(
+                crate::value::Timestamp::new(0, 0).unwrap(),
+            )),
+            "bytes" => Some(Value::Bytes(vec![0])),
+            "geo" => Some(Value::GeoPoint(
+                crate::value::GeoPoint::new(1.0, 1.0).unwrap(),
+            )),
+            "array" => Some(Value::Array(vec![])),
+            "vector" => Some(Value::Vector(vec![1.0])),
+            "map" => Some(Value::Map(BTreeMap::new())),
+            "reference" => Some(Value::Reference(
+                "projects/p/databases/(default)/documents/c/x".into(),
+            )),
+            "null" => Some(Value::Null),
+            "absent" | "error" => None,
+            _ => panic!("unknown type {kind}"),
+        };
+        let eval = if *kind == "error" {
+            Eval::Error(EvalError::Invalid("inner".into()))
+        } else if *kind == "absent" {
+            Eval::Absent
+        } else if *origin == "field" {
+            let r = row("c/x", &[("v", value.clone().unwrap())]);
+            field("v").eval_in(&r, mode)
+        } else {
+            Eval::Value(value.clone().unwrap())
+        };
+        let actual = document_argument(
+            match *function {
+                "document_id" => "document_id",
+                "collection_id" => "collection_id",
+                "parent" => "parent",
+                _ => panic!("unknown function"),
+            },
+            std::slice::from_ref(&eval),
+            mode,
+        );
+        match *kind {
+            "reference" => assert!(actual.is_ok(), "{line}"),
+            "null" | "absent" => assert_eq!(actual, Err(Eval::Value(Value::Null)), "{line}"),
+            "error" => assert_eq!(actual, Err(eval), "{line}"),
+            _ => assert_eq!(
+                actual,
+                Err(Eval::Error(EvalError::WrongType {
+                    function: match *function {
+                        "document_id" => "document_id",
+                        "collection_id" => "collection_id",
+                        _ => "parent",
+                    },
+                    expected: "Reference",
+                    got: match *kind {
+                        "string" => "STRING",
+                        "long" => "LONG",
+                        "double" => "DOUBLE",
+                        "boolean" => "BOOLEAN",
+                        "timestamp" => "TIMESTAMP",
+                        "bytes" => "BYTES",
+                        "geo" => "GEO_POINT",
+                        "array" => "ARRAY",
+                        "vector" => "VECTOR",
+                        "map" => "MAP",
+                        _ => panic!("unexpected wrong type"),
+                    }
+                })),
+                "{line}"
+            ),
+        }
+        count += 1;
+    }
+    assert_eq!(count, 42);
 }

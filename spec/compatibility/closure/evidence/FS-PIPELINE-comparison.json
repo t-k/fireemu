@@ -1,10 +1,10 @@
 {
   "kind": "fs-ent-pipeline-comparison-v1",
-  "artifactSha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
+  "artifactSha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
   "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
   "summary": {
-    "MATCH": 1685,
-    "MISMATCH": 252,
+    "MATCH": 1740,
+    "MISMATCH": 197,
     "INDETERMINATE": 12,
     "UNKNOWN": 2
   },
@@ -1600,63 +1600,27 @@
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#key-reserved-with-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#key-empty-with-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#key-type-with-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#key-dotted-with-function",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#nested-key-name-with-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/literal-keys#array-of-map-reserved-key-with-field",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-unknown-function",
@@ -1806,63 +1770,27 @@
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#limit-boolean",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#limit-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#limit-null",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#limit-empty-map",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#offset-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#offset-boolean",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#where-vector-of-integer",
@@ -1876,80 +1804,31 @@
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-geo",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-timestamp",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-bytes",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-array",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-vector",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#parent-double",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#map-key-double",
@@ -2015,53 +1894,23 @@
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#keys-empty-and-reserved",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#keys-two-reserved",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#keys-reserved-inner-and-outer",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#key-name",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#key-inner-name",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#map-one-argument",
@@ -3701,47 +3550,19 @@
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-docid-map",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-docid-boolean",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-collectionid-integer",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-parent-integer",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-where-field-map",
@@ -3873,25 +3694,11 @@
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-select-alias-shape-dotted",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-select-alias-shape-quoted",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.details",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reversed-literal-field-map",
@@ -8714,133 +8521,55 @@
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-other",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-itself",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-then-sort",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-then-limit",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-inner-where",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-inner-select",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-empty-input",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-of-union",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-after-select",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-int-argument",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-no-arguments",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-two-arguments",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#union-no-stages",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#unnest-tags",
@@ -8910,168 +8639,124 @@
       "row": "fs-ent-pipeline/o8d/stages-main#sample-documents-2",
       "status": "MISMATCH",
       "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
+        "body.0.results.1.fields.g.stringValue",
+        "body.0.results.1.fields.n.integerValue",
+        "body.0.results.1.fields.tags",
+        "body.0.results.1.name"
       ]
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-documents-0",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-documents-10",
       "status": "MISMATCH",
       "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
+        "body.0.results.0.fields.n.integerValue",
+        "body.0.results.0.fields.tags.arrayValue",
+        "body.0.results.0.fields.tags.nullValue",
+        "body.0.results.0.name",
+        "body.0.results.1.fields.g.stringValue",
+        "body.0.results.1.fields.n.integerValue",
+        "body.0.results.1.fields.tags.stringValue",
+        "body.0.results.1.fields.tags.arrayValue",
+        "body.0.results.1.name",
+        "body.0.results.2.fields.n.integerValue",
+        "body.0.results.2.fields.tags.arrayValue",
+        "body.0.results.2.fields.tags.stringValue",
+        "body.0.results.2.name",
+        "body.0.results.3.fields.g.stringValue",
+        "body.0.results.3.fields.n.integerValue",
+        "body.0.results.3.fields.tags",
+        "body.0.results.3.name",
+        "body.0.results.4.fields.n.integerValue",
+        "body.0.results.4.fields.tags",
+        "body.0.results.4.name"
       ]
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-documents-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-documents-fraction",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-percent-0",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-percent-50",
       "status": "MISMATCH",
       "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
+        "body.0.results.0.fields.g.stringValue",
+        "body.0.results.0.fields.n.integerValue",
+        "body.0.results.0.fields.tags.nullValue",
+        "body.0.results.0.fields.tags.stringValue",
+        "body.0.results.0.name",
+        "body.0.results.1.fields.g.stringValue",
+        "body.0.results.1.fields.n.integerValue",
+        "body.0.results.1.fields.tags",
+        "body.0.results.1.name"
       ]
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-percent-100",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-percent-150",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-percent-negative",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-mode-invalid",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-mode-int",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-rate-string",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-one-argument",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-three-arguments",
-      "status": "MISMATCH",
-      "differences": [
-        "status",
-        "body.0.error.code",
-        "body.0.error.message",
-        "body.0.error.status"
-      ]
+      "status": "MATCH"
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-after-where",
       "status": "MISMATCH",
       "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
+        "body.0.results.0.fields.n.integerValue",
+        "body.0.results.0.fields.tags.stringValue",
+        "body.0.results.0.fields.tags.arrayValue",
+        "body.0.results.0.name",
+        "body.0.results.1.fields.g.stringValue",
+        "body.0.results.1.fields.n.integerValue",
+        "body.0.results.1.fields.tags.nullValue",
+        "body.0.results.1.fields.tags.stringValue",
+        "body.0.results.1.name"
       ]
     },
     {
       "row": "fs-ent-pipeline/o8d/stages-main#sample-then-limit",
       "status": "MISMATCH",
       "differences": [
-        "status",
-        "body.0.executionTime",
-        "body.0.results",
-        "body.0.error"
+        "body.0.results.0.fields.g.stringValue",
+        "body.0.results.0.fields.n.integerValue",
+        "body.0.results.0.fields.tags.arrayValue.values",
+        "body.0.results.0.name"
       ]
     },
     {

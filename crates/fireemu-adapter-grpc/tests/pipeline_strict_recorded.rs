@@ -378,8 +378,8 @@ fn strict_answers_only_the_argument_types_production_recorded() {
     let mut cases = Vec::new();
     // Production refused each function of a field per runtime type, since the text names it:
     // document_id of a string (O-3) and an integer (O-4), collection_id of a string (O-3) and a
-    // map (O-4), parent of a string (O-3) and a boolean (O-4). A constant where production read
-    // a field is another shape, so strict answers none of these (ruling of 2026-10-21).
+    // map (O-4), parent of a string (O-3) and a boolean (O-4). O-5 also recorded the
+    // indicated constant argument shapes; other shapes remain gated.
     let call_of = |function: &str, arg: Value| select(func(function, vec![arg]));
     for (function, field_name, got) in [
         ("document_id", "top", "STRING"),
@@ -413,11 +413,15 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         cases.push(Case {
             label,
             stages: vec![call_of(function, arg)],
-            strict: None,
+            strict: matches!(
+                (function, got),
+                ("document_id", "MAP" | "BOOLEAN") | ("collection_id" | "parent", "LONG")
+            )
+            .then_some((400, text)),
             emulator: (400, text),
         });
     }
-    // Unrecorded: every other type.
+    // O-5 recorded these nonreference types; the vector shape remains unrecorded.
     for (label, arg, got) in [
         ("document_id(1.5)", json!({ "doubleValue": 1.5 }), "DOUBLE"),
         (
@@ -450,14 +454,17 @@ fn strict_answers_only_the_argument_types_production_recorded() {
         cases.push(Case {
             label,
             stages: vec![doc_id(arg)],
-            strict: None,
+            strict: (got != "VECTOR").then_some((400, text)),
             emulator: (400, text),
         });
     }
     cases.push(Case {
         label: "parent(1.5)",
         stages: vec![select(func("parent", vec![json!({ "doubleValue": 1.5 })]))],
-        strict: None,
+        strict: Some((
+            400,
+            "The function parent(...) requires `Reference` but got `DOUBLE`.",
+        )),
         emulator: (
             400,
             "The function parent(...) requires `Reference` but got `DOUBLE`.",
@@ -537,13 +544,16 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "offset(-1)",
             stages: offset(int(-1)),
-            strict: None,
+            strict: Some((400, "The 'offset(...)' cannot have a negative value: -1")),
             emulator: (400, "The 'offset(...)' cannot have a negative value: -1"),
         },
         Case {
             label: "limit(true)",
             stages: limit(json!({ "booleanValue": true })),
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
@@ -552,7 +562,10 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit(1.5)",
             stages: limit(json!({ "doubleValue": 1.5 })),
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was DOUBLE_VALUE.",
@@ -561,7 +574,10 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit(null)",
             stages: limit(json!({ "nullValue": null })),
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was NULL_VALUE.",
@@ -570,7 +586,10 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "limit({})",
             stages: limit(map(vec![])),
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was MAP_VALUE.",
@@ -579,7 +598,10 @@ fn strict_answers_only_the_limit_and_offset_arguments_production_recorded() {
         Case {
             label: "offset(true)",
             stages: offset(json!({ "booleanValue": true })),
-            strict: None,
+            strict: Some((
+                400,
+                "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected offset to be INTEGER_VALUE, but was BOOLEAN_VALUE.",
@@ -777,8 +799,8 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
             strict: None,
             emulator: (400, missing),
         },
-        // One refusable key is recorded (O-4 `o4/literals#key-empty`, `#key-reserved`); which
-        // of several production names is not, nor `__name__`.
+        // Recorded single-key and __name__ refusals are known. Multi-key requests without
+        // preserved wire order remain unattributed under strict.
         Case {
             label: "{\"\": 1}",
             stages: vec![select(map(vec![("", int(1))]))],
@@ -816,13 +838,13 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
         Case {
             label: "{__name__: 1}",
             stages: vec![select(map(vec![("__name__", int(1))]))],
-            strict: None,
+            strict: Some((400, "field name '__name__' is reserved.")),
             emulator: (400, "field name '__name__' is reserved."),
         },
         Case {
             label: "{a: {__name__: 1}}",
             stages: vec![select(map(vec![("a", map(vec![("__name__", int(1))]))]))],
-            strict: None,
+            strict: Some((400, "field name '__name__' is reserved.")),
             emulator: (400, "field name '__name__' is reserved."),
         },
     ]);

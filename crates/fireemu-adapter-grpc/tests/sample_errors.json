@@ -1,0 +1,380 @@
+[
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-negative",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "-1"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "The 'size' parameter must be non-negative.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-fraction",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "doubleValue": 1.5
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected size to be INTEGER_VALUE, but was DOUBLE_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-150",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "doubleValue": 1.5
+                },
+                {
+                  "stringValue": "percent"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "The 'size' parameter must be between 0.0 and 1.0.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-negative",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "doubleValue": -0.5
+                },
+                {
+                  "stringValue": "percent"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "The 'size' parameter must be between 0.0 and 1.0.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-mode-invalid",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "stringValue": "rows"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Unsupported Sample Mode: rows",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-mode-int",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "integerValue": "1"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected SampleMode to be STRING_VALUE, but was INTEGER_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-rate-string",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "stringValue": "2"
+                },
+                {
+                  "stringValue": "documents"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Expected size to be INTEGER_VALUE, but was STRING_VALUE.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-one-argument",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Stage 'sample(size: int64 | double, mode: SampleMode)' takes [2..2] argument(s), received 1.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o8d/stages-main#sample-three-arguments",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/su"
+                }
+              ]
+            },
+            {
+              "name": "sample",
+              "args": [
+                {
+                  "integerValue": "2"
+                },
+                {
+                  "stringValue": "documents"
+                },
+                {
+                  "stringValue": "x"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "message": "Stage 'sample(size: int64 | double, mode: SampleMode)' takes [2..2] argument(s), received 3.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  }
+]

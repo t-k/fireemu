@@ -9494,12 +9494,17 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(1)]))
         .await
         .unwrap();
-    // Production refused only a string offset (O-4 `stages#offset-string`); the official
-    // emulator's texts for a negative offset and another type are unrecorded, so strict
-    // refuses them as unobserved (the emulator profile answers them, see
-    // `execute_pipeline_emulator_profile_answers_the_official_argument_checks`).
+    // O-5 recorded the negative offset refusal; other shapes remain gated separately.
+    let error = strict
+        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(-1)]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument, "{error}");
+    assert_eq!(
+        error.message(),
+        "The 'offset(...)' cannot have a negative value: -1"
+    );
     for (label, value) in [
-        ("negative", i(-1)),
         (
             "double",
             pb::Value {

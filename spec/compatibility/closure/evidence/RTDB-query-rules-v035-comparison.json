@@ -1,0 +1,1022 @@
+{
+  "kind": "rtdb-query-rules-recorded-comparison-v1",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+  "productionRequests": 0,
+  "strict": {
+    "profile": "strict",
+    "sourceHead": "8220a36ad88c136592551ebb94f358d6abe4d909",
+    "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+    "source": {
+      "journalSha256": "ff209baafbe0f196ee0176be7f1eb2d61ab6089be8f3f7725581ca16e384126a",
+      "requestCount": 49,
+      "corpusSupportCount": 20,
+      "otherCount": 29,
+      "observationCount": 8,
+      "anchorCount": 4
+    },
+    "rounds": [
+      {
+        "round": 1,
+        "rows": [
+          {
+            "id": "query-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-readback",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-allow-2",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "policy": "filtered-query-json-object",
+            "role": "observation",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-deny-3",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-nolimit",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-key",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "patch-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            }
+          },
+          {
+            "id": "query-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            }
+          },
+          {
+            "id": "patch-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            }
+          },
+          {
+            "id": "query-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [
+              "raw-body-differs"
+            ],
+            "policy": "filtered-get-semantic-json-v1",
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYyI6eyJoIjoyfX0="
+            }
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "rows": [
+          {
+            "id": "query-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-readback",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-allow-2",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "policy": "filtered-query-json-object",
+            "role": "observation",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-deny-3",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-nolimit",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-key",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "patch-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            }
+          },
+          {
+            "id": "query-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            }
+          },
+          {
+            "id": "patch-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            }
+          },
+          {
+            "id": "query-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [
+              "raw-body-differs"
+            ],
+            "policy": "filtered-get-semantic-json-v1",
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYyI6eyJoIjoyfX0="
+            }
+          }
+        ]
+      }
+    ],
+    "failure": null,
+    "cleanup": {
+      "prefix": {
+        "status": "restored"
+      },
+      "rules": {
+        "status": "restored"
+      }
+    },
+    "summary": {
+      "rows": 20,
+      "counts": {
+        "MATCH": 20
+      }
+    }
+  },
+  "emulator": {
+    "profile": "emulator",
+    "sourceHead": "8220a36ad88c136592551ebb94f358d6abe4d909",
+    "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+    "source": {
+      "journalSha256": "ff209baafbe0f196ee0176be7f1eb2d61ab6089be8f3f7725581ca16e384126a",
+      "requestCount": 49,
+      "corpusSupportCount": 20,
+      "otherCount": 29,
+      "observationCount": 8,
+      "anchorCount": 4
+    },
+    "rounds": [
+      {
+        "round": 1,
+        "rows": [
+          {
+            "id": "query-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-readback",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-allow-2",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "policy": "filtered-query-json-object",
+            "role": "observation",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-deny-3",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-nolimit",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-key",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "patch-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            }
+          },
+          {
+            "id": "query-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            }
+          },
+          {
+            "id": "patch-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            }
+          },
+          {
+            "id": "query-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [
+              "raw-body-differs"
+            ],
+            "policy": "filtered-get-semantic-json-v1",
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYyI6eyJoIjoyfX0="
+            }
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "rows": [
+          {
+            "id": "query-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-readback",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "37"
+              },
+              "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-allow-2",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "policy": "filtered-query-json-object",
+            "role": "observation",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "25"
+              },
+              "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+            }
+          },
+          {
+            "id": "query-deny-3",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-nolimit",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "query-deny-key",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "observation",
+            "production": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            },
+            "local": {
+              "status": 401,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "36"
+              },
+              "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+            }
+          },
+          {
+            "id": "patch-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+            }
+          },
+          {
+            "id": "query-anchor-seed",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "support",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "62"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+            }
+          },
+          {
+            "id": "patch-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [],
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "21"
+              },
+              "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+            }
+          },
+          {
+            "id": "query-anchor",
+            "verdict": "MATCH",
+            "differences": [],
+            "diagnostics": [
+              "raw-body-differs"
+            ],
+            "policy": "filtered-get-semantic-json-v1",
+            "role": "anchor",
+            "production": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+            },
+            "local": {
+              "status": 200,
+              "headers": {
+                "content-type": "application/json; charset=utf-8",
+                "content-length": "50"
+              },
+              "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYyI6eyJoIjoyfX0="
+            }
+          }
+        ]
+      }
+    ],
+    "failure": null,
+    "cleanup": {
+      "prefix": {
+        "status": "restored"
+      },
+      "rules": {
+        "status": "restored"
+      }
+    },
+    "summary": {
+      "rows": 20,
+      "counts": {
+        "MATCH": 20
+      }
+    }
+  }
+}

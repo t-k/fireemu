@@ -134,6 +134,13 @@
    "status": "FROZEN",
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-28"
+  },
+  {
+   "id": "R7",
+   "decision": "Coordinator adjudication 1936 accepts the finite re-registration, nested-priority and string-priority observations in two rounds under both local profiles. Other priority shapes remain unverified and RTDB remains IMPLEMENTING.",
+   "decidedBy": "coordinator",
+   "decidedOn": "2026-10-29",
+   "decisionRef": "docs.local/instructions/owner-decisions.md (1936); Coordinator adjudication 1936 under the applicable owner delegations 1858, 1866 and 1899."
   }
  ],
  "conditions": [
@@ -734,7 +741,8 @@
    "cases": [
     "an onDisconnect value that carries a priority (setWithPriority({b:1,10:2,9:3}, 1)), a cancel of its child b and an unrelated write registered next to it: when the connection ends nothing fires, the whole onDisconnect update is dropped (production, two WebSocket rounds); fireemu does the same in both profiles",
     "control in the same recording: the same value without a priority is split by the cancel (s = {9:3,10:2}) and the unrelated write fires",
-    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires"
+    "control in the same recording: a cancel of a key the value does not hold leaves the value whole with its priority, and the unrelated write fires",
+    "Two recorded rounds each of heal-reregister, nested-priority and string-priority were replayed in both profiles; six matched rows per profile. No other onDisconnect priority shape is claimed."
    ],
    "status": "VERIFIED",
    "evidence": {
@@ -766,7 +774,18 @@
      "crates/fireemu-adapter-database/tests/on_disconnect_priority_drop.rs",
      "crates/fireemu-adapter-database/src/on_disconnect.rs#tests"
     ],
-    "scope": "the two rounds r1-ws and r2-ws of the S5 recording; the recorded shape only"
+    "scope": "the two rounds r1-ws and r2-ws of the S5 recording; the recorded shape only",
+    "v035RecordedPriority": {
+     "path": "spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json",
+     "sha256": "7375f338b22d042890bc0f2ed298fd61f9dd56536081a337c99095175867b897",
+     "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+     "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+     "rowsPerProfile": 6,
+     "tests": [
+      "tools/sdk-smoke-database/priority-replay.test.mjs"
+     ],
+     "scope": "Three recorded shapes in two rounds; REST, SDK and other priority behavior outside these cases remain unverified."
+    }
    }
   },
   {
@@ -940,6 +959,59 @@
    "binarySha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
    "rowsPerProfile": 20,
    "note": "Finite recorded requests including support and anchor rows; not complete Rules or query parity."
+  },
+  "v035RecordedRevalidation": {
+   "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+   "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+   "productionRequests": 0,
+   "comparisons": [
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-rest-v035-comparison.json",
+     "sha256": "13280ec98104d0bb7a6c33869da977ca11830ac81d4830c004698fce8075e987",
+     "rows": 172,
+     "summary": {
+      "rest": {
+       "MATCH": 124
+      },
+      "m14": {
+       "MATCH": 48
+      }
+     },
+     "binding": "Local recorded REST replay on the v0.35 source and binary; other historical SDK and Auth evidence remains independently bound."
+    },
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-next4-v035-comparison.json",
+     "sha256": "b5bcee217f826c2af9f8a8b6452fb0f925a6b1d7e46019ff1d3ebb92a1c47db9",
+     "rowsPerProfile": 36,
+     "note": "Finite recorded rows, including support and anchor requests; not general parity."
+    },
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-rules-v035-comparison.json",
+     "sha256": "73aee352e66e0e02cc6f5bde2c0abdcd6787d8f711f49190724fd52a4981491e",
+     "rowsPerProfile": 56,
+     "note": "Finite recorded rows, including support and anchor requests; not general parity."
+    },
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-query-rules-v035-comparison.json",
+     "sha256": "ac9c2c651aab691cc2b7fe089a048078991bdc4a2ee266a4d1484edc24490e70",
+     "rowsPerProfile": 20,
+     "note": "Finite recorded rows, including support and anchor requests; not general parity."
+    },
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-query-bounds-v035-comparison.json",
+     "sha256": "92916e4bcd6cb486d46656440c09dbacb6bed4581c8167789c9a8111df04e77e",
+     "rowsPerProfile": 20,
+     "note": "Finite recorded rows, including support and anchor requests; not general parity."
+    },
+    {
+     "path": "spec/compatibility/closure/evidence/RTDB-priority-v035-comparison.json",
+     "sha256": "7375f338b22d042890bc0f2ed298fd61f9dd56536081a337c99095175867b897",
+     "rowsPerProfile": 6,
+     "note": "Three recorded shapes in two rounds; no broader priority claim."
+    }
+   ],
+   "ownerDecision": "docs.local/instructions/owner-decisions.md (1936)",
+   "scope": "Finite recorded fixtures only; historical SDK and Auth evidence retains its original binding and the parent remains IMPLEMENTING."
   }
  },
  "knownDifferences": {
@@ -975,7 +1047,7 @@
    "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
   },
   "prioritizedSplitBeyondTheRecordedShape": {
-   "statement": "Beyond the recorded S5 shape, healing, nested and string priorities follow the official emulator and are unobserved in production. The offline probes show that a split retains the priority as a child, later registrations below it are kept, and a cancel of that priority removes it. Production observed one shape: a numeric priority on the registered value and a cancel of one of its children."
+   "statement": "Beyond the earlier recorded S5 shape and the three named v0.35 recorded priority shapes (heal-reregister, nested-priority and string-priority), onDisconnect priority behavior remains unverified in production."
   },
   "triggerUserAuthContext": {
    "statement": "Not claimed: the event of a write made by an end user (a Firebase ID token). The recording holds only admin writes (the ADC token) and unauthenticated writes. The 2nd gen `authType` of a user's write is not recorded: production may say unknown there too, as it does for the two recorded kinds; the strict profile still names it `app_user` with the uid, and a 1st gen `context.auth` still carries the token claims. Needs an Auth user and a client SDK write path (R3)."

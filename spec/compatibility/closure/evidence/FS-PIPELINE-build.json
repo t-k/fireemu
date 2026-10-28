@@ -1,17 +1,15 @@
 {
-  "sourceCommit": "81dca801d0f67f002dc7a63e8950f30017f17d9f",
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
   "command": "env -u CARGO_TARGET_DIR RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 cargo build --locked --release -p fireemu --bin fireemu --manifest-path \"$CUSTODY_MANIFEST\" --message-format=json-render-diagnostics",
-  "binarySha256": "988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
   "profile": "release",
   "locked": true,
   "rustcWrapper": "empty",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "host": "Darwin arm64",
-  "builtOn": "2026-10-28T11:48:52.866351+00:00",
-  "buildSeconds": 290,
-  "buildPath": "docs.local/runs/remaining-compat-20261028/v034-final-custody/fireemu",
-  "workTree": ".worktree/remaining-compat-v034-final-custody",
-  "targetDirectoryNote": "CARGO_TARGET_DIR was unset; Cargo used the empty worktree-local target. The exact executed command, compiler artifact messages, hashes and copy receipt are retained privately.",
-  "rustSourcesNote": "Evidence child follows the signed source commit.",
+  "builtOn": "2026-10-28T16:23:59.511553+00:00",
+  "targetDirectoryNote": "CARGO_TARGET_DIR was unset; Cargo used an initially absent exclusive worktree-local target. The executed command, artifact messages and copy receipt are retained privately.",
+  "rustSourcesNote": "Evidence children follow the signed source commit.",
+  "uiBundled": false,
   "reproducibility": "Not compared with a second build."
 }

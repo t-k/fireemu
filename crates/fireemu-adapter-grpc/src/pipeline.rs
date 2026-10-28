@@ -26,6 +26,155 @@ const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 /// Stages the official emulator 1.22.0 knows (probed 2026-10-27) and the registry does not.
 const OFFICIAL_ONLY_STAGES: &[&str] = &["let", "insert", "upsert", "literals"];
 
+/// Bounds nested union planning before recursive validation and shape inspection.
+pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
+    enum Item<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Value(&'a pb::Value),
+    }
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return Ok(());
+    };
+    let Some(root) = &structured.pipeline else {
+        return Ok(());
+    };
+    if !root.stages.iter().any(|stage| stage.name == "union") {
+        return Ok(());
+    }
+    let mut stack = vec![(root, 0_usize)];
+    let mut count = 0_usize;
+    while let Some((pipeline, depth)) = stack.pop() {
+        count = count.saturating_add(pipeline.stages.len());
+        if depth > 32 || count > 256 {
+            return Err(Status::unimplemented(
+                "union nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        for stage in &pipeline.stages {
+            if stage.name == "union" {
+                if let Some(pb::value::ValueType::PipelineValue(child)) = stage
+                    .args
+                    .first()
+                    .and_then(|value| value.value_type.as_ref())
+                {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    let mut nodes = vec![(Item::Pipeline(root), 0_usize)];
+    let mut seen = 0_usize;
+    while let Some((item, depth)) = nodes.pop() {
+        seen += 1;
+        if depth > 100 || seen > 32768 {
+            return Err(Status::unimplemented(
+                "union value nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        match item {
+            Item::Pipeline(pipeline) => {
+                for stage in &pipeline.stages {
+                    for value in stage.args.iter().chain(stage.options.values()) {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+            }
+            Item::Value(value) => match value.value_type.as_ref() {
+                Some(pb::value::ValueType::PipelineValue(pipeline)) => {
+                    nodes.push((Item::Pipeline(pipeline), depth + 1));
+                }
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    for value in &array.values {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    for value in map.fields.values() {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                Some(pb::value::ValueType::FunctionValue(function)) => {
+                    for value in function.args.iter().chain(function.options.values()) {
+                        nodes.push((Item::Value(value), depth + 1));
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    Ok(())
+}
+
+/// Bounds REST union trees before inspecting their recursive request shape.
+pub(crate) fn admit_union_json(body: &serde_json::Value) -> Result<(), Status> {
+    let Some(root) = body
+        .get("structuredPipeline")
+        .or_else(|| body.get("structured_pipeline"))
+        .and_then(|value| value.get("pipeline"))
+    else {
+        return Ok(());
+    };
+    let Some(stages) = root.get("stages").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    if !stages
+        .iter()
+        .any(|stage| stage.get("name").and_then(serde_json::Value::as_str) == Some("union"))
+    {
+        return Ok(());
+    }
+    let mut stack = vec![(root, 0_usize)];
+    let mut count = 0_usize;
+    while let Some((pipeline, depth)) = stack.pop() {
+        let Some(stages) = pipeline.get("stages").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        count = count.saturating_add(stages.len());
+        if depth > 32 || count > 256 {
+            return Err(Status::unimplemented(
+                "union nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        for stage in stages {
+            if stage.get("name").and_then(serde_json::Value::as_str) == Some("union") {
+                if let Some(child) = stage
+                    .get("args")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|args| args.first())
+                    .and_then(|arg| {
+                        arg.get("pipelineValue")
+                            .or_else(|| arg.get("pipeline_value"))
+                    })
+                {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    let mut nodes = vec![(root, 0_usize)];
+    let mut seen = 0_usize;
+    while let Some((value, depth)) = nodes.pop() {
+        seen += 1;
+        if depth > 100 || seen > 32768 {
+            return Err(Status::unimplemented(
+                "union value nesting or plan size exceeds the local execution bound",
+            ));
+        }
+        match value {
+            serde_json::Value::Array(items) => {
+                nodes.extend(items.iter().map(|value| (value, depth + 1)));
+            }
+            serde_json::Value::Object(items) => {
+                nodes.extend(items.values().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Decodes and canonicalizes the request's pipeline. Errors carry the `FS_PIPE_*` code in
 /// the `fireemu-code` metadata like the gateway's rejections. The stage registry's refusals
 /// (a stage's argument count, argument shape, options, input position) are fireemu's own
@@ -36,6 +185,7 @@ pub fn validate_pipeline(
     req: &pb::ExecutePipelineRequest,
     unrecorded: Unrecorded,
 ) -> Result<PipelineAst, Status> {
+    admit_union(req)?;
     if req.database.is_empty() {
         return Err(with_code(
             Status::invalid_argument("ExecutePipeline requires a database"),
@@ -521,6 +671,15 @@ fn collection_query(
     }
 }
 
+/// One raw union source and its branch-local row transformations.
+#[derive(Debug, Clone)]
+pub struct UnionSource {
+    /// Query authorized independently under the request's selected snapshot.
+    pub input: pb::RunQueryRequest,
+    /// Where and select stages local to this source.
+    pub stages: Vec<Stage>,
+}
+
 /// Compiles the finite local Enterprise subset into the equivalent `RunQuery`: collection,
 /// exact top-level field equality, top-level field-reference select aliases, offset and
 /// limit. This lowering no longer serves requests; it is the baseline the executor is
@@ -683,6 +842,8 @@ pub struct CompiledExecution {
     pub stages: Vec<Stage>,
     /// A local lexical search before the existing streaming suffix.
     pub search: Option<crate::text_search::SearchPlan>,
+    /// Source plans for each union stage, indexed by executor stage position.
+    pub unions: Vec<(usize, Vec<UnionSource>)>,
 }
 
 /// Compiles the finite local Enterprise subset for the core executor: collection input,
@@ -765,6 +926,7 @@ pub fn compile_pipeline_in_order(
     }
     let _wire = WireOrderScope::enter(order);
     let mut stages = Vec::new();
+    let mut unions = Vec::new();
     let mut search = None;
     // The equality filter of the first `where` is pushed into the scan while only filters have
     // run before it (a filter commutes with another filter, not with a limit or a sort).
@@ -831,18 +993,59 @@ pub fn compile_pipeline_in_order(
                         Err(error) => return Err(error),
                     }
                 }
+                "union" => {
+                    only_filters_so_far = false;
+                    let Some(pb::value::ValueType::PipelineValue(child)) =
+                        stage.args.first().and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::unimplemented("union requires a pipeline argument"));
+                    };
+                    if child.stages.is_empty() {
+                        return Err(Status::invalid_argument(
+                            "The 'union(...)' stage must have at least one stage.",
+                        ));
+                    }
+                    let mut nested = req.clone();
+                    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        ref mut structured,
+                    )) = nested.pipeline_type
+                    else {
+                        return Err(Status::internal("missing structured pipeline"));
+                    };
+                    structured.pipeline = Some(child.clone());
+                    validate_pipeline(&nested, unrecorded)?;
+                    let nested_order = order.map(|o| o.rebased(
+                        &format!("/structuredPipeline/pipeline/stages/{position}/args/0/pipelineValue"),
+                        "/structuredPipeline/pipeline",
+                    ));
+                    let branch = compile_pipeline_in_order(
+                        &nested,
+                        parent,
+                        unrecorded,
+                        nested_order.as_ref(),
+                    )?;
+                    let sources = flatten_union_sources(branch)?;
+                    unions.push((stages.len(), sources));
+                    stages.push(Stage::Union {
+                        branches: Vec::new(),
+                    });
+                }
+                "sample" => {
+                    only_filters_so_far = false;
+                    stages.push(decode_sample(stage)?);
+                }
                 "unnest" => {
                     only_filters_so_far = false;
                     stages.push(decode_unnest(stage, unrecorded)?);
                 }
                 "offset" => {
                     only_filters_so_far = false;
-                    let offset = count_argument(stage, unrecorded)?;
+                    let offset = count_argument(stage)?;
                     stages.push(Stage::Offset(offset));
                 }
                 "limit" => {
                     only_filters_so_far = false;
-                    let limit = count_argument(stage, unrecorded)?;
+                    let limit = count_argument(stage)?;
                     stages.push(Stage::Limit(limit));
                 }
                 "sort" => {
@@ -951,10 +1154,14 @@ pub fn compile_pipeline_in_order(
                 })
                 .collect(),
         });
-    if search.is_some() {
+    if search.is_some() || !unions.is_empty() {
         pushdown = None;
     }
-    let projection = if search.is_some() { None } else { projection };
+    let projection = if search.is_some() || !unions.is_empty() {
+        None
+    } else {
+        projection
+    };
     let mut input = collection_query(query_parent, collection_id, pushdown, projection, 0, None);
     if all_descendants {
         if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
@@ -972,7 +1179,123 @@ pub fn compile_pipeline_in_order(
         documents,
         stages,
         search,
+        unions,
     })
+}
+
+fn flatten_union_sources(compiled: CompiledExecution) -> Result<Vec<UnionSource>, Status> {
+    if compiled.documents.is_some() || compiled.search.is_some() {
+        return Err(Status::unimplemented(
+            "union child input is not a supported collection",
+        ));
+    }
+    let mut first = compiled.input;
+    if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+        first.query_type.as_mut()
+    {
+        if query.from.iter().any(|selector| selector.all_descendants) {
+            return Err(Status::unimplemented(
+                "union collection group input is unobserved",
+            ));
+        }
+        query.select = None;
+        query.r#where = None;
+    }
+    let mut result = vec![UnionSource {
+        input: first,
+        stages: Vec::new(),
+    }];
+    let mut unions = compiled.unions.into_iter();
+    for (index, stage) in compiled.stages.into_iter().enumerate() {
+        match stage {
+            Stage::Where(_) | Stage::Select { .. } => {
+                for source in &mut result {
+                    source.stages.push(stage.clone());
+                }
+            }
+            Stage::Union { .. } => {
+                let Some((position, branches)) = unions.next() else {
+                    return Err(Status::internal("missing union source plan"));
+                };
+                if position != index {
+                    return Err(Status::internal("misordered union source plan"));
+                }
+                result.extend(branches);
+            }
+            _ => {
+                return Err(Status::unimplemented(
+                    "union child contains a non-row-local stage",
+                ))
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Executes the admitted union plan from one guarded, immutable snapshot.
+pub(crate) fn execute_union(
+    local: &crate::local::LocalBackend,
+    mut compiled: CompiledExecution,
+    guard: crate::rules::ReadGuard<'_>,
+    unrecorded: Unrecorded,
+    runtime: pipeline_exec::RuntimeContext,
+) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
+    if compiled.documents.is_some() || compiled.search.is_some() {
+        return Err(Status::unimplemented(
+            "union parent input is not a supported collection",
+        ));
+    }
+    let mut requests = vec![compiled.input.clone()];
+    for (_, branches) in &compiled.unions {
+        requests.extend(branches.iter().map(|branch| branch.input.clone()));
+    }
+    let mut results = local.run_pipeline_sources(&requests, guard)?.into_iter();
+    let primary = in_scan_order(
+        results
+            .next()
+            .ok_or_else(|| Status::internal("missing union input"))?,
+    );
+    let execution_time = primary.iter().find_map(|row| row.read_time);
+    for (position, branches) in compiled.unions {
+        let mut prepared = Vec::with_capacity(branches.len());
+        for branch in branches {
+            let rows = in_scan_order(
+                results
+                    .next()
+                    .ok_or_else(|| Status::internal("missing union branch"))?,
+            )
+            .iter()
+            .filter_map(|row| row.document.as_ref())
+            .map(document_row)
+            .collect::<Result<Vec<_>, _>>()?;
+            prepared.push(pipeline_exec::PreparedUnionBranch {
+                stages: branch.stages,
+                rows,
+            });
+        }
+        let Some(Stage::Union { branches }) = compiled.stages.get_mut(position) else {
+            return Err(Status::internal("invalid union stage position"));
+        };
+        *branches = prepared;
+    }
+    let mut cursor =
+        pipeline_exec::Cursor::new_in_with_runtime(compiled.stages, unrecorded, runtime);
+    let mut output = Vec::new();
+    for row in primary.iter().filter_map(|row| row.document.as_ref()) {
+        if cursor.is_exhausted() {
+            break;
+        }
+        output.extend(
+            cursor
+                .push(document_row(row)?)
+                .map_err(|error| eval_status(&error))?,
+        );
+    }
+    output.extend(cursor.finish().map_err(|error| eval_status(&error))?);
+    Ok(pack_results(
+        output.iter().map(row_document).collect(),
+        execution_time,
+    ))
 }
 
 /// The status of an expression error. fireemu's own argument-count texts are not
@@ -1353,10 +1676,13 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                         }
                     })?,
             )),
-            // A literal holding an expression with a key that is not plain: the official
-            // emulator names a reserved key before the value type; production has not answered
-            // such a key, so strict refuses it as unobserved.
-            Some(_) if !literal_keys_are_plain(value) && unrecorded == Unrecorded::Refuse => {
+            // Preserve the strict guard for malformed or unrecorded literal subtrees while
+            // allowing recorded reserved-key and expression-type refusals to be checked.
+            Some(_)
+                if !literal_keys_are_plain(value)
+                    && unrecorded == Unrecorded::Refuse
+                    && !literal_expression_shape_safe(value) =>
+            {
                 Err(Status::unimplemented(
                     "a literal holding an expression with this key is not observed locally",
                 ))
@@ -1415,7 +1741,11 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
         Some(V::PipelineValue(pipeline)) => pipeline
             .stages
             .iter()
-            .flat_map(|stage| stage.args.iter().chain(stage.options.values()))
+            .enumerate()
+            .flat_map(|(index, stage)| {
+                let source = usize::from(index == 0 && stage.name == "collection");
+                stage.args.iter().skip(source).chain(stage.options.values())
+            })
             .find_map(|v| reference_outside(v, own)),
         _ => None,
     }
@@ -1869,17 +2199,15 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// Whether production recorded a literal of this shape: every vector map is
 /// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
 /// none a negative zero (O-3, O-4
-/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`), at most one map key
-/// is empty or reserved (production named one, O-4 `literals#key-empty`, `#key-reserved`;
-/// which of several it names is unrecorded), and no key is `__name__` (only the official
-/// emulator answered it).
+/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`). Recorded reserved
+/// keys are handled by the ordered refusal checks after this shape check.
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
     // `in_array`: production read vectors alone and as a map value, never inside an array
     // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, refusable: &mut usize, in_array: bool) -> bool {
+    fn walk(value: &pb::Value, in_array: bool) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, refusable, true)),
+            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
             Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
@@ -1894,21 +2222,44 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                if key.is_empty() || (is_reserved_name(key) && key != "__type__") {
-                    *refusable += 1;
-                }
                 // Production answered a string `__type__` alone in its map only (O-4
                 // `literals#key-type`).
                 let typed = key != "__type__"
                     || (matches!(inner.value_type, Some(V::StringValue(_)))
                         && map.fields.len() == 1);
-                typed && key != "__name__" && walk(inner, refusable, false)
+                typed && walk(inner, false)
             }),
             _ => true,
         }
     }
-    let mut refusable = 0;
-    walk(value, &mut refusable, false) && refusable <= 1
+    walk(value, false)
+}
+
+/// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
+fn literal_expression_shape_safe(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    if literal_depth(value) > fireemu_core_firestore::value::MAX_NESTING_DEPTH as usize {
+        return false;
+    }
+    if expression_kind(value).is_none() {
+        return literal_value_error(value).is_none() && literal_shape_recorded(value);
+    }
+    match value.value_type.as_ref() {
+        Some(V::ArrayValue(array)) => array.values.iter().all(literal_expression_shape_safe),
+        Some(V::MapValue(map)) => {
+            if is_vector_literal(value) {
+                return false;
+            }
+            if let Some(typed) = map.fields.get("__type__") {
+                if map.fields.len() != 1 || expression_kind(typed).is_none() {
+                    return false;
+                }
+            }
+            map.fields.values().all(literal_expression_shape_safe)
+        }
+        Some(V::FieldReferenceValue(_) | V::FunctionValue(_)) => true,
+        _ => false,
+    }
 }
 
 /// Whether every map key a literal holds, at any depth, is plain.
@@ -2270,26 +2621,12 @@ fn parse_alias(alias: &str) -> Result<FieldPath, Status> {
 /// The count a `limit` or `offset` stage takes. Any non-negative integer is answered in both
 /// profiles (FS-ENT-ORACLE O-4 `o4/stages#limit-*`, `#offset-5000000000`). Production refused a
 /// string for both and a negative limit with the official emulator's texts (O-4
-/// `#limit-string`, `#offset-string`, `#limit-negative`); the official emulator refuses every
-/// other type and a negative offset alike, which production has not answered, so strict
-/// refuses those as unobserved.
-fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<u64, Status> {
+/// `#limit-string`, `#offset-string`, `#limit-negative`). O-5 records additional wrong-type
+/// refusals and a negative offset. The outer request shape gate determines strict admission.
+fn count_argument(stage: &pb::pipeline::Stage) -> Result<u64, Status> {
     use pb::value::ValueType as V;
     let name = stage.name.as_str();
     let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
-    // O-5 `appendix#proposed-limit-zero` and `#proposed-offset-zero` record zero for
-    // both stages. Negative offset remains unobserved; a negative limit was refused in O-4.
-    let recorded = match argument {
-        Some(V::IntegerValue(_)) if name == "limit" => true,
-        Some(V::IntegerValue(n)) => *n >= 0,
-        Some(V::StringValue(_)) => true,
-        _ => false,
-    };
-    if unrecorded == Unrecorded::Refuse && !recorded {
-        return Err(Status::unimplemented(format!(
-            "this {name} argument is not observed locally"
-        )));
-    }
     match argument {
         Some(V::IntegerValue(n)) if *n >= 0 => Ok(u64::try_from(*n).unwrap_or(u64::MAX)),
         Some(V::IntegerValue(n)) => Err(Status::invalid_argument(format!(
@@ -2377,6 +2714,40 @@ fn stage_type_error(stage: &pb::pipeline::Stage) -> Option<Status> {
         )))
     };
     match stage.name.as_str() {
+        "sample" => {
+            let mode = match stage.args[1].value_type.as_ref() {
+                Some(V::StringValue(mode)) if mode == "documents" || mode == "percent" => mode,
+                Some(V::StringValue(mode)) => {
+                    return Some(Status::invalid_argument(format!(
+                        "Unsupported Sample Mode: {mode}"
+                    )))
+                }
+                other => return expected("SampleMode", "STRING_VALUE", other),
+            };
+            match (mode.as_str(), stage.args[0].value_type.as_ref()) {
+                ("documents", Some(V::IntegerValue(n))) if *n < 0 => Some(
+                    Status::invalid_argument("The 'size' parameter must be non-negative."),
+                ),
+                ("documents", Some(V::IntegerValue(_))) => None,
+                ("documents", other) => expected("size", "INTEGER_VALUE", other),
+                ("percent", Some(V::IntegerValue(n))) if !(0..=1).contains(n) => Some(
+                    Status::invalid_argument("The 'size' parameter must be between 0.0 and 1.0."),
+                ),
+                ("percent", Some(V::DoubleValue(n)))
+                    if n.is_finite() && !(0.0..=1.0).contains(n) =>
+                {
+                    Some(Status::invalid_argument(
+                        "The 'size' parameter must be between 0.0 and 1.0.",
+                    ))
+                }
+                ("percent", Some(V::IntegerValue(_) | V::DoubleValue(_))) => None,
+                (_, other) => expected("size", "DOUBLE_VALUE", other),
+            }
+        }
+        "union" => match stage.args[0].value_type.as_ref() {
+            Some(V::PipelineValue(_)) => None,
+            other => expected("other", "PIPELINE_VALUE", other),
+        },
         "distinct" => match stage.args[0].value_type.as_ref() {
             Some(V::MapValue(_)) => None,
             other => expected("fields", "MAP_VALUE", other),
@@ -2662,11 +3033,37 @@ fn decode_unnest(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<
     })
 }
 
+fn decode_sample(stage: &pb::pipeline::Stage) -> Result<Stage, Status> {
+    use pb::value::ValueType as V;
+    if !stage.options.is_empty() {
+        return Err(Status::unimplemented("sample options are unobserved"));
+    }
+    let mode = match stage.args[1].value_type.as_ref() {
+        Some(V::StringValue(value)) => value.as_str(),
+        _ => return Err(Status::unimplemented("sample mode is unobserved")),
+    };
+    let sample = match (mode, stage.args[0].value_type.as_ref()) {
+        ("documents", Some(V::IntegerValue(n))) if *n >= 0 => {
+            pipeline_exec::SampleMode::Documents(u64::try_from(*n).unwrap())
+        }
+        ("percent", Some(V::IntegerValue(n))) if (0..=1).contains(n) => {
+            pipeline_exec::SampleMode::Percent(if *n == 0 { 0.0 } else { 1.0 })
+        }
+        ("percent", Some(V::DoubleValue(n))) if n.is_finite() && (0.0..=1.0).contains(n) => {
+            pipeline_exec::SampleMode::Percent(*n)
+        }
+        _ => return Err(Status::unimplemented("sample arguments are unobserved")),
+    };
+    Ok(Stage::Sample(sample))
+}
+
 /// The arity text production answered for a stage with a signature, before any other check of
 /// the stage (FS-ENT-ORACLE O-6 `sort-wire-errors#no-args`, O-7 `aggregate-args`,
 /// `distinct-main`, `fields-main`, `inputs-*`).
 fn stage_arity_error(stage: &pb::pipeline::Stage) -> Option<Status> {
     let (signature, min, max) = match stage.name.as_str() {
+        "sample" => ("sample(size: int64 | double, mode: SampleMode)", 2, Some(2)),
+        "union" => ("union(other: Pipeline)", 1, Some(1)),
         "unnest" => (
             "unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)",
             2,
@@ -2759,7 +3156,7 @@ fn check_unrun_alias_stage(
     let name = stage.name.as_str();
     // A limit or offset after an unrun stage: its argument checks come first, as above.
     if matches!(name, "limit" | "offset") {
-        count_argument(stage, unrecorded)?;
+        count_argument(stage)?;
         return Ok(());
     }
     if !matches!(name, "aggregate" | "add_fields" | "distinct" | "select") {
@@ -3468,6 +3865,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn count_argument_retains_the_full_positive_i64_range() {
+        use pb::value::ValueType as V;
+        for name in ["limit", "offset"] {
+            let stage = pb::pipeline::Stage {
+                name: name.to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(V::IntegerValue(i64::MAX)),
+                }],
+                ..Default::default()
+            };
+            assert_eq!(
+                count_argument(&stage).unwrap(),
+                u64::try_from(i64::MAX).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn count_argument_pict_cases() {
         use pb::value::ValueType as V;
         use tonic::Code;
@@ -3504,19 +3919,10 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let profile = if strict {
-                Unrecorded::Refuse
-            } else {
-                Unrecorded::OfficialEmulator
-            };
-            let got = count_argument(&stage, profile);
+            let got = count_argument(&stage);
             match kind {
                 "zero" => assert_eq!(got.unwrap(), 0, "{strict} {name} {kind}"),
                 "positive" => assert_eq!(got.unwrap(), 1, "{strict} {name} {kind}"),
-                "negative" if strict && name == "offset" => {
-                    assert_eq!(got.unwrap_err().code(), Code::Unimplemented);
-                }
-                "boolean" if strict => assert_eq!(got.unwrap_err().code(), Code::Unimplemented),
                 _ => assert_eq!(
                     got.unwrap_err().code(),
                     Code::InvalidArgument,
@@ -4283,6 +4689,179 @@ mod tests {
             ),
         ] {
             assert_eq!(collection_name_error(&name), want, "{name}");
+        }
+    }
+
+    const GENERATED_LITERAL_KEY_CASES: &[(&str, &str, &str, &str)] = &[
+        ("reserved", "literal", "direct", "strict"),
+        ("reserved", "literal", "nested", "strict"),
+        ("name", "literal", "direct", "strict"),
+        ("name", "literal", "nested", "strict"),
+        ("reserved", "field", "direct", "strict"),
+        ("empty", "field", "direct", "strict"),
+        ("type", "field", "direct", "strict"),
+        ("dotted", "function", "direct", "strict"),
+        ("name", "field", "nested", "strict"),
+        ("reserved", "field", "array", "strict"),
+        ("plain", "literal", "direct", "strict"),
+        ("plain", "field", "direct", "strict"),
+        ("name", "field", "direct", "ordinary"),
+        ("type", "literal", "direct", "ordinary"),
+        ("dotted", "literal", "array", "ordinary"),
+        ("dotted", "function", "nested", "ordinary"),
+        ("empty", "function", "array", "ordinary"),
+        ("empty", "literal", "nested", "strict"),
+        ("reserved", "function", "array", "ordinary"),
+        ("plain", "function", "nested", "ordinary"),
+        ("plain", "field", "array", "ordinary"),
+        ("name", "function", "array", "ordinary"),
+        ("type", "function", "array", "ordinary"),
+        ("dotted", "field", "direct", "ordinary"),
+        ("type", "field", "nested", "strict"),
+    ];
+
+    #[test]
+    fn generated_literal_key_combinations() {
+        use pb::value::ValueType as V;
+        let wrap_map = |key: &str, inner: pb::Value| pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [(key.to_owned(), inner)].into_iter().collect(),
+            })),
+        };
+        for &(key, payload, nest, profile) in GENERATED_LITERAL_KEY_CASES {
+            let name = match key {
+                "reserved" => "__x__",
+                "name" => "__name__",
+                "empty" => "",
+                "dotted" => "a.b",
+                "type" => "__type__",
+                "plain" => "k",
+                _ => unreachable!(),
+            };
+            let inner = match payload {
+                "literal" if key == "type" => pb::Value {
+                    value_type: Some(V::StringValue("tag".to_owned())),
+                },
+                "literal" => pb::Value {
+                    value_type: Some(V::IntegerValue(1)),
+                },
+                "field" => pb::Value {
+                    value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                },
+                "function" => pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "document_id".to_owned(),
+                        ..Default::default()
+                    })),
+                },
+                _ => unreachable!(),
+            };
+            let mut value = wrap_map(name, inner);
+            if nest == "nested" {
+                value = wrap_map("outer", value);
+            }
+            if nest == "array" {
+                value = pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue {
+                        values: vec![value],
+                    })),
+                };
+            }
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&value, mode);
+            let expected = if matches!(key, "reserved" | "name") {
+                Some(format!("field name '{name}' is reserved."))
+            } else if payload == "field" {
+                Some("Value type is not supported: FIELD_REFERENCE_VALUE".to_owned())
+            } else if payload == "function" {
+                Some("Value type is not supported: FUNCTION_VALUE".to_owned())
+            } else if key == "empty" {
+                Some(EMPTY_LITERAL_KEY.to_owned())
+            } else {
+                None
+            };
+            match expected {
+                Some(text) => assert_eq!(
+                    result.unwrap_err().message(),
+                    text,
+                    "{key} {payload} {nest} {profile}"
+                ),
+                None => assert!(
+                    result.is_ok(),
+                    "{key} {payload} {nest} {profile}: {result:?}"
+                ),
+            }
+        }
+        let name = pb::Value {
+            value_type: Some(V::FieldReferenceValue("__name__".to_owned())),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert!(decode_operand_tree(&name, mode).is_ok());
+        }
+    }
+
+    #[test]
+    fn malformed_vector_and_literal_depth_stay_unobserved_with_expressions() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let vector = value(V::MapValue(pb::MapValue {
+            fields: [
+                (
+                    "__type__".to_owned(),
+                    value(V::StringValue("__vector__".to_owned())),
+                ),
+                (
+                    "value".to_owned(),
+                    value(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        }));
+        let map = |fields| value(V::MapValue(pb::MapValue { fields }));
+        let field = value(V::FieldReferenceValue("i".to_owned()));
+        let bad = map([("a".to_owned(), vector), ("__x__".to_owned(), field)]
+            .into_iter()
+            .collect());
+        assert_eq!(
+            decode_operand_tree(&bad, Unrecorded::Refuse)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let mut deep = value(V::FieldReferenceValue("i".to_owned()));
+        for _ in 0..21 {
+            deep = map([("x".to_owned(), deep)].into_iter().collect());
+        }
+        let bad = map([("__x__".to_owned(), deep)].into_iter().collect());
+        assert_eq!(
+            decode_operand_tree(&bad, Unrecorded::Refuse)
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn generated_reserved_key_stems_preserve_literal_diagnostics(stem in "[a-z]{1,12}") {
+            use pb::value::ValueType as V;
+            let map = |key: String| pb::Value { value_type: Some(V::MapValue(pb::MapValue {
+                fields: [(key, pb::Value { value_type: Some(V::IntegerValue(1)) })].into_iter().collect(),
+            })) };
+            let reserved = format!("__{stem}__");
+            let expected = format!("field name '{reserved}' is reserved.");
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let error = decode_operand_tree(&map(reserved.clone()), mode).unwrap_err();
+                proptest::prop_assert_eq!(error.message(), expected.as_str());
+                proptest::prop_assert!(decode_operand_tree(&map(stem.clone()), mode).is_ok());
+            }
         }
     }
 

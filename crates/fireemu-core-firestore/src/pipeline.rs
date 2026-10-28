@@ -268,7 +268,7 @@ const REGISTRY: &[RegistryEntry] = &[
         Some(3),
         &["limit", "distance_field"],
     ),
-    ("sample", StageRole::Transform, 1, Some(1), &["mode"]),
+    ("sample", StageRole::Transform, 2, Some(2), &[]),
     ("union", StageRole::Transform, 1, Some(1), &[]),
     ("unnest", StageRole::Transform, 2, Some(2), &["index_field"]),
     ("replace_with", StageRole::Transform, 1, Some(2), &[]),
@@ -358,10 +358,19 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 )),
             }
         }
-        "sample" => match &args[0] {
-            Arg::Integer(n) if *n >= 0 => Ok(()),
-            Arg::Double(p) if (0.0..=100.0).contains(p) => Ok(()),
-            other => Err(argument(name, 0, "a document count or a percentage", other)),
+        "sample" => match (&args[0], &args[1]) {
+            (Arg::Integer(n), Arg::String(mode)) if mode == "documents" && *n >= 0 => Ok(()),
+            (Arg::Integer(n), Arg::String(mode)) if mode == "percent" && (0..=1).contains(n) => {
+                Ok(())
+            }
+            (Arg::Double(p), Arg::String(mode)) if mode == "percent" && (0.0..=1.0).contains(p) => {
+                Ok(())
+            }
+            (_, Arg::String(mode)) if mode != "documents" && mode != "percent" => {
+                Err(argument(name, 1, "documents or percent", &args[1]))
+            }
+            (_, Arg::String(_)) => Err(argument(name, 0, "a valid sample size", &args[0])),
+            (_, other) => Err(argument(name, 1, "documents or percent", other)),
         },
         "union" => match &args[0] {
             Arg::Pipeline => Ok(()),
@@ -576,17 +585,32 @@ mod tests {
             )
         ])
         .is_ok());
-        let mut sample = stage("sample", vec![Arg::Integer(3)]);
+        assert!(canonicalize(&[
+            users(),
+            stage(
+                "sample",
+                vec![Arg::Integer(2), Arg::String("documents".into())]
+            )
+        ])
+        .is_ok());
+        assert!(matches!(
+            canonicalize(&[users(), stage("sample", vec![Arg::Integer(2)])]),
+            Err(PipelineError::Arity { .. })
+        ));
+        let mut sample = stage(
+            "sample",
+            vec![Arg::Integer(3), Arg::String("documents".into())],
+        );
+        assert!(canonicalize(&[users(), sample.clone()]).is_ok());
+        sample.args[1] = Arg::String("rows".into());
+        assert!(matches!(
+            canonicalize(&[users(), sample.clone()]).unwrap_err(),
+            PipelineError::Argument { .. }
+        ));
+        sample.args[1] = Arg::String("documents".into());
         sample
             .options
             .push(("mode".into(), Arg::String("documents".into())));
-        assert!(canonicalize(&[users(), sample.clone()]).is_ok());
-        sample.options[0].1 = Arg::String("rows".into());
-        assert!(matches!(
-            canonicalize(&[users(), sample.clone()]).unwrap_err(),
-            PipelineError::Option { .. }
-        ));
-        sample.options[0].0 = "speed".into();
         assert!(matches!(
             canonicalize(&[users(), sample]).unwrap_err(),
             PipelineError::Option { .. }

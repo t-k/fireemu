@@ -81,8 +81,8 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | Input | `strict` | `emulator` |
 |---|---|---|
 | A document function of a collection reference with a non-ASCII name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the index counted in UTF-16 units |
-| A literal holding a field or function under a map key that is not a plain name | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming a reserved key first |
-| A document function of a double, timestamp, geo point, bytes, array or vector | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
+| Recorded reserved map-key refusals | `INVALID_ARGUMENT` for the recorded shapes; unrecorded shapes remain gated | `INVALID_ARGUMENT`, naming a reserved key first |
+| Recorded document-function wrong-type requests | `INVALID_ARGUMENT` for the recorded REST shapes; unordered gRPC vector maps remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
 | A `map(...)` key that is a double, null or another type than an integer or boolean | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the type |
 | A vector literal with integer or NaN elements, no element, without `value` or with another key | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
 | A vector literal with an infinite element | `UNIMPLEMENTED` | The vector |
@@ -90,8 +90,8 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | Two refusals in one pipeline | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, one of them |
 | A refusal production recorded only in another stage, such as a literal holding a field inside a `where` condition | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
 | A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
-| A literal with more than one empty or reserved key, or the key `__name__` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
-| A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
+| Recorded empty or reserved literal-key refusals, including `__name__` and multi-key cases | `INVALID_ARGUMENT` over REST and for unambiguous gRPC; three unordered multi-key gRPC cases remain `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
+| Recorded wrong-type `limit` and `offset` arguments and a negative `offset` | `INVALID_ARGUMENT` for the recorded shapes; other shapes remain gated | `INVALID_ARGUMENT`, the official text |
 | A `limit` of 0 or an `offset` of 0 | The recorded zero-count behavior | The same zero-count behavior |
 | A `select` alias inside another in another order than production's `{m, m.r}`, such as `{a.b, a}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the later alias over REST (as the official emulator does) and the child over gRPC |
 | Two `select` fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
@@ -104,7 +104,9 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 | An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
 
-Unsupported functions and stages, including the remaining math functions, `union`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
+In v0.35.0, finite `union` branches can use collection inputs with row-local `where` and `select`; unsupported child stages and inputs are refused. Source reads share a snapshot, and nested branches have local depth and size limits. `sample(size, mode)` supports `documents` sampling without replacement and `percent` sampling in input order: for example, `sample(0.5, "percent")` uses a 0.5 probability per row, while `sample(2, "documents")` selects up to two rows. Random results vary and do not reproduce production's random sequence.
+
+Unsupported functions and stages, including the remaining math functions, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
 
 ## Composite indexes
 

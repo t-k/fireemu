@@ -2215,6 +2215,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             request_timestamp: Some(clock),
             zone_resolver: None,
             regex_resolver: None,
+            sample_seed: None,
         },
     );
     assert!(cursor
@@ -2241,6 +2242,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             request_timestamp: Some(later),
             zone_resolver: None,
             regex_resolver: None,
+            sample_seed: None,
         },
     );
     second.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2268,6 +2270,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
                 request_timestamp: Some(clock),
                 zone_resolver: None,
                 regex_resolver: None,
+                sample_seed: None,
             },
         );
         blocking.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2326,6 +2329,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         request_timestamp: None,
         zone_resolver: Some(resolve),
         regex_resolver: None,
+        sample_seed: None,
     };
     let stages = vec![Stage::Select {
         aliases: vec![

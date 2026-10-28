@@ -1,0 +1,79 @@
+{
+  "kind": "fs-ent-pipeline-sample-contract-adjudication-v1",
+  "decision": "ACCEPTED_FINITE_STRICT_CONTRACT",
+  "decisionAuthority": "coordinator under owner delegation; ledger row 1949",
+  "technicalCandidate": {
+    "sha256": "3af611ee7c5d2ec9366cec243aaaeb12eaee084506588e655c0cc7caa7d27c36",
+    "binding": "PENDING_REVIEW"
+  },
+  "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+  "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+  "actualIndexSha256": "076030b1d5d2c4e2bd90aa6e63c81670e391030d459837e093d45eba8aa702d0",
+  "rawSummary": {
+    "MATCH": 1740,
+    "MISMATCH": 197,
+    "INDETERMINATE": 12,
+    "UNKNOWN": 2
+  },
+  "profile": "strict",
+  "proofs": [
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-2",
+      "rawStatus": "MISMATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": true,
+      "outputCount": 2
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-0",
+      "rawStatus": "MATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": false,
+      "outputCount": 0
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-documents-10",
+      "rawStatus": "MISMATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": true,
+      "outputCount": 5
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-0",
+      "rawStatus": "MATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": false,
+      "outputCount": 0
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-50",
+      "rawStatus": "MISMATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": true,
+      "outputCount": 2
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-percent-100",
+      "rawStatus": "MATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": false,
+      "outputCount": 5
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-after-where",
+      "rawStatus": "MISMATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": true,
+      "outputCount": 2
+    },
+    {
+      "id": "fs-ent-pipeline/o8d/stages-main#sample-then-limit",
+      "rawStatus": "MISMATCH",
+      "proofClassification": "FINITE_SAMPLE_CONTRACT",
+      "productionAvailableAlternate": true,
+      "outputCount": 1
+    }
+  ],
+  "scope": "Exact eight request-bound typed sample contracts; sampled outcomes do not establish production RNG sequence or distribution. Metadata validity does not establish raw timestamp equality. Original raw classifications remain unchanged; ordinary profile is not claimed.",
+  "evidenceLimit": "Historical validation index 7da2 has eight overwritten raw logs and is excluded; final validation index 0b40 retains the reviewed controls."
+}

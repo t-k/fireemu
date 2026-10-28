@@ -1,0 +1,714 @@
+[
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-double",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "doubleValue": 1.5
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `DOUBLE`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-geo",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "geoPointValue": {
+                                "latitude": 1,
+                                "longitude": 1
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `GEO_POINT`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-timestamp",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "timestampValue": "2020-01-01T00:00:00Z"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `TIMESTAMP`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-bytes",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "bytesValue": "AA=="
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `BYTES`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-array",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "arrayValue": {
+                                "values": [
+                                  {
+                                    "integerValue": "1"
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `ARRAY`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#document-id-vector",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "mapValue": {
+                                "fields": {
+                                  "__type__": {
+                                    "stringValue": "__vector__"
+                                  },
+                                  "value": {
+                                    "arrayValue": {
+                                      "values": [
+                                        {
+                                          "doubleValue": 1
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `VECTOR`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/value-shapes#parent-double",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/vs5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "parent",
+                          "args": [
+                            {
+                              "doubleValue": 1.5
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "parent"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function parent(...) requires `Reference` but got `DOUBLE`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/appendix#proposed-docid-map",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/ap5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "mapValue": {
+                                "fields": {
+                                  "a": {
+                                    "integerValue": "1"
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `MAP`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/appendix#proposed-docid-boolean",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/ap5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "document_id",
+                          "args": [
+                            {
+                              "booleanValue": true
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "document_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function document_id(...) requires `Reference` but got `BOOLEAN`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/appendix#proposed-collectionid-integer",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/ap5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "collection_id",
+                          "args": [
+                            {
+                              "integerValue": "1"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "collection_id"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function collection_id(...) requires `Reference` but got `LONG`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "fs-ent-pipeline/o5/appendix#proposed-parent-integer",
+    "body": {
+      "structuredPipeline": {
+        "pipeline": {
+          "stages": [
+            {
+              "name": "collection",
+              "args": [
+                {
+                  "referenceValue": "/ap5"
+                }
+              ]
+            },
+            {
+              "name": "select",
+              "args": [
+                {
+                  "mapValue": {
+                    "fields": {
+                      "v": {
+                        "functionValue": {
+                          "name": "parent",
+                          "args": [
+                            {
+                              "integerValue": "1"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "production": {
+      "status": 400,
+      "body": [
+        {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "domain": "firestore.googleapis.com",
+                "metadata": {
+                  "function_name": "parent"
+                },
+                "reason": "FUNCTION_WRONG_TYPE"
+              }
+            ],
+            "message": "The function parent(...) requires `Reference` but got `LONG`.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      ]
+    }
+  }
+]

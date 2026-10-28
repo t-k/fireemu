@@ -238,10 +238,10 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
   );
 });
 
-test("v0.34 preserves the complete comparison and keeps the controlled clock separate", () => {
+test("v0.35 preserves the complete comparison and keeps the controlled clock separate", () => {
   assert.deepEqual(comparison.summary, {
-    MATCH: 1685,
-    MISMATCH: 252,
+    MATCH: 1740,
+    MISMATCH: 197,
     INDETERMINATE: 12,
     UNKNOWN: 2,
   });
@@ -279,4 +279,65 @@ test("the capability and generated inventory describe recorded unnest and base64
     assert.ok(unimplemented[1].includes(name));
   assert.ok(!capabilities.includes("paths accept base64 values with line breaks"));
   assert.ok(capabilities.includes("recorded CR/LF and mixed alphabets"));
+});
+
+test("v0.35 promotes exactly the accepted 55 strict rows and preserves all other raw statuses", () => {
+  const previous = json("spec/compatibility/closure/evidence/FS-PIPELINE-comparison-v034.json");
+  const accepted = json("spec/compatibility/closure/evidence/FS-PIPELINE-v035-55-claims.json");
+  assert.equal(accepted.strictRecipeIds.length, 55);
+  assert.equal(new Set(accepted.strictRecipeIds).size, 55);
+  assert.equal(
+    sha256(closure.recordedLeafReview.v035Promotion.claimSetPath),
+    closure.recordedLeafReview.v035Promotion.claimSetSha256,
+  );
+  const before = new Map(previous.rows.map((row) => [row.row, row.status]));
+  assert.deepEqual([...status.keys()].toSorted(), [...before.keys()].toSorted());
+  const changed = [...status].filter(([row, value]) => before.get(row) !== value);
+  assert.equal(changed.length, 55);
+  assert.deepEqual(changed.map(([row]) => row).toSorted(), accepted.strictRecipeIds.toSorted());
+  for (const [row, value] of changed) {
+    assert.equal(before.get(row), "MISMATCH", row);
+    assert.equal(value, "MATCH", row);
+  }
+  assert.equal(accepted.sourceCommit, closure.integratedRegression.integrationCommit);
+  assert.equal(accepted.binarySha256, comparison.artifactSha256);
+});
+
+test("finite contract adjudications preserve their strict-only raw outcomes", () => {
+  const contracts = closure.finiteContractEvidence;
+  assert.deepEqual(
+    contracts.map((item) => item.kind),
+    ["sample", "o7-order"],
+  );
+  for (const entry of contracts) {
+    assert.equal(entry.sha256, sha256(entry.path));
+    const proof = json(entry.path);
+    assert.equal(proof.decision, "ACCEPTED_FINITE_STRICT_CONTRACT");
+    assert.equal(proof.profile, "strict");
+    assert.equal(proof.sourceCommit, closure.integratedRegression.integrationCommit);
+    assert.equal(proof.binarySha256, comparison.artifactSha256);
+    assert.deepEqual(proof.rawSummary, comparison.summary);
+    assert.equal(new Set(proof.proofs.map((row) => row.id)).size, proof.proofs.length);
+    for (const row of proof.proofs) assert.equal(status.get(row.id), row.rawStatus, row.id);
+    if (entry.kind === "sample") {
+      assert.equal(proof.proofs.length, 8);
+      assert.equal(proof.proofs.filter((row) => row.rawStatus === "MISMATCH").length, 5);
+      assert.equal(proof.proofs.filter((row) => row.rawStatus === "MATCH").length, 3);
+    } else {
+      assert.equal(proof.proofs.length, 23);
+      assert.equal(
+        proof.proofs.filter(
+          (row) => row.proofClassification === "FULL_TYPED_RESULT_MULTISET_EQUIVALENT",
+        ).length,
+        20,
+      );
+      assert.equal(
+        proof.proofs.filter((row) => row.proofClassification === "LEGAL_UNORDERED_SELECTION")
+          .length,
+        3,
+      );
+      assert.equal(proof.unresolved.length, 2);
+      assert.equal(proof.ordinaryProfile, "unproved");
+    }
+  }
 });

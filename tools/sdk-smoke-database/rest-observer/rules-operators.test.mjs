@@ -34,3 +34,5 @@ test('the selected control-flow, numeric, string, and query predicates are exact
 test('incorrect seed preimage prevents case dispatch',async()=>{const calls=[];await assert.rejects(runOperatorCorpus(async req=>{calls.push(req);return {status:200,body:'999',headers:{}};},prefix),/seed unresolved/);assert.deepEqual(calls.map(x=>x.step),['operators-seed']);});
 
 test('null arithmetic case carries no preassigned allow or deny expectation',()=>{const item=operatorCases().find(x=>x.id==='add-null-input');assert.equal(Object.hasOwn(item,'deny'),false);});
+
+test('NOT cases use a statically boolean comparison and retain their seeds',()=>{const c=Object.fromEntries(operatorCases().map(x=>[x.id,x]));assert.equal(c['not-false-allow'].predicate,'!(data.val() == true)');assert.equal(c['not-true-deny'].predicate,'!(data.val() == true)');assert.equal(c['not-false-allow'].seed,false);assert.equal(c['not-true-deny'].seed,true);assert.equal(operatorCases().length,49);});

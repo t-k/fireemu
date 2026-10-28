@@ -3125,6 +3125,7 @@ fn union_limit_zero_still_denies_nonowner_on_both_routes() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn union_generated_route_combinations() {
     use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
     use fireemu_adapter_grpc::service::GatewayService;
@@ -3319,7 +3320,7 @@ fn union_generated_route_combinations() {
             expected.truncate(2);
         }
         if boundary == "blocking" {
-            expected.sort();
+            expected.sort_unstable();
         }
         let got = result
             .as_array()

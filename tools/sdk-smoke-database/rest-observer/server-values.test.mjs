@@ -74,3 +74,10 @@ test('unknown cleanup does not restore Rules or continue infrastructure mutation
  const p={mode:'server-values',prefix,baselineHash:createHash('sha256').update(baseline).digest('hex'),instanceName,serviceName,instance:'demo-instance',project:'demo-project',listReadiness:async()=>({status:200,body:'{"instances":[]}'}),baselineProbe:async()=>({status:200,body:'null'}),probe:async()=>({status:200,body:'null'}),sleep:async()=>{}};
  await assert.rejects(lifecycle(io,p,async()=>{}),/unknown cleanup/);assert.equal(calls.includes('rules-restore'),false);assert.equal(calls.includes('disable'),false);
 });
+
+test('atomic timestamp relation reports equality across varied integer pairs',async()=>{
+ for (let a=-3;a<=3;a++) for (let b=-3;b<=3;b++) {
+  const db=new Map();const transport=async req=>{if(req.step==='sv-seed')db.set(req.path,JSON.parse(req.body));if(req.step==='sv-write')db.set(req.path,req.method==='PATCH'?{first:a,second:b,counter:12}:1);return {status:200,body:JSON.stringify(db.get(req.path)??null),headers:{}};};
+  const rows=await runServerValueCorpus(transport,prefix,()=>42);assert.equal(rows.find(x=>x.id==='multipath-one-clock').sameClock,a===b);
+ }
+});

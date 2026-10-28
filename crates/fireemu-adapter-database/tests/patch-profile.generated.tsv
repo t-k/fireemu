@@ -1,0 +1,14 @@
+Profile	Input	Output
+strict	nested	compact
+ordinary	nested	compact
+ordinary	simple	silent
+ordinary	nested	pretty
+ordinary	conflict	compact
+ordinary	nested	callback
+ordinary	simple	pretty
+strict	simple	compact
+strict	nested	silent
+strict	conflict	callback
+strict	conflict	silent
+strict	conflict	pretty
+strict	simple	callback

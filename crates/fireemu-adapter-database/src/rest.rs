@@ -943,6 +943,10 @@ impl Database {
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
         let echo = patch_echo(tree, &call.path, &entries, call.context);
+        let ordered_echo = (call.output.style == Style::Compact
+            && !call.output.silent
+            && call.output.callback.is_none())
+        .then(|| ordered_patch_echo(&echo, &entries));
         if call.disable_triggers {
             self.tree_mut(&call.namespace)
                 .update(&call.path, &wire, call.context)
@@ -969,7 +973,10 @@ impl Database {
                 })
                 .collect(),
         );
-        let response = json_response(&echo, &call.output, None);
+        let mut response = json_response(&echo, &call.output, None);
+        if let Some(ordered_echo) = ordered_echo {
+            response.body = ordered_echo.into_bytes();
+        }
         let change = Change::Patch {
             base: call.path.clone(),
             entries,
@@ -1041,13 +1048,19 @@ impl Database {
                 last: view,
             },
         );
+        let mut headers = vec![
+            header("Content-Type", "text/event-stream; charset=utf-8"),
+            header("Cache-Control", "no-cache"),
+            header("Access-Control-Allow-Origin", "*"),
+        ];
+        // Headers precede the eventual cancel. The stream remains live until its existing sender
+        // is dropped; then the HTTP connection closes after the complete chunked entity.
+        if self.options.credentials.strict {
+            headers.push(header("Connection", "close"));
+        }
         let response = HttpResponse {
             status: 200,
-            headers: vec![
-                header("Content-Type", "text/event-stream; charset=utf-8"),
-                header("Cache-Control", "no-cache"),
-                header("Access-Control-Allow-Origin", "*"),
-            ],
+            headers,
             body: Vec::new(),
         };
         Handled::Stream {
@@ -2135,6 +2148,32 @@ fn patch_echo(
         insert_at(&mut echo, entry.path.keys(), value);
     }
     echo
+}
+
+// The recorded PATCH response follows request order for its two root members.
+// The behavior for other shapes remains unobserved in production.
+fn ordered_patch_echo(echo: &Json, entries: &[PatchEntry]) -> String {
+    let Json::Object(map) = echo else {
+        return render(echo, Style::Compact);
+    };
+    let mut keys = std::collections::BTreeSet::new();
+    let mut parts = Vec::new();
+    for entry in entries {
+        let Some(key) = entry.path.keys().first() else {
+            continue;
+        };
+        if !keys.insert(key) {
+            continue;
+        }
+        if let Some(value) = map.get(key) {
+            parts.push(format!(
+                "{}:{}",
+                serde_json::to_string(key).unwrap_or_default(),
+                render(value, Style::Compact)
+            ));
+        }
+    }
+    format!("{{{}}}", parts.join(","))
 }
 
 fn insert_at(target: &mut Json, keys: &[String], value: Json) {

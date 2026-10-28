@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { DATA_ROOT, judgeM14, pythonJsonDumps, judgeRow, KNOWN_RAW_ORDER, localRequests, m14Rules, RULES, summarize } from './rest-replay.mjs';
+import { DATA_ROOT, judgeM14, pythonJsonDumps, judgeRow, localRequests, m14Rules, RULES, summarize } from './rest-replay.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/production-rest.json', import.meta.url), 'utf8'));
 const row = (id, round = 1) => fixture.rounds[round - 1].rows.find((r) => r.id === id);
@@ -41,20 +41,84 @@ test('a row equal in status, bytes and ETag is MATCH; any other difference is a 
   assert.equal(judgeRow(1, plain, answer(plain, { bodyText: 'plain b' })).verdict, 'MISMATCH');
 });
 
-test('only the two recorded key-order rows may differ in bytes, and only in key order', () => {
-  assert.deepEqual([...KNOWN_RAW_ORDER].toSorted(), ['patch-update-nested-and-add', 'query-get-1']);
+test('PATCH remains byte exact in both recorded rounds', () => {
   for (const round of [1, 2]) {
     const patch = row('patch-update-nested-and-add', round);
     const reordered = answer(patch, { bodyText: '{"w":3,"y":{"z":"t"}}' });
     assert.equal(patch.bodyText, '{"y":{"z":"t"},"w":3}');
     const judged = judgeRow(round, patch, reordered);
-    assert.equal(judged.verdict, 'KNOWN_DIFFERENCE');
-    assert.deepEqual(judged.differences, ['raw-key-order']);
+    assert.equal(judged.verdict, 'MISMATCH');
+    assert.deepEqual(judged.differences, ['body']);
     assert.equal(judgeRow(round, patch, answer(patch, { bodyText: '{"w":4,"y":{"z":"t"}}' })).verdict, 'MISMATCH');
     assert.equal(judgeRow(round, patch, answer(patch)).verdict, 'MATCH');
   }
   const other = row('patch-get-after-update');
   assert.equal(judgeRow(1, other, answer(other, { bodyText: JSON.stringify(JSON.parse(other.bodyText), Object.keys(JSON.parse(other.bodyText)).toReversed()) })).verdict, 'MISMATCH');
+});
+
+test('recorded filtered GET uses semantic JSON with retained raw evidence', () => {
+  for (const round of [1, 2]) {
+    const expected = row('query-get-1', round);
+    const request = localRequests(fixture).find((r) => r.round === round && r.id === expected.id);
+    const local = answer(expected, { bodyText: '{"2":{"h":5},"10":{"h":5},"a":{"h":3},"c":{"h":2}}' });
+    const result = judgeRow(round, expected, local, request);
+    assert.equal(result.verdict, 'MATCH');
+    assert.deepEqual(result.differences, []);
+    assert.deepEqual(result.diagnostics, ['raw-body-differs']);
+    assert.equal(result.policy, 'filtered-get-semantic-json-v1');
+    assert.equal(result.production.bodyText, expected.bodyText);
+    assert.equal(result.local.bodyText, local.bodyText);
+    for (const body of [
+      '{"a":{"h":3},"2":{"h":5},"10":{"h":5}}',
+      '{"c":{"h":2},"a":{"h":3},"2":{"h":5},"10":{"h":5},"b":{"h":1}}',
+      '{"c":{"h":2},"a":{"h":3},"2":{"h":5},"10":{"h":5},"d":null}',
+      '{"c":{"h":3},"a":{"h":3},"2":{"h":5},"10":{"h":5}}',
+      '{"c":{"h":"2"},"a":{"h":3},"2":{"h":5},"10":{"h":5}}',
+      '[]', '{', 'null',
+    ]) assert.equal(judgeRow(round, expected, answer(expected, { bodyText: body }), request).verdict, 'MISMATCH', body);
+    for (const changed of [{ status: 201 }, { etag: 'unexpected' }])
+      assert.equal(judgeRow(round, expected, { ...local, ...changed }, request).verdict, 'MISMATCH');
+    const tagged = { ...expected, etag: 'expected-tag' };
+    for (const etag of [null, 'different-tag'])
+      assert.equal(judgeRow(round, tagged, { ...local, etag }, request).verdict, 'MISMATCH');
+    for (const spoof of [{ ...request, method: 'PATCH' }, { ...request, url: request.url.replace('startAt=2', 'startAt=3') }, { ...request, id: 'other' }, undefined])
+      assert.equal(judgeRow(round, expected, local, spoof).verdict, 'MISMATCH');
+    assert.equal(judgeRow(round, { ...expected, method: 'PATCH' }, local, request).verdict, 'MISMATCH');
+    assert.equal(judgeRow(round, { ...expected, path: 'other.json' }, local, request).verdict, 'MISMATCH');
+    assert.equal(judgeRow(round, { ...expected, status: 400 }, { ...local, status: 400 }, request).verdict, 'MISMATCH');
+  }
+});
+
+test('filtered semantic JSON preserves arrays, values, types and explicitly allows JSON serialization variants', () => {
+  const expected = { ...row('query-get-1'), bodyText: '{"a":[1,2,2],"b":{"v":true},"n":null}' };
+  const request = localRequests(fixture).find((r) => r.round === 1 && r.id === expected.id);
+  const compare = (bodyText) => judgeRow(1, expected, answer(expected, { bodyText }), request);
+  for (const text of ['{"b":{"v":true},"n":null,"a":[1,2,2]}', '{ "a": [1.0,2,2], "b": {"v":true}, "n": null }', '{"\\u0061":[1,2,2],"b":{"v":true},"n":null}', '{"a":[0],"a":[1,2,2],"b":{"v":true},"n":null}'])
+    assert.equal(compare(text).verdict, 'MATCH', text);
+  for (const text of ['{"a":[2,1,2],"b":{"v":true},"n":null}', '{"a":[1,2],"b":{"v":true},"n":null}', '{"a":[1,2,1],"b":{"v":true},"n":null}', '{"a":[1,2,2],"b":{"v":1},"n":null}', '{"a":[1,2,2],"b":{"v":true}}', '{"a":[1,2,2],"b":{"v":true},"n":false}'])
+    assert.equal(compare(text).verdict, 'MISMATCH', text);
+});
+
+test('filtered semantic JSON rejects numbers outside the safe integer domain', () => {
+  const expected = { ...row('query-get-1'), bodyText: '{"n":9007199254740992}' };
+  const request = localRequests(fixture).find((r) => r.round === 1 && r.id === expected.id);
+  const result = judgeRow(1, expected, answer(expected, { bodyText: '{"n":9007199254740993}' }), request);
+  assert.equal(result.verdict, 'MISMATCH');
+  assert.deepEqual(result.diagnostics, ['raw-body-differs']);
+  const small = { ...expected, bodyText: '{"n":2}' };
+  assert.equal(judgeRow(1, small, answer(small, { bodyText: '{"n":2.5}' }), request).verdict, 'MISMATCH');
+});
+
+test('PICT filtered-query request, body and ETag combinations', () => {
+  const expected = row('query-get-1');
+  const request = localRequests(fixture).find((r) => r.round === 1 && r.id === expected.id);
+  // Exact rows generated by work+rtdb-query-judge.pict, including mandatory seeds.
+  for (const [bound, permutation, sameEtag] of [[true, true, true], [false, true, true], [true, false, true], [true, true, false], [false, false, false]]) {
+    const bodyText = permutation ? '{"2":{"h":5},"10":{"h":5},"a":{"h":3},"c":{"h":2}}' : '{"c":{"h":3}}';
+    const actualRequest = bound ? request : { ...request, method: 'PATCH' };
+    const result = judgeRow(1, expected, answer(expected, { bodyText, etag: sameEtag ? expected.etag : 'changed' }), actualRequest);
+    assert.equal(result.verdict, bound && permutation && sameEtag ? 'MATCH' : 'MISMATCH');
+  }
 });
 
 test('the masked data root in a production error body is compared as the local root', () => {

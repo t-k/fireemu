@@ -1,0 +1,9 @@
+operation	profile	resolver
+contains	strict	present
+match	emulator	present
+find	strict	absent
+find_all	emulator	absent
+find	emulator	present
+contains	emulator	absent
+find_all	strict	present
+match	strict	absent

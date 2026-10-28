@@ -43,8 +43,8 @@ import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
 
 const lane = LANES["fs-ent-pipeline"];
 
-// The two O-8A framing programs are not in the fixture at all: their answers are kept as a
-// summary (fs-ent-pipeline-framing.json).
+// Keep large O-8A framing payloads out of the per-request harness checks; their restored
+// compact fixture and full corpus identities are checked separately.
 const PROGRAMS = ALL_PROGRAMS.filter((program) => !SUMMARY_ONLY.has(program.id));
 
 const production = (database = lane.database) =>
@@ -561,10 +561,10 @@ test("the committed REST request export is the corpus's", async () => {
       await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
     ).programs,
   );
-  const recordedPrograms = PROGRAMS.filter((p) => recordedIds.includes(p.id));
+  const recordedPrograms = ALL_PROGRAMS.filter((p) => recordedIds.includes(p.id));
   assert.equal(exported.programs.length, recordedPrograms.length);
-  assert.equal(recordedPrograms.length, 74);
-  assert.deepEqual(recordedIds.toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  assert.equal(recordedPrograms.length, 76);
+  assert.deepEqual(recordedIds.toSorted(), ALL_PROGRAMS.map((p) => p.id).toSorted());
   assert.deepEqual(exported.programs.map((p) => p.id).toSorted(), recordedIds.toSorted());
   const rest = recordedPrograms
     .flatMap((p) => p.steps)
@@ -893,7 +893,7 @@ test("O-5 original six programs retain their request cap: 2 x (240 + 80) + 5", a
   const recorded = JSON.parse(
     await readFile(new URL("../fs-ent-pipeline-production.json", import.meta.url), "utf8"),
   ).programs;
-  assert.deepEqual(Object.keys(recorded).toSorted(), PROGRAMS.map((p) => p.id).toSorted());
+  assert.deepEqual(Object.keys(recorded).toSorted(), ALL_PROGRAMS.map((p) => p.id).toSorted());
   const allO5 = PROGRAMS.filter((p) => p.id.startsWith("fs-ent-pipeline/o5/"));
   assert.equal(allO5.length, 8);
   assert.equal(

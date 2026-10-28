@@ -7700,11 +7700,14 @@ async fn execute_pipeline_select_aliases_are_field_paths() {
         );
         for (label, refused) in invalid.clone() {
             let err = pipeline_error(&mut client, refused).await;
-            // A repeated path answers fireemu's own text, which strict refuses as unobserved,
-            // and two aliases have no shape over gRPC, which keeps no wire order.
-            if policy == IndexValidationPolicy::Production
-                && (label == "same path twice" || label == "alias inside another")
-            {
+            // A quoted duplicate has a recorded INTERNAL response under strict. Overlapping
+            // aliases have no recorded shape over gRPC, which keeps no wire order.
+            if policy == IndexValidationPolicy::Production && label == "same path twice" {
+                assert_eq!(err.code(), tonic::Code::Internal, "{label}: {err}");
+                assert_eq!(err.message(), "An internal error occurred.");
+                continue;
+            }
+            if policy == IndexValidationPolicy::Production && label == "alias inside another" {
                 assert_eq!(err.code(), tonic::Code::Unimplemented, "{label}: {err}");
                 continue;
             }
@@ -9225,6 +9228,44 @@ async fn execute_pipeline_streams_all_pages_and_preserves_finite_limits() {
 }
 
 #[tokio::test]
+async fn execute_pipeline_grpc_regex_uses_adapter_resolver() {
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("regex-port/a", &[("v", s("abc"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let select = pipeline_select_map(vec![(
+            "matched",
+            pipeline_function("regex_contains", vec![pipeline_field("v"), s("b")]),
+        )]);
+        let stream = client
+            .execute_pipeline(pipeline_request(vec![
+                pipeline_stage("collection", collection_ref("regex-port")),
+                select,
+            ]))
+            .await
+            .unwrap()
+            .into_inner();
+        let rows = drain_pipeline(stream, 1).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].fields["matched"].value_type,
+            Some(pb::value::ValueType::BooleanValue(true))
+        );
+        handle.abort();
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_preserves_state() {
     // Strict answers only the offsets production recorded (5000000000), so the paging runs
@@ -9416,13 +9457,39 @@ async fn execute_pipeline_offset_skips_filtered_rows_once_across_pages_and_prese
         .into_inner();
     assert!(drain_pipeline(too_large, 1).await.is_empty());
 
-    // Strict answers the offsets production recorded (1, 2, 5, 7 and 5000000000, O-4 and O-6);
-    // zero is a boundary it never answered.
-    let small = strict
-        .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(0)]))
+    // The strict client has a separate store; seed a nonempty baseline for O-5 zero.
+    strict
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write(
+                &format!("{collection}/strict"),
+                &[("value", i(42))],
+            )],
+            ..Default::default()
+        })
         .await
-        .unwrap_err();
-    assert_eq!(small.code(), tonic::Code::Unimplemented, "{small}");
+        .unwrap();
+    let strict_baseline = drain_pipeline(
+        strict
+            .execute_pipeline(execute(vec![collection_stage(), pipeline_select("value")]))
+            .await
+            .unwrap()
+            .into_inner(),
+        1,
+    )
+    .await;
+    assert_eq!(strict_baseline.len(), 1);
+    assert_eq!(strict_baseline[0].fields.get("label"), Some(&i(42)));
+    let zero = strict
+        .execute_pipeline(execute(vec![
+            collection_stage(),
+            pipeline_select("value"),
+            pipeline_offset(0),
+        ]))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(drain_pipeline(zero, 1).await, strict_baseline);
     strict
         .execute_pipeline(execute(vec![collection_stage(), pipeline_offset(1)]))
         .await

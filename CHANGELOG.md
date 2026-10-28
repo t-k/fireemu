@@ -8,9 +8,25 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-28
+
+### Added
+
+- Firestore Enterprise pipelines support the recorded cases of `array_length`, `array_first`, `array_last`, `array_get`, `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values`, `map_entries`, `regex_contains`, `regex_match`, `regex_find` and `regex_find_all`. Under strict, the regex implementation refuses constructs whose RE2 behavior has not been established; map output order and unrecorded argument shapes are not claimed as production parity.
+
+- Firestore Enterprise pipelines evaluate the recorded O8C cases for `array_concat`, `array_reverse`, `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds`. Timestamps use microsecond precision and `current_timestamp` is sampled once per request. Named-zone gaps, overlaps and unrecorded custom-offset forms are refused where their behavior is not established; recorded cases do not establish compatibility for every input.
+- Realtime Database NEXT4 recordings cover finite forms of POST with generated-key readback, DELETE, `shallow`, `print=silent` and small `writeSizeLimit` requests. Other forms remain unverified.
+
 ### Changed
 
-- The RTDB and Firestore Enterprise Pipeline compatibility parents are reopened as `IMPLEMENTING`: earlier approvals covered recorded subsets and do not establish parent-wide compatibility. The recorded leaf evidence and release comparisons remain in place. The Pipeline comparison retains all 1,951 rows: 1,270 matches (including 272 previously unclaimed), 652 mismatches, 27 missing fixtures and two unknowns. Remaining work includes function and stage support, validation and ordering, framing, gRPC cases, and unobserved pipeline features. RTDB still needs the recorded REST ordering and transport differences addressed, broader Rules, SDK, authentication and trigger coverage, and explicit decisions for platform and operational boundaries. Previously described emulator-profile differences are not automatically approved exceptions.
+- The Realtime Database and Firestore Enterprise Pipeline compatibility parents are `IMPLEMENTING`. Earlier verified leaf evidence is retained while remaining unimplemented, mismatching and unobserved behavior is addressed; parent-wide compatibility is not claimed. The Pipeline comparison retains all 1,951 rows.
+- Strict Firestore Enterprise pipelines return the recorded INTERNAL response for a repeated quoted select alias or zero-argument `array_reverse` with empty options. The console explains the cause without logging request values or credentials. The emulator profile and the prior refusal for nonempty options are unchanged.
+
+### Fixed
+
+- Strict Firestore Enterprise pipelines accept zero for recorded `limit` and `offset` cases, returning no results for `limit(0)` and preserving results for `offset(0)`.
+- Realtime Database REST PATCH responses preserve request-member order under both profiles for the recorded compact, non-silent multi-path cases without a callback.
+- Strict Realtime Database SSE cancellation closes the connection after the cancellation event. The local HTTP transport retains its native chunking behavior, while production used close-delimited framing.
 
 ## [0.32.0] - 2026-10-28
 
@@ -993,7 +1009,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/t-k/fireemu/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/t-k/fireemu/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/t-k/fireemu/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/t-k/fireemu/compare/v0.29.0...v0.30.0

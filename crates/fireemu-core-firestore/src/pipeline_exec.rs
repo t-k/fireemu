@@ -87,6 +87,11 @@ pub enum EvalError {
     /// The input is invalid, as production or the official emulator refuses it with
     /// `INVALID_ARGUMENT` (the message is the official emulator's).
     Invalid(String),
+    /// A valid duration crossed the supported Firestore timestamp range.
+    TimestampOutOfRange {
+        /// Production's function label.
+        function: &'static str,
+    },
     /// A function met an argument of a type it does not take: `INVALID_ARGUMENT`, which
     /// production details with a `FUNCTION_WRONG_TYPE` `ErrorInfo` naming the function.
     WrongType {
@@ -107,6 +112,10 @@ impl fmt::Display for EvalError {
                 "{function}: {reason}; this behavior is not observed locally"
             ),
             Self::Invalid(message) => f.write_str(message),
+            Self::TimestampOutOfRange { function } => write!(
+                f,
+                "{function}(...) received a timestamp value that is out of range."
+            ),
             Self::WrongType {
                 function,
                 expected,
@@ -167,13 +176,103 @@ pub enum Arity {
     Between(usize, usize),
 }
 
-/// What a function sees besides its arguments.
+/// Named-zone calendar operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneOperation {
+    /// Truncate to a local calendar boundary.
+    Trunc,
+    /// Extract a local calendar field.
+    Extract,
+}
+/// The result of a named-zone calendar operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneResult {
+    /// A truncated timestamp.
+    Timestamp(Timestamp),
+    /// An extracted field.
+    Integer(i64),
+}
+/// A named-zone operation could not be resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneError {
+    /// The zone name is invalid.
+    InvalidZone,
+    /// The named zone is valid but its semantics are not implemented.
+    Unsupported,
+    /// The local boundary is ambiguous or nonexistent.
+    Ambiguous,
+    /// The result lies outside the timestamp range.
+    OutOfRange,
+}
+/// Adapter-provided named-zone operation, with no clock or mutable state.
+pub type ZoneResolver = fn(Timestamp, &str, &str, ZoneOperation) -> Result<ZoneResult, ZoneError>;
+
+/// Apply the UTC calendar rules to a local wall-clock value represented as UTC.
+/// The adapter uses this only after validating the unit and converting an IANA instant.
+pub fn local_calendar_value(
+    timestamp: Timestamp,
+    unit: &str,
+    operation: ZoneOperation,
+) -> Result<ZoneResult, ZoneError> {
+    scalar::local_calendar_value(timestamp, unit, operation)
+}
+
+/// A regular-expression operation delegated to the adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegexOperation {
+    /// Test for a match anywhere in the subject.
+    Contains,
+    /// Test whether the whole subject matches.
+    Match,
+    /// Return the first match or its first capture.
+    Find,
+    /// Return each match or its first capture.
+    FindAll,
+}
+
+/// The typed result of a delegated regular-expression operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegexResult {
+    /// A boolean match result.
+    Boolean(bool),
+    /// A single optional match or capture.
+    Match(Option<String>),
+    /// Ordered optional matches or captures.
+    Matches(Vec<Option<String>>),
+}
+
+/// A regular-expression engine could not compile the pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegexError {
+    /// The pattern has invalid syntax.
+    InvalidSyntax,
+    /// Compilation exceeded the adapter's resource limits.
+    ResourceLimit,
+}
+
+/// Adapter-provided regular-expression evaluation.
+pub type RegexResolver = fn(&str, &str, RegexOperation) -> Result<RegexResult, RegexError>;
+
+/// Request-scoped runtime values for pipeline expression evaluation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeContext {
+    /// One immutable request timestamp; absent when no clock was supplied.
+    pub request_timestamp: Option<Timestamp>,
+    /// Reserved for the adapter's named-zone resolver.
+    pub zone_resolver: Option<ZoneResolver>,
+    /// Adapter-provided regular-expression operations.
+    pub regex_resolver: Option<RegexResolver>,
+}
+
+/// What a function sees besides its arguments.
+#[derive(Debug, Clone, Copy)]
 pub struct Context {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
     /// Whether the call is the whole condition of a `where` stage (its arguments are not).
     pub condition: bool,
+    /// Immutable request-scoped values.
+    pub runtime: RuntimeContext,
 }
 
 /// One entry of the static function table.
@@ -262,6 +361,81 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
+    array_access_function("array_reverse", Arity::Exact(1), "", eval_array_reverse),
+    array_access_function(
+        "array_concat",
+        Arity::AtLeast(2),
+        "array_concat(arrays: array[any]*): array[any]",
+        eval_array_concat,
+    ),
+    array_access_function(
+        "array_length",
+        Arity::Exact(1),
+        "array_length(x: array[any]): int64",
+        eval_array_length,
+    ),
+    array_access_function(
+        "array_first",
+        Arity::Exact(1),
+        "array_first(array: array[any]): any",
+        eval_array_first,
+    ),
+    array_access_function(
+        "array_last",
+        Arity::Exact(1),
+        "array_last(array: array[any]): any",
+        eval_array_last,
+    ),
+    array_access_function(
+        "array_get",
+        Arity::Exact(2),
+        "array_get(array: array[any], index: int64): any?",
+        eval_array_get,
+    ),
+    map_family_function(
+        "map_set",
+        Arity::AtLeast(3),
+        "map_set(map: map[string, any], entries: any*): map[string, any]",
+        eval_map_set,
+    ),
+    map_family_function(
+        "map_remove",
+        Arity::AtLeast(2),
+        "map_remove(map: map[string, any], key: string*): map[string, any]",
+        eval_map_remove,
+    ),
+    map_family_function(
+        "map_merge",
+        Arity::AtLeast(2),
+        "map_merge(maps: map[string, any]*): map[string, any]",
+        eval_map_merge,
+    ),
+    map_family_function(
+        "map_keys",
+        Arity::Exact(1),
+        "map_keys(map: map[string, any]): array[string]",
+        eval_map_keys,
+    ),
+    map_family_function(
+        "map_values",
+        Arity::Exact(1),
+        "map_values(map: map[string, any]): array[any]",
+        eval_map_values,
+    ),
+    map_family_function(
+        "map_entries",
+        Arity::Exact(1),
+        "map_entries(map: map[string, any]): array[map[string, any]]",
+        eval_map_entries,
+    ),
+    Function {
+        name: "map_get",
+        arity: Arity::Exact(2),
+        returns_boolean: false,
+        signature: "map_get(map: map[string, any], key: string): any?",
+        overloads: &[],
+        eval: eval_map_get,
+    },
     Function {
         name: "map",
         arity: Arity::Pairs,
@@ -288,6 +462,22 @@ const FUNCTIONS: &[Function] = &[
     logic::ARRAY_CONTAINS_ANY,
     logic::EQUAL_ANY,
     logic::NOT_EQUAL_ANY,
+    scalar::CURRENT_TIMESTAMP,
+    scalar::TIMESTAMP_TRUNC,
+    scalar::TIMESTAMP_EXTRACT,
+    scalar::TIMESTAMP_ADD,
+    scalar::TIMESTAMP_SUBTRACT,
+    scalar::TIMESTAMP_DIFF,
+    scalar::UNIX_MICROS_TO_TIMESTAMP,
+    scalar::UNIX_MILLIS_TO_TIMESTAMP,
+    scalar::UNIX_SECONDS_TO_TIMESTAMP,
+    scalar::TIMESTAMP_TO_UNIX_MICROS,
+    scalar::TIMESTAMP_TO_UNIX_MILLIS,
+    scalar::TIMESTAMP_TO_UNIX_SECONDS,
+    scalar::REGEX_CONTAINS,
+    scalar::REGEX_MATCH,
+    scalar::REGEX_FIND,
+    scalar::REGEX_FIND_ALL,
     scalar::CONCAT,
     scalar::TO_LOWER,
     scalar::TO_UPPER,
@@ -359,6 +549,13 @@ impl Expr {
     /// Builds a call of `name` in a position that accepts `placement`, checking the table
     /// and the arity.
     pub fn call(name: &str, args: Vec<Self>, placement: Placement) -> Result<Self, ExprError> {
+        // The adapter handles the recorded strict zero-argument INTERNAL before this call;
+        // other profiles and nonempty options retain the previous unsupported refusal.
+        if name == "array_reverse" && args.is_empty() {
+            return Err(ExprError::Unsupported(format!(
+                "function {name:?} is unsupported locally"
+            )));
+        }
         let Some(function) = function(name) else {
             return Err(ExprError::Unsupported(format!(
                 "function {name:?} is unsupported locally"
@@ -420,6 +617,11 @@ impl Expr {
                 args.len()
             )));
         }
+        if name == "map_set" && args.len() % 2 == 0 {
+            return Err(ExprError::Invalid(
+                "'map_set' function must have an odd number of arguments".to_owned(),
+            ));
+        }
         Ok(Self::Call { function, args })
     }
 
@@ -442,16 +644,33 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, false)
+        self.eval_at(row, unrecorded, false, RuntimeContext::default())
+    }
+
+    /// Evaluates an expression with request-scoped adapter operations.
+    #[must_use]
+    pub fn eval_in_with_runtime(
+        &self,
+        row: &Row,
+        unrecorded: Unrecorded,
+        runtime: RuntimeContext,
+    ) -> Eval {
+        self.eval_at(row, unrecorded, false, runtime)
     }
 
     /// Evaluates the expression as the whole condition of a `where` stage.
     #[must_use]
     pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, true)
+        self.eval_at(row, unrecorded, true, RuntimeContext::default())
     }
 
-    fn eval_at(&self, row: &Row, unrecorded: Unrecorded, condition: bool) -> Eval {
+    fn eval_at(
+        &self,
+        row: &Row,
+        unrecorded: Unrecorded,
+        condition: bool,
+        runtime: RuntimeContext,
+    ) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 row.path.as_ref().map_or(Eval::Absent, |path| {
@@ -465,11 +684,12 @@ impl Expr {
             Self::Call { function, args } => {
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_in(row, unrecorded))
+                    .map(|arg| arg.eval_at(row, unrecorded, false, runtime))
                     .collect();
                 let cx = Context {
                     unrecorded,
                     condition,
+                    runtime,
                 };
                 (function.eval)(&args, cx)
             }
@@ -549,6 +769,462 @@ fn eval_array(args: &[Eval], _cx: Context) -> Eval {
             })
             .collect(),
     ))
+}
+
+/// A recorded array-access function.
+const fn array_access_function(
+    name: &'static str,
+    arity: Arity,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
+    Function {
+        name,
+        arity,
+        returns_boolean: false,
+        signature,
+        overloads: &[],
+        eval,
+    }
+}
+
+fn array_access<'a>(
+    args: &'a [Eval],
+    name: &'static str,
+    cx: Context,
+) -> Result<&'a [Value], Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    let missing = args
+        .iter()
+        .any(|a| matches!(a, Eval::Absent | Eval::Value(Value::Null)));
+    if missing
+        && cx.unrecorded == Unrecorded::Refuse
+        && args.get(1).is_some_and(|arg| {
+            matches!(arg, Eval::Value(value) if !matches!(value, Value::Integer(_) | Value::Null))
+        })
+    {
+        return Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "a null beside an argument of an unrecorded type",
+        }));
+    }
+    if let Eval::Value(value) = &args[0] {
+        if !matches!(value, Value::Array(_) | Value::Null) {
+            let recorded = matches!(
+                (name, value),
+                ("array_length", Value::String(_))
+                    | ("first" | "last" | "array_get", Value::Integer(_))
+            );
+            if cx.unrecorded == Unrecorded::Refuse && (!recorded || missing) {
+                return Err(Eval::Error(EvalError::Unobserved {
+                    function: name,
+                    reason: "an unrecorded array argument",
+                }));
+            }
+            return Err(Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Array",
+                got: type_name(value),
+            }));
+        }
+    }
+    if missing {
+        return Err(Eval::Value(Value::Null));
+    }
+    match &args[0] {
+        Eval::Value(Value::Array(values)) => Ok(values),
+        _ => unreachable!("missing and errors were handled above"),
+    }
+}
+
+fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match &args[0] {
+        Eval::Absent | Eval::Value(Value::Null) => Eval::Value(Value::Null),
+        Eval::Value(Value::Array(values)) => {
+            Eval::Value(Value::Array(values.iter().rev().cloned().collect()))
+        }
+        Eval::Value(value) => Eval::Error(EvalError::WrongType {
+            function: "array_reverse",
+            expected: "Array",
+            got: type_name(value),
+        }),
+        Eval::Error(_) => unreachable!(),
+    }
+}
+
+fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong: Vec<&Value> = args
+        .iter()
+        .filter_map(|arg| match arg {
+            Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null) => Some(value),
+            _ => None,
+        })
+        .collect();
+    if cx.unrecorded == Unrecorded::Refuse && !wrong.is_empty() && (missing || wrong.len() > 1) {
+        return Eval::Error(EvalError::Unobserved {
+            function: "array_concat",
+            reason: "ambiguous invalid arguments",
+        });
+    }
+    if let Some(value) = wrong.first() {
+        return Eval::Error(EvalError::WrongType {
+            function: "array_concat",
+            expected: "Array",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let mut result = Vec::new();
+    for arg in args {
+        if let Eval::Value(Value::Array(values)) = arg {
+            result.extend(values.iter().cloned());
+        }
+    }
+    Eval::Value(Value::Array(result))
+}
+
+fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "array_length", cx) {
+        Ok(values) => Eval::Value(Value::Integer(
+            i64::try_from(values.len()).unwrap_or(i64::MAX),
+        )),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_first(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "first", cx) {
+        Ok(values) => values.first().cloned().map_or(Eval::Absent, Eval::Value),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_last(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "last", cx) {
+        Ok(values) => values.last().cloned().map_or(Eval::Absent, Eval::Value),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
+    let values = match array_access(args, "array_get", cx) {
+        Ok(values) => values,
+        Err(result) => return result,
+    };
+    let index = match &args[1] {
+        Eval::Value(Value::Integer(index)) => *index,
+        Eval::Value(Value::Double(value)) if value.to_bits() == 1.5_f64.to_bits() => {
+            return Eval::Error(EvalError::Invalid(
+                "Cannot coerce Float64 (1.5) to Int64".to_owned(),
+            ))
+        }
+        _ => {
+            return Eval::Error(EvalError::Unobserved {
+                function: "array_get",
+                reason: "an unrecorded index type",
+            })
+        }
+    };
+    let offset = if index < 0 {
+        i64::try_from(values.len())
+            .ok()
+            .and_then(|len| len.checked_add(index))
+            .and_then(|i| usize::try_from(i).ok())
+    } else {
+        usize::try_from(index).ok()
+    };
+    offset
+        .and_then(|i| values.get(i))
+        .cloned()
+        .map_or(Eval::Absent, Eval::Value)
+}
+
+/// A map function with production's recorded argument-count signature.
+const fn map_family_function(
+    name: &'static str,
+    arity: Arity,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
+    Function {
+        name,
+        arity,
+        returns_boolean: false,
+        signature,
+        overloads: &[],
+        eval,
+    }
+}
+
+fn map_argument<'a>(
+    arg: &'a Eval,
+    name: &'static str,
+    null_is_absent: bool,
+) -> Result<&'a BTreeMap<String, Value>, Eval> {
+    match arg {
+        Eval::Value(Value::Map(map)) => Ok(map),
+        Eval::Absent | Eval::Value(Value::Null) => Err(if null_is_absent {
+            Eval::Absent
+        } else {
+            Eval::Value(Value::Null)
+        }),
+        Eval::Value(value) => Err(Eval::Error(EvalError::WrongType {
+            function: name,
+            expected: "Map",
+            got: type_name(value),
+        })),
+        Eval::Error(error) => Err(Eval::Error(error.clone())),
+    }
+}
+
+fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if cx.unrecorded == Unrecorded::Refuse {
+        let map_missing = matches!(args[0], Eval::Absent | Eval::Value(Value::Null));
+        let map_wrong =
+            matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+        let keys = args[1..].chunks_exact(2).map(|pair| &pair[0]);
+        let missing = keys
+            .clone()
+            .any(|key| matches!(key, Eval::Absent | Eval::Value(Value::Null)));
+        let wrong = keys.filter(|key| matches!(key, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null))).count();
+        if wrong > 1
+            || (wrong > 0 && (map_missing || map_wrong || missing))
+            || (map_wrong && missing)
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_set",
+                reason: "ambiguous invalid arguments",
+            });
+        }
+    }
+    let mut map = match map_argument(&args[0], "map_set", true) {
+        Ok(map) => map.clone(),
+        Err(value) => return value,
+    };
+    for pair in args[1..].chunks_exact(2) {
+        let key = match &pair[0] {
+            Eval::Value(Value::String(key)) => key,
+            Eval::Absent | Eval::Value(Value::Null) if cx.unrecorded == Unrecorded::Refuse => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "map_set",
+                    reason: "a missing key",
+                })
+            }
+            Eval::Absent | Eval::Value(Value::Null) => return Eval::Value(Value::Null),
+            Eval::Value(value) => {
+                return Eval::Error(EvalError::Invalid(format!(
+                    "map_set keys must be of type STRING, given type is {}",
+                    type_name(value)
+                )))
+            }
+            Eval::Error(_) => unreachable!(),
+        };
+        match &pair[1] {
+            Eval::Value(value) => {
+                map.insert(key.clone(), value.clone());
+            }
+            Eval::Absent => {
+                map.remove(key);
+            }
+            Eval::Error(_) => unreachable!(),
+        }
+    }
+    Eval::Value(Value::Map(map))
+}
+
+fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if cx.unrecorded == Unrecorded::Refuse {
+        let map_missing = matches!(args[0], Eval::Absent | Eval::Value(Value::Null));
+        let map_wrong =
+            matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+        let missing = args[1..]
+            .iter()
+            .any(|key| matches!(key, Eval::Absent | Eval::Value(Value::Null)));
+        let wrong = args[1..].iter().filter(|key| matches!(key, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null))).count();
+        if wrong > 1
+            || (wrong > 0 && (map_missing || map_wrong || missing))
+            || (map_wrong && missing)
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_remove",
+                reason: "ambiguous invalid arguments",
+            });
+        }
+    }
+    let mut map = match map_argument(&args[0], "map_remove", false) {
+        Ok(map) => map.clone(),
+        Err(value) => return value,
+    };
+    let mut missing = false;
+    for arg in &args[1..] {
+        match arg {
+            Eval::Value(Value::String(key)) => {
+                map.remove(key);
+            }
+            Eval::Absent | Eval::Value(Value::Null) => missing = true,
+            Eval::Value(value) => {
+                if missing && cx.unrecorded == Unrecorded::Refuse {
+                    return Eval::Error(EvalError::Unobserved {
+                        function: "map_remove",
+                        reason: "a null beside a wrong key",
+                    });
+                }
+                return Eval::Error(EvalError::WrongType {
+                    function: "map_remove",
+                    expected: "String",
+                    got: type_name(value),
+                });
+            }
+            Eval::Error(_) => unreachable!(),
+        }
+    }
+    if missing {
+        Eval::Value(Value::Null)
+    } else {
+        Eval::Value(Value::Map(map))
+    }
+}
+
+fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|a| matches!(a, Eval::Absent | Eval::Value(Value::Null)));
+    if cx.unrecorded == Unrecorded::Refuse && args.iter().filter(|arg| matches!(arg, Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null))).count() > 1 {
+        return Eval::Error(EvalError::Unobserved { function: "map_merge", reason: "multiple wrong maps" });
+    }
+    let wrong = args.iter().find_map(|a| match a {
+        Eval::Value(v) if !matches!(v, Value::Map(_) | Value::Null) => Some(v),
+        _ => None,
+    });
+    if let Some(value) = wrong {
+        if missing && cx.unrecorded == Unrecorded::Refuse {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_merge",
+                reason: "a null beside a wrong map",
+            });
+        }
+        return Eval::Error(EvalError::WrongType {
+            function: "map_merge",
+            expected: "Map",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let mut result = BTreeMap::new();
+    for arg in args {
+        if let Eval::Value(Value::Map(map)) = arg {
+            result.extend(map.clone());
+        }
+    }
+    Eval::Value(Value::Map(result))
+}
+
+fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_keys", false) {
+        Ok(map) => Eval::Value(Value::Array(
+            map.keys().cloned().map(Value::String).collect(),
+        )),
+        Err(value) => value,
+    }
+}
+fn eval_map_values(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_values", false) {
+        Ok(map) => Eval::Value(Value::Array(map.values().cloned().collect())),
+        Err(value) => value,
+    }
+}
+fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_entries", false) {
+        Ok(map) => Eval::Value(Value::Array(
+            map.iter()
+                .map(|(key, value)| {
+                    Value::Map(
+                        [
+                            ("k".to_owned(), Value::String(key.clone())),
+                            ("v".to_owned(), value.clone()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                })
+                .collect(),
+        )),
+        Err(value) => value,
+    }
+}
+
+/// Literal map lookup; missing keys are absent and null arguments give null.
+fn eval_map_get(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong_map =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+    let wrong_key =
+        matches!(&args[1], Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null));
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((missing && (wrong_map || wrong_key)) || (wrong_map && wrong_key))
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: "map_get",
+            reason: "mixed null or wrong argument types",
+        });
+    }
+    if wrong_map {
+        let Eval::Value(value) = &args[0] else {
+            unreachable!()
+        };
+        return Eval::Error(EvalError::WrongType {
+            function: "map_get",
+            expected: "Map",
+            got: type_name(value),
+        });
+    }
+    if wrong_key {
+        let Eval::Value(value) = &args[1] else {
+            unreachable!()
+        };
+        return Eval::Error(EvalError::WrongType {
+            function: "map_get",
+            expected: "String",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let (Eval::Value(Value::Map(map)), Eval::Value(Value::String(key))) = (&args[0], &args[1])
+    else {
+        unreachable!()
+    };
+    map.get(key).cloned().map_or(Eval::Absent, Eval::Value)
 }
 
 /// The type name the official emulator's messages give a value.
@@ -889,6 +1565,7 @@ enum StageState {
 pub struct Cursor {
     stages: Vec<Stage>,
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
     state: Vec<StageState>,
 }
 
@@ -902,6 +1579,16 @@ impl Cursor {
     /// A cursor at the first row; `unrecorded` decides what unrecorded inputs give.
     #[must_use]
     pub fn new_in(stages: Vec<Stage>, unrecorded: Unrecorded) -> Self {
+        Self::new_in_with_runtime(stages, unrecorded, RuntimeContext::default())
+    }
+
+    /// Builds a cursor with request-scoped runtime values.
+    #[must_use]
+    pub fn new_in_with_runtime(
+        stages: Vec<Stage>,
+        unrecorded: Unrecorded,
+        runtime: RuntimeContext,
+    ) -> Self {
         let state = stages
             .iter()
             .map(|stage| match stage {
@@ -918,6 +1605,7 @@ impl Cursor {
         Self {
             stages,
             unrecorded,
+            runtime,
             state,
         }
     }
@@ -956,12 +1644,14 @@ impl Cursor {
                 continue;
             };
             let produced = match &self.stages[index] {
-                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded)?,
-                Stage::Distinct(aliases) => distinct_rows(&rows, aliases, self.unrecorded)?,
+                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
+                Stage::Distinct(aliases) => {
+                    distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
+                }
                 Stage::Aggregate {
                     accumulators,
                     groups,
-                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded)?,
+                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded, self.runtime)?,
                 _ => continue,
             };
             for row in produced {
@@ -979,7 +1669,7 @@ impl Cursor {
             let held = &mut self.state[index];
             match stage {
                 Stage::Where(condition) => {
-                    match condition.eval_condition_in(&row, self.unrecorded) {
+                    match condition.eval_at(&row, self.unrecorded, true, self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
                         // Production dropped the row for a condition of every other kind
                         // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
@@ -1017,7 +1707,7 @@ impl Cursor {
                     let mut fields = BTreeMap::new();
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_in(&row, self.unrecorded) {
+                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent if alias.segments().len() > 1 => {
                                 // The official emulator keeps the parents of a nested alias
@@ -1056,7 +1746,7 @@ impl Cursor {
                     let mut values = Vec::with_capacity(aliases.len());
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_in(&row, self.unrecorded) {
+                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(value) => values.push((alias, Some(value))),
                             // A missing value (FS-ENT-ORACLE O-9 `fields-main`): a nested
                             // alias creates the parents as empty maps (a scalar parent is
@@ -1170,14 +1860,19 @@ fn sort_rows(
     rows: Vec<Row>,
     keys: &[SortKey],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut keyed = Vec::with_capacity(rows.len());
     for row in rows {
         let values = keys
             .iter()
             .map(|key| {
-                blocking_value(key.expr.eval_in(&row, unrecorded), unrecorded, "sort")
-                    .map(|value| value.unwrap_or(Value::Null))
+                blocking_value(
+                    key.expr.eval_at(&row, unrecorded, false, runtime),
+                    unrecorded,
+                    "sort",
+                )
+                .map(|value| value.unwrap_or(Value::Null))
             })
             .collect::<Result<Vec<_>, _>>()?;
         keyed.push((values, row));
@@ -1232,12 +1927,17 @@ fn key_values(
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
     stage: &'static str,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Value>, EvalError> {
     aliases
         .iter()
         .map(|(_, expr)| {
-            blocking_value(expr.eval_in(row, unrecorded), unrecorded, stage)
-                .map(|value| value.unwrap_or(Value::Null))
+            blocking_value(
+                expr.eval_at(row, unrecorded, false, runtime),
+                unrecorded,
+                stage,
+            )
+            .map(|value| value.unwrap_or(Value::Null))
         })
         .collect()
 }
@@ -1247,11 +1947,12 @@ fn distinct_rows(
     rows: &[Row],
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for row in rows {
-        let key = GroupKey(key_values(row, aliases, unrecorded, "distinct")?);
+        let key = GroupKey(key_values(row, aliases, unrecorded, "distinct", runtime)?);
         if seen.contains(&key) {
             continue;
         }
@@ -1317,11 +2018,14 @@ impl Accumulator {
         running: &mut Running,
         row: &Row,
         unrecorded: Unrecorded,
+        runtime: RuntimeContext,
     ) -> Result<(), EvalError> {
         let value = match &self.argument {
-            Some(argument) => {
-                blocking_value(argument.eval_in(row, unrecorded), unrecorded, "aggregate")?
-            }
+            Some(argument) => blocking_value(
+                argument.eval_at(row, unrecorded, false, runtime),
+                unrecorded,
+                "aggregate",
+            )?,
             None => None,
         };
         match (running, self.kind) {
@@ -1385,6 +2089,7 @@ fn aggregate_rows(
     accumulators: &[(String, Accumulator)],
     groups: &[(String, Expr)],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     type Group = (Vec<Value>, Vec<Running>);
     let start = || {
@@ -1399,7 +2104,7 @@ fn aggregate_rows(
         order.push((Vec::new(), start()));
     }
     for row in rows {
-        let key = key_values(row, groups, unrecorded, "aggregate")?;
+        let key = key_values(row, groups, unrecorded, "aggregate", runtime)?;
         let at = if groups.is_empty() {
             0
         } else {
@@ -1410,7 +2115,7 @@ fn aggregate_rows(
         };
         let running = &mut order[at].1;
         for ((_, accumulator), state) in accumulators.iter().zip(running.iter_mut()) {
-            accumulator.add(state, row, unrecorded)?;
+            accumulator.add(state, row, unrecorded, runtime)?;
         }
     }
     Ok(order

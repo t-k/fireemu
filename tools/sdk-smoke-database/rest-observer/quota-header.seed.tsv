@@ -1,0 +1,4 @@
+Principal	Result	Method
+admin	refused	PUT
+probe	success	GET
+admin	incomplete	PUT

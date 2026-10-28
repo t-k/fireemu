@@ -235,6 +235,23 @@ fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
     )
 }
 
+/// Recorded timestamp arithmetic range refusal with its production `ErrorInfo` reason.
+#[must_use]
+pub fn timestamp_out_of_range(message: &str) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        message,
+        vec![any(
+            ERROR_INFO,
+            &ErrorInfo {
+                reason: "INVALID_TIMESTAMP_OUT_OF_RANGE".to_owned(),
+                domain: "firestore.googleapis.com".to_owned(),
+                metadata: std::collections::BTreeMap::new(),
+            },
+        )],
+    )
+}
+
 /// Production's refusal of a function argument of the wrong type (FS-ENT-ORACLE O-3,
 /// `fs-ent-pipeline/o3/functions#parent-string` and the other document functions):
 /// `INVALID_ARGUMENT` with an `ErrorInfo` naming the function.
@@ -487,6 +504,20 @@ pub fn respec_grpc_message(headers: &mut hyper::HeaderMap) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_range_error_has_recorded_reason_and_domain() {
+        let status = timestamp_out_of_range(
+            "timestamp_add(...) received a timestamp value that is out of range.",
+        );
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![
+                json!({"@type":"type.googleapis.com/google.rpc.ErrorInfo", "domain":"firestore.googleapis.com", "reason":"INVALID_TIMESTAMP_OUT_OF_RANGE"})
+            ])
+        );
+    }
 
     #[test]
     fn only_the_cosine_refusal_carries_an_error_info() {

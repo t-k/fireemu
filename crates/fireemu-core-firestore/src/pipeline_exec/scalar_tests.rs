@@ -40,6 +40,7 @@ fn call_in(name: &str, args: &[Eval], unrecorded: Unrecorded, condition: bool) -
         Context {
             unrecorded,
             condition,
+            runtime: RuntimeContext::default(),
         },
     )
 }
@@ -81,16 +82,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 22);
-    for name in [
-        "regex_contains",
-        "regex_match",
-        "regex_find",
-        "regex_find_all",
-        "sqrt",
-    ] {
-        assert!(function(name).is_none(), "{name}");
-    }
+    assert_eq!(NAMES.len(), 38);
+    assert!(function("sqrt").is_none());
 }
 
 #[test]
@@ -932,5 +925,1661 @@ proptest! {
             other => panic!("{other:?}"),
         };
         prop_assert_eq!(again, got);
+    }
+}
+
+#[test]
+fn recorded_array_access_results() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    for (name, args, expected) in [
+        ("array_length", vec![a.clone()], int(3)),
+        ("array_length", vec![array(vec![])], int(0)),
+        ("array_first", vec![a.clone()], int(1)),
+        ("array_last", vec![a.clone()], int(3)),
+        ("array_first", vec![array(vec![])], Eval::Absent),
+        ("array_last", vec![array(vec![])], Eval::Absent),
+        ("array_get", vec![a.clone(), int(0)], int(1)),
+        ("array_get", vec![a.clone(), int(2)], int(3)),
+        ("array_get", vec![a.clone(), int(-1)], int(3)),
+        ("array_get", vec![a.clone(), int(10)], Eval::Absent),
+        ("array_get", vec![a.clone(), null()], null()),
+        ("array_get", vec![null(), int(0)], null()),
+        ("array_get", vec![Eval::Absent, int(0)], null()),
+        (
+            "array_length",
+            vec![text("abc")],
+            wrong("array_length", "Array", "STRING"),
+        ),
+        ("array_first", vec![int(5)], wrong("first", "Array", "LONG")),
+        ("array_last", vec![int(5)], wrong("last", "Array", "LONG")),
+        (
+            "array_get",
+            vec![int(5), int(0)],
+            wrong("array_get", "Array", "LONG"),
+        ),
+        (
+            "array_get",
+            vec![a, dbl(1.5)],
+            invalid("Cannot coerce Float64 (1.5) to Int64"),
+        ),
+    ] {
+        assert_eq!(strict(name, &args), expected, "{name} {args:?}");
+    }
+    let nested = Eval::Error(EvalError::Invalid("nested failure".to_owned()));
+    assert_eq!(strict("array_get", &[nested.clone(), int(0)]), nested);
+    assert!(is_unobserved(&strict("array_get", &[null(), dbl(1.5)])));
+    assert!(is_unobserved(&strict(
+        "array_get",
+        &[array(vec![]), text("0")]
+    )));
+    for name in ["array_length", "array_first", "array_last"] {
+        for arg in [null(), Eval::Absent] {
+            assert_eq!(strict(name, &[arg]), null());
+        }
+    }
+    for name in ["array_first", "array_last"] {
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err().to_string(),
+            format!("The function '{name}(array: array[any]): any' takes [1..1] argument(s), but 0 were provided.")
+        );
+    }
+    assert_eq!(Expr::call("array_length", vec![], Placement::Value).unwrap_err().to_string(), "The function 'array_length(x: array[any]): int64' takes [1..1] argument(s), but 0 were provided.");
+    assert_eq!(Expr::call("array_get", vec![Expr::Constant(Value::Null)], Placement::Value).unwrap_err().to_string(), "The function 'array_get(array: array[any], index: int64): any?' takes [2..2] argument(s), but 1 was provided.");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_access_matches_reference_for_nonempty_integer_arrays(items in proptest::collection::vec(any::<i64>(), 1..20), offset in 0usize..40) {
+        let values = items.iter().copied().map(Value::Integer).collect::<Vec<_>>();
+        let argument = array(values);
+        prop_assert_eq!(strict("array_length", std::slice::from_ref(&argument)), int(i64::try_from(items.len()).unwrap()));
+        prop_assert_eq!(strict("array_first", std::slice::from_ref(&argument)), int(items[0]));
+        prop_assert_eq!(strict("array_last", std::slice::from_ref(&argument)), int(*items.last().unwrap()));
+        prop_assert_eq!(strict("array_get", &[argument.clone(), int(-1)]), int(*items.last().unwrap()));
+        let index = offset % items.len();
+        let negative_index = i64::try_from(index).unwrap() - i64::try_from(items.len()).unwrap();
+        prop_assert_eq!(strict("array_get", &[argument, int(negative_index)]), int(items[index]));
+    }
+}
+
+#[test]
+fn array_access_pict_generated_cases() {
+    let cases = [
+        ("length", "populated", "strict"),
+        ("first", "empty", "strict"),
+        ("last", "populated", "strict"),
+        ("get", "populated", "strict"),
+        ("get", "null", "strict"),
+        ("first", "populated", "emulator"),
+        ("last", "null", "emulator"),
+        ("first", "wrong", "strict"),
+        ("last", "wrong", "emulator"),
+        ("last", "absent", "strict"),
+        ("length", "empty", "emulator"),
+        ("last", "empty", "strict"),
+        ("get", "empty", "emulator"),
+        ("length", "absent", "emulator"),
+        ("first", "null", "strict"),
+        ("first", "absent", "strict"),
+        ("get", "absent", "emulator"),
+        ("get", "wrong", "emulator"),
+        ("length", "null", "strict"),
+        ("length", "wrong", "emulator"),
+    ];
+    for (operation, input, profile) in cases {
+        let name = format!("array_{operation}");
+        let arg = match input {
+            "populated" => array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+            "empty" => array(vec![]),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" if operation == "length" => text("abc"),
+            "wrong" => int(5),
+            _ => unreachable!(),
+        };
+        let mut args = vec![arg];
+        if operation == "get" {
+            args.push(int(0));
+        }
+        let expected = match (operation, input) {
+            (_, "null" | "absent") => null(),
+            ("length", "wrong") => wrong("array_length", "Array", "STRING"),
+            ("first", "wrong") => wrong("first", "Array", "LONG"),
+            ("last", "wrong") => wrong("last", "Array", "LONG"),
+            ("get", "wrong") => wrong("array_get", "Array", "LONG"),
+            ("length", "empty") => int(0),
+            (_, "empty") => Eval::Absent,
+            ("length" | "last", "populated") => int(3),
+            (_, "populated") => int(1),
+            _ => unreachable!(),
+        };
+        let actual = if profile == "strict" {
+            strict(&name, &args)
+        } else {
+            emulator(&name, &args)
+        };
+        assert_eq!(actual, expected, "{operation} {input} {profile}");
+    }
+}
+
+#[test]
+fn map_get_recorded_and_pict_cases() {
+    let inner = Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect());
+    let map = Eval::Value(Value::Map(
+        [
+            ("a".to_owned(), Value::Integer(1)),
+            ("b".to_owned(), inner.clone()),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let cases = [
+        ("present", "strict", "select"),
+        ("missing", "strict", "select"),
+        ("dotted", "strict", "select"),
+        ("null", "strict", "select"),
+        ("wrongmap", "strict", "select"),
+        ("wrongkey", "strict", "select"),
+        ("present", "emulator", "nested"),
+        ("nested", "strict", "nested"),
+        ("empty", "emulator", "select"),
+        ("absent", "strict", "nested"),
+        ("wrongmap", "emulator", "nested"),
+        ("dotted", "emulator", "nested"),
+        ("wrongkey", "emulator", "nested"),
+        ("absent", "emulator", "select"),
+        ("missing", "emulator", "nested"),
+        ("empty", "strict", "nested"),
+        ("null", "emulator", "nested"),
+        ("nested", "emulator", "select"),
+    ];
+    for (input, profile, placement) in cases {
+        let (m, key, expected) = match input {
+            "present" => (map.clone(), text("a"), int(1)),
+            "missing" => (map.clone(), text("zz"), Eval::Absent),
+            "dotted" => (map.clone(), text("b.c"), Eval::Absent),
+            "nested" => (map.clone(), text("b"), Eval::Value(inner.clone())),
+            "empty" => (
+                Eval::Value(Value::Map(BTreeMap::new())),
+                text("a"),
+                Eval::Absent,
+            ),
+            "null" => (null(), text("a"), null()),
+            "absent" => (Eval::Absent, text("a"), null()),
+            "wrongmap" => (array(vec![]), text("a"), wrong("map_get", "Map", "ARRAY")),
+            "wrongkey" => (map.clone(), int(1), wrong("map_get", "String", "LONG")),
+            _ => unreachable!(),
+        };
+        let as_expr = |value: Eval| match value {
+            Eval::Value(value) => Expr::Constant(value),
+            Eval::Absent => Expr::Field(FieldPath::parse("missing").unwrap()),
+            Eval::Error(_) => unreachable!(),
+        };
+        let call = Expr::call("map_get", vec![as_expr(m), as_expr(key)], Placement::Value).unwrap();
+        let (expr, expected) = if placement == "nested" {
+            let wrapped = match expected {
+                Eval::Value(value) => array(vec![value]),
+                Eval::Absent => array(vec![Value::Null]),
+                Eval::Error(error) => Eval::Error(error),
+            };
+            (
+                Expr::call("array", vec![call], Placement::Value).unwrap(),
+                wrapped,
+            )
+        } else {
+            (call, expected)
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            expr.eval_in(&Row::derived(BTreeMap::new()), mode),
+            expected,
+            "{input} {profile} {placement}"
+        );
+    }
+    assert_eq!(strict("map_get", &[map.clone(), null()]), null());
+    assert_eq!(strict("map_get", &[map.clone(), Eval::Absent]), null());
+    assert!(is_unobserved(&strict("map_get", &[null(), int(1)])));
+    assert!(is_unobserved(&strict("map_get", &[array(vec![]), int(1)])));
+    let err = invalid("nested error");
+    assert_eq!(strict("map_get", &[err.clone(), text("a")]), err);
+    for (args, n, verb) in [
+        (vec![], 0, "were"),
+        (vec![Expr::Constant(Value::Null)], 1, "was"),
+    ] {
+        assert_eq!(Expr::call("map_get", args, Placement::Value).unwrap_err().to_string(), format!("The function 'map_get(map: map[string, any], key: string): any?' takes [2..2] argument(s), but {n} {verb} provided."));
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn map_get_matches_literal_key_reference(entries in proptest::collection::btree_map(".{0,8}", any::<i64>(), 0..20), key in ".{0,8}") {
+        let expected = entries.get(&key).map_or(Eval::Absent, |v| int(*v));
+        let values = entries.into_iter().map(|(k, v)| (k, Value::Integer(v))).collect();
+        prop_assert_eq!(strict("map_get", &[Eval::Value(Value::Map(values)), text(&key)]), expected);
+    }
+}
+
+#[test]
+fn map_family_recorded_cases() {
+    let m = Eval::Value(Value::Map(
+        [
+            ("a".to_owned(), Value::Integer(1)),
+            (
+                "b".to_owned(),
+                Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let empty = Eval::Value(Value::Map(BTreeMap::new()));
+    let mk = |pairs: &[(&str, Value)]| {
+        Eval::Value(Value::Map(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        ))
+    };
+    let inner = Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect());
+    let inner_d = Value::Map([("d".to_owned(), Value::Integer(2))].into_iter().collect());
+    for (name, args, expected) in [
+        (
+            "map_set",
+            vec![m.clone(), text("z"), int(9)],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("a"), int(9)],
+            mk(&[("a", Value::Integer(9)), ("b", inner.clone())]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("y"), int(8), text("z"), int(9)],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("y", Value::Integer(8)),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("z"), null()],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Null),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("a"), Eval::Absent],
+            mk(&[("b", inner.clone())]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), int(1), int(9)],
+            invalid("map_set keys must be of type STRING, given type is LONG"),
+        ),
+        (
+            "map_remove",
+            vec![m.clone(), text("a")],
+            mk(&[("b", inner.clone())]),
+        ),
+        ("map_remove", vec![m.clone(), text("zz")], m.clone()),
+        (
+            "map_remove",
+            vec![m.clone(), text("a"), text("b")],
+            empty.clone(),
+        ),
+        (
+            "map_remove",
+            vec![m.clone(), int(1)],
+            wrong("map_remove", "String", "LONG"),
+        ),
+        (
+            "map_merge",
+            vec![m.clone(), mk(&[("z", Value::Integer(9))])],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_merge",
+            vec![
+                mk(&[("a", Value::Integer(1))]),
+                mk(&[("a", Value::Integer(2))]),
+            ],
+            mk(&[("a", Value::Integer(2))]),
+        ),
+        (
+            "map_merge",
+            vec![
+                mk(&[("a", Value::Integer(1))]),
+                mk(&[("b", Value::Integer(2))]),
+                mk(&[("c", Value::Integer(3))]),
+            ],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", Value::Integer(2)),
+                ("c", Value::Integer(3)),
+            ]),
+        ),
+        ("map_merge", vec![m.clone(), empty.clone()], m.clone()),
+        (
+            "map_merge",
+            vec![mk(&[("b", inner.clone())]), mk(&[("b", inner_d.clone())])],
+            mk(&[("b", inner_d)]),
+        ),
+        ("map_merge", vec![m.clone(), null()], null()),
+        ("map_merge", vec![m.clone(), Eval::Absent], null()),
+        (
+            "map_merge",
+            vec![m.clone(), array(vec![])],
+            wrong("map_merge", "Map", "ARRAY"),
+        ),
+        (
+            "map_keys",
+            vec![m.clone()],
+            array(vec![
+                Value::String("a".to_owned()),
+                Value::String("b".to_owned()),
+            ]),
+        ),
+        (
+            "map_values",
+            vec![m.clone()],
+            array(vec![Value::Integer(1), inner.clone()]),
+        ),
+        (
+            "map_entries",
+            vec![m.clone()],
+            array(vec![
+                Value::Map(
+                    [
+                        ("k".to_owned(), Value::String("a".to_owned())),
+                        ("v".to_owned(), Value::Integer(1)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                Value::Map(
+                    [
+                        ("k".to_owned(), Value::String("b".to_owned())),
+                        ("v".to_owned(), inner),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]),
+        ),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    assert!(is_unobserved(&strict("map_set", &[null(), int(1), int(9)])));
+    assert!(is_unobserved(&strict("map_remove", &[null(), int(1)])));
+    assert!(is_unobserved(&strict(
+        "map_merge",
+        &[null(), array(vec![])]
+    )));
+    for name in ["map_set", "map_remove"] {
+        for arg in [null(), Eval::Absent] {
+            let args = if name == "map_set" {
+                vec![arg, text("z"), int(9)]
+            } else {
+                vec![arg, text("a")]
+            };
+            assert_eq!(
+                both(name, &args),
+                if name == "map_set" {
+                    Eval::Absent
+                } else {
+                    null()
+                }
+            );
+        }
+    }
+    for name in ["map_keys", "map_values", "map_entries"] {
+        assert_eq!(both(name, std::slice::from_ref(&empty)), array(vec![]));
+        assert_eq!(both(name, &[null()]), null());
+        assert_eq!(both(name, &[Eval::Absent]), null());
+        assert_eq!(both(name, &[array(vec![])]), wrong(name, "Map", "ARRAY"));
+    }
+    for (name, args, expected) in [
+        ("map_set", 2, "The function 'map_set(map: map[string, any], entries: any*): map[string, any]' takes [3..+∞) argument(s), but 2 were provided."),
+        ("map_remove", 1, "The function 'map_remove(map: map[string, any], key: string*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided."),
+        ("map_merge", 1, "The function 'map_merge(maps: map[string, any]*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided."),
+        ("map_keys", 0, "The function 'map_keys(map: map[string, any]): array[string]' takes [1..1] argument(s), but 0 were provided."),
+        ("map_values", 0, "The function 'map_values(map: map[string, any]): array[any]' takes [1..1] argument(s), but 0 were provided."),
+        ("map_entries", 0, "The function 'map_entries(map: map[string, any]): array[map[string, any]]' takes [1..1] argument(s), but 0 were provided."),
+    ] { assert_eq!(Expr::call(name,vec![Expr::Constant(Value::Null);args],Placement::Value).unwrap_err().to_string(),expected); }
+    for (name, signature, min) in [
+        (
+            "map_set",
+            "map_set(map: map[string, any], entries: any*): map[string, any]",
+            3,
+        ),
+        (
+            "map_remove",
+            "map_remove(map: map[string, any], key: string*): map[string, any]",
+            2,
+        ),
+        (
+            "map_merge",
+            "map_merge(maps: map[string, any]*): map[string, any]",
+            2,
+        ),
+    ] {
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "The function '{signature}' takes [{min}..+∞) argument(s), but 0 were provided."
+            )
+        );
+    }
+    assert_eq!(
+        Expr::call(
+            "map_set",
+            vec![Expr::Constant(Value::Null); 4],
+            Placement::Value
+        )
+        .unwrap_err()
+        .to_string(),
+        "'map_set' function must have an odd number of arguments"
+    );
+}
+
+#[test]
+fn map_family_pict_generated_cases() {
+    let cases = [
+        ("set", "populated", "strict"),
+        ("set", "null", "strict"),
+        ("remove", "populated", "strict"),
+        ("merge", "populated", "strict"),
+        ("keys", "populated", "strict"),
+        ("values", "populated", "strict"),
+        ("entries", "populated", "strict"),
+        ("merge", "wrong", "emulator"),
+        ("keys", "empty", "emulator"),
+        ("remove", "null", "emulator"),
+        ("remove", "empty", "strict"),
+        ("merge", "null", "strict"),
+        ("values", "empty", "emulator"),
+        ("entries", "wrong", "emulator"),
+        ("keys", "wrong", "strict"),
+        ("set", "absent", "emulator"),
+        ("values", "null", "strict"),
+        ("keys", "null", "emulator"),
+        ("keys", "absent", "strict"),
+        ("entries", "null", "emulator"),
+        ("set", "wrong", "emulator"),
+        ("merge", "empty", "strict"),
+        ("values", "absent", "emulator"),
+        ("merge", "absent", "emulator"),
+        ("entries", "empty", "emulator"),
+        ("values", "wrong", "emulator"),
+        ("remove", "wrong", "emulator"),
+        ("entries", "absent", "emulator"),
+        ("set", "empty", "emulator"),
+        ("remove", "absent", "strict"),
+        ("entries", "populated", "emulator"),
+    ];
+    for (function, input, profile) in cases {
+        let name = match function {
+            "set" => "map_set",
+            "remove" => "map_remove",
+            "merge" => "map_merge",
+            "keys" => "map_keys",
+            "values" => "map_values",
+            _ => "map_entries",
+        };
+        let m = match input {
+            "populated" => Eval::Value(Value::Map(
+                [("a".to_owned(), Value::Integer(1))].into_iter().collect(),
+            )),
+            "empty" => Eval::Value(Value::Map(BTreeMap::new())),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" => array(vec![]),
+            _ => unreachable!(),
+        };
+        let args = match function {
+            "set" => vec![m.clone(), text("b"), int(2)],
+            "remove" => vec![m.clone(), text("a")],
+            "merge" => vec![m.clone(), Eval::Value(Value::Map(BTreeMap::new()))],
+            _ => vec![m.clone()],
+        };
+        let expected = if input == "wrong" {
+            wrong(name, "Map", "ARRAY")
+        } else if input == "null" || input == "absent" {
+            if function == "set" {
+                Eval::Absent
+            } else {
+                null()
+            }
+        } else {
+            match function {
+                "set" => {
+                    let Eval::Value(Value::Map(mut m)) = m else {
+                        unreachable!()
+                    };
+                    m.insert("b".to_owned(), Value::Integer(2));
+                    Eval::Value(Value::Map(m))
+                }
+                "remove" => Eval::Value(Value::Map(BTreeMap::new())),
+                "merge" => m,
+                "keys" => array(if input == "populated" {
+                    vec![Value::String("a".to_owned())]
+                } else {
+                    vec![]
+                }),
+                "values" => array(if input == "populated" {
+                    vec![Value::Integer(1)]
+                } else {
+                    vec![]
+                }),
+                _ => array(if input == "populated" {
+                    vec![Value::Map(
+                        [
+                            ("k".to_owned(), Value::String("a".to_owned())),
+                            ("v".to_owned(), Value::Integer(1)),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )]
+                } else {
+                    vec![]
+                }),
+            }
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{function} {input} {profile}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn map_family_pairs_and_absent_deletion(entries in proptest::collection::btree_map("[a-z]{1,6}", any::<i64>(), 0..15), key in "[a-z]{1,6}") {
+        let original: BTreeMap<String,Value> = entries.iter().map(|(k,v)| (k.clone(),Value::Integer(*v))).collect();
+        let m = Eval::Value(Value::Map(original.clone()));
+        let mut removed = original.clone(); removed.remove(&key);
+        prop_assert_eq!(strict("map_set", &[m.clone(),text(&key),Eval::Absent]), Eval::Value(Value::Map(removed)));
+        let keys = strict("map_keys", std::slice::from_ref(&m));
+        let values = strict("map_values", std::slice::from_ref(&m));
+        let expected_keys = array(original.keys().cloned().map(Value::String).collect());
+        let expected_values = array(original.values().cloned().collect());
+        let expected_entries = array(original.iter().map(|(key,value)| Value::Map([("k".to_owned(),Value::String(key.clone())), ("v".to_owned(),value.clone())].into_iter().collect())).collect());
+        prop_assert_eq!(strict("map_entries", std::slice::from_ref(&m)), expected_entries);
+        prop_assert_eq!(keys, expected_keys);
+        prop_assert_eq!(values, expected_values);
+    }
+}
+
+#[test]
+fn map_family_mixed_precedence_is_unobserved() {
+    let m = Eval::Value(Value::Map(BTreeMap::new()));
+    for args in [
+        vec![m.clone(), int(1), null()],
+        vec![m.clone(), null(), int(1)],
+        vec![array(vec![]), int(1)],
+        vec![array(vec![]), null()],
+        vec![m.clone(), int(1), text("x"), null()],
+    ] {
+        assert!(is_unobserved(&strict("map_remove", &args)), "{args:?}");
+    }
+    for args in [
+        vec![array(vec![]), int(1), int(2)],
+        vec![m.clone(), int(1), int(2), null(), int(3)],
+        vec![m.clone(), null(), int(3), int(1), int(2)],
+        vec![array(vec![]), null(), int(2)],
+    ] {
+        assert!(is_unobserved(&strict("map_set", &args)), "{args:?}");
+    }
+    assert_eq!(
+        emulator("map_remove", &[m.clone(), int(1), null()]),
+        wrong("map_remove", "String", "LONG")
+    );
+    assert_eq!(
+        emulator("map_set", &[array(vec![]), int(1), int(2)]),
+        wrong("map_set", "Map", "ARRAY")
+    );
+    assert_eq!(
+        emulator("map_merge", &[int(1), text("x")]),
+        wrong("map_merge", "Map", "LONG")
+    );
+    assert!(is_unobserved(&strict("map_merge", &[int(1), text("x")])));
+    assert!(is_unobserved(&strict("map_merge", &[text("x"), int(1)])));
+    assert!(is_unobserved(&strict(
+        "map_merge",
+        &[array(vec![]), array(vec![])]
+    )));
+}
+
+#[test]
+fn array_sequence_recorded_cases() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    let strings = array(vec![
+        Value::String("a".to_owned()),
+        Value::String("b".to_owned()),
+        Value::String("c".to_owned()),
+    ]);
+    for (name, args, expected) in [
+        (
+            "array_reverse",
+            vec![a.clone()],
+            array(vec![
+                Value::Integer(3),
+                Value::Integer(2),
+                Value::Integer(1),
+            ]),
+        ),
+        ("array_reverse", vec![array(vec![])], array(vec![])),
+        ("array_reverse", vec![null()], null()),
+        ("array_reverse", vec![Eval::Absent], null()),
+        (
+            "array_reverse",
+            vec![int(5)],
+            wrong("array_reverse", "Array", "LONG"),
+        ),
+        (
+            "array_concat",
+            vec![a.clone(), strings],
+            array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::String("a".to_owned()),
+                Value::String("b".to_owned()),
+                Value::String("c".to_owned()),
+            ]),
+        ),
+        (
+            "array_concat",
+            vec![a.clone(), a.clone(), a.clone()],
+            array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+        ),
+        ("array_concat", vec![a.clone(), array(vec![])], a.clone()),
+        ("array_concat", vec![a.clone(), null()], null()),
+        ("array_concat", vec![a.clone(), Eval::Absent], null()),
+        (
+            "array_concat",
+            vec![a.clone(), text("x")],
+            wrong("array_concat", "Array", "STRING"),
+        ),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for (n, verb) in [(0, "were"), (1, "was")] {
+        assert_eq!(Expr::call("array_concat",vec![Expr::Constant(Value::Null);n],Placement::Value).unwrap_err().to_string(),format!("The function 'array_concat(arrays: array[any]*): array[any]' takes [2..+∞) argument(s), but {n} {verb} provided."));
+    }
+    assert!(matches!(
+        Expr::call("array_reverse", vec![], Placement::Value),
+        Err(ExprError::Unsupported(_))
+    ));
+    assert!(is_unobserved(&strict("array_concat", &[null(), text("x")])));
+    assert!(is_unobserved(&strict("array_concat", &[text("x"), null()])));
+}
+
+#[test]
+fn array_sequence_pict_cases() {
+    let cases = [
+        ("reverse", "populated", "strict"),
+        ("reverse", "empty", "strict"),
+        ("concat", "populated", "strict"),
+        ("concat", "null", "strict"),
+        ("reverse", "absent", "strict"),
+        ("concat", "wrong", "emulator"),
+        ("reverse", "populated", "emulator"),
+        ("reverse", "null", "emulator"),
+        ("concat", "absent", "emulator"),
+        ("concat", "empty", "emulator"),
+        ("reverse", "wrong", "strict"),
+    ];
+    for (operation, input, profile) in cases {
+        let name = if operation == "reverse" {
+            "array_reverse"
+        } else {
+            "array_concat"
+        };
+        let arg = match input {
+            "populated" => array(vec![Value::Integer(1), Value::Integer(2)]),
+            "empty" => array(vec![]),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" => int(5),
+            _ => unreachable!(),
+        };
+        let args = if operation == "reverse" {
+            vec![arg]
+        } else {
+            vec![arg, array(vec![])]
+        };
+        let expected = match input {
+            "populated" if operation == "reverse" => {
+                array(vec![Value::Integer(2), Value::Integer(1)])
+            }
+            "populated" => array(vec![Value::Integer(1), Value::Integer(2)]),
+            "empty" => array(vec![]),
+            "null" | "absent" => null(),
+            "wrong" => wrong(name, "Array", "LONG"),
+            _ => unreachable!(),
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {input} {profile}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn array_sequence_properties(a in proptest::collection::vec(any::<i64>(),0..30), b in proptest::collection::vec(any::<i64>(),0..30)) {
+        let av: Vec<Value> = a.into_iter().map(Value::Integer).collect();
+        let bv: Vec<Value> = b.into_iter().map(Value::Integer).collect();
+        let reverse = strict("array_reverse", &[array(av.clone())]);
+        prop_assert_eq!(strict("array_reverse", &[reverse]),array(av.clone()));
+        let mut expected = av.clone(); expected.extend(bv.clone());
+        prop_assert_eq!(strict("array_concat", &[array(av),array(bv)]),array(expected));
+    }
+}
+
+#[test]
+fn array_concat_multiple_wrong_types_preserves_profile_behavior() {
+    for args in [vec![int(1), text("x")], vec![text("x"), int(1)]] {
+        assert!(is_unobserved(&strict("array_concat", &args)));
+        let expected_type = if matches!(args[0], Eval::Value(Value::Integer(_))) {
+            "LONG"
+        } else {
+            "STRING"
+        };
+        assert_eq!(
+            emulator("array_concat", &args),
+            wrong("array_concat", "Array", expected_type)
+        );
+    }
+}
+
+#[test]
+fn timestamp_unix_conversion_pict_cases() {
+    let cases = [
+        ("to_timestamp", "microseconds", "negative", "strict"),
+        ("to_timestamp", "seconds", "zero", "strict"),
+        ("to_timestamp", "milliseconds", "boundary", "strict"),
+        ("to_unix", "microseconds", "negative", "strict"),
+        ("to_unix", "seconds", "boundary", "strict"),
+        ("to_unix", "milliseconds", "wrong", "emulator"),
+        ("to_timestamp", "milliseconds", "null", "emulator"),
+        ("to_timestamp", "seconds", "negative", "emulator"),
+        ("to_unix", "microseconds", "zero", "emulator"),
+        ("to_unix", "microseconds", "null", "strict"),
+        ("to_unix", "seconds", "null", "emulator"),
+        ("to_unix", "milliseconds", "positive", "strict"),
+        ("to_timestamp", "microseconds", "boundary", "emulator"),
+        ("to_timestamp", "milliseconds", "absent", "strict"),
+        ("to_unix", "milliseconds", "zero", "strict"),
+        ("to_unix", "milliseconds", "negative", "emulator"),
+        ("to_timestamp", "microseconds", "positive", "emulator"),
+        ("to_timestamp", "seconds", "positive", "emulator"),
+        ("to_timestamp", "microseconds", "wrong", "strict"),
+        ("to_unix", "seconds", "wrong", "strict"),
+        ("to_unix", "seconds", "absent", "emulator"),
+        ("to_timestamp", "microseconds", "absent", "strict"),
+    ];
+    for (direction, unit, input, profile) in cases {
+        let (name, scale) = match (direction, unit) {
+            ("to_timestamp", "seconds") => ("unix_seconds_to_timestamp", 1_i64),
+            ("to_timestamp", "milliseconds") => ("unix_millis_to_timestamp", 1_000),
+            ("to_timestamp", "microseconds") => ("unix_micros_to_timestamp", 1_000_000),
+            ("to_unix", "seconds") => ("timestamp_to_unix_seconds", 1),
+            ("to_unix", "milliseconds") => ("timestamp_to_unix_millis", 1_000),
+            _ => ("timestamp_to_unix_micros", 1_000_000),
+        };
+        let value = match (direction, input) {
+            (_, "null") => null(),
+            (_, "absent") => Eval::Absent,
+            ("to_timestamp", "wrong") => text("1"),
+            ("to_unix", "wrong") => int(5),
+            ("to_timestamp", "boundary") => int(i64::MAX),
+            ("to_timestamp", "positive") => int(1),
+            ("to_timestamp", "zero") => int(0),
+            ("to_timestamp", "negative") => int(-1),
+            ("to_unix", "positive") => Eval::Value(Value::Timestamp(
+                Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+            )),
+            ("to_unix", "zero") => Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap())),
+            ("to_unix", "negative") => {
+                Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap()))
+            }
+            ("to_unix", "boundary") => Eval::Value(Value::Timestamp(
+                Timestamp::new(Timestamp::MAX_SECONDS, 999_999_000).unwrap(),
+            )),
+            _ => unreachable!(),
+        };
+        let expected = match (direction, input) {
+            (_, "null" | "absent") => null(),
+            ("to_timestamp", "wrong") => wrong(name, "Int64", "STRING"),
+            ("to_unix", "wrong") => wrong(name, "Timestamp", "LONG"),
+            ("to_timestamp", "boundary") => invalid(&format!("{name}(...) argument out of range")),
+            ("to_timestamp", "positive") => Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    1 / scale,
+                    u32::try_from((1 % scale) * (1_000_000_000 / scale)).unwrap(),
+                )
+                .unwrap(),
+            )),
+            ("to_timestamp", "zero") => {
+                Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap()))
+            }
+            ("to_timestamp", "negative") => Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    -1,
+                    u32::try_from(1_000_000_000 - (1_000_000_000 / scale)).unwrap(),
+                )
+                .unwrap(),
+            )),
+            ("to_unix", "positive") => {
+                int(1_582_979_696 * scale + 789_012_000 / (1_000_000_000 / scale))
+            }
+            ("to_unix", "zero") => int(0),
+            ("to_unix", "negative") => int(-1),
+            ("to_unix", "boundary") => {
+                int(Timestamp::MAX_SECONDS * scale + 999_999_000 / (1_000_000_000 / scale))
+            }
+            _ => unreachable!(),
+        };
+        let got = if profile == "strict" {
+            strict(name, &[value])
+        } else {
+            emulator(name, &[value])
+        };
+        assert_eq!(got, expected, "{direction} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_unix_conversion_recorded_arities_and_float() {
+    for unit in ["seconds", "millis", "micros"] {
+        let from = format!("unix_{unit}_to_timestamp");
+        let to = format!("timestamp_to_unix_{unit}");
+        assert_eq!(
+            strict(&from, &[int(i64::MIN)]),
+            invalid(&format!("{from}(...) argument out of range"))
+        );
+        assert_eq!(
+            strict(&from, &[dbl(1.5)]),
+            invalid("Cannot coerce Float64 (1.5) to Int64")
+        );
+        for (name, signature) in [
+            (&from, format!("{from}(input: int64): timestamp")),
+            (
+                &to,
+                format!("{to}[T: timestamp | bson_timestamp](input: T): int64"),
+            ),
+        ] {
+            assert_eq!(
+                Expr::call(name, vec![], Placement::Value)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "The function '{signature}' takes [1..1] argument(s), but 0 were provided."
+                )
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn timestamp_unix_round_trip_for_microsecond_aligned_values(seconds in -62_135_596_800i64..=253_402_300_799, micros in 0u32..1_000_000) {
+        let timestamp = Eval::Value(Value::Timestamp(Timestamp::new(seconds,micros*1_000).unwrap()));
+        let encoded = strict("timestamp_to_unix_micros", std::slice::from_ref(&timestamp));
+        prop_assert_eq!(strict("unix_micros_to_timestamp", &[encoded]), timestamp);
+    }
+}
+
+#[test]
+fn timestamp_duration_arithmetic_pict_cases() {
+    let cases = [
+        ("add", "day", "positive", "strict"),
+        ("add", "microsecond", "positive", "strict"),
+        ("subtract", "day", "negative", "strict"),
+        ("diff", "second", "positive", "strict"),
+        ("diff", "day", "negative", "strict"),
+        ("add", "hour", "absent", "emulator"),
+        ("subtract", "second", "absent", "emulator"),
+        ("diff", "microsecond", "negative", "emulator"),
+        ("add", "minute", "negative", "emulator"),
+        ("subtract", "millisecond", "positive", "emulator"),
+        ("subtract", "microsecond", "zero", "emulator"),
+        ("add", "second", "negative", "strict"),
+        ("diff", "millisecond", "null", "strict"),
+        ("add", "day", "null", "emulator"),
+        ("subtract", "hour", "null", "strict"),
+        ("add", "millisecond", "absent", "strict"),
+        ("diff", "minute", "null", "strict"),
+        ("diff", "day", "zero", "strict"),
+        ("diff", "hour", "zero", "emulator"),
+        ("add", "millisecond", "zero", "strict"),
+        ("diff", "microsecond", "absent", "emulator"),
+        ("subtract", "minute", "absent", "emulator"),
+        ("diff", "millisecond", "negative", "strict"),
+        ("add", "day", "absent", "emulator"),
+        ("diff", "second", "null", "strict"),
+        ("add", "minute", "zero", "emulator"),
+        ("add", "second", "zero", "emulator"),
+        ("add", "minute", "positive", "strict"),
+        ("subtract", "hour", "negative", "emulator"),
+        ("add", "microsecond", "null", "emulator"),
+        ("add", "hour", "positive", "strict"),
+    ];
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(100_000, 123_456_000).unwrap(),
+    ));
+    let origin = Eval::Value(Value::Timestamp(
+        Timestamp::new(100_000, 123_456_000).unwrap(),
+    ));
+    for (operation, unit, input, profile) in cases {
+        let name = match operation {
+            "add" => "timestamp_add",
+            "subtract" => "timestamp_subtract",
+            _ => "timestamp_diff",
+        };
+        let factor: i64 = match unit {
+            "microsecond" => 1_000,
+            "millisecond" => 1_000_000,
+            "second" => 1_000_000_000,
+            "minute" => 60_000_000_000,
+            "hour" => 3_600_000_000_000,
+            _ => 86_400_000_000_000,
+        };
+        let amount = match input {
+            "negative" => -1_i64,
+            "zero" => 0,
+            _ => 1,
+        };
+        let first = match input {
+            "null" => null(),
+            "absent" => Eval::Absent,
+            _ => base.clone(),
+        };
+        let args = if operation == "diff" {
+            let end = match input {
+                "null" => null(),
+                "absent" => Eval::Absent,
+                _ => Eval::Value(Value::Timestamp(
+                    Timestamp::new(100_000 + amount, 123_456_000).unwrap(),
+                )),
+            };
+            vec![end, origin.clone(), text(unit)]
+        } else {
+            vec![first, text(unit), int(amount)]
+        };
+        let expected = if input == "null" || input == "absent" {
+            null()
+        } else if operation == "diff" {
+            int((amount * 1_000_000_000) / factor)
+        } else {
+            let sign = if operation == "subtract" { -1 } else { 1 };
+            let nanos = 100_000_i64 * 1_000_000_000 + 123_456_000 + sign * amount * factor;
+            Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    nanos.div_euclid(1_000_000_000),
+                    u32::try_from(nanos.rem_euclid(1_000_000_000)).unwrap(),
+                )
+                .unwrap(),
+            ))
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_duration_recorded_boundaries() {
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    let epoch = Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap()));
+    assert_eq!(
+        strict(
+            "timestamp_diff",
+            &[base.clone(), epoch.clone(), text("day")]
+        ),
+        int(18_321)
+    );
+    assert_eq!(
+        strict(
+            "timestamp_diff",
+            &[epoch.clone(), base.clone(), text("day")]
+        ),
+        int(-18_321)
+    );
+    let negative = Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap()));
+    assert_eq!(
+        strict("timestamp_diff", &[epoch, negative, text("second")]),
+        int(0)
+    );
+    for unit in ["month", "week", "DAY"] {
+        let message = "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]";
+        assert_eq!(
+            strict("timestamp_add", &[base.clone(), text(unit), int(1)]),
+            invalid(message)
+        );
+    }
+    assert_eq!(
+        strict(
+            "timestamp_add",
+            &[base.clone(), text("second"), int(i64::MAX)]
+        ),
+        invalid("timestamp_add(...) result is out of range")
+    );
+    assert_eq!(
+        strict("timestamp_add", &[base.clone(), text("day"), dbl(1.5)]),
+        invalid("Cannot coerce Float64 (1.5) to Int64")
+    );
+    assert_eq!(
+        strict("timestamp_subtract", &[int(5), text("day"), int(1)]),
+        wrong("timestamp_sub", "Timestamp or BsonTimestamp", "LONG")
+    );
+    let max = Eval::Value(Value::Timestamp(
+        Timestamp::new(Timestamp::MAX_SECONDS, 999_999_000).unwrap(),
+    ));
+    let result = strict("timestamp_add", &[max, text("day"), int(1)]);
+    assert!(
+        matches!(result, Eval::Error(error) if error.to_string() == "timestamp_add(...) received a timestamp value that is out of range.")
+    );
+}
+
+#[test]
+fn timestamp_calendar_recorded_utc_cases() {
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    for (unit, seconds, nanos) in [
+        ("microsecond", 1_582_979_696_i64, 789_012_000_u32),
+        ("millisecond", 1_582_979_696_i64, 789_000_000_u32),
+        ("second", 1_582_979_696_i64, 0_u32),
+        ("minute", 1_582_979_640_i64, 0_u32),
+        ("hour", 1_582_977_600_i64, 0_u32),
+        ("day", 1_582_934_400_i64, 0_u32),
+        ("week", 1_582_416_000_i64, 0_u32),
+        ("week(monday)", 1_582_502_400_i64, 0_u32),
+        ("isoweek", 1_582_502_400_i64, 0_u32),
+        ("month", 1_580_515_200_i64, 0_u32),
+        ("quarter", 1_577_836_800_i64, 0_u32),
+        ("year", 1_577_836_800_i64, 0_u32),
+        ("isoyear", 1_577_664_000_i64, 0_u32),
+    ] {
+        assert_eq!(
+            both("timestamp_trunc", &[base.clone(), text(unit)]),
+            Eval::Value(Value::Timestamp(Timestamp::new(seconds, nanos).unwrap())),
+            "{unit}"
+        );
+    }
+    for (unit, value) in [
+        ("year", 2020_i64),
+        ("month", 2_i64),
+        ("day", 29_i64),
+        ("dayofweek", 7_i64),
+        ("dayofyear", 60_i64),
+        ("hour", 12_i64),
+        ("minute", 34_i64),
+        ("second", 56_i64),
+        ("microsecond", 789_012_i64),
+        ("week", 8_i64),
+        ("isoweek", 9_i64),
+        ("quarter", 1_i64),
+    ] {
+        assert_eq!(
+            both("timestamp_extract", &[base.clone(), text(unit)]),
+            int(value),
+            "{unit}"
+        );
+    }
+}
+
+#[test]
+fn timestamp_calendar_pict_cases() {
+    let cases = [
+        ("trunc", "day", "positive", "strict"),
+        ("extract", "hour", "positive", "strict"),
+        ("trunc", "second", "negative", "strict"),
+        ("extract", "microsecond", "null", "strict"),
+        ("trunc", "second", "null", "emulator"),
+        ("extract", "millisecond", "positive", "emulator"),
+        ("extract", "day", "negative", "emulator"),
+        ("extract", "day", "null", "strict"),
+        ("trunc", "hour", "absent", "emulator"),
+        ("trunc", "hour", "negative", "emulator"),
+        ("trunc", "millisecond", "null", "strict"),
+        ("trunc", "minute", "null", "emulator"),
+        ("trunc", "microsecond", "absent", "emulator"),
+        ("extract", "millisecond", "absent", "strict"),
+        ("extract", "microsecond", "negative", "emulator"),
+        ("extract", "second", "positive", "emulator"),
+        ("extract", "hour", "null", "emulator"),
+        ("extract", "minute", "positive", "strict"),
+        ("extract", "microsecond", "positive", "strict"),
+        ("extract", "minute", "negative", "emulator"),
+        ("trunc", "second", "absent", "strict"),
+        ("trunc", "day", "absent", "emulator"),
+        ("extract", "millisecond", "negative", "strict"),
+        ("extract", "minute", "absent", "strict"),
+    ];
+    for (operation, unit, input, profile) in cases {
+        let name = if operation == "trunc" {
+            "timestamp_trunc"
+        } else {
+            "timestamp_extract"
+        };
+        let timestamp = match input {
+            "positive" => Eval::Value(Value::Timestamp(
+                Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+            )),
+            "negative" => Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap())),
+            "null" => null(),
+            _ => Eval::Absent,
+        };
+        let expected = if input == "null" || input == "absent" {
+            null()
+        } else if operation == "extract" {
+            let v = if input == "positive" {
+                match unit {
+                    "microsecond" => 789_012,
+                    "millisecond" => 789,
+                    "second" => 56,
+                    "minute" => 34,
+                    "hour" => 12,
+                    _ => 29,
+                }
+            } else {
+                match unit {
+                    "microsecond" => 999_999,
+                    "millisecond" => 999,
+                    "second" | "minute" => 59,
+                    "hour" => 23,
+                    _ => 31,
+                }
+            };
+            int(v)
+        } else {
+            let (seconds, nanos) = if input == "positive" {
+                match unit {
+                    "microsecond" => (1_582_979_696, 789_012_000),
+                    "millisecond" => (1_582_979_696, 789_000_000),
+                    "second" => (1_582_979_696, 0),
+                    "minute" => (1_582_979_640, 0),
+                    "hour" => (1_582_977_600, 0),
+                    _ => (1_582_934_400, 0),
+                }
+            } else {
+                match unit {
+                    "microsecond" => (-1, 999_999_000),
+                    "millisecond" => (-1, 999_000_000),
+                    "second" => (-1, 0),
+                    "minute" => (-60, 0),
+                    "hour" => (-3_600, 0),
+                    _ => (-86_400, 0),
+                }
+            };
+            Eval::Value(Value::Timestamp(Timestamp::new(seconds, nanos).unwrap()))
+        };
+        let args = [timestamp, text(unit)];
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
+    let clock = Timestamp::new(1234, 567_890_000).unwrap();
+    let later = Timestamp::new(4321, 0).unwrap();
+    let now = || Expr::call("current_timestamp", vec![], Placement::Value).unwrap();
+    let stages = || {
+        vec![
+            Stage::Sort(vec![SortKey {
+                expr: now(),
+                descending: false,
+            }]),
+            Stage::Select {
+                aliases: vec![
+                    (FieldPath::parse("t").unwrap(), now()),
+                    (
+                        FieldPath::parse("nested").unwrap(),
+                        Expr::call("array", vec![now()], Placement::Value).unwrap(),
+                    ),
+                ],
+                keeps_name: false,
+            },
+        ]
+    };
+    let mut cursor = Cursor::new_in_with_runtime(
+        stages(),
+        Unrecorded::Refuse,
+        RuntimeContext {
+            request_timestamp: Some(clock),
+            zone_resolver: None,
+            regex_resolver: None,
+        },
+    );
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    let rows = cursor.finish().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.fields["t"], Value::Timestamp(clock));
+        assert_eq!(
+            row.fields["nested"],
+            Value::Array(vec![Value::Timestamp(clock)])
+        );
+    }
+    let mut second = Cursor::new_in_with_runtime(
+        stages(),
+        Unrecorded::Refuse,
+        RuntimeContext {
+            request_timestamp: Some(later),
+            zone_resolver: None,
+            regex_resolver: None,
+        },
+    );
+    second.push(Row::derived(BTreeMap::new())).unwrap();
+    assert_eq!(
+        second.finish().unwrap()[0].fields["t"],
+        Value::Timestamp(later)
+    );
+    for stages in [
+        vec![Stage::Distinct(vec![("t".to_owned(), now())])],
+        vec![Stage::Aggregate {
+            accumulators: vec![(
+                "t".to_owned(),
+                Accumulator {
+                    kind: AccumulatorKind::Maximum,
+                    argument: Some(now()),
+                },
+            )],
+            groups: vec![],
+        }],
+    ] {
+        let mut blocking = Cursor::new_in_with_runtime(
+            stages,
+            Unrecorded::Refuse,
+            RuntimeContext {
+                request_timestamp: Some(clock),
+                zone_resolver: None,
+                regex_resolver: None,
+            },
+        );
+        blocking.push(Row::derived(BTreeMap::new())).unwrap();
+        blocking.push(Row::derived(BTreeMap::new())).unwrap();
+        assert_eq!(
+            blocking.finish().unwrap()[0].fields["t"],
+            Value::Timestamp(clock)
+        );
+    }
+    assert!(is_unobserved(
+        &now().eval_in(&Row::derived(BTreeMap::new()), Unrecorded::Refuse)
+    ));
+}
+
+#[test]
+fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
+    fn resolve(
+        timestamp: Timestamp,
+        zone: &str,
+        unit: &str,
+        operation: ZoneOperation,
+    ) -> Result<ZoneResult, ZoneError> {
+        assert_eq!(zone, "Asia/Tokyo");
+        assert_eq!(
+            timestamp,
+            Timestamp::new(1_582_979_696, 789_012_000).unwrap()
+        );
+        match (operation, unit) {
+            (ZoneOperation::Trunc, "day") => Ok(ZoneResult::Timestamp(
+                Timestamp::new(1_582_902_000, 0).unwrap(),
+            )),
+            (ZoneOperation::Extract, "hour") => Ok(ZoneResult::Integer(21)),
+            _ => Err(ZoneError::InvalidZone),
+        }
+    }
+    let t = Expr::Constant(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    let call = |name: &str, unit: &str| {
+        Expr::call(
+            name,
+            vec![
+                t.clone(),
+                Expr::Constant(Value::String(unit.to_owned())),
+                Expr::Constant(Value::String("Asia/Tokyo".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let row = Row::derived(BTreeMap::new());
+    assert!(is_unobserved(
+        &call("timestamp_trunc", "day").eval_in(&row, Unrecorded::Refuse)
+    ));
+    let runtime = RuntimeContext {
+        request_timestamp: None,
+        zone_resolver: Some(resolve),
+        regex_resolver: None,
+    };
+    let stages = vec![Stage::Select {
+        aliases: vec![
+            (
+                FieldPath::parse("t").unwrap(),
+                call("timestamp_trunc", "day"),
+            ),
+            (
+                FieldPath::parse("h").unwrap(),
+                call("timestamp_extract", "hour"),
+            ),
+        ],
+        keeps_name: false,
+    }];
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let out = cursor.push(row).unwrap();
+    assert_eq!(
+        out[0].fields["t"],
+        Value::Timestamp(Timestamp::new(1_582_902_000, 0).unwrap())
+    );
+    assert_eq!(out[0].fields["h"], Value::Integer(21));
+}
+
+#[test]
+fn timestamp_shift_wrong_timestamp_uses_recorded_type_name() {
+    for name in ["timestamp_add", "timestamp_subtract"] {
+        let args = [int(1), text("day"), int(1)];
+        let error_name = if name == "timestamp_subtract" {
+            "timestamp_sub"
+        } else {
+            name
+        };
+        assert_eq!(
+            strict(name, &args),
+            wrong(error_name, "Timestamp or BsonTimestamp", "LONG")
+        );
+    }
+}
+
+#[test]
+fn regex_without_adapter_resolver_is_unobserved() {
+    let expression = Expr::call(
+        "regex_contains",
+        vec![
+            Expr::Constant(Value::String("abc".to_owned())),
+            Expr::Constant(Value::String("b".to_owned())),
+        ],
+        Placement::Value,
+    )
+    .unwrap();
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert!(is_unobserved(
+            &expression.eval_in(&Row::derived(BTreeMap::new()), mode)
+        ));
+    }
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn fake_regex(
+    subject: &str,
+    pattern: &str,
+    operation: RegexOperation,
+) -> Result<RegexResult, RegexError> {
+    assert_eq!((subject, pattern), ("abc", "b"));
+    Ok(match operation {
+        RegexOperation::Contains => RegexResult::Boolean(true),
+        RegexOperation::Match => RegexResult::Boolean(false),
+        RegexOperation::Find => RegexResult::Match(Some("b".to_owned())),
+        RegexOperation::FindAll => RegexResult::Matches(vec![Some("b".to_owned())]),
+    })
+}
+
+#[test]
+fn regex_port_pict_generated_cases() {
+    let table = include_str!("regex_port.generated.tsv");
+    let mut count = 0;
+    for line in table.lines().skip(1) {
+        let fields: Vec<_> = line.split('\t').collect();
+        let [operation, profile, availability] = fields.as_slice() else {
+            panic!("bad generated row: {line}");
+        };
+        let (name, expected) = match *operation {
+            "contains" => ("regex_contains", Eval::Value(Value::Boolean(true))),
+            "match" => ("regex_match", Eval::Value(Value::Boolean(false))),
+            "find" => ("regex_find", text("b")),
+            "find_all" => ("regex_find_all", array(vec![Value::String("b".to_owned())])),
+            _ => panic!("bad operation: {operation}"),
+        };
+        let mode = match *profile {
+            "strict" => Unrecorded::Refuse,
+            "emulator" => Unrecorded::OfficialEmulator,
+            _ => panic!("bad profile: {profile}"),
+        };
+        let resolver = match *availability {
+            "present" => Some(fake_regex as RegexResolver),
+            "absent" => None,
+            _ => panic!("bad resolver: {availability}"),
+        };
+        let expression = Expr::call(
+            name,
+            vec![
+                Expr::Constant(Value::String("abc".to_owned())),
+                Expr::Constant(Value::String("b".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap();
+        let got = expression.eval_in_with_runtime(
+            &Row::derived(BTreeMap::new()),
+            mode,
+            RuntimeContext {
+                regex_resolver: resolver,
+                ..RuntimeContext::default()
+            },
+        );
+        if resolver.is_some() {
+            assert_eq!(got, expected, "{line}");
+        } else {
+            assert!(is_unobserved(&got), "{line}: {got:?}");
+        }
+        count += 1;
+    }
+    assert_eq!(count, 8);
+}
+
+#[test]
+fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
+    fn unexpected(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        panic!("invalid input reached the resolver");
+    }
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: RuntimeContext {
+            regex_resolver: Some(unexpected),
+            ..RuntimeContext::default()
+        },
+    };
+    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx);
+    assert_eq!(evaluate(&[null(), text("b")]), null());
+    assert_eq!(
+        evaluate(&[int(1), text("b")]),
+        wrong("regex_contains", "String", "LONG")
+    );
+    assert!(is_unobserved(&evaluate(&[text("1"), text(r"\d")])));
+}
+
+#[test]
+fn regex_resolver_reaches_nested_and_blocking_stages() {
+    let regex = || {
+        Expr::call(
+            "regex_contains",
+            vec![
+                Expr::Constant(Value::String("abc".to_owned())),
+                Expr::Constant(Value::String("b".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let nested = || Expr::call("array", vec![regex()], Placement::Value).unwrap();
+    let runtime = RuntimeContext {
+        regex_resolver: Some(fake_regex),
+        ..RuntimeContext::default()
+    };
+    let stages = vec![
+        Stage::Sort(vec![SortKey {
+            expr: regex(),
+            descending: false,
+        }]),
+        Stage::Select {
+            aliases: vec![(FieldPath::parse("result").unwrap(), nested())],
+            keeps_name: false,
+        },
+    ];
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    let rows = cursor.finish().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].fields["result"],
+        Value::Array(vec![Value::Boolean(true)])
+    );
+    for stage in [
+        Stage::Distinct(vec![("result".to_owned(), regex())]),
+        Stage::Aggregate {
+            groups: vec![("result".to_owned(), regex())],
+            accumulators: vec![(
+                "count".to_owned(),
+                Accumulator {
+                    kind: AccumulatorKind::Count,
+                    argument: Some(regex()),
+                },
+            )],
+        },
+    ] {
+        let mut buffered = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime);
+        assert!(buffered
+            .push(Row::derived(BTreeMap::new()))
+            .unwrap()
+            .is_empty());
+        let rows = buffered.finish().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fields["result"], Value::Boolean(true));
+        if rows[0].fields.contains_key("count") {
+            assert_eq!(rows[0].fields["count"], Value::Integer(1));
+        }
+    }
+    let condition = Expr::call(
+        "equal",
+        vec![regex(), Expr::Constant(Value::Boolean(true))],
+        Placement::Condition,
+    )
+    .unwrap();
+    let mut filtered =
+        Cursor::new_in_with_runtime(vec![Stage::Where(condition)], Unrecorded::Refuse, runtime);
+    assert_eq!(
+        filtered.push(Row::derived(BTreeMap::new())).unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn regex_port_maps_syntax_resource_and_incompatible_results() {
+    fn invalid_syntax(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Err(RegexError::InvalidSyntax)
+    }
+    fn exhausted(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Err(RegexError::ResourceLimit)
+    }
+    #[allow(clippy::unnecessary_wraps)]
+    fn wrong_result(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Ok(RegexResult::Match(None))
+    }
+    let call = |resolver: RegexResolver, mode| {
+        let cx = Context {
+            unrecorded: mode,
+            condition: false,
+            runtime: RuntimeContext {
+                regex_resolver: Some(resolver),
+                ..RuntimeContext::default()
+            },
+        };
+        (function("regex_contains").unwrap().eval)(&[text("abc"), text("b")], cx)
+    };
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(invalid_syntax, mode),
+            invalid("Unsupported regex syntax.")
+        );
+        assert!(is_unobserved(&call(exhausted, mode)));
+        assert!(is_unobserved(&call(wrong_result, mode)));
     }
 }

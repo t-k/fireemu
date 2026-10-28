@@ -1664,6 +1664,7 @@ impl RestState {
                     .collect(),
             )));
         }
+        let runtime = crate::pipeline_timezone::runtime(&self.local);
         let responses = if let Some(names) = &compiled.documents {
             crate::pipeline::documents_input(&self.local, database, names, &*guard)
                 .map_err(refuse)?
@@ -1677,8 +1678,11 @@ impl RestState {
         };
         // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);
-        let mut cursor =
-            fireemu_core_firestore::pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
+        let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
+            compiled.stages,
+            unrecorded,
+            runtime,
+        );
         let mut rows = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {

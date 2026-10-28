@@ -1,0 +1,594 @@
+{
+  "version": 1,
+  "source": {
+    "journalSha256": "0d4e63973b6d91a68af254d3c1cd7684c00775f0ec8436adbb24f0c9b348ee8c",
+    "capture": "NEXT4 production two rounds",
+    "normalization": "Private run prefix removed; each generated 20-byte push key replaced only in its POST response and dependent request paths by a unique same-length per-round placeholder."
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "generatedKeyPlaceholder": "GeneratedKeyRound01_",
+      "rows": [
+        {
+          "id": "seed-tree",
+          "requestId": 16,
+          "method": "PUT",
+          "path": "/r1/tree.json",
+          "query": "",
+          "requestBody": "{\"scalar\":1,\"child\":{\"x\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6eyJ4IjoyfSwic2NhbGFyIjoxfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "1fcfdacf8e51838703ce6c850372b968a656c0d2e5641d29c963b83ad812cf5b"
+        },
+        {
+          "id": "seed-patch",
+          "requestId": 17,
+          "method": "PUT",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19",
+          "bodyBytes": 21,
+          "originalBodySha256": "ccae440c7c76e4a208beb230f350b61056bf77c3850ad5733258144e845c1033"
+        },
+        {
+          "id": "seed-query",
+          "requestId": 18,
+          "method": "PUT",
+          "path": "/r1/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0=",
+          "bodyBytes": 62,
+          "originalBodySha256": "b87db758d9accfea150b82ce77b27f0ea92d559a2f9770b438aafa03fc10f72f"
+        },
+        {
+          "id": "read-tree",
+          "requestId": 19,
+          "method": "GET",
+          "path": "/r1/tree.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6eyJ4IjoyfSwic2NhbGFyIjoxfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "1fcfdacf8e51838703ce6c850372b968a656c0d2e5641d29c963b83ad812cf5b"
+        },
+        {
+          "id": "read-patch",
+          "requestId": 20,
+          "method": "GET",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19",
+          "bodyBytes": 21,
+          "originalBodySha256": "ccae440c7c76e4a208beb230f350b61056bf77c3850ad5733258144e845c1033"
+        },
+        {
+          "id": "read-query",
+          "requestId": 21,
+          "method": "GET",
+          "path": "/r1/query.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0=",
+          "bodyBytes": 62,
+          "originalBodySha256": "b87db758d9accfea150b82ce77b27f0ea92d559a2f9770b438aafa03fc10f72f"
+        },
+        {
+          "id": "post-child",
+          "requestId": 22,
+          "method": "POST",
+          "path": "/r1/push.json",
+          "query": "",
+          "requestBody": "{\"v\":1}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "31"
+          },
+          "bodyBase64": "eyJuYW1lIjoiR2VuZXJhdGVkS2V5Um91bmQwMV8ifQ==",
+          "bodyBytes": 31,
+          "originalBodySha256": "4a864719f2971e32fa39bb3df26928b3e5d4f5a7f2675b9a0499f17463364374"
+        },
+        {
+          "id": "read-child",
+          "requestId": 23,
+          "method": "GET",
+          "path": "/r1/push/GeneratedKeyRound01_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "7"
+          },
+          "bodyBase64": "eyJ2IjoxfQ==",
+          "bodyBytes": 7,
+          "originalBodySha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+        },
+        {
+          "id": "delete-child",
+          "requestId": 24,
+          "method": "DELETE",
+          "path": "/r1/push/GeneratedKeyRound01_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "read-absence",
+          "requestId": 25,
+          "method": "GET",
+          "path": "/r1/push/GeneratedKeyRound01_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "shallow",
+          "requestId": 26,
+          "method": "GET",
+          "path": "/r1/tree.json",
+          "query": "shallow=true",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6dHJ1ZSwic2NhbGFyIjp0cnVlfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "53da57876ed1d8b073f12d2b67fd09c9c8480b3377ed00949c00032de8d92697"
+        },
+        {
+          "id": "put-silent",
+          "requestId": 27,
+          "method": "PUT",
+          "path": "/r1/silent.json",
+          "query": "print=silent",
+          "requestBody": "{\"a\":1}",
+          "status": 204,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyBase64": "",
+          "bodyBytes": 0,
+          "originalBodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "patch-silent",
+          "requestId": 28,
+          "method": "PATCH",
+          "path": "/r1/silent.json",
+          "query": "print=silent",
+          "requestBody": "{\"b\":2}",
+          "status": 204,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyBase64": "",
+          "bodyBytes": 0,
+          "originalBodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "write-limit",
+          "requestId": 29,
+          "method": "PUT",
+          "path": "/r1/limited.json",
+          "query": "writeSizeLimit=small",
+          "requestBody": "{\"v\":1}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "7"
+          },
+          "bodyBase64": "eyJ2IjoxfQ==",
+          "bodyBytes": 7,
+          "originalBodySha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+        },
+        {
+          "id": "patch-anchor",
+          "requestId": 30,
+          "method": "PATCH",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9",
+          "bodyBytes": 21,
+          "originalBodySha256": "eb43194bd3ede2f2a085bea5ec6349f7837531b3deb7315c7d886b1afb899781"
+        },
+        {
+          "id": "query-anchor",
+          "requestId": 31,
+          "method": "GET",
+          "path": "/r1/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0=",
+          "bodyBytes": 50,
+          "originalBodySha256": "2a9f220574a2ea47478fe4a069e7714b6431c23539f52a8d7f8bc7406d1f24e4"
+        },
+        {
+          "id": "wipe-round",
+          "requestId": 32,
+          "method": "DELETE",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "verify-round-empty",
+          "requestId": 33,
+          "method": "GET",
+          "path": "/r1.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "generatedKeyPlaceholder": "GeneratedKeyRound02_",
+      "rows": [
+        {
+          "id": "seed-tree",
+          "requestId": 34,
+          "method": "PUT",
+          "path": "/r2/tree.json",
+          "query": "",
+          "requestBody": "{\"scalar\":1,\"child\":{\"x\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6eyJ4IjoyfSwic2NhbGFyIjoxfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "1fcfdacf8e51838703ce6c850372b968a656c0d2e5641d29c963b83ad812cf5b"
+        },
+        {
+          "id": "seed-patch",
+          "requestId": 35,
+          "method": "PUT",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19",
+          "bodyBytes": 21,
+          "originalBodySha256": "ccae440c7c76e4a208beb230f350b61056bf77c3850ad5733258144e845c1033"
+        },
+        {
+          "id": "seed-query",
+          "requestId": 36,
+          "method": "PUT",
+          "path": "/r2/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0=",
+          "bodyBytes": 62,
+          "originalBodySha256": "b87db758d9accfea150b82ce77b27f0ea92d559a2f9770b438aafa03fc10f72f"
+        },
+        {
+          "id": "read-tree",
+          "requestId": 37,
+          "method": "GET",
+          "path": "/r2/tree.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6eyJ4IjoyfSwic2NhbGFyIjoxfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "1fcfdacf8e51838703ce6c850372b968a656c0d2e5641d29c963b83ad812cf5b"
+        },
+        {
+          "id": "read-patch",
+          "requestId": 38,
+          "method": "GET",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19",
+          "bodyBytes": 21,
+          "originalBodySha256": "ccae440c7c76e4a208beb230f350b61056bf77c3850ad5733258144e845c1033"
+        },
+        {
+          "id": "read-query",
+          "requestId": 39,
+          "method": "GET",
+          "path": "/r2/query.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0=",
+          "bodyBytes": 62,
+          "originalBodySha256": "b87db758d9accfea150b82ce77b27f0ea92d559a2f9770b438aafa03fc10f72f"
+        },
+        {
+          "id": "post-child",
+          "requestId": 40,
+          "method": "POST",
+          "path": "/r2/push.json",
+          "query": "",
+          "requestBody": "{\"v\":1}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "31"
+          },
+          "bodyBase64": "eyJuYW1lIjoiR2VuZXJhdGVkS2V5Um91bmQwMl8ifQ==",
+          "bodyBytes": 31,
+          "originalBodySha256": "fce4c050d0e76c309fe2f7778e516cc3fcba4836fe4a9f7390f8a8cdf8690901"
+        },
+        {
+          "id": "read-child",
+          "requestId": 41,
+          "method": "GET",
+          "path": "/r2/push/GeneratedKeyRound02_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "7"
+          },
+          "bodyBase64": "eyJ2IjoxfQ==",
+          "bodyBytes": 7,
+          "originalBodySha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+        },
+        {
+          "id": "delete-child",
+          "requestId": 42,
+          "method": "DELETE",
+          "path": "/r2/push/GeneratedKeyRound02_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "read-absence",
+          "requestId": 43,
+          "method": "GET",
+          "path": "/r2/push/GeneratedKeyRound02_.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "shallow",
+          "requestId": 44,
+          "method": "GET",
+          "path": "/r2/tree.json",
+          "query": "shallow=true",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "28"
+          },
+          "bodyBase64": "eyJjaGlsZCI6dHJ1ZSwic2NhbGFyIjp0cnVlfQ==",
+          "bodyBytes": 28,
+          "originalBodySha256": "53da57876ed1d8b073f12d2b67fd09c9c8480b3377ed00949c00032de8d92697"
+        },
+        {
+          "id": "put-silent",
+          "requestId": 45,
+          "method": "PUT",
+          "path": "/r2/silent.json",
+          "query": "print=silent",
+          "requestBody": "{\"a\":1}",
+          "status": 204,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyBase64": "",
+          "bodyBytes": 0,
+          "originalBodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "patch-silent",
+          "requestId": 46,
+          "method": "PATCH",
+          "path": "/r2/silent.json",
+          "query": "print=silent",
+          "requestBody": "{\"b\":2}",
+          "status": 204,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyBase64": "",
+          "bodyBytes": 0,
+          "originalBodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "id": "write-limit",
+          "requestId": 47,
+          "method": "PUT",
+          "path": "/r2/limited.json",
+          "query": "writeSizeLimit=small",
+          "requestBody": "{\"v\":1}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "7"
+          },
+          "bodyBase64": "eyJ2IjoxfQ==",
+          "bodyBytes": 7,
+          "originalBodySha256": "afbf9d0f3560b0fd7795e81c42a0a79ee6b6fc67e064f77826aee642cad28d91"
+        },
+        {
+          "id": "patch-anchor",
+          "requestId": 48,
+          "method": "PATCH",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9",
+          "bodyBytes": 21,
+          "originalBodySha256": "eb43194bd3ede2f2a085bea5ec6349f7837531b3deb7315c7d886b1afb899781"
+        },
+        {
+          "id": "query-anchor",
+          "requestId": 49,
+          "method": "GET",
+          "path": "/r2/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0=",
+          "bodyBytes": 50,
+          "originalBodySha256": "2a9f220574a2ea47478fe4a069e7714b6431c23539f52a8d7f8bc7406d1f24e4"
+        },
+        {
+          "id": "wipe-round",
+          "requestId": 50,
+          "method": "DELETE",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "id": "verify-round-empty",
+          "requestId": 51,
+          "method": "GET",
+          "path": "/r2.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "4"
+          },
+          "bodyBase64": "bnVsbA==",
+          "bodyBytes": 4,
+          "originalBodySha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        }
+      ]
+    }
+  ]
+}

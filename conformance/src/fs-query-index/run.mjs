@@ -930,11 +930,45 @@ export function classify({ stale, production, alternative, fireemu }) {
   return "MISMATCH";
 }
 
+const FRAMING_PROGRAMS = new Set([
+  "fs-ent-pipeline/o8a/framing-small",
+  "fs-ent-pipeline/o8a/framing-large",
+]);
+
+/** Framing digests apply only to the two recorded pipeline programs. */
+export function classifyPipelineFraming({
+  lane,
+  programId,
+  saved,
+  stale,
+  production,
+  alternative,
+  fireemu,
+  framingTools,
+}) {
+  if (lane !== "fs-ent-pipeline" || !FRAMING_PROGRAMS.has(programId) || !saved)
+    return { status: classify({ stale, production, alternative, fireemu }) };
+  if (
+    stale ||
+    production === undefined ||
+    production.unknown !== undefined ||
+    fireemu === undefined
+  )
+    return { status: classify({ stale, production, alternative, fireemu }) };
+  if (saved.compactFramingVersion !== 1 || !framingTools)
+    return { status: "STALE_FIXTURE", diagnostic: "invalid-framing-fixture" };
+  return framingTools.classifyCompactFraming(production, alternative, fireemu);
+}
+
 async function check() {
   const fixture = existsSync(FIXTURE)
     ? (await loadCommittedFixture(FIXTURE)).fixture
     : { programs: {} };
   const selected = selectPrograms(PROGRAMS);
+  const framingTools =
+    LANE.id === "fs-ent-pipeline"
+      ? await import("../fs-ent-pipeline/framing-summary.mjs")
+      : undefined;
   const harness = await harnessDigest();
   const local = await runLocal(selected);
   const rows = [];
@@ -948,17 +982,42 @@ async function check() {
       const alternative = saved?.second?.[step.id];
       const fireemu = local.results[program.id]?.steps?.[step.id];
       const row = `${program.id}#${step.id}`;
-      let status = classify({ stale, production, alternative, fireemu });
+      // Only the two recorded pipeline framing programs use compact response comparisons.
+      const framingProgram = LANE.id === "fs-ent-pipeline" && FRAMING_PROGRAMS.has(program.id);
+      const framing = framingProgram && saved?.compactFramingVersion === 1;
+      const framingResult = classifyPipelineFraming({
+        lane: LANE.id,
+        programId: program.id,
+        saved,
+        stale,
+        production,
+        alternative,
+        fireemu,
+        framingTools,
+      });
+      let status = framingResult.status;
       const decision =
-        status === "MISMATCH" ? approvedDivergence(row, production, fireemu) : undefined;
+        status === "MISMATCH" && !framingProgram
+          ? approvedDivergence(row, production, fireemu)
+          : undefined;
       if (decision) status = "DIVERGENCE_APPROVED";
+      let shown = fireemu;
+      if (framing) {
+        try {
+          shown = framingTools.compactFramingStep(fireemu, production?.kind);
+        } catch {
+          shown = { diagnostic: "invalid-local-response" };
+        }
+      }
       rows.push({
         row,
         status,
         ...(decision ? { decision } : {}),
+        ...(framingResult?.diagnostic ? { framingDiagnostic: framingResult.diagnostic } : {}),
+        ...(framingResult?.framing ? { framing: framingResult.framing } : {}),
         production,
         ...(alternative ? { alternative } : {}),
-        fireemu,
+        fireemu: shown,
       });
     }
   }
@@ -1029,15 +1088,15 @@ async function exportComparison(out) {
     fixtureSha256,
     summary: comparison.summary,
     rangeTotals: comparison.rangeTotals,
-    rows: comparison.rows.map(({ row, status, decision, production, fireemu }) =>
-      status === "MISMATCH" || status === "DIVERGENCE_APPROVED"
-        ? {
-            row,
-            status,
-            ...(decision ? { decision } : {}),
-            differences: differencePaths(production, fireemu),
-          }
-        : { row, status },
+    rows: comparison.rows.map(
+      ({ row, status, decision, production, fireemu, framingDiagnostic }) => {
+        const exported = { row, status };
+        if (decision) exported.decision = decision;
+        if (framingDiagnostic) exported.framingDiagnostic = framingDiagnostic;
+        if (status === "MISMATCH" || status === "DIVERGENCE_APPROVED")
+          exported.differences = differencePaths(production, fireemu);
+        return exported;
+      },
     ),
   };
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);

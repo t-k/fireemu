@@ -1,0 +1,3 @@
+Original: success, pending, error
+State: ENABLED, DISABLED, OTHER
+Disable: success, error

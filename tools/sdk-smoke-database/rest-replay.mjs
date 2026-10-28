@@ -6,8 +6,8 @@
 // It starts `fireemu up --only auth,database` in the strict profile on free loopback ports,
 // installs the Rules the production instance had, sends the 124 corpus requests in their recorded
 // order (two rounds), then loads the 48 M14 Rules sources, and stops the server. Each REST row is
-// MATCH (status, body bytes and ETag equal), KNOWN_DIFFERENCE (only the member order of the JSON
-// body differs, on the two rows recorded as such) or MISMATCH. M14 rows compare status and bytes.
+// MATCH (status and ETag equal, with exact bytes except for the documented filtered-query semantic
+// JSON policy) or MISMATCH. M14 rows compare status and bytes.
 // `comparison.json` holds every verdict and the local answer; nothing is sent to production.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -32,9 +32,13 @@ export const RULES = {
     },
   },
 };
-// Rows where production answered the same JSON with another member order (both rounds): the PATCH
-// answer keeps the request's order, and the orderBy query answer lists children in query order.
-export const KNOWN_RAW_ORDER = new Set(['patch-update-nested-and-add', 'query-get-1']);
+// JSON.parse ignores whitespace and numeric/escape spelling, rounds numbers and collapses duplicate keys.
+// The recorded comparison accepts only values that parse as safe integers when numeric.
+export const FILTERED_QUERY_POLICY = {
+  id: 'filtered-get-semantic-json-v1',
+  authority: 'https://firebase.google.com/docs/database/rest/retrieve-data#filtering-data',
+  limitations: 'JSON.parse ignores whitespace and numeric/escape spelling, rounds numbers and collapses duplicate object keys; parsed numeric values must be safe integers',
+};
 // The fixture masks the data root inside one error message.
 const ROOT_MASK = '{root}';
 
@@ -68,18 +72,43 @@ export function localRequests(fixture) {
   })));
 }
 
-const parse = (text) => { try { return { json: JSON.parse(text) }; } catch { return { text }; } };
-// Called only when the bytes differ: equal parsed JSON then means another member order.
-const memberOrderOnly = (a, b) => isDeepStrictEqual(parse(a), parse(b));
+function recordedFilteredGet(round, production, request) {
+  return (round === 1 || round === 2)
+    && production.id === 'query-get-1' && production.method === 'GET'
+    && production.path === `raw/round${round}/query.json` && production.status === 200
+    && request?.round === round && request.id === production.id && request.method === 'GET'
+    && request.url === `/${DATA_ROOT}/raw/round${round}/query.json?orderBy="h"&startAt=2`;
+}
 
-export function judgeRow(round, production, local) {
+function jsonObject(text) {
+  try {
+    const value = JSON.parse(text);
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasOnlySafeIntegers(value) {
+  if (typeof value === 'number') return Number.isSafeInteger(value);
+  if (value !== null && typeof value === 'object') return Object.values(value).every(hasOnlySafeIntegers);
+  return true;
+}
+
+export function judgeRow(round, production, local, request) {
   const expected = production.bodyText.includes(ROOT_MASK) ? production.bodyText.replaceAll(ROOT_MASK, DATA_ROOT) : production.bodyText;
   const differences = [];
+  const diagnostics = [];
+  const semantic = recordedFilteredGet(round, production, request);
   if (local.status !== production.status) differences.push('status');
   if (local.etag !== production.etag) differences.push('etag');
-  if (local.bodyText !== expected) differences.push(memberOrderOnly(local.bodyText, expected) ? 'raw-key-order' : 'body');
-  const known = differences.length === 1 && differences[0] === 'raw-key-order' && KNOWN_RAW_ORDER.has(production.id);
-  return { round, id: production.id, verdict: differences.length === 0 ? 'MATCH' : known ? 'KNOWN_DIFFERENCE' : 'MISMATCH', differences, production: { status: production.status, bodyText: production.bodyText, etag: production.etag }, local };
+  if (semantic) {
+    const left = jsonObject(expected);
+    const right = jsonObject(local.bodyText);
+    if (left === undefined || right === undefined || !hasOnlySafeIntegers(left) || !hasOnlySafeIntegers(right) || !isDeepStrictEqual(left, right)) differences.push('body');
+    if (local.bodyText !== expected) diagnostics.push('raw-body-differs');
+  } else if (local.bodyText !== expected) differences.push('body');
+  return { round, id: production.id, verdict: differences.length === 0 ? 'MATCH' : 'MISMATCH', differences, diagnostics, ...(semantic ? { policy: FILTERED_QUERY_POLICY.id } : {}), production: { status: production.status, bodyText: production.bodyText, etag: production.etag }, local };
 }
 
 export function judgeM14(production, local) {
@@ -126,13 +155,13 @@ async function runLocal({ fireemu, out }) {
     if (rules.status !== 200) throw Error(`installing the Rules answered ${rules.status}`);
     const productionRows = fixture.rounds.flatMap((round) => round.rows);
     const rows = [];
-    for (const [i, request] of localRequests(fixture).entries()) rows.push(judgeRow(request.round, productionRows[i], await send(origin, request)));
+    for (const [i, request] of localRequests(fixture).entries()) rows.push(judgeRow(request.round, productionRows[i], await send(origin, request), request));
     const m14 = [];
     for (const production of fixture.m14) {
       const local = await send(origin, { method: 'PUT', url: '/.settings/rules.json', body: pythonJsonDumps(m14Rules(production.expression, production.context)), headers: owner });
       m14.push(judgeM14(production, local));
     }
-    return { fixture: { observedAt: fixture.observedAt, corpusSha256: fixture.source.corpusSha256 }, summary: summarize(rows, m14), rows, m14 };
+    return { comparisonPolicy: FILTERED_QUERY_POLICY, fixture: { observedAt: fixture.observedAt, corpusSha256: fixture.source.corpusSha256 }, summary: summarize(rows, m14), rows, m14 };
   } finally {
     child.stdin.end(); // --owner-stdin: closing stdin stops the server
     const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }, 10000);

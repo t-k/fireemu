@@ -609,6 +609,7 @@ fn eval_function(name: &str, args: Vec<Eval>) -> Eval {
         Context {
             unrecorded: Unrecorded::OfficialEmulator,
             condition: false,
+            runtime: RuntimeContext::default(),
         },
     )
 }
@@ -710,6 +711,7 @@ fn a_value_that_is_not_a_boolean_fails_the_logical_call() {
                 Context {
                     unrecorded,
                     condition: false,
+                    runtime: RuntimeContext::default(),
                 },
             )
         };
@@ -909,6 +911,7 @@ fn strict(function_name: &str, args: &[Eval]) -> Eval {
         Context {
             unrecorded: Unrecorded::Refuse,
             condition: false,
+            runtime: RuntimeContext::default(),
         },
     )
 }
@@ -1352,6 +1355,7 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
             Context {
                 unrecorded,
                 condition,
+                runtime: RuntimeContext::default(),
             },
         )
     };

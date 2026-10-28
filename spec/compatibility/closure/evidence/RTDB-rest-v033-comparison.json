@@ -1,0 +1,2627 @@
+{
+  "kind": "rtdb-production-comparison-v1",
+  "parent": "RTDB",
+  "comparison": "rest",
+  "sourceCommit": "86abafcdf2197456b819134c33f76ecd5da2a54c",
+  "binarySha256": "8da4b077c5b4cb63d364451f838de21d95d58101e64fe36541e52da872b6da76",
+  "command": "node tools/sdk-smoke-database/rest-replay.mjs local --fireemu <binary> --out <dir>",
+  "productionRequests": 0,
+  "comparisonPolicy": {
+    "id": "filtered-get-semantic-json-v1",
+    "authority": "https://firebase.google.com/docs/database/rest/retrieve-data#filtering-data",
+    "limitations": "JSON.parse ignores whitespace and numeric/escape spelling, rounds numbers and collapses duplicate object keys; parsed numeric values must be safe integers"
+  },
+  "fixture": {
+    "observedAt": "2026-10-23",
+    "corpusSha256": "a9cbf4b0e83096d79038469ea179d8f98ca2719bf4708c59ba07ab6b4d0b9aff"
+  },
+  "summary": {
+    "rows": 124,
+    "m14Rows": 48,
+    "verdicts": {
+      "MATCH": 124
+    },
+    "m14Verdicts": {
+      "MATCH": 48
+    },
+    "pass": true
+  },
+  "rows": [
+    {
+      "round": 1,
+      "id": "fresh-number-0-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-0-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-1-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-1-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-2-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-2-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-3-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-3-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-4-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-4-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-5-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-5-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-6-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-6-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-7-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-7-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-8-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-8-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-9-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "fresh-number-9-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-put-one",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-get-one",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-put-one-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-get-one-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-put-negative-zero-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-get-negative-zero-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-put-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "equal-value-get-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "priority-put-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "priority-get-export-before",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "priority-get-priority",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "2.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "2.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "priority-put-priority",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "3.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "3.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "priority-get-export-after",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-put-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-get-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-get-missing",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "null",
+        "etag": "null_etag"
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "null",
+        "etag": "null_etag"
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-put-if-match-wrong",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 412,
+        "bodyText": "1",
+        "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+      },
+      "local": {
+        "status": 412,
+        "bodyText": "1",
+        "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-put-if-match-null-etag",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "etag-get-after-conditional-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "patch-put-initial",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "patch-update-nested-and-add",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "patch-get-after-update",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "patch-conflicting-keys",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "patch-get-after-conflicting-keys",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "array-put-native",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "array-get-native",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "array-put-indexed-object",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "array-get-indexed-object",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "array-get-indexed-object-export",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-put-mixed-children",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-0",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-1",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [
+        "raw-body-differs"
+      ],
+      "policy": "filtered-get-semantic-json-v1",
+      "production": {
+        "status": 200,
+        "bodyText": "{\"c\":{\"h\":2},\"a\":{\"h\":3},\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-2",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-3",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{root}/raw/round1/query\\\", to the rules\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/parity20261023/raw/round1/query\\\", to the rules\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-4",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-5",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "query-get-6",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "validation-put-bad-key",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "validation-put-bad-json",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "validation-put-scalar-patch-target",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "validation-patch-array-body",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 1,
+      "id": "validation-get-bad-patch",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-0-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-0-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-1-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-1-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-2-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-2-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-3-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-3-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-4-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-4-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0E7",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-5-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-5-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9007199254740993",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-6-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-6-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9223372036854775807",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-7-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-7-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "9.223372036854776E18",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-8-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-8-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-9-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "fresh-number-9-get",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "\"-Infinity\"",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-put-one",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-get-one",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-put-one-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-get-one-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "1",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-put-negative-zero-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-get-negative-zero-point-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-put-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "equal-value-get-zero",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "-0.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "priority-put-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "priority-get-export-before",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":2.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "priority-get-priority",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "2.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "2.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "priority-put-priority",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "3.0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "3.0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "priority-get-export-after",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\".value\":1.0,\".priority\":3.0}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-put-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-get-value",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1}",
+        "etag": "LkoDN24bwRWG2p4jGZoe8M/Acf8="
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-get-missing",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "null",
+        "etag": "null_etag"
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "null",
+        "etag": "null_etag"
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-put-if-match-wrong",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 412,
+        "bodyText": "1",
+        "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+      },
+      "local": {
+        "status": 412,
+        "bodyText": "1",
+        "etag": "YPVfR2bXt/lcDjiQZ8pOkAd3qkQ="
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-put-if-match-null-etag",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "etag-get-after-conditional-put",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "5",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "patch-put-initial",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "patch-update-nested-and-add",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"y\":{\"z\":\"t\"},\"w\":3}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "patch-get-after-update",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "patch-conflicting-keys",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "patch-get-after-conflicting-keys",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"w\":3,\"x\":1,\"y\":{\"z\":\"t\"}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "array-put-native",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "array-get-native",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",\"b\",null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "array-put-indexed-object",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "array-get-indexed-object",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "array-get-indexed-object-export",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "[\"a\",null,null,\"d\"]",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-put-mixed-children",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-0",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-1",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [
+        "raw-body-differs"
+      ],
+      "policy": "filtered-get-semantic-json-v1",
+      "production": {
+        "status": 200,
+        "bodyText": "{\"c\":{\"h\":2},\"a\":{\"h\":3},\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5},\"a\":{\"h\":3},\"c\":{\"h\":2}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-2",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "{\"2\":{\"h\":5},\"10\":{\"h\":5}}",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-3",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/{root}/raw/round2/query\\\", to the rules\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Index not defined, add \\\".indexOn\\\": \\\".value\\\", for path \\\"/parity20261023/raw/round2/query\\\", to the rules\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-4",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"limitToFirst must be positive\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-5",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Only one of limitToFirst and limitToLast may be specified\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "query-get-6",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"orderBy must be a valid JSON encoded path\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "validation-put-bad-key",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse key beginning at 1:2. Key value can't be empty or contain $ # [ ] / or .\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "validation-put-bad-json",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object, array, or value.\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "validation-put-scalar-patch-target",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "validation-patch-array-body",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      },
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"Invalid data; couldn't parse JSON object. Are you sending a JSON object with valid key names?\"\n}\n",
+        "etag": null
+      }
+    },
+    {
+      "round": 2,
+      "id": "validation-get-bad-patch",
+      "verdict": "MATCH",
+      "differences": [],
+      "diagnostics": [],
+      "production": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      },
+      "local": {
+        "status": 200,
+        "bodyText": "0",
+        "etag": null
+      }
+    }
+  ],
+  "m14": [
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:116: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:132: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 0,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:151: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:107: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:123: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 1,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:142: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:109: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:125: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 2,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:144: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:114: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:130: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 3,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:149: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:118: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:134: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 4,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:153: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:120: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:136: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 5,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:155: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:113: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:129: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 6,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:148: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:115: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:131: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 1,
+      "expressionIndex": 7,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:150: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:116: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:132: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 0,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:151: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:107: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:123: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 1,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:142: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:109: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:125: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 2,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:144: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:114: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:130: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 3,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:149: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:118: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:134: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 4,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:153: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:120: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:136: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 5,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:155: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:113: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:129: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 6,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:148: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "context": "read",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:115: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "context": "write",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:131: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    },
+    {
+      "round": 2,
+      "expressionIndex": 7,
+      "context": "validate",
+      "verdict": "MATCH",
+      "local": {
+        "status": 400,
+        "bodyText": "{\n  \"error\" : \"1:150: Illegal regular expression, could not determinize efficiently\\n\"\n}\n"
+      }
+    }
+  ]
+}

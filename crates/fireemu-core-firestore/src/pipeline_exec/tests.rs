@@ -61,6 +61,19 @@ fn table_lists_exactly_the_recorded_functions() {
             "greater_than",
             "greater_than_or_equal",
             "array",
+            "array_reverse",
+            "array_concat",
+            "array_length",
+            "array_first",
+            "array_last",
+            "array_get",
+            "map_set",
+            "map_remove",
+            "map_merge",
+            "map_keys",
+            "map_values",
+            "map_entries",
+            "map_get",
             "map",
             "document_id",
             "collection_id",
@@ -80,6 +93,22 @@ fn table_lists_exactly_the_recorded_functions() {
             "array_contains_any",
             "equal_any",
             "not_equal_any",
+            "current_timestamp",
+            "timestamp_trunc",
+            "timestamp_extract",
+            "timestamp_add",
+            "timestamp_subtract",
+            "timestamp_diff",
+            "unix_micros_to_timestamp",
+            "unix_millis_to_timestamp",
+            "unix_seconds_to_timestamp",
+            "timestamp_to_unix_micros",
+            "timestamp_to_unix_millis",
+            "timestamp_to_unix_seconds",
+            "regex_contains",
+            "regex_match",
+            "regex_find",
+            "regex_find_all",
             "concat",
             "to_lower",
             "to_upper",
@@ -108,7 +137,7 @@ fn table_lists_exactly_the_recorded_functions() {
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
     }
-    for name in ["eq", "between", "sqrt", "regex_match", "AND", "", "Equal"] {
+    for name in ["eq", "between", "sqrt", "REGEX_MATCH", "AND", "", "Equal"] {
         assert!(function(name).is_none(), "{name}");
     }
 }

@@ -52,10 +52,25 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | Literals | Values of every type, including arrays and maps of literals and vectors of doubles |
 | Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
 | Construction | `array(...)` and `map(...)` |
+| Array access | `array_length`, `array_first`, `array_last` and `array_get` |
+| Array helpers | `array_concat` and `array_reverse` |
+| Timestamp functions | `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds` |
+| Map functions | `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values` and `map_entries` |
+| Regular expressions | `regex_contains`, `regex_match`, `regex_find` and `regex_find_all` |
 | Document functions | `documentId`, `collectionId` and `parent` |
 | Logic, existence, type and membership | `and`, `or`, `not`, `xor`, `nor`, `exists`, `is_absent`, `is_error`, `type`, `is_type`, `array_contains`, `array_contains_all`, `array_contains_any`, `equal_any` and `not_equal_any` |
 | String | `concat`, `to_lower`, `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`, `trim`, `ltrim`, `rtrim` and `split` |
 | Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` |
+
+The array, map, regular-expression and timestamp functions above, zero-count changes and recorded `INTERNAL` responses described below are available from v0.33.0. The functions are available in both profiles. The production comparison covers the recorded cases, not every input type or combination. `map_set` retains an explicit null value and removes a key whose value is absent; a null or absent input map yields an absent result, while the other listed map functions return null for that input; that removal follows the documented API and has not been observed in production. Map keys, values and entries use Fireemu's deterministic map order, and corresponding keys and values stay paired. The recorded production map agrees for its two keys; production ordering for other maps is unverified.
+
+Pipeline timestamps use microsecond precision. `current_timestamp` samples the configured clock once per request and stays fixed throughout that pipeline evaluation. Zone-aware truncation and extraction use named IANA zones; the production recordings cover only specific zone cases. Ambiguous or nonexistent local daylight-saving boundaries are refused as unobserved, and custom GMT offset semantics are not implemented. Other time zones, boundaries and input combinations are not established as production-compatible by those recordings.
+
+The regex functions use a bounded local engine. Under `strict`, patterns outside a conservative common RE2 grammar are refused as unobserved, including shorthand classes and word boundaries, Unicode property escapes, brace repetitions, nested classes and class set operators. Ordinary Unicode literals, simple classes and the recorded inline case flag remain supported. The `emulator` profile uses the local engine without that strict grammar guard; its behavior outside recorded cases is not established as production parity. `regex_match` requires a full-string match; the recorded `regex_find` capture case returns the first capture.
+
+A `limit` of zero passes no rows to the next stage and an `offset` of zero passes all rows through, in both profiles. The strict profile follows the recorded production cases for these inputs.
+
+The strict profile reproduces production's recorded `INTERNAL` response for `array_reverse()` with no arguments and empty options, and for a duplicate select alias when one spelling is quoted and the other is unquoted. Fireemu writes a fixed explanation to standard error without request values. A zero-argument `array_reverse()` with nonempty options keeps its prior refusal, and the emulator profile retains its prior validation behavior. These errors cover the recorded forms only; adjust the call or alias to proceed.
 
 A `where` keeps a row only when its condition (a comparison, a field or another supported function) is `true`. A `select` sets at most 64 fields, as in production. Results without a `select` carry the document's name, create time and update time, and answers normally carry the execution time; a `documents` input whose only path is missing currently returns an empty element without it. A small answer comes as production frames it: all results in one response message over gRPC, or in one array element over REST. Fireemu cuts a larger answer at about 1 MiB of results; production recordings show variable boundaries; large-answer framing is not verified. `select({__name__: field("__name__")})` answers the document name, including the recorded forms beside other aliases or with quoted aliases and values; unrecorded forms remain `UNIMPLEMENTED` under `strict`. Without `sort`, recorded collection reads follow ascending CRC-32 of document IDs; collection groups use parent path then that order. Non-ASCII IDs and CRC-32 ties are unverified, as are aggregate group order and ordering of ties under a limit. A stored `-0.0` reads back as `-0.0`, as in production; the official emulator stores it as `0.0`.
 
@@ -75,7 +90,7 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | A vector literal with a negative-zero element | `UNIMPLEMENTED` | The vector |
 | A literal with more than one empty or reserved key, or the key `__name__` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming one key |
 | A `limit` of another type than an integer or string; an `offset` that is negative or of another type than an integer or string | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the official text |
-| A `limit` of 0 or an `offset` of 0 | `UNIMPLEMENTED` | The rows |
+| A `limit` of 0 or an `offset` of 0 | The recorded zero-count behavior | The same zero-count behavior |
 | A `select` alias inside another in another order than production's `{m, m.r}`, such as `{a.b, a}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, naming the later alias over REST (as the official emulator does) and the child over gRPC |
 | Two `select` fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
 | A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
@@ -87,7 +102,7 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 | An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
 
-Unsupported functions and stages, including regex functions, timestamp and map functions, the remaining math functions, `union`, `unnest`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
+Unsupported functions and stages, including the remaining math functions, `union`, `unnest`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
 
 ## Composite indexes
 

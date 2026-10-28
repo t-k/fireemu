@@ -644,19 +644,40 @@ import { readFileSync } from "node:fs";
 
 const readJson = (name) => JSON.parse(readFileSync(new URL(`../${name}`, import.meta.url), "utf8"));
 
-test("the framing programs are kept as a summary of the recorded rows, not as rows", () => {
+test("the framing programs retain compact content and their recorded summaries", () => {
   const fixture = readJson("fs-ent-pipeline-production.json");
   const summary = readJson("fs-ent-pipeline-framing.json");
   assert.equal(summary.version, 1);
   assert.deepEqual(Object.keys(summary.programs).toSorted(), [...SUMMARY_ONLY].toSorted());
   for (const id of SUMMARY_ONLY) {
-    assert.equal(fixture.programs[id], undefined, `${id} is in the fixture`);
+    const compact = fixture.programs[id];
+    assert.equal(compact?.compactFramingVersion, 1, id);
     const program = O8A_PROGRAMS.find((p) => p.id === id);
     const kept = summary.programs[id];
     // The summary is of this corpus: same digest, one entry per step.
     assert.equal(kept.corpusDigest, programDigest(program), id);
     assert.deepEqual(Object.keys(kept.steps).toSorted(), program.steps.map((s) => s.id).toSorted());
+    assert.deepEqual(
+      Object.keys(compact.steps).toSorted(),
+      program.steps.map((s) => s.id).toSorted(),
+    );
+    assert.equal(compact.corpusDigest, kept.corpusDigest);
     for (const [step, row] of Object.entries(kept.steps)) {
+      const saved = compact.steps[step];
+      assert.equal(saved.kind, step.startsWith("seed-") ? "seed" : "read");
+      if (saved.kind === "read") {
+        assert.equal(saved.results, row.results);
+        assert.deepEqual(
+          saved.profile.map(({ results, jsonBytes }) => ({ results, jsonBytes })),
+          row.units,
+        );
+      }
+      assert.equal(Boolean(compact.second?.[step]), Boolean(row.second), step);
+      if (row.second && saved.kind === "read")
+        assert.deepEqual(
+          compact.second[step].profile.map(({ results, jsonBytes }) => ({ results, jsonBytes })),
+          row.second.units,
+        );
       assert.equal(
         row.units.reduce((n, u) => n + u.results, 0),
         row.results,
@@ -702,7 +723,7 @@ test("the recorded O-8A programs are in the fixture with their own digests and e
   assert.equal(
     Object.keys(fixture.programs).filter((id) => !/^fs-ent-pipeline\/(o8[b-d]|o9b?)\//.test(id))
       .length,
-    60,
+    62,
   );
   // Production answered the duplicate quoted path with a server error, every time (O-5, O-8A).
   const dup = fixture.programs[`${O8A_PREFIX}dupquote-main`].steps;
@@ -734,4 +755,321 @@ test("a row the recorder's own client failed to serialize is marked unknown, nev
     `${O8A_PREFIX}nesting-main#chain-48-grpc`,
     `${O8A_PREFIX}nesting-main#chain-100-grpc`,
   ]);
+});
+
+test("compact framing preserves values, metadata, status and observed unit profiles", async () => {
+  const { compactFramingStep, classifyCompactFraming } =
+    await import("./fs-ent-pipeline/framing-summary.mjs");
+  assert.equal(typeof compactFramingStep, "function");
+  assert.equal(typeof classifyCompactFraming, "function");
+  const responseUnit = (results) => ({ executionTime: "<time>", results });
+  const rest = (units) => ({ status: 200, body: units });
+  const expected = compactFramingStep(rest([responseUnit([{ n: 1 }, { n: 2 }])]), "read");
+  assert.equal(
+    expected.contentDigest,
+    "43cae1cbe38954d19eed99accedec288c0a61dd33d2c93e1aef02a922bc1a090",
+  );
+  const alternative = compactFramingStep(
+    rest([responseUnit([{ n: 1 }]), responseUnit([{ n: 2 }])]),
+    "read",
+  );
+  const check = (local, second = undefined) => classifyCompactFraming(expected, second, local);
+  assert.equal(check(rest([responseUnit([{ n: 1 }, { n: 2 }])])).status, "MATCH");
+  assert.equal(
+    check(rest([responseUnit([{ n: 1 }]), responseUnit([{ n: 2 }])]), alternative).status,
+    "MATCH_NONDETERMINISTIC",
+  );
+  const unseen = check(rest([responseUnit([{ n: 1 }]), responseUnit([{ n: 2 }])]));
+  assert.equal(unseen.status, "INDETERMINATE");
+  assert.equal(unseen.diagnostic, "unobserved-framing");
+  for (const local of [
+    rest([responseUnit([{ n: 2 }, { n: 1 }])]),
+    rest([responseUnit([{ n: 1 }, { n: "2" }])]),
+    rest([responseUnit([{ n: 1 }, { n: null }])]),
+    rest([{ results: [{ n: 1 }, { n: 2 }] }]),
+    { status: 503, body: [] },
+    { status: 200, body: [] },
+    rest([{ executionTime: "<time>", results: "not-an-array" }]),
+  ])
+    assert.equal(check(local).status, "MISMATCH");
+  const seed = {
+    status: 200,
+    body: { commitTime: "<time>", writeResults: [{ updateTime: "<time>" }] },
+  };
+  const compactSeed = compactFramingStep(seed, "seed");
+  assert.equal(classifyCompactFraming(compactSeed, undefined, seed).status, "MATCH");
+  assert.equal(
+    classifyCompactFraming(compactSeed, undefined, {
+      ...seed,
+      body: { ...seed.body, writeResults: [] },
+    }).status,
+    "MISMATCH",
+  );
+  for (const value of [-0, Number.MAX_SAFE_INTEGER + 1, 1.5, Infinity, undefined])
+    assert.throws(
+      () => compactFramingStep(rest([responseUnit([{ value }])]), "read"),
+      /unsupported/,
+    );
+  const sparse = Array(1);
+  assert.throws(
+    () => compactFramingStep(rest([responseUnit([{ sparse }])]), "read"),
+    /unsupported/,
+  );
+  const extra = [1];
+  extra.extra = true;
+  assert.throws(() => compactFramingStep(rest([responseUnit([{ extra }])]), "read"), /unsupported/);
+  const symbolic = { [Symbol("x")]: 1 };
+  assert.throws(
+    () => compactFramingStep(rest([responseUnit([{ symbolic }])]), "read"),
+    /unsupported/,
+  );
+  assert.throws(
+    () => compactFramingStep(rest([responseUnit([{ text: "x".repeat(2 * 1024 * 1024) }])]), "read"),
+    /oversized/,
+  );
+  assert.equal(check(rest([responseUnit([{ n: 1 }, {}])])).status, "MISMATCH");
+});
+
+test("compact framing exercises generated PICT combinations", async () => {
+  const { compactFramingStep, classifyCompactFraming } =
+    await import("./fs-ent-pipeline/framing-summary.mjs");
+  assert.equal(typeof compactFramingStep, "function");
+  assert.equal(typeof classifyCompactFraming, "function");
+  const rows = [
+    ["rest", "read", "recorded", "same", "success"],
+    ["grpc", "read", "unseen", "same", "success"],
+    ["rest", "seed", "recorded", "same", "success"],
+    ["grpc", "read", "recorded", "same", "failure"],
+    ["rest", "seed", "recorded", "different", "failure"],
+    ["grpc", "read", "unseen", "different", "failure"],
+    ["rest", "read", "unseen", "different", "success"],
+  ];
+  const responseUnit = (results) => ({ executionTime: "<time>", results });
+  for (const [transport, kind, frame, content, status] of rows) {
+    const make = (units, failed = false) =>
+      transport === "grpc"
+        ? { transport, code: failed ? 13 : 0, messages: units }
+        : { status: failed ? 500 : 200, body: kind === "seed" ? { writeResults: units } : units };
+    const baselineUnits = [responseUnit([{ n: 1 }, { n: 2 }])];
+    const expected = compactFramingStep(make(baselineUnits), kind);
+    const result = content === "same" ? [{ n: 1 }, { n: 2 }] : [{ n: 1 }, { n: 3 }];
+    const actualUnits =
+      frame === "unseen"
+        ? [responseUnit([result[0]]), responseUnit([result[1]])]
+        : [responseUnit(result)];
+    const local = make(actualUnits, status === "failure");
+    const actual = classifyCompactFraming(expected, undefined, local);
+    assert.equal(
+      actual.status,
+      status === "failure" || content === "different"
+        ? "MISMATCH"
+        : frame === "unseen"
+          ? "INDETERMINATE"
+          : "MATCH",
+      rows.join(),
+    );
+  }
+});
+
+test("compact framing matches full normalized equality on the accepted domain", async () => {
+  const { compactFramingStep, classifyCompactFraming } =
+    await import("./fs-ent-pipeline/framing-summary.mjs");
+  const { sameRecording } = await import("./fs-ent-pipeline/harness.mjs");
+  forAll(
+    100,
+    (random) => ({
+      n: between(random, 0, 1000),
+      text: pick(random, ["x", "", "\u3042"]),
+      missing: pick(random, [true, false]),
+    }),
+    ({ n, text, missing }) => {
+      const value = {
+        n,
+        text,
+        nested: [null, true, { x: n }],
+        ...(missing ? {} : { optional: null }),
+      };
+      const row = { status: 200, body: [{ executionTime: "<time>", results: [value] }] };
+      const copy = JSON.parse(JSON.stringify(row));
+      const compact = compactFramingStep(row, "read");
+      assert.equal(sameRecording(row, copy), true);
+      assert.equal(classifyCompactFraming(compact, undefined, copy).status, "MATCH");
+      const changed = {
+        status: 200,
+        body: [{ executionTime: "<time>", results: [{ ...value, n: n + 1 }] }],
+      };
+      assert.equal(sameRecording(row, changed), false);
+      assert.equal(classifyCompactFraming(compact, undefined, changed).status, "MISMATCH");
+    },
+  );
+});
+
+test("compact policy is bounded to the two pipeline programs and preserves UNKNOWN", async () => {
+  const framingTools = await import("./fs-ent-pipeline/framing-summary.mjs");
+  const { compactFramingStep } = framingTools;
+  const { classifyPipelineFraming } = await import("./fs-query-index/run.mjs");
+  const row = { status: 200, body: [{ executionTime: "<time>", results: [{ n: 1 }] }] };
+  const expectedCompact = compactFramingStep(row, "read");
+  const args = {
+    lane: "fs-ent-pipeline",
+    programId: `${O8A_PREFIX}framing-small`,
+    saved: { compactFramingVersion: 1 },
+    stale: false,
+    production: expectedCompact,
+    fireemu: row,
+    framingTools,
+  };
+  assert.equal(classifyPipelineFraming(args).status, "MATCH");
+  // Rows generated by work+pipeline-framing-unknown.pict, including all six seeds.
+  for (const [stale, productionState, version, local] of [
+    ["no", "unknown", "invalid", "missing"],
+    ["yes", "unknown", "valid", "present"],
+    ["no", "missing", "invalid", "present"],
+    ["no", "recorded", "invalid", "present"],
+    ["no", "recorded", "valid", "missing"],
+    ["no", "recorded", "valid", "present"],
+    ["yes", "missing", "valid", "missing"],
+    ["yes", "recorded", "invalid", "missing"],
+  ]) {
+    const sampleProduction =
+      productionState === "unknown"
+        ? { unknown: "client" }
+        : productionState === "missing"
+          ? undefined
+          : expectedCompact;
+    const actual = classifyPipelineFraming({
+      ...args,
+      stale: stale === "yes",
+      production: sampleProduction,
+      saved: { compactFramingVersion: version === "valid" ? 1 : 9 },
+      fireemu: local === "present" ? row : undefined,
+    });
+    const expected =
+      stale === "yes"
+        ? "STALE_FIXTURE"
+        : productionState === "missing"
+          ? "MISSING_FIXTURE"
+          : productionState === "unknown"
+            ? "UNKNOWN"
+            : local === "missing"
+              ? "MISSING"
+              : version === "invalid"
+                ? "STALE_FIXTURE"
+                : "MATCH";
+    assert.equal(actual.status, expected, `${stale}/${productionState}/${version}/${local}`);
+  }
+
+  assert.equal(classifyPipelineFraming({ ...args, stale: true }).status, "STALE_FIXTURE");
+  assert.equal(classifyPipelineFraming({ ...args, fireemu: undefined }).status, "MISSING");
+  assert.equal(
+    classifyPipelineFraming({ ...args, production: undefined }).status,
+    "MISSING_FIXTURE",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, saved: { compactFramingVersion: 9 } }).status,
+    "STALE_FIXTURE",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, production: { unknown: "client" } }).status,
+    "UNKNOWN",
+  );
+  const invalidVersion = { compactFramingVersion: 9 };
+  assert.equal(
+    classifyPipelineFraming({
+      ...args,
+      saved: invalidVersion,
+      production: { unknown: "client" },
+      fireemu: undefined,
+    }).status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, stale: true, production: undefined }).status,
+    "STALE_FIXTURE",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, saved: invalidVersion, production: { unknown: "client" } })
+      .status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, stale: true, production: { unknown: "client" } }).status,
+    "STALE_FIXTURE",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, saved: invalidVersion, production: undefined }).status,
+    "MISSING_FIXTURE",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, saved: invalidVersion, fireemu: undefined }).status,
+    "MISSING",
+  );
+  assert.equal(
+    classifyPipelineFraming({
+      ...args,
+      programId: `${O8A_PREFIX}nesting-main`,
+      production: { unknown: "client" },
+    }).status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, lane: "fs-query-index", production: { unknown: "client" } })
+      .status,
+    "UNKNOWN",
+  );
+  assert.equal(
+    classifyPipelineFraming({ ...args, production: { ...expectedCompact, contentDigest: "bad" } })
+      .diagnostic,
+    "invalid-fixture",
+  );
+});
+
+test("compact recovery keeps the 1,951 row identities and the two client UNKNOWN rows", async () => {
+  const { classify } = await import("./fs-query-index/run.mjs");
+  const fixture = readJson("fs-ent-pipeline-production.json");
+  const comparison = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const ids = PROGRAMS.flatMap((program) =>
+    program.steps.map((step) => `${program.id}#${step.id}`),
+  );
+  assert.equal(ids.length, 1951);
+  assert.deepEqual(ids.toSorted(), comparison.rows.map((row) => row.row).toSorted());
+  const missing = comparison.rows
+    .filter((row) => row.status === "MISSING_FIXTURE")
+    .map((row) => row.row)
+    .toSorted();
+  const restored = [...SUMMARY_ONLY]
+    .flatMap((id) => Object.keys(fixture.programs[id].steps).map((step) => `${id}#${step}`))
+    .toSorted();
+  assert.equal(restored.length, 27);
+  assert.deepEqual(missing, []);
+  const compactRows = comparison.rows.filter((row) => restored.includes(row.row));
+  assert.deepEqual(compactRows.map((row) => row.row).toSorted(), restored);
+  assert.equal(compactRows.filter((row) => row.status === "MATCH").length, 15);
+  assert.equal(compactRows.filter((row) => row.status === "INDETERMINATE").length, 12);
+  const unknown = comparison.rows
+    .filter((row) => row.status === "UNKNOWN")
+    .map((row) => row.row)
+    .toSorted();
+  assert.deepEqual(unknown, [
+    `${O8A_PREFIX}nesting-main#chain-100-grpc`,
+    `${O8A_PREFIX}nesting-main#chain-48-grpc`,
+  ]);
+  for (const name of ["chain-48-grpc", "chain-100-grpc"]) {
+    const recordedUnknown = fixture.programs[`${O8A_PREFIX}nesting-main`].steps[name];
+    assert.equal(
+      classify({
+        production: recordedUnknown,
+        fireemu: { transport: "grpc", code: 0, messages: [] },
+      }),
+      "UNKNOWN",
+    );
+  }
 });

@@ -13,7 +13,7 @@
 // The management calls (API, instance, Rules, prefix delete) use the ADC token and never reach an
 // output (assertNoSecrets guards every write). Setup and cleanup follow the CV11 recorder.
 import { createHash, randomBytes } from 'node:crypto';
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { createRequire } from 'node:module';
@@ -96,9 +96,11 @@ async function runProfile(run, o, scenario, prof) {
 
 // Runs setup, the scenarios x profiles and cleanup. The status is 'closed' only when nothing is
 // unknown and every owned resource read back at its starting state; otherwise 'needs-recovery'.
+const startupTicket = Symbol('validated startup');
+
 export async function runScenario(o) {
   if (o.mode === 'production') {
-    for (const scenario of [o.packet?.scenario, ...(o.scenarios ?? [])]) if (['sdk-next', 'sdk-next-startup'].includes(scenario)) assertProductionSdkNextReady({ scenario });
+    for (const scenario of [o.packet?.scenario, ...(o.scenarios ?? [])]) if (scenario === 'sdk-next' || (scenario === 'sdk-next-startup' && o.ticket !== startupTicket)) assertProductionSdkNextReady({ scenario });
   }
   o.secrets ??= [];
   const u = urls(o);
@@ -159,6 +161,13 @@ export function validateStartupAdmission({ admission: a, packetSha256, sourceSha
   return true;
 }
 
+export function validateStartupEntrypoint(input) {
+  validateStartupAdmission(input);
+  const { admission: a, nodeSha256, launcherSha256, carry } = input;
+  if (a.nodeSha256 !== nodeSha256 || a.launcherSha256 !== launcherSha256 || !a.ownerRows[2].includes(`launcherSha256=${launcherSha256}`) || !a.ownerRows[2].includes(`nodeSha256=${nodeSha256}`) || carry?.taskRequests !== 1177 || carry?.taskAdcAcquisitions !== 20 || carry?.outcome !== 'cleanup-verified') throw Error('startup entrypoint custody mismatch');
+  return true;
+}
+
 export function createStartupStrictClient({ caps, allowed, journal, fetchImpl = fetch, headers = {}, stop = {} }) {
   const counts = { observe: 0, cleanup: 0, mutations: 0, unknown: 0, logFailures: 0 }, unknownAnswers = [];
   let phase = 'observe', latched = false;
@@ -209,7 +218,27 @@ export function verifyPacket(file, expected) {
   if (sha256(raw) !== expected) throw Error('packet SHA-256 does not match --packet-sha256');
   const packet = JSON.parse(raw);
   for (const s of SOURCES) if (packet.sources?.[s] !== sha256(readFileSync(path.join(here, s)))) throw Error(`source pin differs: ${s}`);
+  if (packet.scenario === 'sdk-next-startup' && packet.sources?.['rtdb-admin.mjs'] !== sha256(readFileSync(path.join(here, 'rtdb-admin.mjs')))) throw Error('startup admin source pin differs');
   return packet;
+}
+
+export function verifyRootStartup(packet, packetSha256, { root = path.resolve(here, '../../../..'), ownerPid = process.pid, nodePath = process.execPath } = {}) {
+  const ops = path.join(root, 'docs.local/runs/remaining-compat-20261028/rtdb-sdk-startup-ops-v1/root-ops');
+  for (const file of [path.join(ops, 'booked-admission.json'), path.join(ops, 'launch-startup.sh'), path.join(root, 'docs.local/instructions/owner-decisions.md'), path.join(root, 'docs.local/runs/sandbox-ledger.jsonl')]) if (!lstatSync(file).isFile()) throw Error('startup authority must be regular files');
+  const booked = readFileSync(path.join(ops, 'booked-admission.json'));
+  const admission = JSON.parse(booked);
+  const ledger = readFileSync(path.join(root, 'docs.local/instructions/owner-decisions.md'), 'utf8').split(/\r?\n/);
+  admission.ownerRows = ['A', 'E', 'V'].map((kind) => { const rows = ledger.filter((line) => line.split(' | ')[1] === `${kind} ${admission.envelopeId}`); if (rows.length !== 1) throw Error('startup authority row is not unique'); return rows[0]; });
+  if (!admission.ownerRows[2]?.includes(`admissionSha256=${sha256(booked)}`)) throw Error('startup booked admission not bound');
+  const lease = JSON.parse(readFileSync(path.join(root, 'docs.local/runs/sandbox-locks/fireemu-oracle-query.lock'), 'utf8'));
+  if (lease.pid !== ownerPid || lease.envelopeId !== admission.envelopeId || !existsSync(path.join(root, 'docs.local/runs/heavy-slots/RECORDING'))) throw Error('startup lease not owned by launcher');
+  const gcloudSha256 = sha256(readFileSync(packet.gcloud));
+  if (admission.gcloudSha256 !== gcloudSha256 || !admission.ownerRows[2].includes(`gcloudSha256=${gcloudSha256}`)) throw Error('startup credential executable mismatch');
+  const raw = readFileSync(path.join(root, 'docs.local/runs/sandbox-ledger.jsonl'), 'utf8').split('\n').filter(Boolean);
+  const row = raw.map((line) => ({ line, value: JSON.parse(line) })).filter(({ value }) => value.project === packet.projectId).at(-1);
+  if (!row || !/^[a-z][a-z0-9-]{4,29}$/.test(packet.projectId ?? '') || admission.projectId !== packet.projectId || !/^[0-9]{1,20}$/.test(packet.projectNumber ?? '') || admission.projectNumber !== packet.projectNumber) throw Error('startup sandbox mismatch');
+  const carrySha256 = sha256(`${row.line}\n`);
+  validateStartupEntrypoint({ admission, packetSha256, sourceSha256: sha256(readFileSync(path.join(here, 'rtdb-residual.mjs'))), carrySha256, nodeSha256: sha256(readFileSync(nodePath)), launcherSha256: sha256(readFileSync(path.join(ops, 'launch-startup.sh'))), ledger, carry: row.value });
 }
 
 /** Production remains unavailable until the SDK transport retry barrier is reviewed. */
@@ -369,6 +398,11 @@ export function createPrivateAdminJournal(file, secrets) {
   };
 }
 
+export function prepareStartupJournals(out, syncDirectory = (directory) => { const fd = openSync(directory, 'r'); try { fsyncSync(fd); } finally { closeSync(fd); } }) {
+  for (const name of ['private-admin.jsonl', 'private-controls.jsonl']) { const fd = openSync(path.join(out, name), 'wx', 0o600); try { fsyncSync(fd); } finally { closeSync(fd); } }
+  syncDirectory(out);
+}
+
 export function browserRunner({ modules, page: pageConfig, stop = {} }) {
   const require = createRequire(path.join(path.resolve(modules), 'x.js'));
   const { chromium } = require('playwright');
@@ -499,9 +533,12 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
-  if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); assertProductionSdkNextReady(packet); verifyBundles(packet); }
+  let startup = false;
+  if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); if (packet.scenario === 'sdk-next-startup') { verifyRootStartup(packet, opt('--packet-sha256')); startup = true; } else assertProductionSdkNextReady(packet); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory
   const secrets = [], stop = { requested: false };
+  if (startup) prepareStartupJournals(out);
+  const strictJournal = startup ? createPrivateAdminJournal(path.join(out, 'private-admin.jsonl'), secrets) : undefined;
   // Logs are redacted, never refused: a row that cannot be written would hide a sent request.
   const append = (f, row) => appendFileSync(path.join(out, f), `${redact(JSON.stringify(row), secrets).replace(/\n/g, ' ')}\n`);
   const privateControl = createPrivateControlWriter((bytes) => {
@@ -542,7 +579,7 @@ async function main(argv) {
       const stopped = await runPreflight(out, token, fetch, (text) => assertNoSecrets(text, secrets));
       if (stopped) return stopped;
       const browser = browserRunner({ modules: packet.modules, stop, page: { projectId: packet.projectId, databaseURL: `https://${INSTANCE}.firebaseio.com`, allowHost: (h) => /^[a-z0-9-]+\.firebaseio\.com$/.test(h) } });
-      o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common };
+      o = { mode, packet, headers: productionHeaders(token, packet.projectId), browser, ...common, ...(startup ? { scenarios: ['sdk-next-startup'], strictStartup: true, strictJournal, ticket: startupTicket } : {}) };
     }
     const result = await runScenario(o);
     const status = writeOutputs(out, mode, result, prefix.split('/')[0], secrets);

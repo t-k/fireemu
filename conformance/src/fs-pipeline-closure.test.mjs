@@ -59,33 +59,54 @@ export function placeholders(record) {
 
 // These recorded framing cases have differing production response-unit boundaries.
 const INDETERMINATE_FRAMING = new Set([
-  'fs-ent-pipeline/o8a/framing-small#f500-rest',
-  'fs-ent-pipeline/o8a/framing-small#f500-grpc',
-  'fs-ent-pipeline/o8a/framing-small#f5000-rest',
-  'fs-ent-pipeline/o8a/framing-small#f5000-grpc',
-  'fs-ent-pipeline/o8a/framing-small#f5000-select-rest',
-  'fs-ent-pipeline/o8a/framing-small#f5000-select-grpc',
-  'fs-ent-pipeline/o8a/framing-small#f5000-limit-rest',
-  'fs-ent-pipeline/o8a/framing-small#f5000-limit-grpc',
-  'fs-ent-pipeline/o8a/framing-large#l12-rest',
-  'fs-ent-pipeline/o8a/framing-large#l12-grpc',
-  'fs-ent-pipeline/o8a/framing-large#m30-rest',
-  'fs-ent-pipeline/o8a/framing-large#m30-grpc',
+  "fs-ent-pipeline/o8a/framing-small#f500-rest",
+  "fs-ent-pipeline/o8a/framing-small#f500-grpc",
+  "fs-ent-pipeline/o8a/framing-small#f5000-rest",
+  "fs-ent-pipeline/o8a/framing-small#f5000-grpc",
+  "fs-ent-pipeline/o8a/framing-small#f5000-select-rest",
+  "fs-ent-pipeline/o8a/framing-small#f5000-select-grpc",
+  "fs-ent-pipeline/o8a/framing-small#f5000-limit-rest",
+  "fs-ent-pipeline/o8a/framing-small#f5000-limit-grpc",
+  "fs-ent-pipeline/o8a/framing-large#l12-rest",
+  "fs-ent-pipeline/o8a/framing-large#l12-grpc",
+  "fs-ent-pipeline/o8a/framing-large#m30-rest",
+  "fs-ent-pipeline/o8a/framing-large#m30-grpc",
 ]);
 
 function isUnclaimedStatusAllowed(row, status) {
-  return status === "MISMATCH" || status === "UNKNOWN" ||
-    (status === "INDETERMINATE" && INDETERMINATE_FRAMING.has(row));
+  return (
+    status === "MISMATCH" ||
+    status === "UNKNOWN" ||
+    (status === "INDETERMINATE" && INDETERMINATE_FRAMING.has(row))
+  );
 }
 
 test("only recorded framing identities may remain indeterminate", () => {
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "INDETERMINATE"), true);
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f5000-grpc", "INDETERMINATE"), true);
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#unobserved-rest", "INDETERMINATE"), false);
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/px1/select#equal-i-d5", "INDETERMINATE"), false);
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "INDETERMINATE"),
+    true,
+  );
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f5000-grpc", "INDETERMINATE"),
+    true,
+  );
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#unobserved-rest", "INDETERMINATE"),
+    false,
+  );
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/px1/select#equal-i-d5", "INDETERMINATE"),
+    false,
+  );
   assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/px1/select#equal-i-d5", "MISMATCH"), true);
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/nesting-main#chain-48-grpc", "UNKNOWN"), true);
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "MATCH"), false);
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/nesting-main#chain-48-grpc", "UNKNOWN"),
+    true,
+  );
+  assert.equal(
+    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "MATCH"),
+    false,
+  );
 });
 
 test("a digest field that is not 64 hex characters, or a placeholder, is found", () => {

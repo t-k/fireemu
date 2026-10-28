@@ -3454,7 +3454,7 @@ mod tests {
                 "zero" => assert_eq!(got.unwrap(), 0, "{strict} {name} {kind}"),
                 "positive" => assert_eq!(got.unwrap(), 1, "{strict} {name} {kind}"),
                 "negative" if strict && name == "offset" => {
-                    assert_eq!(got.unwrap_err().code(), Code::Unimplemented)
+                    assert_eq!(got.unwrap_err().code(), Code::Unimplemented);
                 }
                 "boolean" if strict => assert_eq!(got.unwrap_err().code(), Code::Unimplemented),
                 _ => assert_eq!(

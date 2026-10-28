@@ -1,6 +1,6 @@
 {
   "sourceCommit": "e69ba42d87d07b70a532bf12c370fdc86f524f87",
-  "command": "RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/Users/tk/work/firebase-emulator/target cargo build --release -p fireemu --locked",
+  "command": "RUSTC_WRAPPER= CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=\"$SHARED_TARGET_DIR\" cargo build --release -p fireemu --locked",
   "binarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
   "profile": "release",
   "locked": true,
@@ -12,5 +12,6 @@
   "buildPath": "docs.local/runs/remaining-compat-20261028/pipeline-integration/s-build/fireemu",
   "workTree": "clean before and after build; ui/dist absent",
   "rustSourcesNote": "Evidence child follows the signed source commit.",
-  "reproducibility": "Not compared with a second build."
+  "reproducibility": "Not compared with a second build.",
+  "targetDirectoryNote": "The variable denotes a redacted local target directory; the exact executed command is retained in the private build receipt."
 }

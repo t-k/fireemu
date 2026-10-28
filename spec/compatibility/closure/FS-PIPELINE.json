@@ -2281,7 +2281,7 @@
     "releaseBinarySha256": "fa53cfde309210e5beb873d43fb3ffd2e5aa892b688a94d4fafbc76c22fc7afb",
     "binaryProfile": "release",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-PIPELINE-build.json",
-    "buildReceiptSha256": "d3f264e8c0aeb4ef0ff2ce292de6aee869df550b6dee62f3f5a4e724ee6f0e3a",
+    "buildReceiptSha256": "c43282f94865c80d12c4c319942212c5fad7821d1f58de70d5d894d1a1345b89",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",

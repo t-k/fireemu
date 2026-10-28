@@ -798,3 +798,99 @@ async fn an_abandoned_held_request_closes_its_connection_at_the_idle_close_time(
         "closed late: {closed_after:?}"
     );
 }
+
+async fn cv09_send(lp: &mut Lp, message: &str, split: bool) -> String {
+    if !split {
+        return lp.poll(&[message]).await;
+    }
+    let encoded = b64(message);
+    let (first, second) = encoded.split_at(encoded.len() / 2);
+    lp.serial += 1;
+    let segment = lp.segment;
+    lp.segment += 2;
+    let target =
+        format!(
+        "/.lp?id={}&pw={}&ser={}&ns={}&seg0={segment}&ts0=2&d0={first}&seg1={}&ts1=2&d1={second}",
+        lp.id, lp.pw, lp.serial, lp.ns, segment + 1
+    );
+    get(&lp.address, "GET", &target, "").await.2
+}
+
+fn cv09_reply(body: &str, expected: &str) {
+    let expected: serde_json::Value = serde_json::from_str(expected).unwrap();
+    let (_, messages) = read_packet(body);
+    let actual = messages
+        .iter()
+        .map(|m| serde_json::from_str::<serde_json::Value>(m).unwrap())
+        .find(|m| m["d"]["r"] == expected["d"]["r"])
+        .expect("response for recorded request ID");
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn production_cv09_long_poll_held_stale_and_retry() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/cv09-lp.json")).unwrap();
+    for row in include_str!("fixtures/cv09-lp.pict.tsv").lines().skip(1) {
+        let columns: Vec<_> = row.split('\t').collect();
+        let round = fixture["rounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|round| round["cell"] == columns[0])
+            .unwrap();
+        let messages = &round["messages"];
+        let request = |name: &str| {
+            messages[name]["request"]
+                .as_str()
+                .unwrap()
+                .replace("/__CV09_PATH__", "/cv09/counter")
+        };
+        let reply = |name: &str| messages[name]["reply"].as_str().unwrap();
+        let split = columns[2] == "split";
+        let (address, _) = start(ServerConfig::default()).await;
+        assert_eq!(
+            get(&address, "PUT", "/cv09/counter.json?ns=cv09", "0")
+                .await
+                .0,
+            200
+        );
+        let (mut writer, _) = Lp::start(&address, "cv09").await;
+        let (mut observer, _) = Lp::start(&address, "cv09").await;
+        if columns[1] == "nonstale" {
+            let body = cv09_send(&mut writer, &request("stale"), split).await;
+            cv09_reply(&body, r#"{"t":"d","d":{"r":3,"b":{"s":"ok","d":1}}}"#);
+            continue;
+        }
+        let original = request("stale");
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            held.await.unwrap();
+            let body = cv09_send(&mut writer, &original, split).await;
+            (writer, body)
+        });
+        assert!(
+            !task.is_finished(),
+            "original write remains held until competitor readback"
+        );
+        cv09_reply(
+            &cv09_send(&mut observer, &request("competitor"), split).await,
+            reply("competitor"),
+        );
+        cv09_reply(
+            &cv09_send(&mut observer, &request("read10"), split).await,
+            reply("read10"),
+        );
+        release.send(()).unwrap();
+        let (mut writer, body) = task.await.unwrap();
+        cv09_reply(&body, reply("stale"));
+        cv09_reply(
+            &cv09_send(&mut writer, &request("retry"), split).await,
+            reply("retry"),
+        );
+        cv09_reply(
+            &cv09_send(&mut observer, &request("read11"), split).await,
+            reply("read11"),
+        );
+    }
+}

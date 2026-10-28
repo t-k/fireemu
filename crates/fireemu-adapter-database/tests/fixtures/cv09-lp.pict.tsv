@@ -1,0 +1,8 @@
+Round	Scenario	Segments
+r1_lp	stale	whole
+r1_lp	stale	split
+r2_lp	stale	whole
+r2_lp	stale	split
+r1_lp	nonstale	whole
+r2_lp	nonstale	whole
+r1_lp	nonstale	split

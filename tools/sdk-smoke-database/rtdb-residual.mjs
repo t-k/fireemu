@@ -445,6 +445,12 @@ export const profileTimeout = (cfg) => (cfg.scenario === 'cv10' ? PROFILE_TIMEOU
 // but loopback and Firebase hosts (--host-rules).
 export const browserContextOptions = (scenario) => ['sdk-next', 'sdk-next-startup'].includes(scenario) ? { serviceWorkers: 'block' } : {};
 
+export function harnessPort(value) {
+  if (value === undefined) return 0;
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value) || Number(value) > 65535) throw Error('invalid harness port');
+  return Number(value);
+}
+
 export function createPrivateControlWriter(write, secrets) {
   let count = 0;
   return (profile, raw) => {
@@ -480,7 +486,7 @@ export function browserRunner({ modules, page: pageConfig, stop = {}, startupExe
       res.writeHead(200, { 'content-type': file ? 'text/javascript' : 'text/html' });
       res.end(file ? readFileSync(file) : '<!doctype html><script type="module" src="/page.js"></script>');
     });
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    await new Promise((r) => server.listen(harnessPort(process.env.PORT), '127.0.0.1', r));
     const origin = `127.0.0.1:${server.address().port}`, counts = { http: 0, ws: 0, frames: 0, blocked: 0 }, journal = [];
     const browser = await chromium.launch({ ...LAUNCH, ...(cfg.scenario === 'sdk-next-startup' && startupExecutable ? { executablePath: startupExecutable } : {}), args: [hostRules()] });
     stop.closeBrowser = () => browser.close().catch(() => {});
@@ -601,6 +607,7 @@ async function main(argv) {
   if (!['local', 'production'].includes(mode) || !out) throw Error('usage: local|production --out <new dir> (see the header)');
   refuseNarrowing(mode, opt('--scenarios'), opt('--transports'));
   const packet = mode === 'production' ? verifyPacket(opt('--packet'), opt('--packet-sha256')) : undefined;
+  if (packet?.scenario === 'sdk-next-startup') harnessPort(process.env.PORT);
   let startup = false, startupExecutable;
   if (packet) { if (packet.scenario !== undefined && !['sdk-next', 'sdk-next-startup'].includes(packet.scenario)) throw Error('invalid fixed packet scenario'); if (packet.scenario === 'sdk-next-startup') { startupExecutable = verifyRootStartup(packet, opt('--packet-sha256')); startup = true; } else assertProductionSdkNextReady(packet); verifyBundles(packet); }
   mkdirSync(out); // refuses an existing directory

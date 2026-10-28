@@ -70,6 +70,13 @@ window.__rrRun = async (c) => {
     };
     const observed = [];
     try {
+      step = 'startup';
+      for (const [actor, app] of [['w', w], ['o', o]]) {
+        const snap = await perform(`startup-${actor}`, () => D.get(at(app, '')));
+        const value = snap.val();
+        emit('startup', { actor, label: 'root-read', shape: JSON.stringify(value) });
+        if (value !== null) throw Error('startup root not empty');
+      }
       step = 'seed';
       await perform('seed', () => D.set(at(w, ''), { items: { a: { score: 1 }, b: { score: 2, note: 'old' }, c: { score: 2 } }, merge: { keep: 1, edit: 1 }, fanout: {}, values: { numeric: 7, string: 'old' }, txn: { abort: 3, apply: 4 } }));
       step = 'attach';

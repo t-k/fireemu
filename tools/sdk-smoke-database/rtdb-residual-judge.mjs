@@ -188,7 +188,12 @@ export function validateSdkNext(journal) {
   const initial = journal.filter((r) => r.step === 'attach' && r.type === 'child_added' && r.label === 'items');
   if (!initial.some((r) => r.key === 'b' && r.prev === 'a') || !initial.some((r) => r.key === 'c' && r.prev === 'b')) errors.push('query tie ordering');
   const ops = journal.filter((r) => r.type === 'operation');
-  if (ops.length !== 19 || ops.some((r, i) => r.code !== String(i + 1))) errors.push('operation count/order');
+  if (ops.length !== 21 || ops.some((r, i) => r.code !== String(i + 1)) || ops[0]?.label !== 'startup-w' || ops[1]?.label !== 'startup-o' || ops[2]?.label !== 'seed') errors.push('operation count/order');
+  const seed = journal.indexOf(ops[2]);
+  for (const actor of ['w', 'o']) {
+    const reads = journal.filter((r) => r.type === 'startup' && r.label === 'root-read' && r.actor === actor && r.shape === 'null');
+    if (reads.length !== 1 || journal.indexOf(reads[0]) >= seed) errors.push(`startup ${actor}`);
+  }
   if (journal.some((r) => ['timeout', 'error', 'rejected'].includes(r.type))) errors.push('unknown outcome');
   if (!journal.some((r) => r.type === 'gap' && r.label === 'transaction-retry' && r.code === 'unobserved')) errors.push('retry gap');
   return { valid: errors.length === 0, errors, retry: 'unobserved', verdict: 'needs-review' };

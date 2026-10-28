@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 const shape = (v) => JSON.stringify(v);
 const row = (type, label, value, extra = {}) => ({ type, label, shape: shape(value), ...extra });
 const good = () => [
+  { type: 'startup', label: 'root-read', actor: 'w', shape: 'null' }, { type: 'startup', label: 'root-read', actor: 'o', shape: 'null' },
   row('push', 'a', { label: 'a' }, { key: 'push-a' }), row('push', 'b', { label: 'b' }, { key: 'push-b' }),
   row('get', 'update-preserves-sibling', { keep: 1, edit: 2 }), row('get', 'set-replaces-node', { edit: 3 }),
   row('get', 'atomic-multipath-final', { x: 1, y: 2 }), row('get', 'server-values', { numeric: 12, absent: 5, string: 5, at: 1000 }),
@@ -15,7 +16,7 @@ const good = () => [
   row('transaction', 'abort', { callbacks: [3], committed: false, value: 3 }), row('transaction', 'applyLocally-false', { callbacks: [4], committed: true, value: 5 }),
   ...['child_added', 'child_changed', 'child_moved'].map((type) => ({ type, key: 'b', prev: 'a' })),
   { step: 'attach', type: 'child_added', label: 'items', key: 'b', prev: 'a' }, { step: 'attach', type: 'child_added', label: 'items', key: 'c', prev: 'b' },
-  ...Array.from({ length: 19 }, (_, i) => ({ type: 'operation', code: String(i + 1) })), { type: 'gap', label: 'transaction-retry', code: 'unobserved' },
+  ...Array.from({ length: 21 }, (_, i) => ({ type: 'operation', label: ['startup-w', 'startup-o', 'seed'][i], code: String(i + 1) })), { type: 'gap', label: 'transaction-retry', code: 'unobserved' },
 ];
 
 test('typed obligations and unresolved retry', () => {
@@ -26,6 +27,9 @@ test('typed obligations and unresolved retry', () => {
 
 test('missing, typed, key, time, failure and cap mutations are rejected', () => {
   const mutations = [
+    (a) => a.splice(a.findIndex((r) => r.type === 'startup' && r.actor === 'o'), 1),
+    (a) => { a.find((r) => r.type === 'startup').shape = '{}'; },
+    (a) => { const i = a.findIndex((r) => r.type === 'startup' && r.actor === 'o'); const [row] = a.splice(i, 1); a.push(row); },
     (a) => a.splice(a.findIndex((r) => r.label === 'txn-abort'), 1),
     (a) => { a.find((r) => r.label === 'txn-abort').shape = 'null'; },
 
@@ -34,9 +38,11 @@ test('missing, typed, key, time, failure and cap mutations are rejected', () => 
     (a) => { a.find((r) => r.label === 'abort').shape = shape({ callbacks: [], committed: false, value: 3 }); },
     (a) => { a.find((r) => r.label === 'applyLocally-false').shape = shape({ callbacks: ['bad'], committed: true, value: 5 }); },
     (a) => { a.find((r) => r.label === 'applyLocally-false').shape = shape({ callbacks: [4], committed: true, value: 999 }); },
-    (a) => a.splice(0, 1), (a) => { a[1].key = a[0].key; }, (a) => { a[4].shape = shape({ x: 1 }); },
-    (a) => { a[5].shape = shape({ numeric: '12', absent: 5, string: 5, at: 1000 }); },
-    (a) => { a[6].shape = shape({ before: 1, after: 2, value: 900000 }); },
+    (a) => a.splice(a.findIndex((r) => r.type === 'push'), 1),
+    (a) => { a.find((r) => r.type === 'push' && r.label === 'b').key = a.find((r) => r.type === 'push' && r.label === 'a').key; },
+    (a) => { a.find((r) => r.label === 'atomic-multipath-final').shape = shape({ x: 1 }); },
+    (a) => { a.find((r) => r.label === 'server-values').shape = shape({ numeric: '12', absent: 5, string: 5, at: 1000 }); },
+    (a) => { a.find((r) => r.label === 'server-timestamp').shape = shape({ before: 1, after: 2, value: 900000 }); },
     (a) => a.push({ type: 'error' }), (a) => a.push({ type: 'operation', code: '25' }),
     (a) => a.splice(a.findIndex((r) => r.label === 'transaction-retry'), 1),
   ];
@@ -57,7 +63,7 @@ test('actual page fails closed and deletes apps when the first SDK write rejects
   const vm = await import('node:vm');
   let deleted = 0, calls = 0;
   const events = [];
-  const D = { forceWebSockets() {}, forceLongPolling() {}, getDatabase: () => ({}), ref: (_, path) => ({ path }), set: async () => { calls++; throw Error('write failed'); } };
+  const D = { forceWebSockets() {}, forceLongPolling() {}, getDatabase: () => ({}), ref: (_, path) => ({ path }), get: async () => ({ val: () => null }), set: async () => { calls++; throw Error('write failed'); } };
   const source = readFileSync(new URL('./rtdb-residual-page.js', import.meta.url), 'utf8')
     .replace(/^import .*firebase-app\.js';$/m, '')
     .replace(/^import .*firebase-database\.js';$/m, '');
@@ -66,7 +72,7 @@ test('actual page fails closed and deletes apps when the first SDK write rejects
   await assert.rejects(context.window.__rrRun({ scenario: 'sdk-next', transport: 'ws', base: 'test', name: 'r1-ws' }), /write failed/);
   assert.equal(calls, 1);
   assert.equal(deleted, 2);
-  assert.equal(events.filter((r) => r.type === 'operation').length, 1);
+  assert.equal(events.filter((r) => r.type === 'operation').length, 3);
   assert.equal(events.some((r) => r.type === 'done'), false);
 });
 
@@ -106,13 +112,13 @@ test('production selection is one fixed packet scenario and invalid profiles sto
 test('fixed script completes against a deterministic offline SDK double', async () => {
   const vm = await import('node:vm');
   const events = [], listeners = [], child = new Map();
-  let tree = {}, deleted = 0, serial = 0;
+  let tree = null, deleted = 0, serial = 0;
   const parts = (ref) => ref.path.split('/').filter(Boolean).slice(1);
   const read = (ref) => parts(ref).reduce((v, k) => v?.[k], tree) ?? null;
   const snapshot = (key, val) => ({ key, val: () => val });
   const assign = (ref, value) => {
     const ps = parts(ref); if (!ps.length) { tree = value; return; }
-    let node = tree; for (const p of ps.slice(0, -1)) node = node[p] ??= {};
+    let node = tree ??= {}; for (const p of ps.slice(0, -1)) node = node[p] ??= {};
     node[ps.at(-1)] = value;
   };
   const publish = () => { for (const [r, cb] of listeners) cb(snapshot(null, read(r))); };
@@ -146,7 +152,7 @@ test('fixed script completes against a deterministic offline SDK double', async 
   vm.runInNewContext(source, context);
   await context.window.__rrRun({ scenario: 'sdk-next', transport: 'ws', base: 'test', name: 'r1-ws', waitScale: 0.001 });
   assert.equal(validateSdkNext(events).valid, true, JSON.stringify(validateSdkNext(events).errors));
-  assert.equal(events.filter((r) => r.type === 'operation').length, 19);
+  assert.equal(events.filter((r) => r.type === 'operation').length, 21);
   assert.equal(deleted, 2);
   assert.equal(listeners.length, 0);
   assert.ok(events.some((r) => r.type === 'value' && r.label === 'txn-apply' && r.actor === 'w'));

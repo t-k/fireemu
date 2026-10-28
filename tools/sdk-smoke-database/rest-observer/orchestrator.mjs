@@ -2,6 +2,17 @@ import { verifyPacket } from './packet-gate.mjs';
 import { createTransport } from './transport.mjs';
 import { lifecycle } from './lifecycle.mjs';
 import { runCorpus } from './runner.mjs';
+import { validOperation } from './recovery.mjs';
+
+export function routeAdmin(path,p,prefix) {
+ const base=`https://${p.instance}.firebaseio.com`, mgmt=`https://firebasedatabase.googleapis.com/v1beta/projects/${p.projectNumber}/locations`, service=`https://serviceusage.googleapis.com/v1/projects/${p.projectNumber}/services/firebasedatabase.googleapis.com`, instance=`${mgmt}/${p.location}/instances/${p.instance}`;
+ if(validOperation(path))return `https://serviceusage.googleapis.com/v1/${path}`;
+ if(path==='service')return service;if(path==='service:enable'||path==='service:disable')return `${service}:${path.slice(8)}`;
+ if(path==='instances')return `${mgmt}/-/instances`;if(path==='instance')return instance;
+ if(['instance:undelete','instance:reenable','instance:disable'].includes(path))return `${instance}:${path.slice(9)}`;
+ if(path==='rules')return `${base}/.settings/rules.json`;if(path===prefix)return `${base}/${prefix}.json`;
+ throw Error('administration route refused');
+}
 
 // wire is injected by the caller. This module never acquires credentials or starts network access.
 export async function runPacket({packet,digest,wire,output,prefix,transport}) {
@@ -9,7 +20,7 @@ export async function runPacket({packet,digest,wire,output,prefix,transport}) {
  if(!/^rnext1_[a-f0-9]{24}$/.test(prefix)) throw Error('invalid run prefix');
  const base=`https://${p.instance}.firebaseio.com`, mgmt=`https://firebasedatabase.googleapis.com/v1beta/projects/${p.projectNumber}/locations`, service=`https://serviceusage.googleapis.com/v1/projects/${p.projectNumber}/services/firebasedatabase.googleapis.com`, instance=`${mgmt}/${p.location}/instances/${p.instance}`;
  const counted=transport ?? await createTransport({file:output,max:p.maxRequests,reserve:p.cleanupReserve,wire});
- const url=(path)=>/^operations\/[A-Za-z0-9_-]+$/.test(path)?`https://serviceusage.googleapis.com/v1/${path}`:path==='service'?service:path==='service:enable'?`${service}:enable`:path==='service:disable'?`${service}:disable`:path==='instances'?`${mgmt}/-/instances`:path==='instance'?instance:path.startsWith('instance:')?`${instance}:${path.slice(9)}`:path==='rules'?`${base}/.settings/rules.json`:`${base}/${path}.json`;
+ const url=(path)=>routeAdmin(path,p,prefix);
  let cleanup=false;
  const io=async (step,method,path,body)=>{if(step==='prefix-delete') cleanup=true;const response=await counted({step,method,url:url(path),body:body===undefined?undefined:typeof body==='string'?body:JSON.stringify(body),phase:cleanup?'cleanup':'normal'});if(step==='rules-before'||step==='rules-restored')return response.body;try{return JSON.parse(response.body);}catch{throw Error(`${step}: unreadable response`);}};
  const state={used:0,max:p.maxRequests,cleanupReserve:0,unknown:false,journal:[]};

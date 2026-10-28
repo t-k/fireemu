@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { validOperation } from './recovery.mjs';
 
 // io must provide counted, durable and sticky-unknown request semantics.
 export async function lifecycle(io, p, corpus) {
@@ -9,8 +10,8 @@ export async function lifecycle(io, p, corpus) {
  const mutate = async (step, method, path, body, accept) => { const v=await io(step,method,path,body); if (!accept(v)) throw Error(`${step}: unknown mutation outcome`); return v; };
  const rules={rules:{[p.prefix]:{'.read':true,'.write':true}}};
  const state = (want) => v => v?.state === want && v?.name === p.serviceName;
- const op = v => typeof v?.name === 'string' && /^operations\/[A-Za-z0-9_-]+$/.test(v.name) && !v.error;
- const finishOp = async (step, initial) => { let current=initial; for(let i=0;i<3 && current.done!==true;i++) { current=await read(`${step}-poll-${i}`,initial.name,v=>op(v)&&v.name===initial.name); } if(current.done!==true) throw Error(`${step}: operation unresolved`); };
+ const op = v => validOperation(v?.name) && !v.error;
+ const finishOp = async (step, initial) => { let current=initial; for(let i=0;i<10 && current.done!==true;i++) { await (p.sleep ?? (ms=>new Promise(resolve=>setTimeout(resolve,ms))))(5000); current=await read(`${step}-poll-${i}`,initial.name,v=>op(v)&&v.name===initial.name); } if(current.done!==true) throw Error(`${step}: operation unresolved`); };
  const empty = v => v && (v.instances === undefined || (Array.isArray(v.instances) && v.instances.length === 0)) && !v.nextPageToken;
  await read('api-before','service',state('DISABLED'));
  await finishOp('api-enable',await mutate('api-enable','POST','service:enable',{},op));

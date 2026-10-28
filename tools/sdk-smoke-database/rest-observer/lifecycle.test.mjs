@@ -23,8 +23,8 @@ test('unknown rules mutation stops without automatic cleanup writes', async () =
 
 test('pending API operation is polled only within fixed bound',async()=>{
  const calls=[];const io=async(step,method)=>{calls.push([step,method]);if(step==='api-before')return {name:'service',state:'DISABLED'};if(step==='api-enable')return {name:'operations/a',done:false};if(step.startsWith('api-enable-poll-'))return {name:'operations/a',done:false};throw Error(step);};
- await assert.rejects(lifecycle(io,{prefix:'owned',instanceName:'instance',serviceName:'service',baselineHash:'678bf03b47ad96012e4b7cf24f90a91aefc5c921863940998e65e28463f45cb0'},async()=>{}),/operation unresolved/);
- assert.equal(calls.filter(x=>x[0].startsWith('api-enable-poll-')).length,3);assert.equal(calls.filter(x=>x[1]==='POST').length,1);
+ await assert.rejects(lifecycle(io,{prefix:'owned',instanceName:'instance',serviceName:'service',sleep:async()=>{},baselineHash:'678bf03b47ad96012e4b7cf24f90a91aefc5c921863940998e65e28463f45cb0'},async()=>{}),/operation unresolved/);
+ assert.equal(calls.filter(x=>x[0].startsWith('api-enable-poll-')).length,10);assert.equal(calls.filter(x=>x[1]==='POST').length,1);
 });
 
 test('wrong Rules baseline blocks rules mutation',async()=>{

@@ -52,23 +52,23 @@
     },
     {
       "path": "lifecycle.mjs",
-      "sha256": "ce8f2ac9cdf16e27a90bb4a9d7412ee2e8815d0f9ed3de741d85d9ea3f04126b"
+      "sha256": "bfa3dfdd05ca785a5d0dc1c5ef0636da1712de5fcb1c4f3e556e57b677e75444"
     },
     {
       "path": "transport.mjs",
-      "sha256": "9d2a31fabb92a6f395985b96cd038fc55e2fd80052fe0759e2c7a832c1e8a662"
+      "sha256": "123560a1492b5de6fa78cef77341766baf4e84aeb4ea6fee8e7240c8cea69629"
     },
     {
       "path": "orchestrator.mjs",
-      "sha256": "e41e2620a9a81be843f538a038d3b849e5c48b4e4a5d606a481ed33b3de33b56"
+      "sha256": "8f52c04ff7d275c7420505691e531339b80e20f812238b87e445d1f600593b4e"
     },
     {
       "path": "packet-gate.mjs",
-      "sha256": "7e38beb06c7f2cea56a82c0f758ae24435198dfc838fb82275f75d2358b05fe4"
+      "sha256": "e54ab3f347283703b8612ba49c0bd4f399a0b57a2206194acf392e0e7df67017"
     },
     {
       "path": "launcher.mjs",
-      "sha256": "31917246f86ea388bc4451fad87d43b7f8100462a8a0011c28bf17f194abe916"
+      "sha256": "927dfec57f26ac78280635dc9ddf5fa7d0924e97588bb9b1b93a51e24c840ed4"
     },
     {
       "path": "provider.mjs",
@@ -77,6 +77,10 @@
     {
       "path": "adc-preflight.mjs",
       "sha256": "461845ad6ca7b09d910f0bdc79cd4224e10fc8d0801f47ac81efb248f6502907"
+    },
+    {
+      "path": "recovery.mjs",
+      "sha256": "c05f48892b8d95f357120b34be96f470be95a18a50bd793c5db9b775b9b95e12"
     }
   ]
 }

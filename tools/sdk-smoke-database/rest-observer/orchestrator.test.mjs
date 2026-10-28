@@ -13,3 +13,5 @@ test('full fake lifecycle, both rounds, anchors and restoration',async()=>{
  }else result=map[r.step]; if(result===undefined)throw Error(`unexpected ${r.step}`);return {status:200,body:JSON.stringify(result),raw:Buffer.from(JSON.stringify(result)),headers:{}};};
  assert.equal(await runPacket({packet,digest,wire,output:join(d,'journal'),prefix:'rnext1_0123456789abcdef01234567'}),'closed');assert.equal(calls.filter(x=>x.step==='corpus'&&x.method==='POST').length,2);assert.equal(rules,'BASELINE');assert.equal(values.size,0);
 });
+
+test('operation router handles dotted names and refuses arbitrary data paths',async()=>{const {routeAdmin}=await import('./orchestrator.mjs');const p={instance:'demo-observer',projectNumber:'123456',location:'us-central1'},prefix='rnext1_0123456789abcdef01234567';assert.equal(routeAdmin('operations/acat.p2-123456-example',p,prefix),'https://serviceusage.googleapis.com/v1/operations/acat.p2-123456-example');for(const path of ['operations/bad/name','operations/../../bad','not-owned','rnext1_other'])assert.throws(()=>routeAdmin(path,p,prefix));});

@@ -1,0 +1,10 @@
+Original	State	Disable
+success	ENABLED	success
+success	DISABLED	success
+error	ENABLED	error
+pending	ENABLED	success
+error	DISABLED	success
+pending	DISABLED	error
+success	OTHER	error
+pending	OTHER	success
+error	OTHER	error

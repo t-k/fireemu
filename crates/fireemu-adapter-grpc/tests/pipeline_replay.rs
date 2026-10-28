@@ -1807,7 +1807,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     }
     if let Ok(path) = std::env::var("REGENERATE_O5_DEBT") {
         let rows: Vec<Value> = o5_difference_rows()
-            .into_iter()
+            .iter()
             .filter_map(|debt| regenerate_o5_row(debt, &answers))
             .collect();
         std::fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
@@ -1816,7 +1816,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
 }
 
 fn regenerate_o5_row(
-    debt: O5Difference,
+    debt: &O5Difference,
     answers: &BTreeMap<(bool, String), Value>,
 ) -> Option<Value> {
     let strict = answers
@@ -1906,9 +1906,9 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
         .clone();
     let mut answers = BTreeMap::new();
     answers.insert((true, unknown.row.clone()), unknown.production.clone());
-    assert!(std::panic::catch_unwind(|| regenerate_o5_row(unknown.clone(), &answers)).is_err());
+    assert!(std::panic::catch_unwind(|| regenerate_o5_row(&unknown, &answers)).is_err());
     answers.insert((false, unknown.row.clone()), unknown.production.clone());
-    let kept = regenerate_o5_row(unknown.clone(), &answers).unwrap();
+    let kept = regenerate_o5_row(&unknown, &answers).unwrap();
     assert_eq!(kept["row"], O5_INTERNAL_ROW);
     assert_eq!(kept["category"], "unknown-production-outcome");
     assert_eq!(kept["production"], unknown.production);
@@ -1921,7 +1921,7 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
         ((true, ordinary.row.clone()), ordinary.production.clone()),
         ((false, ordinary.row.clone()), ordinary.production.clone()),
     ]);
-    assert!(regenerate_o5_row(ordinary, &both).is_none());
+    assert!(regenerate_o5_row(&ordinary, &both).is_none());
 }
 
 /// Whether a step of a pending program is pinned as matching production in a profile.

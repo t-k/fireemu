@@ -40,6 +40,7 @@ export async function createTransport({file,max,reserve,wire}) {
   let response; try{response=await wire(request,onHeaders); if(!receipt)throw Error('missing headers'); if(!response||!Number.isInteger(response.status)||(response.status<200||response.status>=300)&&!permittedProbe(request,response)&&!permittedRulesCase(request,response)&&!permittedQueryCase(request,response)&&!permittedBoundsCase(request,response)&&!permittedInstanceReadiness(request,response)||!Buffer.isBuffer(response.raw)||response.raw.length>1048576||typeof response.body!=='string'||!response.headers||SECRET.test(response.body))throw Error('unknown response');if(!bodyCaptured)await onHeaders.body(response.raw);}catch(e){unknown=true;try{if(e instanceof KnownRejection && receipt && bodyCaptured){await append({state:'known-rejection',id,status:e.status});if(e.status<400||e.status>=500)await append({state:'unknown',id});}else await append({state:'unknown',id});}catch{}throw Error('request stopped');}
   return response;
  };
+ invoke.observeServerValue=async observation=>{if(unknown)throw Error('sticky unknown');try{await append({state:'server-value-observation',observation});}catch{unknown=true;throw Error('observation stopped');}};
  invoke.close=()=>handle.close(); return invoke;
 }
 

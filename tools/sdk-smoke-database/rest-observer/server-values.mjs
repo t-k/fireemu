@@ -41,7 +41,15 @@ export async function runServerValueCorpus(transport, prefix, now = Date.now) {
     const after = await transport(request('sv-after', 'GET'));
     const readback = responseValue(after);
     const response = r => ({ status: r.status, body: r.body, etag: r.headers?.etag ?? null });
-    rows.push({ id: item.id, round, preimage, before: response(before), request: writeRequest, startedAt, endedAt, response: response(writeResponse), value, readback, after: response(after), ...(item.id === 'multipath-one-clock' ? { sameClock: Number.isSafeInteger(readback?.first) && Number.isSafeInteger(readback?.second) && readback.first === readback.second } : {}) });
+    rows.push({ id: item.id, round, preimage, before: response(before), request: writeRequest, startedAt, endedAt, response: response(writeResponse), value, readback, after: response(after), responseMatchesReadback: isDeepStrictEqual(value, readback), ...(item.id === 'timestamp-single' ? { timestampIsInteger: Number.isSafeInteger(readback) } : {}), ...(item.id === 'multipath-one-clock' ? { sameClock: Number.isSafeInteger(readback?.first) && Number.isSafeInteger(readback?.second) && readback.first === readback.second } : {}) });
   }
   return rows;
+}
+
+export function serverValueRequest(base,prefix,req) {
+ if(!/^https:\/\/[a-z][a-z0-9-]{3,62}\.firebaseio\.com$/.test(base)||!/^rnext1_[a-f0-9]{24}$/.test(prefix)||req?.phase!=='normal'||req.query)throw Error('server value request refused');
+ const match=new RegExp(`^/${prefix}/r[12]/([a-z-]+)\\.json$`).exec(req.path??'');
+ const item=serverValueCases().find(x=>x.id===match?.[1]);if(!item)throw Error('server value request refused');
+ const ok=req.step==='sv-seed'&&req.method==='PUT'&&req.body===JSON.stringify(item.seed)||['sv-before','sv-after'].includes(req.step)&&req.method==='GET'&&req.body===undefined||req.step==='sv-write'&&req.method===item.method&&req.body===JSON.stringify(item.body);
+ if(!ok)throw Error('server value request refused');return {step:req.step,method:req.method,url:`${base}${req.path}`,body:req.body,phase:'normal'};
 }

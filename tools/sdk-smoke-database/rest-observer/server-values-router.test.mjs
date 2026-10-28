@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serverValueRequest } from './orchestrator.mjs';
-import { serverValueCases } from './server-values.mjs';
+import { serverValueRequest, serverValueCases } from './server-values.mjs';
 const prefix = 'rnext1_0123456789abcdef01234567', base = 'https://demo-instance.firebaseio.com';
 test('only exact scoped seed, read, and typed server-value requests are admitted', () => {
  for (const round of ['r1','r2']) for (const item of serverValueCases()) {

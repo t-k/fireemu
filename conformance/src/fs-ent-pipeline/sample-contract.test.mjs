@@ -205,7 +205,7 @@ test("binding rejects unapproved profile, stale source and untrusted index befor
         { index: Buffer.from("{}") },
         {
           profile: "ordinary",
-          sourceCommit: "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
+          sourceCommit: "8220a36ad88c136592551ebb94f358d6abe4d909",
           indexSha256: "0".repeat(64),
         },
       ),
@@ -222,7 +222,7 @@ test("binding rejects unapproved profile, stale source and untrusted index befor
         { index: Buffer.from("{}") },
         {
           profile: "strict",
-          sourceCommit: "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
+          sourceCommit: "8220a36ad88c136592551ebb94f358d6abe4d909",
           indexSha256: "0".repeat(64),
         },
       ),
@@ -246,7 +246,7 @@ test("raw REST extraction rejects transport failures and malformed responses", (
 import { checkBuild } from "./sample-contract-binding.mjs";
 import { createHash } from "node:crypto";
 test("build binding rejects stale binary, source and profile", () => {
-  const source = "18f77be8956cccb768adfe8b43cfd0f9a8dfff09",
+  const source = "8220a36ad88c136592551ebb94f358d6abe4d909",
     binary = Buffer.from("binary"),
     digest = createHash("sha256").update(binary).digest("hex"),
     index = { sourceCommit: source, binarySha256: digest },

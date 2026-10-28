@@ -1,10 +1,11 @@
-//! Replays the FS-ENT-ORACLE pipeline corpus (every REST step of the O-1, O-2 and O-3 programs,
+//! Replays ordinary REST steps of the FS-ENT-ORACLE pipeline corpus (O-1, O-2 and O-3 programs,
 //! `conformance/fs-ent-pipeline-requests.json`) against the in-process REST surface under both
 //! profiles and compares each answer with the production recording
 //! (`conformance/fs-ent-pipeline-production.json`): the status, the result documents as a
 //! multiset (order and framing are not compared) and the whole error body. Every difference is
 //! named in the allowlist below with its reason, and each listed row must still differ, so the
-//! list cannot hide a row that has started to match.
+//! list cannot hide a row that has started to match. Compact framing steps are explicitly
+//! delegated to the actual-binary comparator and are not counted as matches here.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -33,7 +34,6 @@ const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 /// differ are named in the lists below, each with its reason. `nesting-main` is not listed:
 /// every nesting probe this surface can take matches production.)
 const PENDING_PROGRAMS: &[&str] = &[
-    "fs-ent-pipeline/o8c/timestamps-main",
     "fs-ent-pipeline/o8c/collections-main",
     "fs-ent-pipeline/o8d/stages-main",
 ];
@@ -73,6 +73,18 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
         "array-get-double-index",
         "array-get-int-array",
         "array-get-one",
+        "array-concat-two",
+        "array-concat-three",
+        "array-concat-with-empty",
+        "array-concat-null",
+        "array-concat-absent",
+        "array-concat-string",
+        "array-concat-one",
+        "array-reverse-ok",
+        "array-reverse-empty",
+        "array-reverse-null",
+        "array-reverse-absent",
+        "array-reverse-int",
         "map-get-key",
         "map-get-missing-key",
         "map-get-dotted-key",
@@ -154,6 +166,18 @@ const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
         "array-get-double-index",
         "array-get-int-array",
         "array-get-one",
+        "array-concat-two",
+        "array-concat-three",
+        "array-concat-with-empty",
+        "array-concat-null",
+        "array-concat-absent",
+        "array-concat-string",
+        "array-concat-one",
+        "array-reverse-ok",
+        "array-reverse-empty",
+        "array-reverse-null",
+        "array-reverse-absent",
+        "array-reverse-int",
         "map-get-key",
         "map-get-missing-key",
         "map-get-dotted-key",
@@ -582,6 +606,10 @@ fn read(name: &str) -> Value {
 }
 
 fn state(strict: bool) -> RestState {
+    state_at(strict, i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000)
+}
+
+fn state_at(strict: bool, clock_nanos: i128) -> RestState {
     let gateway = Gateway {
         enforce_limits: strict,
         ctx: PlanningContext {
@@ -595,9 +623,9 @@ fn state(strict: bool) -> RestState {
         },
         indexes: IndexSet::default(),
     };
-    let clock = Arc::new(Mutex::new(VirtualClock::new(
-        LogicalInstant::from_unix_seconds(REPLAY_CLOCK_SECONDS),
-    )));
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        clock_nanos,
+    ))));
     RestState {
         local: Arc::new(LocalBackend::new(gateway.clone(), clock, 7)),
         gateway: Arc::new(gateway),
@@ -788,6 +816,50 @@ fn answer_in(status: u16, body: &Value, ordered: bool) -> Value {
     json!({"status": 200, "results": results})
 }
 
+/// Compare only the recorded `current_timestamp` recipe against its configured request clock.
+fn current_timestamp_matches(
+    status: u16,
+    body: &Value,
+    expected_status: u16,
+    expected: &Value,
+    clock_nanos: i128,
+) -> bool {
+    const LEAF: &str = "/0/results/0/fields/v/timestampValue";
+    if status != 200
+        || status != expected_status
+        || framing(body) != framing(expected)
+        || expected.pointer(LEAF).and_then(Value::as_str) != Some("<t2>")
+    {
+        return false;
+    }
+    let Some(text) = body.pointer(LEAF).and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) else {
+        return false;
+    };
+    if fireemu_core_firestore::value::Timestamp::new(
+        parsed.timestamp(),
+        parsed.timestamp_subsec_nanos(),
+    )
+    .is_err()
+    {
+        return false;
+    }
+    let seconds = clock_nanos.div_euclid(1_000_000_000);
+    let nanos = clock_nanos.rem_euclid(1_000_000_000) / 1_000 * 1_000;
+    if i128::from(parsed.timestamp()) != seconds
+        || i128::from(parsed.timestamp_subsec_nanos()) != nanos
+    {
+        return false;
+    }
+    let mut actual = body.clone();
+    let mut recorded = expected.clone();
+    *actual.pointer_mut(LEAF).unwrap() = json!("<clock>");
+    *recorded.pointer_mut(LEAF).unwrap() = json!("<clock>");
+    answer_in(status, &actual, true) == answer_in(expected_status, &recorded, true)
+}
+
 /// How an answer is cut into array elements: the number of results in each.
 fn framing(body: &Value) -> Vec<usize> {
     body.as_array()
@@ -963,10 +1035,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 206, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 192, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            141,
+            127,
             "finite emulator debt inventory"
         );
     }
@@ -1087,6 +1159,22 @@ fn zero_counts_match_the_recorded_production_answers() {
 
 /// Executes the recorded REST body through either real adapter route.
 fn internal_case(strict: bool, family: &str, step_id: &str, grpc: bool) -> (u16, Value) {
+    internal_case_at(
+        strict,
+        family,
+        step_id,
+        grpc,
+        i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+    )
+}
+
+fn internal_case_at(
+    strict: bool,
+    family: &str,
+    step_id: &str,
+    grpc: bool,
+    clock_nanos: i128,
+) -> (u16, Value) {
     use fireemu_adapter_grpc::service::GatewayService;
     use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
     let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
@@ -1105,7 +1193,7 @@ fn internal_case(strict: bool, family: &str, step_id: &str, grpc: bool) -> (u16,
         .enumerate()
         .find(|(_, step)| step["id"] == step_id)
         .unwrap();
-    let s = state(strict);
+    let s = state_at(strict, clock_nanos);
     for seed in program["seed"].as_array().unwrap() {
         let mut fields = fill(&seed[1]);
         if std::env::var_os("FIREEMU_INTERNAL_DIAGNOSTIC_CASE").is_some() {
@@ -1144,13 +1232,30 @@ fn internal_case(strict: bool, family: &str, step_id: &str, grpc: bool) -> (u16,
         let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
             .await?
             .into_inner();
+        let mut responses = Vec::new();
         while let Some(response) = stream.next().await {
-            response?;
+            responses.push(response?);
         }
-        Ok::<(), tonic::Status>(())
+        Ok::<_, tonic::Status>(responses)
     });
     match result {
-        Ok(()) => (200, Value::Null),
+        Ok(responses) => {
+            use fireemu_proto_firestore::google::firestore::v1::value::ValueType;
+            let timestamp = responses
+                .iter()
+                .flat_map(|response| &response.results)
+                .filter_map(|result| result.fields.get("v"))
+                .find_map(|value| match &value.value_type {
+                    Some(ValueType::TimestampValue(timestamp)) => {
+                        Some((timestamp.seconds, timestamp.nanos))
+                    }
+                    _ => None,
+                });
+            (
+                200,
+                json!({"timestamp": timestamp, "resultCount": responses.iter().map(|response| response.results.len()).sum::<usize>(), "fieldNames": responses.iter().flat_map(|response| &response.results).flat_map(|result| result.fields.keys()).collect::<Vec<_>>()}),
+            )
+        }
         Err(error) => (
             match error.code() {
                 tonic::Code::Internal => 500,
@@ -1175,6 +1280,7 @@ fn observed_internal_fixtures_and_pict_cases() {
         ("o8a/dupquote-main", "swapped-order"),
         ("o5/appendix", "proposed-select-duplicate-quoted-path"),
         ("o8c/collections-main", "array-reverse-none"),
+        ("o8c/collections-main", "array-reverse-int"),
     ] {
         let (status, body) = internal_case(true, family, step, false);
         let expected = &fixture["programs"][format!("fs-ent-pipeline/{family}")]["steps"][step];
@@ -1217,7 +1323,7 @@ fn observed_internal_fixtures_and_pict_cases() {
             "o8c/collections-main",
             "array-reverse-int",
             false,
-            501,
+            400,
         ),
         (false, "o8a/dupquote-main", "dotted", true, 200),
     ] {
@@ -1346,6 +1452,125 @@ fn observed_internal_console_diagnostics_are_safe() {
     }
 }
 
+// The binary-level Node comparator owns compact framing: this in-process REST harness cannot
+// observe transport framing or reconstruct the discarded production bodies. These identities
+// are delegated, not counted as matches, and the full 1951-row binary comparison remains required.
+fn compact_delegation(program: &Value, recorded: &Value) -> Result<Option<Vec<String>>, String> {
+    let id = program["id"].as_str().ok_or("missing program id")?;
+    let entries: &[(&str, &str, &str)] = match id {
+        "fs-ent-pipeline/o8a/framing-small" => &[
+            ("f5-rest", "read", "executePipeline"),
+            ("f50-rest", "read", "executePipeline"),
+            ("f500-rest", "read", "executePipeline"),
+            ("f5000-rest", "read", "executePipeline"),
+            ("f5000-select-rest", "read", "executePipeline"),
+            ("f5000-limit-rest", "read", "executePipeline"),
+        ],
+        "fs-ent-pipeline/o8a/framing-large" => &[
+            ("seed-l12-1", "seed", "commit"),
+            ("seed-l12-2", "seed", "commit"),
+            ("seed-l12-3", "seed", "commit"),
+            ("seed-l3-1", "seed", "commit"),
+            ("seed-l3-2", "seed", "commit"),
+            ("seed-l3-3", "seed", "commit"),
+            ("seed-m30-1", "seed", "commit"),
+            ("seed-m30-2", "seed", "commit"),
+            ("seed-m30-3", "seed", "commit"),
+            ("l12-rest", "read", "executePipeline"),
+            ("l3-rest", "read", "executePipeline"),
+            ("m30-rest", "read", "executePipeline"),
+        ],
+        _ if recorded.get("compactFramingVersion").is_some() => {
+            return Err(format!("unexpected compact program: {id}"));
+        }
+        _ => return Ok(None),
+    };
+    if recorded["compactFramingVersion"] != 1 {
+        return Err(format!("invalid compact version: {id}"));
+    }
+    let steps = program["steps"].as_array().ok_or("missing steps")?;
+    if steps.len() != entries.len() {
+        return Err(format!("compact step count changed: {id}"));
+    }
+    let mut rows = Vec::new();
+    for (step_id, kind, rpc) in entries {
+        let matches: Vec<_> = steps.iter().filter(|step| step["id"] == *step_id).collect();
+        if matches.len() != 1
+            || matches[0]["rpc"] != *rpc
+            || recorded["steps"][*step_id]["kind"] != *kind
+        {
+            return Err(format!("compact contract changed: {id}#{step_id}"));
+        }
+        rows.push(format!("{id}#{step_id}"));
+    }
+    Ok(Some(rows))
+}
+
+#[test]
+fn compact_delegation_rejects_missing_extra_and_changed_kinds() {
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    for row in include_str!("pipeline_compact.generated.tsv")
+        .lines()
+        .skip(1)
+    {
+        let columns: Vec<_> = row.split('\t').collect();
+        let [size, profile, variant] = columns.as_slice() else {
+            panic!("invalid PICT row: {row}");
+        };
+        assert!(["strict", "emulator"].contains(profile));
+        let id = format!("fs-ent-pipeline/o8a/framing-{size}");
+        let mut program = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|program| program["id"] == id)
+            .unwrap()
+            .clone();
+        let mut recorded = production["programs"][&id].clone();
+        match *variant {
+            "valid" => (),
+            "missing" => {
+                program["steps"].as_array_mut().unwrap().pop();
+            }
+            "extra" => {
+                program["steps"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":"extra", "rpc":"commit"}));
+            }
+            "duplicate" => {
+                let first = program["steps"][0]["id"].clone();
+                program["steps"][1]["id"] = first;
+            }
+            "version" => {
+                recorded["compactFramingVersion"] = json!(2);
+            }
+            "unknown" => {
+                program["id"] = json!("unexpected-compact-program");
+            }
+            "kind" => {
+                let step_id = program["steps"][0]["id"].as_str().unwrap();
+                recorded["steps"][step_id]["kind"] = json!("unexpected");
+            }
+            "rpc" => {
+                program["steps"][0]["rpc"] = json!("unexpected");
+            }
+            _ => panic!("unknown variant: {variant}"),
+        }
+        let result = compact_delegation(&program, &recorded);
+        if *variant == "valid" {
+            assert_eq!(
+                result.unwrap().unwrap().len(),
+                if *size == "small" { 6 } else { 12 },
+                "{row}"
+            );
+        } else {
+            assert!(result.is_err(), "{row}");
+        }
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn the_pipeline_corpus_replays_as_production_answered() {
@@ -1368,6 +1593,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     for strict in [true, false] {
         let mut differing = Vec::new();
         let mut not_replayable = Vec::new();
+        let mut delegated_compact = Vec::new();
         let mut compared = 0;
         let mut seen = HashSet::new();
         let pending = |row: &str| {
@@ -1376,6 +1602,10 @@ fn the_pipeline_corpus_replays_as_production_answered() {
         };
         for (p, program) in requests["programs"].as_array().unwrap().iter().enumerate() {
             let id = program["id"].as_str().unwrap();
+            if let Some(rows) = compact_delegation(program, &production["programs"][id]).unwrap() {
+                delegated_compact.extend(rows);
+                continue;
+            }
             // Each program runs on its own database, as the recorder cleans its collections
             // between programs (several programs seed the same collection names).
             let s = state(strict);
@@ -1454,9 +1684,19 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                             ordered,
                         )
                 };
-                let matches = match nondeterministic(&row) {
-                    Some(rule) => satisfies(&rule, status, &body, REPLAY_CLOCK_SECONDS),
-                    None => matches,
+                let matches = if row == "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok" {
+                    current_timestamp_matches(
+                        status,
+                        &body,
+                        u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
+                        &expected["body"],
+                        i128::from(REPLAY_CLOCK_SECONDS) * 1_000_000_000,
+                    )
+                } else {
+                    match nondeterministic(&row) {
+                        Some(rule) => satisfies(&rule, status, &body, REPLAY_CLOCK_SECONDS),
+                        None => matches,
+                    }
                 };
                 compared += 1;
                 seen.insert(row.clone());
@@ -1544,6 +1784,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             )
             .unwrap();
         }
+        assert_eq!(
+            delegated_compact.len(),
+            18,
+            "strict={strict}: compact delegation changed"
+        );
+        assert_eq!(delegated_compact.iter().collect::<HashSet<_>>().len(), 18);
         assert!(compared > 200, "{compared}");
         // The O-8A bodies that are not JSON, or nest deeper than the parser takes, are the only rows
         // this surface cannot take.
@@ -2055,4 +2301,87 @@ fn the_nondeterministic_rows_accept_both_recordings_and_refuse_near_misses() {
         &integer(REPLAY_CLOCK_SECONDS + 5),
         REPLAY_CLOCK_SECONDS
     ));
+}
+
+#[test]
+fn timestamp_recorded_clock_request_reaches_rest_and_grpc() {
+    for (clock, seconds, nanos) in [
+        (1_000_001_234_i128, 1_i64, 1_000_i32),
+        (-1_i128, -1_i64, 999_999_000_i32),
+    ] {
+        let (status, body) = internal_case_at(
+            false,
+            "o8c/timestamps-main",
+            "current-timestamp-ok",
+            false,
+            clock,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(framing(&body), vec![1]);
+        assert_eq!(
+            body.pointer("/0/results/0/fields")
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["v"]
+        );
+        let value = body
+            .pointer("/0/results/0/fields/v/timestampValue")
+            .and_then(Value::as_str)
+            .unwrap();
+        let parsed = chrono::DateTime::parse_from_rfc3339(value).unwrap();
+        assert_eq!(
+            (parsed.timestamp(), parsed.timestamp_subsec_nanos()),
+            (seconds, u32::try_from(nanos).unwrap())
+        );
+        let (status, body) = internal_case_at(
+            false,
+            "o8c/timestamps-main",
+            "current-timestamp-ok",
+            true,
+            clock,
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["resultCount"], 1);
+        assert_eq!(body["fieldNames"], json!(["v"]));
+        assert_eq!(body["timestamp"], json!([seconds, nanos]));
+    }
+}
+
+#[test]
+fn current_timestamp_comparison_checks_clock_and_full_shape() {
+    let want =
+        json!([{"executionTime":"<t1>","results":[{"fields":{"v":{"timestampValue":"<t2>"}}}]}]);
+    for (clock, value) in [
+        (1_000_001_234_i128, "1970-01-01T00:00:01.000001Z"),
+        (-1, "1969-12-31T23:59:59.999999Z"),
+    ] {
+        let got = json!([{"executionTime":"ignored", "results":[{"fields":{"v":{"timestampValue":value}}}]}]);
+        assert!(current_timestamp_matches(200, &got, 200, &want, clock));
+        for bad in [
+            json!([{"results":[{"fields":{"v":{"timestampValue":"2000-01-01T00:00:00Z"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":"1970-01-01T01:00:01.000001Z"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"integerValue":"1"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":123}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":"not-a-time"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":"<t2>"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":"1970-01-01T00:00:01.000002Z"}}}]}]),
+            json!([{"results":[]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":value},"extra":{"integerValue":"1"}}}]}]),
+            json!([{"results":[{"fields":{"v":{"timestampValue":value}}},{"fields":{"v":{"timestampValue":value}}}]}]),
+        ] {
+            assert!(
+                !current_timestamp_matches(200, &bad, 200, &want, clock),
+                "{bad}"
+            );
+        }
+        assert!(!current_timestamp_matches(400, &got, 200, &want, clock));
+        assert!(!current_timestamp_matches(200, &got, 200, &want, i128::MIN));
+        assert!(!current_timestamp_matches(200, &got, 200, &want, i128::MAX));
+        let other =
+            json!([{"results":[{"fields":{"v":{"timestampValue":"2000-01-01T00:00:00Z"}}}]}]);
+        assert_ne!(answer_in(200, &got, true), answer_in(200, &other, true));
+    }
 }

@@ -242,6 +242,7 @@ fn execute_at_snapshot(
     unrecorded: Unrecorded,
     after_snapshot: impl FnOnce(),
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
+    let runtime = crate::pipeline_timezone::runtime(local);
     let plan = compiled
         .search
         .as_ref()
@@ -309,7 +310,8 @@ fn execute_at_snapshot(
     if !config.warned.swap(true, Ordering::Relaxed) {
         eprintln!("[firestore] text search uses fireemu-lexical-v1: approximate BM25, language-neutral tokenization; no stemming, synonyms, typo correction or language autodetection");
     }
-    let mut cursor = pipeline_exec::Cursor::new_in(compiled.stages, unrecorded);
+    let mut cursor =
+        pipeline_exec::Cursor::new_in_with_runtime(compiled.stages, unrecorded, runtime);
     let mut rows = Vec::new();
     for hit in hits {
         if cursor.is_exhausted() {
@@ -532,6 +534,69 @@ mod snapshot_tests {
         ]}}})).unwrap();
         pipeline::compile_pipeline(&request, parent, Unrecorded::OfficialEmulator).unwrap()
     }
+    #[test]
+    fn text_search_evaluates_request_scoped_timestamp() {
+        use fireemu_core_firestore::field_path::FieldPath;
+        use fireemu_core_firestore::pipeline_exec::{Expr, Placement, Stage};
+        let (local, _, parent) = fixture();
+        let mut pipeline = compiled(&parent);
+        pipeline.stages.push(Stage::Select {
+            aliases: vec![(
+                FieldPath::parse("now").unwrap(),
+                Expr::call("current_timestamp", vec![], Placement::Value).unwrap(),
+            )],
+            keeps_name: false,
+        });
+        let responses = execute(
+            &local,
+            &parent,
+            pipeline,
+            &allow_all_reads,
+            Unrecorded::OfficialEmulator,
+        )
+        .unwrap();
+        assert!(
+            format!("{responses:?}").contains("1788004860"),
+            "{responses:?}"
+        );
+    }
+
+    #[test]
+    fn text_search_suffix_uses_the_regex_resolver() {
+        use fireemu_core_firestore::field_path::FieldPath;
+        use fireemu_core_firestore::pipeline_exec::{Expr, Placement, Stage};
+        use fireemu_core_firestore::value::Value;
+        let (local, _, parent) = fixture();
+        let mut pipeline = compiled(&parent);
+        pipeline.stages.push(Stage::Select {
+            aliases: vec![(
+                FieldPath::parse("matched").unwrap(),
+                Expr::call(
+                    "regex_contains",
+                    vec![
+                        Expr::Constant(Value::String("abc".to_owned())),
+                        Expr::Constant(Value::String("b".to_owned())),
+                    ],
+                    Placement::Value,
+                )
+                .unwrap(),
+            )],
+            keeps_name: false,
+        });
+        let responses = execute(
+            &local,
+            &parent,
+            pipeline,
+            &allow_all_reads,
+            Unrecorded::Refuse,
+        )
+        .unwrap();
+        assert_eq!(
+            responses[0].results[0].fields["matched"].value_type,
+            Some(pb::value::ValueType::BooleanValue(true))
+        );
+    }
+
     #[test]
     fn catalog_replacement_and_write_after_capture_cannot_mix_with_the_frozen_source() {
         let (local, catalog, parent) = fixture();

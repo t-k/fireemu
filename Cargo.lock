@@ -670,6 +670,8 @@ name = "fireemu-adapter-grpc"
 version = "0.33.0"
 dependencies = [
  "bytes",
+ "chrono",
+ "chrono-tz",
  "fireemu-adapter-support",
  "fireemu-core-app-check",
  "fireemu-core-auth",
@@ -686,6 +688,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-types",
+ "regex",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -857,7 +860,6 @@ dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
  "proptest",
- "regex",
 ]
 
 [[package]]

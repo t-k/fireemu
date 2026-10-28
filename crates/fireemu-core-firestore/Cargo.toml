@@ -11,7 +11,6 @@ description = "Firestore core: field paths, value ordering, logical size, query 
 [dependencies]
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-limits = { path = "../fireemu-core-limits" }
-regex = "1.13.1"
 
 [dev-dependencies]
 fireemu-adapter-support = { path = "../fireemu-adapter-support" }

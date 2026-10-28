@@ -26,3 +26,6 @@ pub mod streams;
 pub mod webchannel;
 
 mod text_search;
+
+mod pipeline_regex;
+mod pipeline_timezone;

@@ -30,6 +30,9 @@ hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server"] }
 http-body-util = "0.1"
 bytes = "1"
+chrono = "0.4"
+chrono-tz = "0.10"
+regex = "1.13.1"
 
 [dev-dependencies]
 tokio-stream = { version = "0.1", features = ["net"] }

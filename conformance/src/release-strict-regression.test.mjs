@@ -2030,7 +2030,7 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("reopened RTDB retains its six disclosed comparisons", () => {
+test("reopened RTDB retains its seven disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
   assert.equal(rtdb.closure.parentStatus, "IMPLEMENTING");
@@ -2044,6 +2044,7 @@ test("reopened RTDB retains its six disclosed comparisons", () => {
     "spec/compatibility/closure/evidence/RTDB-genuine-auth-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-residual-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+    "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
   ]);

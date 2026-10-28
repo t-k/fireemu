@@ -1,0 +1,17 @@
+Program	Profile	Variant
+small	strict	valid
+large	emulator	valid
+large	strict	missing
+small	emulator	extra
+large	strict	kind
+small	emulator	rpc
+small	strict	duplicate
+large	emulator	version
+small	strict	unknown
+large	strict	rpc
+small	strict	version
+large	strict	extra
+small	emulator	kind
+large	emulator	duplicate
+small	emulator	missing
+large	emulator	unknown

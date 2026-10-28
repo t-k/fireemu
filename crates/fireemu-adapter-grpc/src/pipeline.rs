@@ -1005,6 +1005,9 @@ pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
     match error {
         pipeline_exec::EvalError::Unobserved { .. } => Status::unimplemented(error.to_string()),
         pipeline_exec::EvalError::Invalid(message) => Status::invalid_argument(message.clone()),
+        pipeline_exec::EvalError::TimestampOutOfRange { .. } => {
+            crate::production_status::timestamp_out_of_range(&error.to_string())
+        }
         pipeline_exec::EvalError::WrongType { function, .. } => {
             crate::production_status::function_wrong_type(&error.to_string(), function)
         }

@@ -40,6 +40,7 @@ fn call_in(name: &str, args: &[Eval], unrecorded: Unrecorded, condition: bool) -
         Context {
             unrecorded,
             condition,
+            runtime: RuntimeContext::default(),
         },
     )
 }
@@ -81,7 +82,7 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 26);
+    assert_eq!(NAMES.len(), 38);
     assert!(function("sqrt").is_none());
 }
 
@@ -1173,331 +1174,6 @@ proptest! {
 }
 
 #[test]
-fn regex_recorded_production_cases() {
-    let subject = text("Hello World");
-    let yes = Eval::Value(Value::Boolean(true));
-    let no = Eval::Value(Value::Boolean(false));
-    let strings = |items: &[&str]| {
-        array(
-            items
-                .iter()
-                .map(|s| Value::String((*s).to_owned()))
-                .collect(),
-        )
-    };
-    for (name, args, expected) in [
-        (
-            "regex_contains",
-            vec![subject.clone(), text("o W")],
-            yes.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("xyz")],
-            no.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("^Hello")],
-            yes.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("^World")],
-            no.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("hello")],
-            no.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("(?i)hello")],
-            yes.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![subject.clone(), text("")],
-            yes.clone(),
-        ),
-        (
-            "regex_contains",
-            vec![text("héllo ☃😀"), text("☃")],
-            yes.clone(),
-        ),
-        (
-            "regex_match",
-            vec![subject.clone(), text("H.*d")],
-            yes.clone(),
-        ),
-        (
-            "regex_match",
-            vec![subject.clone(), text("o W")],
-            no.clone(),
-        ),
-        (
-            "regex_match",
-            vec![subject.clone(), text("^Hello World$")],
-            yes.clone(),
-        ),
-        ("regex_match", vec![text(""), text("")], yes.clone()),
-        ("regex_find", vec![subject.clone(), text("o")], text("o")),
-        ("regex_find", vec![subject.clone(), text("xyz")], null()),
-        (
-            "regex_find",
-            vec![subject.clone(), text("(W)orld")],
-            text("W"),
-        ),
-        ("regex_find", vec![subject.clone(), text("x*")], text("")),
-        (
-            "regex_find_all",
-            vec![subject.clone(), text("o")],
-            strings(&["o", "o"]),
-        ),
-        (
-            "regex_find_all",
-            vec![subject.clone(), text("xyz")],
-            strings(&[]),
-        ),
-        (
-            "regex_find_all",
-            vec![text("aaa"), text("aa")],
-            strings(&["aa"]),
-        ),
-        (
-            "regex_find_all",
-            vec![text("abc"), text("x*")],
-            strings(&["", "", "", ""]),
-        ),
-    ] {
-        assert_eq!(both(name, &args), expected, "{name} {args:?}");
-    }
-    assert_eq!(
-        both("regex_match", &[subject.clone(), text("[")]),
-        invalid("Unsupported regex syntax.")
-    );
-    for name in [
-        "regex_contains",
-        "regex_match",
-        "regex_find",
-        "regex_find_all",
-    ] {
-        assert_eq!(
-            both(name, &[subject.clone(), text("(")]),
-            invalid("Unsupported regex syntax.")
-        );
-        assert_eq!(both(name, &[null(), text("a")]), null());
-        assert_eq!(both(name, &[Eval::Absent, text("a")]), null());
-        assert_eq!(
-            both(name, &[int(1), text("a")]),
-            wrong(name, "String", "LONG")
-        );
-        assert_eq!(both(name, &[subject.clone(), null()]), null());
-        assert_eq!(
-            both(name, &[subject.clone(), int(1)]),
-            wrong(name, "String or Regex", "LONG")
-        );
-        for (n, verb) in [(0, "were"), (1, "was")] {
-            let result = match name {
-                "regex_contains" | "regex_match" => "boolean",
-                "regex_find" => "string?",
-                _ => "array[string?]",
-            };
-            let args = vec![Expr::Constant(Value::Null); n];
-            let signature =
-                format!("{name}[T: string | regex](search_space: string, regexp: T): {result}");
-            assert_eq!(
-                Expr::call(name, args, Placement::Value)
-                    .unwrap_err()
-                    .to_string(),
-                format!(
-                    "The function '{signature}' takes [2..2] argument(s), but {n} {verb} provided."
-                )
-            );
-        }
-    }
-}
-
-#[test]
-fn regex_pict_generated_cases() {
-    let cases = [
-        ("contains", "text", "match", "strict"),
-        ("match", "text", "match", "strict"),
-        ("find", "text", "match", "strict"),
-        ("find_all", "text", "match", "strict"),
-        ("contains", "null", "match", "strict"),
-        ("contains", "text", "invalid", "strict"),
-        ("match", "null", "empty", "emulator"),
-        ("find_all", "absent", "match", "emulator"),
-        ("match", "empty", "no_match", "emulator"),
-        ("match", "empty", "invalid", "emulator"),
-        ("find", "empty", "null", "emulator"),
-        ("find", "empty", "invalid", "strict"),
-        ("contains", "text", "wrong", "emulator"),
-        ("contains", "absent", "empty", "strict"),
-        ("find_all", "text", "empty", "strict"),
-        ("find_all", "empty", "wrong", "strict"),
-        ("contains", "empty", "match", "emulator"),
-        ("find_all", "wrong", "no_match", "strict"),
-        ("find", "wrong", "empty", "emulator"),
-        ("find_all", "empty", "empty", "emulator"),
-        ("find", "null", "no_match", "strict"),
-        ("find", "text", "wrong", "emulator"),
-        ("find_all", "null", "null", "strict"),
-        ("contains", "text", "no_match", "strict"),
-        ("contains", "wrong", "match", "strict"),
-        ("find_all", "text", "invalid", "emulator"),
-        ("match", "absent", "null", "emulator"),
-        ("contains", "text", "null", "strict"),
-        ("match", "wrong", "match", "emulator"),
-        ("find", "absent", "no_match", "emulator"),
-        ("match", "empty", "wrong", "strict"),
-    ];
-    for (function, subject, pattern, profile) in cases {
-        let name = match function {
-            "contains" => "regex_contains",
-            "match" => "regex_match",
-            "find" => "regex_find",
-            _ => "regex_find_all",
-        };
-        let input = match subject {
-            "text" => text("abc"),
-            "empty" => text(""),
-            "null" => null(),
-            "absent" => Eval::Absent,
-            "wrong" => int(1),
-            _ => unreachable!(),
-        };
-        let pattern_arg = match pattern {
-            "match" => text("b"),
-            "no_match" => text("z"),
-            "empty" => text(""),
-            "invalid" => text("("),
-            "null" => null(),
-            "wrong" => int(1),
-            _ => unreachable!(),
-        };
-        let expected = if subject == "wrong" {
-            wrong(name, "String", "LONG")
-        } else if pattern == "wrong" {
-            wrong(name, "String or Regex", "LONG")
-        } else if subject == "null" || subject == "absent" || pattern == "null" {
-            null()
-        } else if pattern == "invalid" {
-            invalid("Unsupported regex syntax.")
-        } else {
-            let matches = pattern == "empty" || (pattern == "match" && subject == "text");
-            let full = pattern == "empty" && subject == "empty";
-            match function {
-                "contains" => Eval::Value(Value::Boolean(matches)),
-                "match" => Eval::Value(Value::Boolean(full)),
-                "find" if !matches => null(),
-                "find" => text(if pattern == "empty" { "" } else { "b" }),
-                "find_all" if !matches => array(vec![]),
-                "find_all" if pattern == "empty" => {
-                    array(vec![
-                        Value::String(String::new());
-                        if subject == "empty" { 1 } else { 4 }
-                    ])
-                }
-                "find_all" => array(vec![Value::String("b".to_owned())]),
-                _ => unreachable!(),
-            }
-        };
-        let got = if profile == "strict" {
-            strict(name, &[input, pattern_arg])
-        } else {
-            emulator(name, &[input, pattern_arg])
-        };
-        assert_eq!(got, expected, "{function} {subject} {pattern} {profile}");
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-    #[test]
-    fn regex_contains_and_match_agree_with_literal_reference(prefix in "[a-z]{0,8}", suffix in "[a-z]{0,8}") {
-        let subject = format!("{prefix}Q{suffix}");
-        prop_assert_eq!(strict("regex_contains", &[text(&subject), text("Q")]), Eval::Value(Value::Boolean(true)));
-        prop_assert_eq!(strict("regex_match", &[text(&subject), text("Q")]), Eval::Value(Value::Boolean(prefix.is_empty() && suffix.is_empty())));
-        prop_assert_eq!(strict("regex_find_all", &[text(&subject), text("Q")]), array(vec![Value::String("Q".to_owned())]));
-    }
-}
-
-#[test]
-fn regex_strict_guards_known_re2_differences() {
-    for (subject, pattern) in [
-        ("١", r"\d"),
-        ("١", r"\D"),
-        ("é", r"\w"),
-        ("é", r"\W"),
-        (" ", r"\s"),
-        (" ", r"\S"),
-        ("é", r"\bé\b"),
-        ("é", r"\B"),
-        ("\u{000b}", r"\s"),
-        ("ab", "(?x)a b"),
-        ("a", "[a&&b]"),
-        ("α", r"\p{Greek}"),
-        ("a", r"[\d]"),
-        ("a", r"\Qabc\E"),
-        ("a", r"\C"),
-        ("a", "(?u)a"),
-        ("a", "(?R)^a$"),
-        ("a", "[a--b]"),
-        ("a", "[a~~b]"),
-        ("a", "[a[b]]"),
-        ("a", "a{2}"),
-    ] {
-        assert!(
-            is_unobserved(&strict("regex_contains", &[text(subject), text(pattern)])),
-            "{subject:?} {pattern:?}"
-        );
-    }
-    for name in [
-        "regex_contains",
-        "regex_match",
-        "regex_find",
-        "regex_find_all",
-    ] {
-        assert!(is_unobserved(&strict(name, &[text("١"), text(r"\d")])));
-    }
-    assert_eq!(
-        emulator("regex_contains", &[text("١"), text(r"\d")]),
-        Eval::Value(Value::Boolean(true))
-    );
-    assert_eq!(
-        strict("regex_contains", &[text("☃"), text("☃")]),
-        Eval::Value(Value::Boolean(true))
-    );
-    assert_eq!(
-        strict("regex_contains", &[text(r"\d"), text(r"\\d")]),
-        Eval::Value(Value::Boolean(true))
-    );
-    for (subject, pattern) in [
-        ("[", r"\["),
-        ("{", r"\{"),
-        ("?", r"\?"),
-        ("a", "[a-z]"),
-        ("z", "[^a]"),
-        ("foo", "(?im:foo)"),
-        ("a&&b", "a&&b"),
-        (r"\s", r"\\s"),
-    ] {
-        assert_eq!(
-            strict("regex_contains", &[text(subject), text(pattern)]),
-            Eval::Value(Value::Boolean(true)),
-            "{pattern}"
-        );
-    }
-    assert_eq!(
-        strict("regex_contains", &[text("Hello"), text("(?i)hello")]),
-        Eval::Value(Value::Boolean(true))
-    );
-}
-
-#[test]
 fn map_family_recorded_cases() {
     let m = Eval::Value(Value::Map(
         [
@@ -1906,4 +1582,1004 @@ fn map_family_mixed_precedence_is_unobserved() {
         "map_merge",
         &[array(vec![]), array(vec![])]
     )));
+}
+
+#[test]
+fn array_sequence_recorded_cases() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    let strings = array(vec![
+        Value::String("a".to_owned()),
+        Value::String("b".to_owned()),
+        Value::String("c".to_owned()),
+    ]);
+    for (name, args, expected) in [
+        (
+            "array_reverse",
+            vec![a.clone()],
+            array(vec![
+                Value::Integer(3),
+                Value::Integer(2),
+                Value::Integer(1),
+            ]),
+        ),
+        ("array_reverse", vec![array(vec![])], array(vec![])),
+        ("array_reverse", vec![null()], null()),
+        ("array_reverse", vec![Eval::Absent], null()),
+        (
+            "array_reverse",
+            vec![int(5)],
+            wrong("array_reverse", "Array", "LONG"),
+        ),
+        (
+            "array_concat",
+            vec![a.clone(), strings],
+            array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::String("a".to_owned()),
+                Value::String("b".to_owned()),
+                Value::String("c".to_owned()),
+            ]),
+        ),
+        (
+            "array_concat",
+            vec![a.clone(), a.clone(), a.clone()],
+            array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+        ),
+        ("array_concat", vec![a.clone(), array(vec![])], a.clone()),
+        ("array_concat", vec![a.clone(), null()], null()),
+        ("array_concat", vec![a.clone(), Eval::Absent], null()),
+        (
+            "array_concat",
+            vec![a.clone(), text("x")],
+            wrong("array_concat", "Array", "STRING"),
+        ),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for (n, verb) in [(0, "were"), (1, "was")] {
+        assert_eq!(Expr::call("array_concat",vec![Expr::Constant(Value::Null);n],Placement::Value).unwrap_err().to_string(),format!("The function 'array_concat(arrays: array[any]*): array[any]' takes [2..+∞) argument(s), but {n} {verb} provided."));
+    }
+    assert!(matches!(
+        Expr::call("array_reverse", vec![], Placement::Value),
+        Err(ExprError::Unsupported(_))
+    ));
+    assert!(is_unobserved(&strict("array_concat", &[null(), text("x")])));
+    assert!(is_unobserved(&strict("array_concat", &[text("x"), null()])));
+}
+
+#[test]
+fn array_sequence_pict_cases() {
+    let cases = [
+        ("reverse", "populated", "strict"),
+        ("reverse", "empty", "strict"),
+        ("concat", "populated", "strict"),
+        ("concat", "null", "strict"),
+        ("reverse", "absent", "strict"),
+        ("concat", "wrong", "emulator"),
+        ("reverse", "populated", "emulator"),
+        ("reverse", "null", "emulator"),
+        ("concat", "absent", "emulator"),
+        ("concat", "empty", "emulator"),
+        ("reverse", "wrong", "strict"),
+    ];
+    for (operation, input, profile) in cases {
+        let name = if operation == "reverse" {
+            "array_reverse"
+        } else {
+            "array_concat"
+        };
+        let arg = match input {
+            "populated" => array(vec![Value::Integer(1), Value::Integer(2)]),
+            "empty" => array(vec![]),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" => int(5),
+            _ => unreachable!(),
+        };
+        let args = if operation == "reverse" {
+            vec![arg]
+        } else {
+            vec![arg, array(vec![])]
+        };
+        let expected = match input {
+            "populated" if operation == "reverse" => {
+                array(vec![Value::Integer(2), Value::Integer(1)])
+            }
+            "populated" => array(vec![Value::Integer(1), Value::Integer(2)]),
+            "empty" => array(vec![]),
+            "null" | "absent" => null(),
+            "wrong" => wrong(name, "Array", "LONG"),
+            _ => unreachable!(),
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {input} {profile}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn array_sequence_properties(a in proptest::collection::vec(any::<i64>(),0..30), b in proptest::collection::vec(any::<i64>(),0..30)) {
+        let av: Vec<Value> = a.into_iter().map(Value::Integer).collect();
+        let bv: Vec<Value> = b.into_iter().map(Value::Integer).collect();
+        let reverse = strict("array_reverse", &[array(av.clone())]);
+        prop_assert_eq!(strict("array_reverse", &[reverse]),array(av.clone()));
+        let mut expected = av.clone(); expected.extend(bv.clone());
+        prop_assert_eq!(strict("array_concat", &[array(av),array(bv)]),array(expected));
+    }
+}
+
+#[test]
+fn array_concat_multiple_wrong_types_preserves_profile_behavior() {
+    for args in [vec![int(1), text("x")], vec![text("x"), int(1)]] {
+        assert!(is_unobserved(&strict("array_concat", &args)));
+        let expected_type = if matches!(args[0], Eval::Value(Value::Integer(_))) {
+            "LONG"
+        } else {
+            "STRING"
+        };
+        assert_eq!(
+            emulator("array_concat", &args),
+            wrong("array_concat", "Array", expected_type)
+        );
+    }
+}
+
+#[test]
+fn timestamp_unix_conversion_pict_cases() {
+    let cases = [
+        ("to_timestamp", "microseconds", "negative", "strict"),
+        ("to_timestamp", "seconds", "zero", "strict"),
+        ("to_timestamp", "milliseconds", "boundary", "strict"),
+        ("to_unix", "microseconds", "negative", "strict"),
+        ("to_unix", "seconds", "boundary", "strict"),
+        ("to_unix", "milliseconds", "wrong", "emulator"),
+        ("to_timestamp", "milliseconds", "null", "emulator"),
+        ("to_timestamp", "seconds", "negative", "emulator"),
+        ("to_unix", "microseconds", "zero", "emulator"),
+        ("to_unix", "microseconds", "null", "strict"),
+        ("to_unix", "seconds", "null", "emulator"),
+        ("to_unix", "milliseconds", "positive", "strict"),
+        ("to_timestamp", "microseconds", "boundary", "emulator"),
+        ("to_timestamp", "milliseconds", "absent", "strict"),
+        ("to_unix", "milliseconds", "zero", "strict"),
+        ("to_unix", "milliseconds", "negative", "emulator"),
+        ("to_timestamp", "microseconds", "positive", "emulator"),
+        ("to_timestamp", "seconds", "positive", "emulator"),
+        ("to_timestamp", "microseconds", "wrong", "strict"),
+        ("to_unix", "seconds", "wrong", "strict"),
+        ("to_unix", "seconds", "absent", "emulator"),
+        ("to_timestamp", "microseconds", "absent", "strict"),
+    ];
+    for (direction, unit, input, profile) in cases {
+        let (name, scale) = match (direction, unit) {
+            ("to_timestamp", "seconds") => ("unix_seconds_to_timestamp", 1_i64),
+            ("to_timestamp", "milliseconds") => ("unix_millis_to_timestamp", 1_000),
+            ("to_timestamp", "microseconds") => ("unix_micros_to_timestamp", 1_000_000),
+            ("to_unix", "seconds") => ("timestamp_to_unix_seconds", 1),
+            ("to_unix", "milliseconds") => ("timestamp_to_unix_millis", 1_000),
+            _ => ("timestamp_to_unix_micros", 1_000_000),
+        };
+        let value = match (direction, input) {
+            (_, "null") => null(),
+            (_, "absent") => Eval::Absent,
+            ("to_timestamp", "wrong") => text("1"),
+            ("to_unix", "wrong") => int(5),
+            ("to_timestamp", "boundary") => int(i64::MAX),
+            ("to_timestamp", "positive") => int(1),
+            ("to_timestamp", "zero") => int(0),
+            ("to_timestamp", "negative") => int(-1),
+            ("to_unix", "positive") => Eval::Value(Value::Timestamp(
+                Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+            )),
+            ("to_unix", "zero") => Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap())),
+            ("to_unix", "negative") => {
+                Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap()))
+            }
+            ("to_unix", "boundary") => Eval::Value(Value::Timestamp(
+                Timestamp::new(Timestamp::MAX_SECONDS, 999_999_000).unwrap(),
+            )),
+            _ => unreachable!(),
+        };
+        let expected = match (direction, input) {
+            (_, "null" | "absent") => null(),
+            ("to_timestamp", "wrong") => wrong(name, "Int64", "STRING"),
+            ("to_unix", "wrong") => wrong(name, "Timestamp", "LONG"),
+            ("to_timestamp", "boundary") => invalid(&format!("{name}(...) argument out of range")),
+            ("to_timestamp", "positive") => Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    1 / scale,
+                    u32::try_from((1 % scale) * (1_000_000_000 / scale)).unwrap(),
+                )
+                .unwrap(),
+            )),
+            ("to_timestamp", "zero") => {
+                Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap()))
+            }
+            ("to_timestamp", "negative") => Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    -1,
+                    u32::try_from(1_000_000_000 - (1_000_000_000 / scale)).unwrap(),
+                )
+                .unwrap(),
+            )),
+            ("to_unix", "positive") => {
+                int(1_582_979_696 * scale + 789_012_000 / (1_000_000_000 / scale))
+            }
+            ("to_unix", "zero") => int(0),
+            ("to_unix", "negative") => int(-1),
+            ("to_unix", "boundary") => {
+                int(Timestamp::MAX_SECONDS * scale + 999_999_000 / (1_000_000_000 / scale))
+            }
+            _ => unreachable!(),
+        };
+        let got = if profile == "strict" {
+            strict(name, &[value])
+        } else {
+            emulator(name, &[value])
+        };
+        assert_eq!(got, expected, "{direction} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_unix_conversion_recorded_arities_and_float() {
+    for unit in ["seconds", "millis", "micros"] {
+        let from = format!("unix_{unit}_to_timestamp");
+        let to = format!("timestamp_to_unix_{unit}");
+        assert_eq!(
+            strict(&from, &[int(i64::MIN)]),
+            invalid(&format!("{from}(...) argument out of range"))
+        );
+        assert_eq!(
+            strict(&from, &[dbl(1.5)]),
+            invalid("Cannot coerce Float64 (1.5) to Int64")
+        );
+        for (name, signature) in [
+            (&from, format!("{from}(input: int64): timestamp")),
+            (
+                &to,
+                format!("{to}[T: timestamp | bson_timestamp](input: T): int64"),
+            ),
+        ] {
+            assert_eq!(
+                Expr::call(name, vec![], Placement::Value)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "The function '{signature}' takes [1..1] argument(s), but 0 were provided."
+                )
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn timestamp_unix_round_trip_for_microsecond_aligned_values(seconds in -62_135_596_800i64..=253_402_300_799, micros in 0u32..1_000_000) {
+        let timestamp = Eval::Value(Value::Timestamp(Timestamp::new(seconds,micros*1_000).unwrap()));
+        let encoded = strict("timestamp_to_unix_micros", std::slice::from_ref(&timestamp));
+        prop_assert_eq!(strict("unix_micros_to_timestamp", &[encoded]), timestamp);
+    }
+}
+
+#[test]
+fn timestamp_duration_arithmetic_pict_cases() {
+    let cases = [
+        ("add", "day", "positive", "strict"),
+        ("add", "microsecond", "positive", "strict"),
+        ("subtract", "day", "negative", "strict"),
+        ("diff", "second", "positive", "strict"),
+        ("diff", "day", "negative", "strict"),
+        ("add", "hour", "absent", "emulator"),
+        ("subtract", "second", "absent", "emulator"),
+        ("diff", "microsecond", "negative", "emulator"),
+        ("add", "minute", "negative", "emulator"),
+        ("subtract", "millisecond", "positive", "emulator"),
+        ("subtract", "microsecond", "zero", "emulator"),
+        ("add", "second", "negative", "strict"),
+        ("diff", "millisecond", "null", "strict"),
+        ("add", "day", "null", "emulator"),
+        ("subtract", "hour", "null", "strict"),
+        ("add", "millisecond", "absent", "strict"),
+        ("diff", "minute", "null", "strict"),
+        ("diff", "day", "zero", "strict"),
+        ("diff", "hour", "zero", "emulator"),
+        ("add", "millisecond", "zero", "strict"),
+        ("diff", "microsecond", "absent", "emulator"),
+        ("subtract", "minute", "absent", "emulator"),
+        ("diff", "millisecond", "negative", "strict"),
+        ("add", "day", "absent", "emulator"),
+        ("diff", "second", "null", "strict"),
+        ("add", "minute", "zero", "emulator"),
+        ("add", "second", "zero", "emulator"),
+        ("add", "minute", "positive", "strict"),
+        ("subtract", "hour", "negative", "emulator"),
+        ("add", "microsecond", "null", "emulator"),
+        ("add", "hour", "positive", "strict"),
+    ];
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(100_000, 123_456_000).unwrap(),
+    ));
+    let origin = Eval::Value(Value::Timestamp(
+        Timestamp::new(100_000, 123_456_000).unwrap(),
+    ));
+    for (operation, unit, input, profile) in cases {
+        let name = match operation {
+            "add" => "timestamp_add",
+            "subtract" => "timestamp_subtract",
+            _ => "timestamp_diff",
+        };
+        let factor: i64 = match unit {
+            "microsecond" => 1_000,
+            "millisecond" => 1_000_000,
+            "second" => 1_000_000_000,
+            "minute" => 60_000_000_000,
+            "hour" => 3_600_000_000_000,
+            _ => 86_400_000_000_000,
+        };
+        let amount = match input {
+            "negative" => -1_i64,
+            "zero" => 0,
+            _ => 1,
+        };
+        let first = match input {
+            "null" => null(),
+            "absent" => Eval::Absent,
+            _ => base.clone(),
+        };
+        let args = if operation == "diff" {
+            let end = match input {
+                "null" => null(),
+                "absent" => Eval::Absent,
+                _ => Eval::Value(Value::Timestamp(
+                    Timestamp::new(100_000 + amount, 123_456_000).unwrap(),
+                )),
+            };
+            vec![end, origin.clone(), text(unit)]
+        } else {
+            vec![first, text(unit), int(amount)]
+        };
+        let expected = if input == "null" || input == "absent" {
+            null()
+        } else if operation == "diff" {
+            int((amount * 1_000_000_000) / factor)
+        } else {
+            let sign = if operation == "subtract" { -1 } else { 1 };
+            let nanos = 100_000_i64 * 1_000_000_000 + 123_456_000 + sign * amount * factor;
+            Eval::Value(Value::Timestamp(
+                Timestamp::new(
+                    nanos.div_euclid(1_000_000_000),
+                    u32::try_from(nanos.rem_euclid(1_000_000_000)).unwrap(),
+                )
+                .unwrap(),
+            ))
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_duration_recorded_boundaries() {
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    let epoch = Eval::Value(Value::Timestamp(Timestamp::new(0, 0).unwrap()));
+    assert_eq!(
+        strict(
+            "timestamp_diff",
+            &[base.clone(), epoch.clone(), text("day")]
+        ),
+        int(18_321)
+    );
+    assert_eq!(
+        strict(
+            "timestamp_diff",
+            &[epoch.clone(), base.clone(), text("day")]
+        ),
+        int(-18_321)
+    );
+    let negative = Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap()));
+    assert_eq!(
+        strict("timestamp_diff", &[epoch, negative, text("second")]),
+        int(0)
+    );
+    for unit in ["month", "week", "DAY"] {
+        let message = "The argument 'unit' for function 'timestamp_add' must be a literal of type string from the following list: [microsecond, millisecond, second, minute, hour, day]";
+        assert_eq!(
+            strict("timestamp_add", &[base.clone(), text(unit), int(1)]),
+            invalid(message)
+        );
+    }
+    assert_eq!(
+        strict(
+            "timestamp_add",
+            &[base.clone(), text("second"), int(i64::MAX)]
+        ),
+        invalid("timestamp_add(...) result is out of range")
+    );
+    assert_eq!(
+        strict("timestamp_add", &[base.clone(), text("day"), dbl(1.5)]),
+        invalid("Cannot coerce Float64 (1.5) to Int64")
+    );
+    assert_eq!(
+        strict("timestamp_subtract", &[int(5), text("day"), int(1)]),
+        wrong("timestamp_sub", "Timestamp or BsonTimestamp", "LONG")
+    );
+    let max = Eval::Value(Value::Timestamp(
+        Timestamp::new(Timestamp::MAX_SECONDS, 999_999_000).unwrap(),
+    ));
+    let result = strict("timestamp_add", &[max, text("day"), int(1)]);
+    assert!(
+        matches!(result, Eval::Error(error) if error.to_string() == "timestamp_add(...) received a timestamp value that is out of range.")
+    );
+}
+
+#[test]
+fn timestamp_calendar_recorded_utc_cases() {
+    let base = Eval::Value(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    for (unit, seconds, nanos) in [
+        ("microsecond", 1_582_979_696_i64, 789_012_000_u32),
+        ("millisecond", 1_582_979_696_i64, 789_000_000_u32),
+        ("second", 1_582_979_696_i64, 0_u32),
+        ("minute", 1_582_979_640_i64, 0_u32),
+        ("hour", 1_582_977_600_i64, 0_u32),
+        ("day", 1_582_934_400_i64, 0_u32),
+        ("week", 1_582_416_000_i64, 0_u32),
+        ("week(monday)", 1_582_502_400_i64, 0_u32),
+        ("isoweek", 1_582_502_400_i64, 0_u32),
+        ("month", 1_580_515_200_i64, 0_u32),
+        ("quarter", 1_577_836_800_i64, 0_u32),
+        ("year", 1_577_836_800_i64, 0_u32),
+        ("isoyear", 1_577_664_000_i64, 0_u32),
+    ] {
+        assert_eq!(
+            both("timestamp_trunc", &[base.clone(), text(unit)]),
+            Eval::Value(Value::Timestamp(Timestamp::new(seconds, nanos).unwrap())),
+            "{unit}"
+        );
+    }
+    for (unit, value) in [
+        ("year", 2020_i64),
+        ("month", 2_i64),
+        ("day", 29_i64),
+        ("dayofweek", 7_i64),
+        ("dayofyear", 60_i64),
+        ("hour", 12_i64),
+        ("minute", 34_i64),
+        ("second", 56_i64),
+        ("microsecond", 789_012_i64),
+        ("week", 8_i64),
+        ("isoweek", 9_i64),
+        ("quarter", 1_i64),
+    ] {
+        assert_eq!(
+            both("timestamp_extract", &[base.clone(), text(unit)]),
+            int(value),
+            "{unit}"
+        );
+    }
+}
+
+#[test]
+fn timestamp_calendar_pict_cases() {
+    let cases = [
+        ("trunc", "day", "positive", "strict"),
+        ("extract", "hour", "positive", "strict"),
+        ("trunc", "second", "negative", "strict"),
+        ("extract", "microsecond", "null", "strict"),
+        ("trunc", "second", "null", "emulator"),
+        ("extract", "millisecond", "positive", "emulator"),
+        ("extract", "day", "negative", "emulator"),
+        ("extract", "day", "null", "strict"),
+        ("trunc", "hour", "absent", "emulator"),
+        ("trunc", "hour", "negative", "emulator"),
+        ("trunc", "millisecond", "null", "strict"),
+        ("trunc", "minute", "null", "emulator"),
+        ("trunc", "microsecond", "absent", "emulator"),
+        ("extract", "millisecond", "absent", "strict"),
+        ("extract", "microsecond", "negative", "emulator"),
+        ("extract", "second", "positive", "emulator"),
+        ("extract", "hour", "null", "emulator"),
+        ("extract", "minute", "positive", "strict"),
+        ("extract", "microsecond", "positive", "strict"),
+        ("extract", "minute", "negative", "emulator"),
+        ("trunc", "second", "absent", "strict"),
+        ("trunc", "day", "absent", "emulator"),
+        ("extract", "millisecond", "negative", "strict"),
+        ("extract", "minute", "absent", "strict"),
+    ];
+    for (operation, unit, input, profile) in cases {
+        let name = if operation == "trunc" {
+            "timestamp_trunc"
+        } else {
+            "timestamp_extract"
+        };
+        let timestamp = match input {
+            "positive" => Eval::Value(Value::Timestamp(
+                Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+            )),
+            "negative" => Eval::Value(Value::Timestamp(Timestamp::new(-1, 999_999_000).unwrap())),
+            "null" => null(),
+            _ => Eval::Absent,
+        };
+        let expected = if input == "null" || input == "absent" {
+            null()
+        } else if operation == "extract" {
+            let v = if input == "positive" {
+                match unit {
+                    "microsecond" => 789_012,
+                    "millisecond" => 789,
+                    "second" => 56,
+                    "minute" => 34,
+                    "hour" => 12,
+                    _ => 29,
+                }
+            } else {
+                match unit {
+                    "microsecond" => 999_999,
+                    "millisecond" => 999,
+                    "second" | "minute" => 59,
+                    "hour" => 23,
+                    _ => 31,
+                }
+            };
+            int(v)
+        } else {
+            let (seconds, nanos) = if input == "positive" {
+                match unit {
+                    "microsecond" => (1_582_979_696, 789_012_000),
+                    "millisecond" => (1_582_979_696, 789_000_000),
+                    "second" => (1_582_979_696, 0),
+                    "minute" => (1_582_979_640, 0),
+                    "hour" => (1_582_977_600, 0),
+                    _ => (1_582_934_400, 0),
+                }
+            } else {
+                match unit {
+                    "microsecond" => (-1, 999_999_000),
+                    "millisecond" => (-1, 999_000_000),
+                    "second" => (-1, 0),
+                    "minute" => (-60, 0),
+                    "hour" => (-3_600, 0),
+                    _ => (-86_400, 0),
+                }
+            };
+            Eval::Value(Value::Timestamp(Timestamp::new(seconds, nanos).unwrap()))
+        };
+        let args = [timestamp, text(unit)];
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{operation} {unit} {input} {profile}");
+    }
+}
+
+#[test]
+fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
+    let clock = Timestamp::new(1234, 567_890_000).unwrap();
+    let later = Timestamp::new(4321, 0).unwrap();
+    let now = || Expr::call("current_timestamp", vec![], Placement::Value).unwrap();
+    let stages = || {
+        vec![
+            Stage::Sort(vec![SortKey {
+                expr: now(),
+                descending: false,
+            }]),
+            Stage::Select {
+                aliases: vec![
+                    (FieldPath::parse("t").unwrap(), now()),
+                    (
+                        FieldPath::parse("nested").unwrap(),
+                        Expr::call("array", vec![now()], Placement::Value).unwrap(),
+                    ),
+                ],
+                keeps_name: false,
+            },
+        ]
+    };
+    let mut cursor = Cursor::new_in_with_runtime(
+        stages(),
+        Unrecorded::Refuse,
+        RuntimeContext {
+            request_timestamp: Some(clock),
+            zone_resolver: None,
+            regex_resolver: None,
+        },
+    );
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    let rows = cursor.finish().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row.fields["t"], Value::Timestamp(clock));
+        assert_eq!(
+            row.fields["nested"],
+            Value::Array(vec![Value::Timestamp(clock)])
+        );
+    }
+    let mut second = Cursor::new_in_with_runtime(
+        stages(),
+        Unrecorded::Refuse,
+        RuntimeContext {
+            request_timestamp: Some(later),
+            zone_resolver: None,
+            regex_resolver: None,
+        },
+    );
+    second.push(Row::derived(BTreeMap::new())).unwrap();
+    assert_eq!(
+        second.finish().unwrap()[0].fields["t"],
+        Value::Timestamp(later)
+    );
+    for stages in [
+        vec![Stage::Distinct(vec![("t".to_owned(), now())])],
+        vec![Stage::Aggregate {
+            accumulators: vec![(
+                "t".to_owned(),
+                Accumulator {
+                    kind: AccumulatorKind::Maximum,
+                    argument: Some(now()),
+                },
+            )],
+            groups: vec![],
+        }],
+    ] {
+        let mut blocking = Cursor::new_in_with_runtime(
+            stages,
+            Unrecorded::Refuse,
+            RuntimeContext {
+                request_timestamp: Some(clock),
+                zone_resolver: None,
+                regex_resolver: None,
+            },
+        );
+        blocking.push(Row::derived(BTreeMap::new())).unwrap();
+        blocking.push(Row::derived(BTreeMap::new())).unwrap();
+        assert_eq!(
+            blocking.finish().unwrap()[0].fields["t"],
+            Value::Timestamp(clock)
+        );
+    }
+    assert!(is_unobserved(
+        &now().eval_in(&Row::derived(BTreeMap::new()), Unrecorded::Refuse)
+    ));
+}
+
+#[test]
+fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
+    fn resolve(
+        timestamp: Timestamp,
+        zone: &str,
+        unit: &str,
+        operation: ZoneOperation,
+    ) -> Result<ZoneResult, ZoneError> {
+        assert_eq!(zone, "Asia/Tokyo");
+        assert_eq!(
+            timestamp,
+            Timestamp::new(1_582_979_696, 789_012_000).unwrap()
+        );
+        match (operation, unit) {
+            (ZoneOperation::Trunc, "day") => Ok(ZoneResult::Timestamp(
+                Timestamp::new(1_582_902_000, 0).unwrap(),
+            )),
+            (ZoneOperation::Extract, "hour") => Ok(ZoneResult::Integer(21)),
+            _ => Err(ZoneError::InvalidZone),
+        }
+    }
+    let t = Expr::Constant(Value::Timestamp(
+        Timestamp::new(1_582_979_696, 789_012_000).unwrap(),
+    ));
+    let call = |name: &str, unit: &str| {
+        Expr::call(
+            name,
+            vec![
+                t.clone(),
+                Expr::Constant(Value::String(unit.to_owned())),
+                Expr::Constant(Value::String("Asia/Tokyo".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let row = Row::derived(BTreeMap::new());
+    assert!(is_unobserved(
+        &call("timestamp_trunc", "day").eval_in(&row, Unrecorded::Refuse)
+    ));
+    let runtime = RuntimeContext {
+        request_timestamp: None,
+        zone_resolver: Some(resolve),
+        regex_resolver: None,
+    };
+    let stages = vec![Stage::Select {
+        aliases: vec![
+            (
+                FieldPath::parse("t").unwrap(),
+                call("timestamp_trunc", "day"),
+            ),
+            (
+                FieldPath::parse("h").unwrap(),
+                call("timestamp_extract", "hour"),
+            ),
+        ],
+        keeps_name: false,
+    }];
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let out = cursor.push(row).unwrap();
+    assert_eq!(
+        out[0].fields["t"],
+        Value::Timestamp(Timestamp::new(1_582_902_000, 0).unwrap())
+    );
+    assert_eq!(out[0].fields["h"], Value::Integer(21));
+}
+
+#[test]
+fn timestamp_shift_wrong_timestamp_uses_recorded_type_name() {
+    for name in ["timestamp_add", "timestamp_subtract"] {
+        let args = [int(1), text("day"), int(1)];
+        let error_name = if name == "timestamp_subtract" {
+            "timestamp_sub"
+        } else {
+            name
+        };
+        assert_eq!(
+            strict(name, &args),
+            wrong(error_name, "Timestamp or BsonTimestamp", "LONG")
+        );
+    }
+}
+
+#[test]
+fn regex_without_adapter_resolver_is_unobserved() {
+    let expression = Expr::call(
+        "regex_contains",
+        vec![
+            Expr::Constant(Value::String("abc".to_owned())),
+            Expr::Constant(Value::String("b".to_owned())),
+        ],
+        Placement::Value,
+    )
+    .unwrap();
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert!(is_unobserved(
+            &expression.eval_in(&Row::derived(BTreeMap::new()), mode)
+        ));
+    }
+}
+
+#[allow(clippy::unnecessary_wraps)]
+fn fake_regex(
+    subject: &str,
+    pattern: &str,
+    operation: RegexOperation,
+) -> Result<RegexResult, RegexError> {
+    assert_eq!((subject, pattern), ("abc", "b"));
+    Ok(match operation {
+        RegexOperation::Contains => RegexResult::Boolean(true),
+        RegexOperation::Match => RegexResult::Boolean(false),
+        RegexOperation::Find => RegexResult::Match(Some("b".to_owned())),
+        RegexOperation::FindAll => RegexResult::Matches(vec![Some("b".to_owned())]),
+    })
+}
+
+#[test]
+fn regex_port_pict_generated_cases() {
+    let table = include_str!("regex_port.generated.tsv");
+    let mut count = 0;
+    for line in table.lines().skip(1) {
+        let fields: Vec<_> = line.split('\t').collect();
+        let [operation, profile, availability] = fields.as_slice() else {
+            panic!("bad generated row: {line}");
+        };
+        let (name, expected) = match *operation {
+            "contains" => ("regex_contains", Eval::Value(Value::Boolean(true))),
+            "match" => ("regex_match", Eval::Value(Value::Boolean(false))),
+            "find" => ("regex_find", text("b")),
+            "find_all" => ("regex_find_all", array(vec![Value::String("b".to_owned())])),
+            _ => panic!("bad operation: {operation}"),
+        };
+        let mode = match *profile {
+            "strict" => Unrecorded::Refuse,
+            "emulator" => Unrecorded::OfficialEmulator,
+            _ => panic!("bad profile: {profile}"),
+        };
+        let resolver = match *availability {
+            "present" => Some(fake_regex as RegexResolver),
+            "absent" => None,
+            _ => panic!("bad resolver: {availability}"),
+        };
+        let expression = Expr::call(
+            name,
+            vec![
+                Expr::Constant(Value::String("abc".to_owned())),
+                Expr::Constant(Value::String("b".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap();
+        let got = expression.eval_in_with_runtime(
+            &Row::derived(BTreeMap::new()),
+            mode,
+            RuntimeContext {
+                regex_resolver: resolver,
+                ..RuntimeContext::default()
+            },
+        );
+        if resolver.is_some() {
+            assert_eq!(got, expected, "{line}");
+        } else {
+            assert!(is_unobserved(&got), "{line}: {got:?}");
+        }
+        count += 1;
+    }
+    assert_eq!(count, 8);
+}
+
+#[test]
+fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
+    fn unexpected(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        panic!("invalid input reached the resolver");
+    }
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: RuntimeContext {
+            regex_resolver: Some(unexpected),
+            ..RuntimeContext::default()
+        },
+    };
+    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx);
+    assert_eq!(evaluate(&[null(), text("b")]), null());
+    assert_eq!(
+        evaluate(&[int(1), text("b")]),
+        wrong("regex_contains", "String", "LONG")
+    );
+    assert!(is_unobserved(&evaluate(&[text("1"), text(r"\d")])));
+}
+
+#[test]
+fn regex_resolver_reaches_nested_and_blocking_stages() {
+    let regex = || {
+        Expr::call(
+            "regex_contains",
+            vec![
+                Expr::Constant(Value::String("abc".to_owned())),
+                Expr::Constant(Value::String("b".to_owned())),
+            ],
+            Placement::Value,
+        )
+        .unwrap()
+    };
+    let nested = || Expr::call("array", vec![regex()], Placement::Value).unwrap();
+    let runtime = RuntimeContext {
+        regex_resolver: Some(fake_regex),
+        ..RuntimeContext::default()
+    };
+    let stages = vec![
+        Stage::Sort(vec![SortKey {
+            expr: regex(),
+            descending: false,
+        }]),
+        Stage::Select {
+            aliases: vec![(FieldPath::parse("result").unwrap(), nested())],
+            keeps_name: false,
+        },
+    ];
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    assert!(cursor
+        .push(Row::derived(BTreeMap::new()))
+        .unwrap()
+        .is_empty());
+    let rows = cursor.finish().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].fields["result"],
+        Value::Array(vec![Value::Boolean(true)])
+    );
+    for stage in [
+        Stage::Distinct(vec![("result".to_owned(), regex())]),
+        Stage::Aggregate {
+            groups: vec![("result".to_owned(), regex())],
+            accumulators: vec![(
+                "count".to_owned(),
+                Accumulator {
+                    kind: AccumulatorKind::Count,
+                    argument: Some(regex()),
+                },
+            )],
+        },
+    ] {
+        let mut buffered = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime);
+        assert!(buffered
+            .push(Row::derived(BTreeMap::new()))
+            .unwrap()
+            .is_empty());
+        let rows = buffered.finish().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fields["result"], Value::Boolean(true));
+        if rows[0].fields.contains_key("count") {
+            assert_eq!(rows[0].fields["count"], Value::Integer(1));
+        }
+    }
+    let condition = Expr::call(
+        "equal",
+        vec![regex(), Expr::Constant(Value::Boolean(true))],
+        Placement::Condition,
+    )
+    .unwrap();
+    let mut filtered =
+        Cursor::new_in_with_runtime(vec![Stage::Where(condition)], Unrecorded::Refuse, runtime);
+    assert_eq!(
+        filtered.push(Row::derived(BTreeMap::new())).unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn regex_port_maps_syntax_resource_and_incompatible_results() {
+    fn invalid_syntax(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Err(RegexError::InvalidSyntax)
+    }
+    fn exhausted(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Err(RegexError::ResourceLimit)
+    }
+    #[allow(clippy::unnecessary_wraps)]
+    fn wrong_result(_: &str, _: &str, _: RegexOperation) -> Result<RegexResult, RegexError> {
+        Ok(RegexResult::Match(None))
+    }
+    let call = |resolver: RegexResolver, mode| {
+        let cx = Context {
+            unrecorded: mode,
+            condition: false,
+            runtime: RuntimeContext {
+                regex_resolver: Some(resolver),
+                ..RuntimeContext::default()
+            },
+        };
+        (function("regex_contains").unwrap().eval)(&[text("abc"), text("b")], cx)
+    };
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(invalid_syntax, mode),
+            invalid("Unsupported regex syntax.")
+        );
+        assert!(is_unobserved(&call(exhausted, mode)));
+        assert!(is_unobserved(&call(wrong_result, mode)));
+    }
 }

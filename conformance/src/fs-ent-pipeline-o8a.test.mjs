@@ -1049,7 +1049,11 @@ test("compact recovery keeps the 1,951 row identities and the two client UNKNOWN
     .flatMap((id) => Object.keys(fixture.programs[id].steps).map((step) => `${id}#${step}`))
     .toSorted();
   assert.equal(restored.length, 27);
-  assert.deepEqual(restored, missing);
+  assert.deepEqual(missing, []);
+  const compactRows = comparison.rows.filter((row) => restored.includes(row.row));
+  assert.deepEqual(compactRows.map((row) => row.row).toSorted(), restored);
+  assert.equal(compactRows.filter((row) => row.status === "MATCH").length, 15);
+  assert.equal(compactRows.filter((row) => row.status === "INDETERMINATE").length, 12);
   const unknown = comparison.rows
     .filter((row) => row.status === "UNKNOWN")
     .map((row) => row.row)

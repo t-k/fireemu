@@ -87,6 +87,11 @@ pub enum EvalError {
     /// The input is invalid, as production or the official emulator refuses it with
     /// `INVALID_ARGUMENT` (the message is the official emulator's).
     Invalid(String),
+    /// A valid duration crossed the supported Firestore timestamp range.
+    TimestampOutOfRange {
+        /// Production's function label.
+        function: &'static str,
+    },
     /// A function met an argument of a type it does not take: `INVALID_ARGUMENT`, which
     /// production details with a `FUNCTION_WRONG_TYPE` `ErrorInfo` naming the function.
     WrongType {
@@ -107,6 +112,10 @@ impl fmt::Display for EvalError {
                 "{function}: {reason}; this behavior is not observed locally"
             ),
             Self::Invalid(message) => f.write_str(message),
+            Self::TimestampOutOfRange { function } => write!(
+                f,
+                "{function}(...) received a timestamp value that is out of range."
+            ),
             Self::WrongType {
                 function,
                 expected,
@@ -167,13 +176,103 @@ pub enum Arity {
     Between(usize, usize),
 }
 
-/// What a function sees besides its arguments.
+/// Named-zone calendar operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneOperation {
+    /// Truncate to a local calendar boundary.
+    Trunc,
+    /// Extract a local calendar field.
+    Extract,
+}
+/// The result of a named-zone calendar operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneResult {
+    /// A truncated timestamp.
+    Timestamp(Timestamp),
+    /// An extracted field.
+    Integer(i64),
+}
+/// A named-zone operation could not be resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoneError {
+    /// The zone name is invalid.
+    InvalidZone,
+    /// The named zone is valid but its semantics are not implemented.
+    Unsupported,
+    /// The local boundary is ambiguous or nonexistent.
+    Ambiguous,
+    /// The result lies outside the timestamp range.
+    OutOfRange,
+}
+/// Adapter-provided named-zone operation, with no clock or mutable state.
+pub type ZoneResolver = fn(Timestamp, &str, &str, ZoneOperation) -> Result<ZoneResult, ZoneError>;
+
+/// Apply the UTC calendar rules to a local wall-clock value represented as UTC.
+/// The adapter uses this only after validating the unit and converting an IANA instant.
+pub fn local_calendar_value(
+    timestamp: Timestamp,
+    unit: &str,
+    operation: ZoneOperation,
+) -> Result<ZoneResult, ZoneError> {
+    scalar::local_calendar_value(timestamp, unit, operation)
+}
+
+/// A regular-expression operation delegated to the adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegexOperation {
+    /// Test for a match anywhere in the subject.
+    Contains,
+    /// Test whether the whole subject matches.
+    Match,
+    /// Return the first match or its first capture.
+    Find,
+    /// Return each match or its first capture.
+    FindAll,
+}
+
+/// The typed result of a delegated regular-expression operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegexResult {
+    /// A boolean match result.
+    Boolean(bool),
+    /// A single optional match or capture.
+    Match(Option<String>),
+    /// Ordered optional matches or captures.
+    Matches(Vec<Option<String>>),
+}
+
+/// A regular-expression engine could not compile the pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegexError {
+    /// The pattern has invalid syntax.
+    InvalidSyntax,
+    /// Compilation exceeded the adapter's resource limits.
+    ResourceLimit,
+}
+
+/// Adapter-provided regular-expression evaluation.
+pub type RegexResolver = fn(&str, &str, RegexOperation) -> Result<RegexResult, RegexError>;
+
+/// Request-scoped runtime values for pipeline expression evaluation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RuntimeContext {
+    /// One immutable request timestamp; absent when no clock was supplied.
+    pub request_timestamp: Option<Timestamp>,
+    /// Reserved for the adapter's named-zone resolver.
+    pub zone_resolver: Option<ZoneResolver>,
+    /// Adapter-provided regular-expression operations.
+    pub regex_resolver: Option<RegexResolver>,
+}
+
+/// What a function sees besides its arguments.
+#[derive(Debug, Clone, Copy)]
 pub struct Context {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
     /// Whether the call is the whole condition of a `where` stage (its arguments are not).
     pub condition: bool,
+    /// Immutable request-scoped values.
+    pub runtime: RuntimeContext,
 }
 
 /// One entry of the static function table.
@@ -262,6 +361,13 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
+    array_access_function("array_reverse", Arity::Exact(1), "", eval_array_reverse),
+    array_access_function(
+        "array_concat",
+        Arity::AtLeast(2),
+        "array_concat(arrays: array[any]*): array[any]",
+        eval_array_concat,
+    ),
     array_access_function(
         "array_length",
         Arity::Exact(1),
@@ -356,6 +462,18 @@ const FUNCTIONS: &[Function] = &[
     logic::ARRAY_CONTAINS_ANY,
     logic::EQUAL_ANY,
     logic::NOT_EQUAL_ANY,
+    scalar::CURRENT_TIMESTAMP,
+    scalar::TIMESTAMP_TRUNC,
+    scalar::TIMESTAMP_EXTRACT,
+    scalar::TIMESTAMP_ADD,
+    scalar::TIMESTAMP_SUBTRACT,
+    scalar::TIMESTAMP_DIFF,
+    scalar::UNIX_MICROS_TO_TIMESTAMP,
+    scalar::UNIX_MILLIS_TO_TIMESTAMP,
+    scalar::UNIX_SECONDS_TO_TIMESTAMP,
+    scalar::TIMESTAMP_TO_UNIX_MICROS,
+    scalar::TIMESTAMP_TO_UNIX_MILLIS,
+    scalar::TIMESTAMP_TO_UNIX_SECONDS,
     scalar::REGEX_CONTAINS,
     scalar::REGEX_MATCH,
     scalar::REGEX_FIND,
@@ -431,6 +549,13 @@ impl Expr {
     /// Builds a call of `name` in a position that accepts `placement`, checking the table
     /// and the arity.
     pub fn call(name: &str, args: Vec<Self>, placement: Placement) -> Result<Self, ExprError> {
+        // The adapter handles the recorded strict zero-argument INTERNAL before this call;
+        // other profiles and nonempty options retain the previous unsupported refusal.
+        if name == "array_reverse" && args.is_empty() {
+            return Err(ExprError::Unsupported(format!(
+                "function {name:?} is unsupported locally"
+            )));
+        }
         let Some(function) = function(name) else {
             return Err(ExprError::Unsupported(format!(
                 "function {name:?} is unsupported locally"
@@ -519,16 +644,33 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, false)
+        self.eval_at(row, unrecorded, false, RuntimeContext::default())
+    }
+
+    /// Evaluates an expression with request-scoped adapter operations.
+    #[must_use]
+    pub fn eval_in_with_runtime(
+        &self,
+        row: &Row,
+        unrecorded: Unrecorded,
+        runtime: RuntimeContext,
+    ) -> Eval {
+        self.eval_at(row, unrecorded, false, runtime)
     }
 
     /// Evaluates the expression as the whole condition of a `where` stage.
     #[must_use]
     pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, true)
+        self.eval_at(row, unrecorded, true, RuntimeContext::default())
     }
 
-    fn eval_at(&self, row: &Row, unrecorded: Unrecorded, condition: bool) -> Eval {
+    fn eval_at(
+        &self,
+        row: &Row,
+        unrecorded: Unrecorded,
+        condition: bool,
+        runtime: RuntimeContext,
+    ) -> Eval {
         match self {
             Self::Field(path) if path.is_document_name() => {
                 row.path.as_ref().map_or(Eval::Absent, |path| {
@@ -542,11 +684,12 @@ impl Expr {
             Self::Call { function, args } => {
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_in(row, unrecorded))
+                    .map(|arg| arg.eval_at(row, unrecorded, false, runtime))
                     .collect();
                 let cx = Context {
                     unrecorded,
                     condition,
+                    runtime,
                 };
                 (function.eval)(&args, cx)
             }
@@ -694,6 +837,63 @@ fn array_access<'a>(
         Eval::Value(Value::Array(values)) => Ok(values),
         _ => unreachable!("missing and errors were handled above"),
     }
+}
+
+fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match &args[0] {
+        Eval::Absent | Eval::Value(Value::Null) => Eval::Value(Value::Null),
+        Eval::Value(Value::Array(values)) => {
+            Eval::Value(Value::Array(values.iter().rev().cloned().collect()))
+        }
+        Eval::Value(value) => Eval::Error(EvalError::WrongType {
+            function: "array_reverse",
+            expected: "Array",
+            got: type_name(value),
+        }),
+        Eval::Error(_) => unreachable!(),
+    }
+}
+
+fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong: Vec<&Value> = args
+        .iter()
+        .filter_map(|arg| match arg {
+            Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null) => Some(value),
+            _ => None,
+        })
+        .collect();
+    if cx.unrecorded == Unrecorded::Refuse && !wrong.is_empty() && (missing || wrong.len() > 1) {
+        return Eval::Error(EvalError::Unobserved {
+            function: "array_concat",
+            reason: "ambiguous invalid arguments",
+        });
+    }
+    if let Some(value) = wrong.first() {
+        return Eval::Error(EvalError::WrongType {
+            function: "array_concat",
+            expected: "Array",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let mut result = Vec::new();
+    for arg in args {
+        if let Eval::Value(Value::Array(values)) = arg {
+            result.extend(values.iter().cloned());
+        }
+    }
+    Eval::Value(Value::Array(result))
 }
 
 fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
@@ -1365,6 +1565,7 @@ enum StageState {
 pub struct Cursor {
     stages: Vec<Stage>,
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
     state: Vec<StageState>,
 }
 
@@ -1378,6 +1579,16 @@ impl Cursor {
     /// A cursor at the first row; `unrecorded` decides what unrecorded inputs give.
     #[must_use]
     pub fn new_in(stages: Vec<Stage>, unrecorded: Unrecorded) -> Self {
+        Self::new_in_with_runtime(stages, unrecorded, RuntimeContext::default())
+    }
+
+    /// Builds a cursor with request-scoped runtime values.
+    #[must_use]
+    pub fn new_in_with_runtime(
+        stages: Vec<Stage>,
+        unrecorded: Unrecorded,
+        runtime: RuntimeContext,
+    ) -> Self {
         let state = stages
             .iter()
             .map(|stage| match stage {
@@ -1394,6 +1605,7 @@ impl Cursor {
         Self {
             stages,
             unrecorded,
+            runtime,
             state,
         }
     }
@@ -1432,12 +1644,14 @@ impl Cursor {
                 continue;
             };
             let produced = match &self.stages[index] {
-                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded)?,
-                Stage::Distinct(aliases) => distinct_rows(&rows, aliases, self.unrecorded)?,
+                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
+                Stage::Distinct(aliases) => {
+                    distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
+                }
                 Stage::Aggregate {
                     accumulators,
                     groups,
-                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded)?,
+                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded, self.runtime)?,
                 _ => continue,
             };
             for row in produced {
@@ -1455,7 +1669,7 @@ impl Cursor {
             let held = &mut self.state[index];
             match stage {
                 Stage::Where(condition) => {
-                    match condition.eval_condition_in(&row, self.unrecorded) {
+                    match condition.eval_at(&row, self.unrecorded, true, self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
                         // Production dropped the row for a condition of every other kind
                         // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
@@ -1493,7 +1707,7 @@ impl Cursor {
                     let mut fields = BTreeMap::new();
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_in(&row, self.unrecorded) {
+                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent if alias.segments().len() > 1 => {
                                 // The official emulator keeps the parents of a nested alias
@@ -1532,7 +1746,7 @@ impl Cursor {
                     let mut values = Vec::with_capacity(aliases.len());
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_in(&row, self.unrecorded) {
+                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(value) => values.push((alias, Some(value))),
                             // A missing value (FS-ENT-ORACLE O-9 `fields-main`): a nested
                             // alias creates the parents as empty maps (a scalar parent is
@@ -1646,14 +1860,19 @@ fn sort_rows(
     rows: Vec<Row>,
     keys: &[SortKey],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut keyed = Vec::with_capacity(rows.len());
     for row in rows {
         let values = keys
             .iter()
             .map(|key| {
-                blocking_value(key.expr.eval_in(&row, unrecorded), unrecorded, "sort")
-                    .map(|value| value.unwrap_or(Value::Null))
+                blocking_value(
+                    key.expr.eval_at(&row, unrecorded, false, runtime),
+                    unrecorded,
+                    "sort",
+                )
+                .map(|value| value.unwrap_or(Value::Null))
             })
             .collect::<Result<Vec<_>, _>>()?;
         keyed.push((values, row));
@@ -1708,12 +1927,17 @@ fn key_values(
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
     stage: &'static str,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Value>, EvalError> {
     aliases
         .iter()
         .map(|(_, expr)| {
-            blocking_value(expr.eval_in(row, unrecorded), unrecorded, stage)
-                .map(|value| value.unwrap_or(Value::Null))
+            blocking_value(
+                expr.eval_at(row, unrecorded, false, runtime),
+                unrecorded,
+                stage,
+            )
+            .map(|value| value.unwrap_or(Value::Null))
         })
         .collect()
 }
@@ -1723,11 +1947,12 @@ fn distinct_rows(
     rows: &[Row],
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for row in rows {
-        let key = GroupKey(key_values(row, aliases, unrecorded, "distinct")?);
+        let key = GroupKey(key_values(row, aliases, unrecorded, "distinct", runtime)?);
         if seen.contains(&key) {
             continue;
         }
@@ -1793,11 +2018,14 @@ impl Accumulator {
         running: &mut Running,
         row: &Row,
         unrecorded: Unrecorded,
+        runtime: RuntimeContext,
     ) -> Result<(), EvalError> {
         let value = match &self.argument {
-            Some(argument) => {
-                blocking_value(argument.eval_in(row, unrecorded), unrecorded, "aggregate")?
-            }
+            Some(argument) => blocking_value(
+                argument.eval_at(row, unrecorded, false, runtime),
+                unrecorded,
+                "aggregate",
+            )?,
             None => None,
         };
         match (running, self.kind) {
@@ -1861,6 +2089,7 @@ fn aggregate_rows(
     accumulators: &[(String, Accumulator)],
     groups: &[(String, Expr)],
     unrecorded: Unrecorded,
+    runtime: RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     type Group = (Vec<Value>, Vec<Running>);
     let start = || {
@@ -1875,7 +2104,7 @@ fn aggregate_rows(
         order.push((Vec::new(), start()));
     }
     for row in rows {
-        let key = key_values(row, groups, unrecorded, "aggregate")?;
+        let key = key_values(row, groups, unrecorded, "aggregate", runtime)?;
         let at = if groups.is_empty() {
             0
         } else {
@@ -1886,7 +2115,7 @@ fn aggregate_rows(
         };
         let running = &mut order[at].1;
         for ((_, accumulator), state) in accumulators.iter().zip(running.iter_mut()) {
-            accumulator.add(state, row, unrecorded)?;
+            accumulator.add(state, row, unrecorded, runtime)?;
         }
     }
     Ok(order

@@ -18,11 +18,26 @@
 //! condition); the emulator profile evaluates it by the same rules. Regex inputs use a bounded
 //! Rust regex engine; general RE2 equivalence beyond the recorded cases is not established.
 
-use super::{first_error, type_name, Arity, Context, Eval, EvalError, Function, Unrecorded};
-use crate::value::Value;
+use super::{
+    first_error, type_name, Arity, Context, Eval, EvalError, Function, RegexError, RegexOperation,
+    RegexResult, Unrecorded, ZoneError, ZoneOperation, ZoneResult,
+};
+use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 26] = [
+pub const NAMES: [&str; 38] = [
+    "current_timestamp",
+    "timestamp_trunc",
+    "timestamp_extract",
+    "timestamp_add",
+    "timestamp_subtract",
+    "timestamp_diff",
+    "unix_micros_to_timestamp",
+    "unix_millis_to_timestamp",
+    "unix_seconds_to_timestamp",
+    "timestamp_to_unix_micros",
+    "timestamp_to_unix_millis",
+    "timestamp_to_unix_seconds",
     "regex_contains",
     "regex_match",
     "regex_find",
@@ -50,6 +65,82 @@ pub const NAMES: [&str; 26] = [
     "ceil",
     "pow",
 ];
+
+pub(super) const CURRENT_TIMESTAMP: Function = function(
+    "current_timestamp",
+    Arity::Exact(0),
+    false,
+    "current_timestamp(): timestamp",
+    &[],
+    |_, cx| {
+        cx.runtime.request_timestamp.map_or_else(
+            || unobserved("current_timestamp", "request clock is unavailable"),
+            |value| Eval::Value(Value::Timestamp(value)),
+        )
+    },
+);
+
+pub(super) const TIMESTAMP_TRUNC: Function = function("timestamp_trunc", Arity::Between(2, 3), false, "", &[
+    ("timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): timestamp", 2, 2),
+    ("timestamp_trunc[T: timestamp | bson_timestamp](timestamp: T, granularity: (microsecond|millisecond|second|minute|hour|day|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): timestamp", 3, 3),
+], eval_timestamp_trunc);
+pub(super) const TIMESTAMP_EXTRACT: Function = function("timestamp_extract", Arity::Between(2, 3), false, "", &[
+    ("timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear)): int64", 2, 2),
+    ("timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): int64", 3, 3),
+], eval_timestamp_extract);
+
+pub(super) const TIMESTAMP_ADD: Function = function("timestamp_add", Arity::Exact(3), false, "timestamp_add[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_add", args, cx, false));
+pub(super) const TIMESTAMP_SUBTRACT: Function = function("timestamp_subtract", Arity::Exact(3), false, "timestamp_subtract[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_subtract", args, cx, true));
+pub(super) const TIMESTAMP_DIFF: Function = function("timestamp_diff", Arity::Exact(3), false, "timestamp_diff[T1: timestamp | bson_timestamp, T2: timestamp | bson_timestamp](end: T1, start: T2, unit: (microsecond|millisecond|second|minute|hour|day)): int64", &[], timestamp_diff);
+
+pub(super) const UNIX_MICROS_TO_TIMESTAMP: Function = function(
+    "unix_micros_to_timestamp",
+    Arity::Exact(1),
+    false,
+    "unix_micros_to_timestamp(input: int64): timestamp",
+    &[],
+    |args, cx| unix_to_timestamp("unix_micros_to_timestamp", args, cx, 1_000_000),
+);
+pub(super) const UNIX_MILLIS_TO_TIMESTAMP: Function = function(
+    "unix_millis_to_timestamp",
+    Arity::Exact(1),
+    false,
+    "unix_millis_to_timestamp(input: int64): timestamp",
+    &[],
+    |args, cx| unix_to_timestamp("unix_millis_to_timestamp", args, cx, 1_000),
+);
+pub(super) const UNIX_SECONDS_TO_TIMESTAMP: Function = function(
+    "unix_seconds_to_timestamp",
+    Arity::Exact(1),
+    false,
+    "unix_seconds_to_timestamp(input: int64): timestamp",
+    &[],
+    |args, cx| unix_to_timestamp("unix_seconds_to_timestamp", args, cx, 1),
+);
+pub(super) const TIMESTAMP_TO_UNIX_MICROS: Function = function(
+    "timestamp_to_unix_micros",
+    Arity::Exact(1),
+    false,
+    "timestamp_to_unix_micros[T: timestamp | bson_timestamp](input: T): int64",
+    &[],
+    |args, cx| timestamp_to_unix("timestamp_to_unix_micros", args, cx, 1_000_000),
+);
+pub(super) const TIMESTAMP_TO_UNIX_MILLIS: Function = function(
+    "timestamp_to_unix_millis",
+    Arity::Exact(1),
+    false,
+    "timestamp_to_unix_millis[T: timestamp | bson_timestamp](input: T): int64",
+    &[],
+    |args, cx| timestamp_to_unix("timestamp_to_unix_millis", args, cx, 1_000),
+);
+pub(super) const TIMESTAMP_TO_UNIX_SECONDS: Function = function(
+    "timestamp_to_unix_seconds",
+    Arity::Exact(1),
+    false,
+    "timestamp_to_unix_seconds[T: timestamp | bson_timestamp](input: T): int64",
+    &[],
+    |args, cx| timestamp_to_unix("timestamp_to_unix_seconds", args, cx, 1),
+);
 
 const REGEX_CONTAINS_SIGNATURE: &str =
     "regex_contains[T: string | regex](search_space: string, regexp: T): boolean";
@@ -335,6 +426,10 @@ enum Param {
     Int,
     /// A number (an integer or a double).
     Number,
+    /// A timestamp.
+    Timestamp,
+    /// A timestamp named with the recorded BSON alternative.
+    TimestampOrBson,
 }
 
 impl Param {
@@ -346,6 +441,7 @@ impl Param {
             }
             Self::Int => matches!(value, Value::Integer(_)),
             Self::Number => matches!(value, Value::Integer(_) | Value::Double(_)),
+            Self::Timestamp | Self::TimestampOrBson => matches!(value, Value::Timestamp(_)),
         }
     }
 
@@ -356,6 +452,8 @@ impl Param {
             Self::StrOrBytesAsString => "String",
             Self::Int => "Int64",
             Self::Number => "Number",
+            Self::Timestamp => "Timestamp",
+            Self::TimestampOrBson => "Timestamp or BsonTimestamp",
         }
     }
 }
@@ -472,86 +570,431 @@ fn common_regex_grammar(pattern: &str) -> bool {
     true
 }
 
-/// Compile a bounded pattern and preserve the distinction between syntax and resource limits.
-fn regex_input<'a>(
+const TRUNC_PARTS: &str = "[microsecond, millisecond, second, minute, hour, day, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]";
+const EXTRACT_PARTS: &str = "[microsecond, millisecond, second, minute, hour, dayofweek, day, dayofyear, week, week(monday), week(tuesday), week(wednesday), week(thursday), week(friday), week(saturday), week(sunday), isoweek, month, quarter, year, isoyear]";
+
+fn calendar_unit(name: &'static str, arg: &Eval, extract: bool) -> Result<String, Eval> {
+    let allowed = if extract { EXTRACT_PARTS } else { TRUNC_PARTS };
+    if let Eval::Value(Value::String(unit)) = arg {
+        if allowed[1..allowed.len() - 1]
+            .split(", ")
+            .any(|item| item == unit)
+        {
+            return Ok(unit.clone());
+        }
+    }
+    let label = if extract { "part" } else { "granularity" };
+    Err(invalid(format!("The argument '{label}' for function '{name}' must be a literal of type string from the following list: {allowed}")))
+}
+
+fn calendar_values(
     name: &'static str,
-    args: &'a [Eval],
+    args: &[Eval],
     cx: Context,
-    full: bool,
-) -> Result<(&'a str, regex::Regex), Eval> {
-    let values = check(
+    extract: bool,
+) -> Result<(Timestamp, String, Option<String>), Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    let unit = calendar_unit(name, &args[1], extract)?;
+    let params = if args.len() == 3 {
+        vec![Param::Timestamp, Param::Str("String"), Param::Str("String")]
+    } else {
+        vec![Param::Timestamp, Param::Str("String")]
+    };
+    let values = check(name, args, &params, cx)?;
+    let Value::Timestamp(timestamp) = values[0] else {
+        unreachable!()
+    };
+    let zone = if args.len() == 3 {
+        let Value::String(zone) = values[2] else {
+            unreachable!()
+        };
+        Some(zone.clone())
+    } else {
+        None
+    };
+    Ok((*timestamp, unit, zone))
+}
+
+fn resolve_zone(
+    name: &'static str,
+    timestamp: Timestamp,
+    zone: &str,
+    unit: &str,
+    operation: ZoneOperation,
+    cx: Context,
+) -> Eval {
+    let Some(resolver) = cx.runtime.zone_resolver else {
+        return unobserved(name, "named time zone resolver is unavailable");
+    };
+    match resolver(timestamp, zone, unit, operation) {
+        Ok(ZoneResult::Timestamp(value)) => Eval::Value(Value::Timestamp(value)),
+        Ok(ZoneResult::Integer(value)) => Eval::Value(Value::Integer(value)),
+        Err(ZoneError::InvalidZone) => invalid(format!("{name}(...) given an invalid timezone")),
+        Err(ZoneError::Unsupported) => unobserved(name, "custom GMT offsets are unobserved"),
+        Err(ZoneError::Ambiguous) => {
+            unobserved(name, "time zone boundary is ambiguous or nonexistent")
+        }
+        Err(ZoneError::OutOfRange) => {
+            Eval::Error(EvalError::TimestampOutOfRange { function: name })
+        }
+    }
+}
+
+pub(super) fn local_calendar_value(
+    timestamp: Timestamp,
+    unit: &str,
+    operation: ZoneOperation,
+) -> Result<ZoneResult, ZoneError> {
+    let args = [
+        Eval::Value(Value::Timestamp(timestamp)),
+        Eval::Value(Value::String(unit.to_owned())),
+    ];
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: super::RuntimeContext::default(),
+    };
+    let result = match operation {
+        ZoneOperation::Trunc => eval_timestamp_trunc(&args, cx),
+        ZoneOperation::Extract => eval_timestamp_extract(&args, cx),
+    };
+    match result {
+        Eval::Value(Value::Timestamp(value)) => Ok(ZoneResult::Timestamp(value)),
+        Eval::Value(Value::Integer(value)) => Ok(ZoneResult::Integer(value)),
+        _ => Err(ZoneError::OutOfRange),
+    }
+}
+
+fn week_start(days: i64, start: i64) -> i64 {
+    let weekday = (days + 4).rem_euclid(7);
+    days - (weekday - start).rem_euclid(7)
+}
+
+fn iso_year_start(year: i64) -> i64 {
+    week_start(fireemu_core_types::time::days_from_civil(year, 1, 4), 1)
+}
+
+fn week_day(unit: &str) -> Option<i64> {
+    match unit {
+        "week" | "week(sunday)" => Some(0),
+        "week(monday)" | "isoweek" => Some(1),
+        "week(tuesday)" => Some(2),
+        "week(wednesday)" => Some(3),
+        "week(thursday)" => Some(4),
+        "week(friday)" => Some(5),
+        "week(saturday)" => Some(6),
+        _ => None,
+    }
+}
+
+fn eval_timestamp_trunc(args: &[Eval], cx: Context) -> Eval {
+    let (timestamp, unit, zone) = match calendar_values("timestamp_trunc", args, cx, false) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if let Some(zone) = zone {
+        return resolve_zone(
+            "timestamp_trunc",
+            timestamp,
+            &zone,
+            &unit,
+            ZoneOperation::Trunc,
+            cx,
+        );
+    }
+    let seconds = timestamp.seconds();
+    let days = seconds.div_euclid(86_400);
+    let (year, month, _) = fireemu_core_types::time::civil_from_days(days);
+    let (seconds, nanos) = match unit.as_str() {
+        "microsecond" => (seconds, timestamp.nanos() / 1_000 * 1_000),
+        "millisecond" => (seconds, timestamp.nanos() / 1_000_000 * 1_000_000),
+        "second" => (seconds, 0),
+        "minute" => (seconds.div_euclid(60) * 60, 0),
+        "hour" => (seconds.div_euclid(3_600) * 3_600, 0),
+        "day" => (days * 86_400, 0),
+        "month" => (
+            fireemu_core_types::time::days_from_civil(year, month, 1) * 86_400,
+            0,
+        ),
+        "quarter" => (
+            fireemu_core_types::time::days_from_civil(year, (month - 1) / 3 * 3 + 1, 1) * 86_400,
+            0,
+        ),
+        "year" => (
+            fireemu_core_types::time::days_from_civil(year, 1, 1) * 86_400,
+            0,
+        ),
+        "isoyear" => {
+            let (iso_year, _, _) =
+                fireemu_core_types::time::civil_from_days(days + (3 - (days + 3).rem_euclid(7)));
+            (iso_year_start(iso_year) * 86_400, 0)
+        }
+        other => (week_start(days, week_day(other).unwrap_or(0)) * 86_400, 0),
+    };
+    match Timestamp::new(seconds, nanos) {
+        Ok(value) => Eval::Value(Value::Timestamp(value)),
+        Err(_) => Eval::Error(EvalError::TimestampOutOfRange {
+            function: "timestamp_trunc",
+        }),
+    }
+}
+
+fn eval_timestamp_extract(args: &[Eval], cx: Context) -> Eval {
+    let (timestamp, unit, zone) = match calendar_values("timestamp_extract", args, cx, true) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    if let Some(zone) = zone {
+        return resolve_zone(
+            "timestamp_extract",
+            timestamp,
+            &zone,
+            &unit,
+            ZoneOperation::Extract,
+            cx,
+        );
+    }
+    let seconds = timestamp.seconds();
+    let days = seconds.div_euclid(86_400);
+    let within_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = fireemu_core_types::time::civil_from_days(days);
+    let first = fireemu_core_types::time::days_from_civil(year, 1, 1);
+    let day_of_year = days - first;
+    let value = match unit.as_str() {
+        "microsecond" => i64::from(timestamp.nanos() / 1_000),
+        "millisecond" => i64::from(timestamp.nanos() / 1_000_000),
+        "second" => within_day % 60,
+        "minute" => within_day / 60 % 60,
+        "hour" => within_day / 3_600,
+        "dayofweek" => (days + 4).rem_euclid(7) + 1,
+        "day" => day,
+        "dayofyear" => day_of_year + 1,
+        "month" => month,
+        "quarter" => (month - 1) / 3 + 1,
+        "year" => year,
+        "isoyear" | "isoweek" => {
+            let (iso_year, _, _) =
+                fireemu_core_types::time::civil_from_days(days + (3 - (days + 3).rem_euclid(7)));
+            if unit == "isoyear" {
+                iso_year
+            } else {
+                (days - iso_year_start(iso_year)) / 7 + 1
+            }
+        }
+        other => {
+            let start = week_day(other).unwrap_or(0);
+            let first_start = (start - (first + 4).rem_euclid(7)).rem_euclid(7);
+            if day_of_year < first_start {
+                0
+            } else {
+                1 + (day_of_year - first_start) / 7
+            }
+        }
+    };
+    Eval::Value(Value::Integer(value))
+}
+
+const TIMESTAMP_UNITS: &str = "[microsecond, millisecond, second, minute, hour, day]";
+
+fn timestamp_unit(name: &'static str, unit: &Eval) -> Result<i64, Eval> {
+    let scale = match unit {
+        Eval::Value(Value::String(unit)) => match unit.as_str() {
+            "microsecond" => Some(1_i64),
+            "millisecond" => Some(1_000),
+            "second" => Some(1_000_000),
+            "minute" => Some(60_000_000),
+            "hour" => Some(3_600_000_000),
+            "day" => Some(86_400_000_000),
+            _ => None,
+        },
+        _ => None,
+    };
+    scale.ok_or_else(|| invalid(format!("The argument 'unit' for function '{name}' must be a literal of type string from the following list: {TIMESTAMP_UNITS}")))
+}
+
+fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: bool) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let scale = match timestamp_unit(name, &args[1]) {
+        Ok(scale) => scale,
+        Err(error) => return error,
+    };
+    if let Some(error) = int_argument(name, &args[2], cx) {
+        return error;
+    }
+    let error_name = if subtract { "timestamp_sub" } else { name };
+    let values = match check(
+        error_name,
+        args,
+        &[Param::TimestampOrBson, Param::Str("String"), Param::Int],
+        cx,
+    ) {
+        Ok(values) => values,
+        Err(value) => return value,
+    };
+    let [Value::Timestamp(timestamp), Value::String(_), Value::Integer(amount)] = values.as_slice()
+    else {
+        unreachable!()
+    };
+    let Some(micros) = amount.checked_mul(scale).and_then(|value| {
+        if subtract {
+            value.checked_neg()
+        } else {
+            Some(value)
+        }
+    }) else {
+        return invalid(format!("{name}(...) result is out of range"));
+    };
+    let nanos = i128::from(timestamp.seconds()) * 1_000_000_000
+        + i128::from(timestamp.nanos())
+        + i128::from(micros) * 1_000;
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let fraction = u32::try_from(nanos.rem_euclid(1_000_000_000)).unwrap_or(0);
+    let timestamp = i64::try_from(seconds)
+        .ok()
+        .and_then(|seconds| Timestamp::new(seconds, fraction).ok());
+    match timestamp {
+        Some(timestamp) => Eval::Value(Value::Timestamp(timestamp)),
+        None => Eval::Error(EvalError::TimestampOutOfRange {
+            function: if subtract {
+                "timestamp_sub"
+            } else {
+                "timestamp_add"
+            },
+        }),
+    }
+}
+
+fn timestamp_diff(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let scale = match timestamp_unit("timestamp_diff", &args[2]) {
+        Ok(scale) => scale,
+        Err(error) => return error,
+    };
+    let values = match check(
+        "timestamp_diff",
+        args,
+        &[Param::Timestamp, Param::Timestamp, Param::Str("String")],
+        cx,
+    ) {
+        Ok(values) => values,
+        Err(value) => return value,
+    };
+    let [Value::Timestamp(end), Value::Timestamp(start), Value::String(_)] = values.as_slice()
+    else {
+        unreachable!()
+    };
+    let end_nanos = i128::from(end.seconds()) * 1_000_000_000 + i128::from(end.nanos());
+    let start_nanos = i128::from(start.seconds()) * 1_000_000_000 + i128::from(start.nanos());
+    match i64::try_from((end_nanos - start_nanos) / (i128::from(scale) * 1_000)) {
+        Ok(value) => Eval::Value(Value::Integer(value)),
+        Err(_) => invalid("timestamp_diff(...) result is out of range"),
+    }
+}
+
+/// Convert signed Unix units without losing subsecond precision at negative epochs.
+fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if let Some(error) = int_argument(name, &args[0], cx) {
+        return error;
+    }
+    let values = match check(name, args, &[Param::Int], cx) {
+        Ok(values) => values,
+        Err(value) => return value,
+    };
+    let [Value::Integer(value)] = values.as_slice() else {
+        unreachable!()
+    };
+    let seconds = value.div_euclid(scale);
+    let nanos = u32::try_from(value.rem_euclid(scale) * (1_000_000_000 / scale)).unwrap_or(0);
+    match Timestamp::new(seconds, nanos) {
+        Ok(timestamp) => Eval::Value(Value::Timestamp(timestamp)),
+        Err(_) => invalid(format!("{name}(...) argument out of range")),
+    }
+}
+
+/// Convert a bounded timestamp to Unix units, truncating fractional units toward the past.
+fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
+    let values = match check(name, args, &[Param::Timestamp], cx) {
+        Ok(values) => values,
+        Err(value) => return value,
+    };
+    let [Value::Timestamp(value)] = values.as_slice() else {
+        unreachable!()
+    };
+    let fraction = i64::from(value.nanos()) / (1_000_000_000 / scale);
+    match value
+        .seconds()
+        .checked_mul(scale)
+        .and_then(|seconds| seconds.checked_add(fraction))
+    {
+        Some(value) => Eval::Value(Value::Integer(value)),
+        None => invalid(format!("{name}(...) result is out of range")),
+    }
+}
+
+/// Compile a bounded pattern and preserve the distinction between syntax and resource limits.
+fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOperation) -> Eval {
+    let values = match check(
         name,
         args,
         &[Param::Str("String"), Param::Str("String or Regex")],
         cx,
-    )?;
+    ) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
     let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
         unreachable!()
     };
     if strict(cx) && !common_regex_grammar(pattern) {
-        return Err(unobserved(
-            name,
-            "a regex construct outside the common RE2 grammar",
-        ));
+        return unobserved(name, "a regex construct outside the common RE2 grammar");
     }
-    let pattern = if full {
-        format!(r"\A(?:{pattern})\z")
-    } else {
-        (*pattern).clone()
+    let Some(resolver) = cx.runtime.regex_resolver else {
+        return unobserved(name, "no regex resolver is available");
     };
-    let compiled = regex::RegexBuilder::new(&pattern)
-        .size_limit(10 * 1024 * 1024)
-        .dfa_size_limit(2 * 1024 * 1024)
-        .build();
-    match compiled {
-        Ok(regex) => Ok((subject, regex)),
-        Err(regex::Error::Syntax(_)) => Err(invalid("Unsupported regex syntax.")),
-        Err(_) => Err(unobserved(
-            name,
-            "regex compilation exceeded local resources",
+    match (operation, resolver(subject, pattern, operation)) {
+        (_, Err(RegexError::InvalidSyntax)) => invalid("Unsupported regex syntax."),
+        (_, Err(RegexError::ResourceLimit)) => {
+            unobserved(name, "regex compilation exceeded local resources")
+        }
+        (RegexOperation::Contains | RegexOperation::Match, Ok(RegexResult::Boolean(value))) => {
+            Eval::Value(Value::Boolean(value))
+        }
+        (RegexOperation::Find, Ok(RegexResult::Match(value))) => {
+            value.map_or_else(null, |value| Eval::Value(Value::String(value)))
+        }
+        (RegexOperation::FindAll, Ok(RegexResult::Matches(values))) => Eval::Value(Value::Array(
+            values
+                .into_iter()
+                .map(|value| value.map_or(Value::Null, Value::String))
+                .collect(),
         )),
+        _ => unobserved(name, "the regex resolver returned an incompatible result"),
     }
 }
 
 fn eval_regex_contains(args: &[Eval], cx: Context) -> Eval {
-    match regex_input("regex_contains", args, cx, false) {
-        Ok((subject, re)) => Eval::Value(Value::Boolean(re.is_match(subject))),
-        Err(error) => error,
-    }
+    regex_eval("regex_contains", args, cx, RegexOperation::Contains)
 }
 
 fn eval_regex_match(args: &[Eval], cx: Context) -> Eval {
-    match regex_input("regex_match", args, cx, true) {
-        Ok((subject, re)) => Eval::Value(Value::Boolean(re.is_match(subject))),
-        Err(error) => error,
-    }
+    regex_eval("regex_match", args, cx, RegexOperation::Match)
 }
 
 fn eval_regex_find(args: &[Eval], cx: Context) -> Eval {
-    match regex_input("regex_find", args, cx, false) {
-        Ok((subject, re)) => re
-            .captures(subject)
-            .and_then(|c| {
-                c.get(usize::from(c.len() > 1))
-                    .map(|m| m.as_str().to_owned())
-            })
-            .map_or_else(null, |s| Eval::Value(Value::String(s))),
-        Err(error) => error,
-    }
+    regex_eval("regex_find", args, cx, RegexOperation::Find)
 }
 
 fn eval_regex_find_all(args: &[Eval], cx: Context) -> Eval {
-    match regex_input("regex_find_all", args, cx, false) {
-        Ok((subject, re)) => Eval::Value(Value::Array(
-            re.captures_iter(subject)
-                .map(|c| {
-                    c.get(usize::from(c.len() > 1))
-                        .map_or(Value::Null, |m| Value::String(m.as_str().to_owned()))
-                })
-                .collect(),
-        )),
-        Err(error) => error,
-    }
+    regex_eval("regex_find_all", args, cx, RegexOperation::FindAll)
 }
 
 /// `concat(a, b, ...)`: strings, bytes or arrays of one kind joined. The first argument sets the

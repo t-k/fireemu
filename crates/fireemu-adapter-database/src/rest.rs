@@ -943,8 +943,7 @@ impl Database {
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
         let echo = patch_echo(tree, &call.path, &entries, call.context);
-        let ordered_echo = (self.options.credentials.strict
-            && call.output.style == Style::Compact
+        let ordered_echo = (call.output.style == Style::Compact
             && !call.output.silent
             && call.output.callback.is_none())
         .then(|| ordered_patch_echo(&echo, &entries));

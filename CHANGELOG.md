@@ -14,6 +14,9 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Firestore Enterprise pipelines support the recorded cases of `array_length`, `array_first`, `array_last`, `array_get`, `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values`, `map_entries`, `regex_contains`, `regex_match`, `regex_find` and `regex_find_all`. Under strict, the regex implementation refuses constructs whose RE2 behavior has not been established; map output order and unrecorded argument shapes are not claimed as production parity.
 
+- Firestore Enterprise pipelines evaluate the recorded O8C cases for `array_concat`, `array_reverse`, `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds`. Timestamps use microsecond precision and `current_timestamp` is sampled once per request. Named-zone gaps, overlaps and unrecorded custom-offset forms are refused where their behavior is not established; recorded cases do not establish compatibility for every input.
+- Realtime Database NEXT4 recordings cover finite forms of POST with generated-key readback, DELETE, `shallow`, `print=silent` and small `writeSizeLimit` requests. Other forms remain unverified.
+
 ### Changed
 
 - The Realtime Database and Firestore Enterprise Pipeline compatibility parents are `IMPLEMENTING`. Earlier verified leaf evidence is retained while remaining unimplemented, mismatching and unobserved behavior is addressed; parent-wide compatibility is not claimed. The Pipeline comparison retains all 1,951 rows.
@@ -22,7 +25,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Fixed
 
 - Strict Firestore Enterprise pipelines accept zero for recorded `limit` and `offset` cases, returning no results for `limit(0)` and preserving results for `offset(0)`.
-- Strict Realtime Database REST PATCH responses preserve the recorded request-member order for the covered cases.
+- Realtime Database REST PATCH responses preserve request-member order under both profiles for the recorded compact, non-silent multi-path cases without a callback.
 - Strict Realtime Database SSE cancellation closes the connection after the cancellation event. The local HTTP transport retains its native chunking behavior, while production used close-delimited framing.
 
 ## [0.32.0] - 2026-10-28

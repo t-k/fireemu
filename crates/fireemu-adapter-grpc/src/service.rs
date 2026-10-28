@@ -633,6 +633,7 @@ impl Firestore for GatewayService {
     }
 
     type ExecutePipelineStream = BoxStream<pb::ExecutePipelineResponse>;
+    #[allow(clippy::too_many_lines)]
     async fn execute_pipeline(
         &self,
         request: Request<pb::ExecutePipelineRequest>,
@@ -707,6 +708,10 @@ impl Firestore for GatewayService {
                     responses.into_iter().map(Ok),
                 ))));
             }
+            let runtime = crate::pipeline_timezone::runtime(
+                self.local_backend()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?,
+            );
             let input: BoxStream<pb::RunQueryResponse> =
                 if let Some(names) = compiled.documents.clone() {
                     let local = self
@@ -727,7 +732,7 @@ impl Firestore for GatewayService {
                         .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
                 };
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
-                input, compiled, unrecorded, canonical, gate,
+                input, compiled, unrecorded, canonical, gate, runtime,
             ))));
         }
         let mut status = Status::unimplemented(format!(
@@ -1142,12 +1147,14 @@ impl PipelineResponseStream {
         unrecorded: fireemu_core_firestore::pipeline_exec::Unrecorded,
         canonical: String,
         gate: crate::pipeline_shape::RefusalGate,
+        runtime: fireemu_core_firestore::pipeline_exec::RuntimeContext,
     ) -> Self {
         Self {
             inner: Some(inner),
-            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in(
+            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
                 compiled.stages,
                 unrecorded,
+                runtime,
             ),
             read_time: None,
             canonical,

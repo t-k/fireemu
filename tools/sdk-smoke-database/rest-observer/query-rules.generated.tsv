@@ -1,0 +1,13 @@
+Case	Round	Outcome
+query-allow-2	r1	allowed
+query-allow-2	r2	allowed
+query-deny-3	r1	denied
+query-deny-3	r2	denied
+query-deny-nolimit	r1	denied
+query-deny-nolimit	r2	denied
+query-deny-key	r1	denied
+query-deny-key	r2	denied
+query-deny-key	r1	allowed
+query-deny-nolimit	r1	allowed
+query-deny-3	r2	allowed
+query-allow-2	r2	denied

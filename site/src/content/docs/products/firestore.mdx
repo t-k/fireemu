@@ -44,7 +44,7 @@ apiMode = "native"
 
 The FS-PIPELINE production compatibility assessment is in progress. Recorded cases retain their individual evidence, but mismatches and unobserved behavior remain; the parent is not verified.
 
-On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group` or `documents` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset` and `limit` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
+On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group` or `documents` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset`, `limit` and `unnest` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
 
 | Expression | Supported |
 |---|---|
@@ -52,7 +52,7 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | Literals | Values of every type, including arrays and maps of literals and vectors of doubles |
 | Comparisons | `equal`, `not_equal`, `less_than`, `less_than_or_equal`, `greater_than` and `greater_than_or_equal`, anywhere an expression stands |
 | Construction | `array(...)` and `map(...)` |
-| Array access | `array_length`, `array_first`, `array_last` and `array_get` |
+| Array access | `array_length`, `array_first`, `array_last`, `array_get`, `array_slice`, `array_first_n`, `array_last_n`, `array_index_of`, `join`, `maximum_n` and `minimum_n` |
 | Array helpers | `array_concat` and `array_reverse` |
 | Timestamp functions | `current_timestamp`, `timestamp_add`, `timestamp_subtract`, `timestamp_trunc`, `timestamp_diff`, `timestamp_extract`, `unix_micros_to_timestamp`, `unix_millis_to_timestamp`, `unix_seconds_to_timestamp`, `timestamp_to_unix_micros`, `timestamp_to_unix_millis` and `timestamp_to_unix_seconds` |
 | Map functions | `map_get`, `map_set`, `map_remove`, `map_merge`, `map_keys`, `map_values` and `map_entries` |
@@ -62,7 +62,9 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | String | `concat`, `to_lower`, `to_upper`, `starts_with`, `ends_with`, `string_contains`, `char_length`, `substring`, `trim`, `ltrim`, `rtrim` and `split` |
 | Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` |
 
-The array, map, regular-expression and timestamp functions above, zero-count changes and recorded `INTERNAL` responses described below are available from v0.33.0. The functions are available in both profiles. The production comparison covers the recorded cases, not every input type or combination. `map_set` retains an explicit null value and removes a key whose value is absent; a null or absent input map yields an absent result, while the other listed map functions return null for that input; that removal follows the documented API and has not been observed in production. Map keys, values and entries use Fireemu's deterministic map order, and corresponding keys and values stay paired. The recorded production map agrees for its two keys; production ordering for other maps is unverified.
+The array and map functions listed in the v0.33.0 changelog, regular-expression and timestamp functions, zero-count changes and recorded `INTERNAL` responses described below are available from v0.33.0; the additional array functions and `unnest` are available in v0.34.0. The functions are available in both profiles. The production comparison covers the recorded cases, not every input type or combination. `map_set` retains an explicit null value and removes a key whose value is absent; a null or absent input map yields an absent result, while the other listed map functions return null for that input; that removal follows the documented API and has not been observed in production. Map keys, values and entries use Fireemu's deterministic map order, and corresponding keys and values stay paired. The recorded production map agrees for its two keys; production ordering for other maps is unverified.
+
+The additional array functions and `unnest` cover the recorded input shapes; unrecorded combinations and ordering remain unverified. Strict Firestore REST accepts the recorded standard and URL-safe base64 forms and the protobuf `bytes_value` alias, and rejects recorded CR/LF and mixed-alphabet forms. The ordinary emulator profile retains permissive decoding for development; its extra accepted forms are not a production compatibility claim.
 
 Pipeline timestamps use microsecond precision. `current_timestamp` samples the configured clock once per request and stays fixed throughout that pipeline evaluation. Zone-aware truncation and extraction use named IANA zones; the production recordings cover only specific zone cases. Ambiguous or nonexistent local daylight-saving boundaries are refused as unobserved, and custom GMT offset semantics are not implemented. Other time zones, boundaries and input combinations are not established as production-compatible by those recordings.
 
@@ -102,7 +104,7 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | An empty `array()` or `map()` | `UNIMPLEMENTED` | An empty array or map |
 | An `aggregate` without its groups argument | `INVALID_ARGUMENT` with production's arity text for the recorded shape (directly after the collection, a non-empty map of plain aliases to `count`), else `UNIMPLEMENTED` | `INVALID_ARGUMENT` with the same text |
 
-Unsupported functions and stages, including the remaining math functions, `union`, `unnest`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
+Unsupported functions and stages, including the remaining math functions, `union`, `sample`, `find_nearest` and `replace_with`, are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
 
 ## Composite indexes
 

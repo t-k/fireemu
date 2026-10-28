@@ -608,7 +608,7 @@ fn value_from_json_at(
                 .ok_or_else(|| JsonError("stringValue must be a string".into()))?
                 .to_owned(),
         ),
-        "bytesValue" => {
+        "bytesValue" | "bytes_value" => {
             let text = inner
                 .as_str()
                 .ok_or_else(|| JsonError("bytesValue must be a base64 string".into()))?;

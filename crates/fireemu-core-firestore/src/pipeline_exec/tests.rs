@@ -49,6 +49,7 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
     assert_eq!(
@@ -67,6 +68,13 @@ fn table_lists_exactly_the_recorded_functions() {
             "array_first",
             "array_last",
             "array_get",
+            "maximum_n",
+            "minimum_n",
+            "join",
+            "array_slice",
+            "array_index_of",
+            "array_first_n",
+            "array_last_n",
             "map_set",
             "map_remove",
             "map_merge",
@@ -137,7 +145,18 @@ fn table_lists_exactly_the_recorded_functions() {
     for name in ["document_id", "collection_id", "parent"] {
         assert_eq!(function(name).unwrap().arity, Arity::Exact(1), "{name}");
     }
-    for name in ["eq", "between", "sqrt", "REGEX_MATCH", "AND", "", "Equal"] {
+    for name in [
+        "eq",
+        "between",
+        "sqrt",
+        "REGEX_MATCH",
+        "MAXIMUM_N",
+        "MINIMUM_N",
+        "JOIN",
+        "AND",
+        "",
+        "Equal",
+    ] {
         assert!(function(name).is_none(), "{name}");
     }
 }

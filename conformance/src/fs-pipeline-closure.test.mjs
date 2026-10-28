@@ -237,3 +237,46 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
     [[run.id]],
   );
 });
+
+test("v0.34 preserves the complete comparison and keeps the controlled clock separate", () => {
+  assert.deepEqual(comparison.summary, {
+    MATCH: 1685,
+    MISMATCH: 252,
+    INDETERMINATE: 12,
+    UNKNOWN: 2,
+  });
+  assert.equal(status.get("fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now"), "MISMATCH");
+  const clock = json(closure.integratedRegression.clockDiffControlPath);
+  assert.equal(
+    sha256(closure.integratedRegression.clockDiffControlPath),
+    closure.integratedRegression.clockDiffControlSha256,
+  );
+  assert.equal(clock.recipe, "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now");
+  assert.equal(clock.binarySha256, comparison.artifactSha256);
+  assert.equal(clock.derivedSeconds, "1927857906");
+  assert.equal(clock.response[0].results[0].fields.v.integerValue, clock.derivedSeconds);
+});
+
+test("the capability and generated inventory describe recorded unnest and base64 behavior", () => {
+  const capabilities = text("crates/fireemu/src/capabilities.json");
+  const features = text("spec/compatibility/features.json");
+  const inventory = text("docs/compatibility/firestore-enterprise-native.md");
+  for (const source of [capabilities, features, inventory]) {
+    assert.ok(!source.includes("union, unnest and sample remain unsupported"));
+    assert.ok(source.includes("recorded unnest"));
+  }
+  const unimplemented = json("crates/fireemu/src/capabilities.json")["FS-PIPE-RPC-1"].unimplemented;
+  assert.ok(!unimplemented[0].includes("union, unnest, sample"));
+  for (const name of [
+    "array_slice",
+    "array_first_n",
+    "array_last_n",
+    "array_index_of",
+    "join",
+    "maximum_n",
+    "minimum_n",
+  ])
+    assert.ok(unimplemented[1].includes(name));
+  assert.ok(!capabilities.includes("paths accept base64 values with line breaks"));
+  assert.ok(capabilities.includes("recorded CR/LF and mixed alphabets"));
+});

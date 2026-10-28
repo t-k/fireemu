@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "source": "RTDB-CV09-SDK-20261025-08",
+  "rounds": [
+    {
+      "cell": "r1_lp",
+      "journalSha256": "45341dd288bd40b41359265905f28c6ef24205ee526159538e78a70187e65e56",
+      "messages": {
+        "competitor": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":2,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":10}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":2,\"b\":{\"s\":\"ok\",\"d\":\"\"}}}",
+          "requestSeq": 75,
+          "replySeq": 82
+        },
+        "read10": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":3,\"a\":\"g\",\"b\":{\"p\":\"/__CV09_PATH__\",\"q\":{}}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":3,\"b\":{\"s\":\"ok\",\"d\":10}}}",
+          "requestSeq": 94,
+          "replySeq": 96
+        },
+        "stale": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":3,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":1,\"h\":\"7ysMph9WPitGP7poMnMHMVPtUlI=\"}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":3,\"b\":{\"s\":\"datastale\",\"d\":\"Transaction ETag does not match\"}}}",
+          "requestSeq": 110,
+          "replySeq": 113
+        },
+        "retry": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":4,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":11,\"h\":\"+r5aI9HvKKagELki8SYKBk0q7D4=\"}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":4,\"b\":{\"s\":\"ok\",\"d\":11}}}",
+          "requestSeq": 119,
+          "replySeq": 127
+        },
+        "read11": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":4,\"a\":\"g\",\"b\":{\"p\":\"/__CV09_PATH__\",\"q\":{}}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":4,\"b\":{\"s\":\"ok\",\"d\":11}}}",
+          "requestSeq": 140,
+          "replySeq": 144
+        }
+      }
+    },
+    {
+      "cell": "r2_lp",
+      "journalSha256": "ea46629cb47fa09e8c5a952b505376b9573e2afa2f86ab38a6b6d17920be5b78",
+      "messages": {
+        "competitor": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":2,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":10}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":2,\"b\":{\"s\":\"ok\",\"d\":\"\"}}}",
+          "requestSeq": 75,
+          "replySeq": 82
+        },
+        "read10": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":3,\"a\":\"g\",\"b\":{\"p\":\"/__CV09_PATH__\",\"q\":{}}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":3,\"b\":{\"s\":\"ok\",\"d\":10}}}",
+          "requestSeq": 94,
+          "replySeq": 98
+        },
+        "stale": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":3,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":1,\"h\":\"7ysMph9WPitGP7poMnMHMVPtUlI=\"}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":3,\"b\":{\"s\":\"datastale\",\"d\":\"Transaction ETag does not match\"}}}",
+          "requestSeq": 110,
+          "replySeq": 113
+        },
+        "retry": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":4,\"a\":\"p\",\"b\":{\"p\":\"/__CV09_PATH__\",\"d\":11,\"h\":\"+r5aI9HvKKagELki8SYKBk0q7D4=\"}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":4,\"b\":{\"s\":\"ok\",\"d\":11}}}",
+          "requestSeq": 119,
+          "replySeq": 127
+        },
+        "read11": {
+          "request": "{\"t\":\"d\",\"d\":{\"r\":4,\"a\":\"g\",\"b\":{\"p\":\"/__CV09_PATH__\",\"q\":{}}}}",
+          "reply": "{\"t\":\"d\",\"d\":{\"r\":4,\"b\":{\"s\":\"ok\",\"d\":11}}}",
+          "requestSeq": 140,
+          "replySeq": 144
+        }
+      }
+    }
+  ]
+}

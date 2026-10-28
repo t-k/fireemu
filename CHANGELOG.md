@@ -8,6 +8,17 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-28
+
+### Added
+
+- Firestore Enterprise pipelines support recorded cases of `array_slice`, `array_first_n`, `array_last_n`, `array_index_of`, `join`, `maximum_n`, `minimum_n` and the `unnest` stage. Unrecorded argument and ordering cases remain unverified.
+- Realtime Database regression fixtures cover finite recorded REST Rules, query-dependent Rules and query-bound cases in both profiles, and recorded long-poll transaction frames. These fixtures do not establish full Rules or transport parity.
+
+### Changed
+
+- Strict Firestore REST accepts the protobuf `bytes_value` field alias and rejects recorded CR/LF and mixed-alphabet base64 forms. The ordinary emulator profile retains permissive decoding for development; behavior outside the recorded strict forms is not established as production parity.
+
 ## [0.33.0] - 2026-10-28
 
 ### Added
@@ -1009,7 +1020,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/t-k/fireemu/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/t-k/fireemu/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/t-k/fireemu/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/t-k/fireemu/compare/v0.30.0...v0.31.0

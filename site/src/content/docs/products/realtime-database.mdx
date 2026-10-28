@@ -92,6 +92,8 @@ Rules support `.read`, `.write`, `.validate` and `.indexOn`, with `auth`, `now`,
 
 `onDisconnect` writes are checked both at registration and when the connection ends. Registration checks a `set` as one write and an `update` entry by entry, each against the current tree; if any entry fails, registration is refused. At disconnect, each pending entry is first checked alone against the then-current tree. Entries denied by `.write` or `.validate` are dropped. The retained entries are then checked together as one update; if that combined check fails, none of them is applied. In the recorded production case, cancelling a child of an onDisconnect value registered with a numeric priority drops the connection's entire update, including an unrelated write. Other priority and cancellation shapes remain unverified in production.
 
+Finite recorded production REST Rules, query-dependent Rules and query-bound cases are replayed in both profiles, along with recorded long-poll transaction frames. These observations cover the recorded requests and do not establish parity for every rule, query or transport shape.
+
 An event stream whose query bounds or limits it is judged with that query; one whose query only orders reads all the data and, as on the official emulator, is judged as a stream without a query and needs no index. A rules change, a write that changes what a data-dependent `.read` allows, or a client signing in or out cancels the listens and event streams the rules no longer allow.
 
 ### Credentials

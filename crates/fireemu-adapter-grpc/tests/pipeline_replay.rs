@@ -43,197 +43,345 @@ const PENDING_PROGRAMS: &[&str] = &[
 /// `__name__` forms. Every other row of a pending program must differ. A row that stops
 /// matching, or starts to, fails the replay until this table is updated, so the work that
 /// implements a stage cannot drop or gain a match unnoticed.
-const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
-    "fs-ent-pipeline/o8c/collections-main",
-    &[
-        "array-length-ok",
-        "array-length-empty",
-        "array-length-null",
-        "array-length-absent",
-        "array-length-string",
-        "array-length-none",
-        "array-reverse-none",
-        "array-first-ok",
-        "array-first-empty",
-        "array-first-null",
-        "array-first-absent",
-        "array-first-int",
-        "array-last-ok",
-        "array-last-empty",
-        "array-last-null",
-        "array-last-absent",
-        "array-last-int",
-        "array-get-first",
-        "array-get-last",
-        "array-get-negative",
-        "array-get-out-of-range",
-        "array-get-null-index",
-        "array-get-null-array",
-        "array-get-absent",
-        "array-get-double-index",
-        "array-get-int-array",
-        "array-get-one",
-        "array-concat-two",
-        "array-concat-three",
-        "array-concat-with-empty",
-        "array-concat-null",
-        "array-concat-absent",
-        "array-concat-string",
-        "array-concat-one",
-        "array-reverse-ok",
-        "array-reverse-empty",
-        "array-reverse-null",
-        "array-reverse-absent",
-        "array-reverse-int",
-        "map-get-key",
-        "map-get-missing-key",
-        "map-get-dotted-key",
-        "map-get-nested-map",
-        "map-get-empty-map",
-        "map-get-null-map",
-        "map-get-absent-map",
-        "map-get-null-key",
-        "map-get-int-key",
-        "map-get-array-map",
-        "map-get-one",
-        "map-merge-two",
-        "map-merge-later-wins",
-        "map-merge-three",
-        "map-merge-with-empty",
-        "map-merge-not-deep",
-        "map-merge-null",
-        "map-merge-absent",
-        "map-merge-array",
-        "map-merge-one",
-        "map-set-add",
-        "map-set-overwrite",
-        "map-set-two-pairs",
-        "map-set-null-value",
-        "map-set-int-key",
-        "map-set-null-map",
-        "map-set-absent-map",
-        "map-set-two",
-        "map-remove-one",
-        "map-remove-missing",
-        "map-remove-two",
-        "map-remove-null-map",
-        "map-remove-absent-map",
-        "map-remove-int-key",
-        "map-remove-map-only",
-        "map-keys-ok",
-        "map-keys-empty",
-        "map-keys-null",
-        "map-keys-absent",
-        "map-keys-array",
-        "map-keys-none",
-        "map-values-ok",
-        "map-values-empty",
-        "map-values-null",
-        "map-values-absent",
-        "map-values-array",
-        "map-values-none",
-        "map-entries-ok",
-        "map-entries-empty",
-        "map-entries-null",
-        "map-entries-absent",
-        "map-entries-array",
-        "map-entries-none",
-    ],
-    &[
-        "array-length-ok",
-        "array-length-empty",
-        "array-length-null",
-        "array-length-absent",
-        "array-length-string",
-        "array-length-none",
-        "array-first-ok",
-        "array-first-empty",
-        "array-first-null",
-        "array-first-absent",
-        "array-first-int",
-        "array-last-ok",
-        "array-last-empty",
-        "array-last-null",
-        "array-last-absent",
-        "array-last-int",
-        "array-get-first",
-        "array-get-last",
-        "array-get-negative",
-        "array-get-out-of-range",
-        "array-get-null-index",
-        "array-get-null-array",
-        "array-get-absent",
-        "array-get-double-index",
-        "array-get-int-array",
-        "array-get-one",
-        "array-concat-two",
-        "array-concat-three",
-        "array-concat-with-empty",
-        "array-concat-null",
-        "array-concat-absent",
-        "array-concat-string",
-        "array-concat-one",
-        "array-reverse-ok",
-        "array-reverse-empty",
-        "array-reverse-null",
-        "array-reverse-absent",
-        "array-reverse-int",
-        "map-get-key",
-        "map-get-missing-key",
-        "map-get-dotted-key",
-        "map-get-nested-map",
-        "map-get-empty-map",
-        "map-get-null-map",
-        "map-get-absent-map",
-        "map-get-null-key",
-        "map-get-int-key",
-        "map-get-array-map",
-        "map-get-one",
-        "map-merge-two",
-        "map-merge-later-wins",
-        "map-merge-three",
-        "map-merge-with-empty",
-        "map-merge-not-deep",
-        "map-merge-null",
-        "map-merge-absent",
-        "map-merge-array",
-        "map-merge-one",
-        "map-set-add",
-        "map-set-overwrite",
-        "map-set-two-pairs",
-        "map-set-odd-entries",
-        "map-set-null-value",
-        "map-set-int-key",
-        "map-set-null-map",
-        "map-set-absent-map",
-        "map-set-two",
-        "map-remove-one",
-        "map-remove-missing",
-        "map-remove-two",
-        "map-remove-null-map",
-        "map-remove-absent-map",
-        "map-remove-int-key",
-        "map-remove-map-only",
-        "map-keys-ok",
-        "map-keys-empty",
-        "map-keys-null",
-        "map-keys-absent",
-        "map-keys-array",
-        "map-keys-none",
-        "map-values-ok",
-        "map-values-empty",
-        "map-values-null",
-        "map-values-absent",
-        "map-values-array",
-        "map-values-none",
-        "map-entries-ok",
-        "map-entries-empty",
-        "map-entries-null",
-        "map-entries-absent",
-        "map-entries-array",
-        "map-entries-none",
-    ],
-)];
+const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[
+    (
+        "fs-ent-pipeline/o8c/collections-main",
+        &[
+            "array-length-ok",
+            "array-length-empty",
+            "array-length-null",
+            "array-length-absent",
+            "array-length-string",
+            "array-length-none",
+            "array-reverse-none",
+            "array-first-ok",
+            "array-first-empty",
+            "array-first-null",
+            "array-first-absent",
+            "array-first-int",
+            "array-last-ok",
+            "array-last-empty",
+            "array-last-null",
+            "array-last-absent",
+            "array-last-int",
+            "array-get-first",
+            "array-get-last",
+            "array-get-negative",
+            "array-get-out-of-range",
+            "array-get-null-index",
+            "array-get-null-array",
+            "array-get-absent",
+            "array-get-double-index",
+            "array-get-int-array",
+            "array-get-one",
+            "array-concat-two",
+            "array-concat-three",
+            "array-concat-with-empty",
+            "array-concat-null",
+            "array-concat-absent",
+            "array-concat-string",
+            "array-concat-one",
+            "array-reverse-ok",
+            "array-reverse-empty",
+            "array-reverse-null",
+            "array-reverse-absent",
+            "array-reverse-int",
+            "map-get-key",
+            "map-get-missing-key",
+            "map-get-dotted-key",
+            "map-get-nested-map",
+            "map-get-empty-map",
+            "map-get-null-map",
+            "map-get-absent-map",
+            "map-get-null-key",
+            "map-get-int-key",
+            "map-get-array-map",
+            "map-get-one",
+            "map-merge-two",
+            "map-merge-later-wins",
+            "map-merge-three",
+            "map-merge-with-empty",
+            "map-merge-not-deep",
+            "map-merge-null",
+            "map-merge-absent",
+            "map-merge-array",
+            "map-merge-one",
+            "map-set-add",
+            "map-set-overwrite",
+            "map-set-two-pairs",
+            "map-set-null-value",
+            "map-set-int-key",
+            "map-set-null-map",
+            "map-set-absent-map",
+            "map-set-two",
+            "map-remove-one",
+            "map-remove-missing",
+            "map-remove-two",
+            "map-remove-null-map",
+            "map-remove-absent-map",
+            "map-remove-int-key",
+            "map-remove-map-only",
+            "map-keys-ok",
+            "map-keys-empty",
+            "map-keys-null",
+            "map-keys-absent",
+            "map-keys-array",
+            "map-keys-none",
+            "map-values-ok",
+            "map-values-empty",
+            "map-values-null",
+            "map-values-absent",
+            "map-values-array",
+            "map-values-none",
+            "map-entries-ok",
+            "map-entries-empty",
+            "map-entries-null",
+            "map-entries-absent",
+            "map-entries-array",
+            "map-entries-none",
+            "map-set-odd-entries",
+            "array-slice-from",
+            "array-slice-with-length",
+            "array-slice-negative-offset",
+            "array-slice-beyond",
+            "array-slice-null",
+            "array-slice-absent",
+            "array-slice-int-array",
+            "array-index-of-first",
+            "array-index-of-last",
+            "array-index-of-none",
+            "array-index-of-null-search",
+            "array-index-of-direction-invalid",
+            "array-index-of-null-array",
+            "array-index-of-absent-array",
+            "array-index-of-int-array",
+            "array-index-of-two",
+            "array-first-n-ok",
+            "array-first-n-zero",
+            "array-first-n-negative",
+            "array-first-n-more-than-length",
+            "array-first-n-null",
+            "array-first-n-absent",
+            "array-first-n-double-n",
+            "array-first-n-one",
+            "array-last-n-ok",
+            "array-last-n-zero",
+            "array-last-n-negative",
+            "array-last-n-more-than-length",
+            "array-last-n-null",
+            "array-last-n-absent",
+            "array-last-n-double-n",
+            "array-last-n-one",
+            "join-ok",
+            "join-empty-array",
+            "join-null-element",
+            "join-null-element-no-text",
+            "join-int-elements",
+            "join-null-delimiter",
+            "join-null-array",
+            "join-absent",
+            "join-one",
+            "maximum-n-ok",
+            "maximum-n-more-than-length",
+            "maximum-n-zero",
+            "maximum-n-null",
+            "maximum-n-absent",
+            "maximum-n-int-array",
+            "minimum-n-ok",
+            "minimum-n-more-than-length",
+            "minimum-n-zero",
+            "minimum-n-null",
+            "minimum-n-absent",
+            "minimum-n-int-array",
+        ],
+        &[
+            "array-length-ok",
+            "array-length-empty",
+            "array-length-null",
+            "array-length-absent",
+            "array-length-string",
+            "array-length-none",
+            "array-first-ok",
+            "array-first-empty",
+            "array-first-null",
+            "array-first-absent",
+            "array-first-int",
+            "array-last-ok",
+            "array-last-empty",
+            "array-last-null",
+            "array-last-absent",
+            "array-last-int",
+            "array-get-first",
+            "array-get-last",
+            "array-get-negative",
+            "array-get-out-of-range",
+            "array-get-null-index",
+            "array-get-null-array",
+            "array-get-absent",
+            "array-get-double-index",
+            "array-get-int-array",
+            "array-get-one",
+            "array-concat-two",
+            "array-concat-three",
+            "array-concat-with-empty",
+            "array-concat-null",
+            "array-concat-absent",
+            "array-concat-string",
+            "array-concat-one",
+            "array-reverse-ok",
+            "array-reverse-empty",
+            "array-reverse-null",
+            "array-reverse-absent",
+            "array-reverse-int",
+            "map-get-key",
+            "map-get-missing-key",
+            "map-get-dotted-key",
+            "map-get-nested-map",
+            "map-get-empty-map",
+            "map-get-null-map",
+            "map-get-absent-map",
+            "map-get-null-key",
+            "map-get-int-key",
+            "map-get-array-map",
+            "map-get-one",
+            "map-merge-two",
+            "map-merge-later-wins",
+            "map-merge-three",
+            "map-merge-with-empty",
+            "map-merge-not-deep",
+            "map-merge-null",
+            "map-merge-absent",
+            "map-merge-array",
+            "map-merge-one",
+            "map-set-add",
+            "map-set-overwrite",
+            "map-set-two-pairs",
+            "map-set-odd-entries",
+            "map-set-null-value",
+            "map-set-int-key",
+            "map-set-null-map",
+            "map-set-absent-map",
+            "map-set-two",
+            "map-remove-one",
+            "map-remove-missing",
+            "map-remove-two",
+            "map-remove-null-map",
+            "map-remove-absent-map",
+            "map-remove-int-key",
+            "map-remove-map-only",
+            "map-keys-ok",
+            "map-keys-empty",
+            "map-keys-null",
+            "map-keys-absent",
+            "map-keys-array",
+            "map-keys-none",
+            "map-values-ok",
+            "map-values-empty",
+            "map-values-null",
+            "map-values-absent",
+            "map-values-array",
+            "map-values-none",
+            "map-entries-ok",
+            "map-entries-empty",
+            "map-entries-null",
+            "map-entries-absent",
+            "map-entries-array",
+            "map-entries-none",
+            "array-slice-from",
+            "array-slice-with-length",
+            "array-slice-negative-offset",
+            "array-slice-beyond",
+            "array-slice-null",
+            "array-slice-absent",
+            "array-slice-int-array",
+            "array-index-of-first",
+            "array-index-of-last",
+            "array-index-of-none",
+            "array-index-of-null-search",
+            "array-index-of-direction-invalid",
+            "array-index-of-null-array",
+            "array-index-of-absent-array",
+            "array-index-of-int-array",
+            "array-index-of-two",
+            "array-first-n-ok",
+            "array-first-n-zero",
+            "array-first-n-negative",
+            "array-first-n-more-than-length",
+            "array-first-n-null",
+            "array-first-n-absent",
+            "array-first-n-double-n",
+            "array-first-n-one",
+            "array-last-n-ok",
+            "array-last-n-zero",
+            "array-last-n-negative",
+            "array-last-n-more-than-length",
+            "array-last-n-null",
+            "array-last-n-absent",
+            "array-last-n-double-n",
+            "array-last-n-one",
+            "join-ok",
+            "join-empty-array",
+            "join-null-element",
+            "join-null-element-no-text",
+            "join-int-elements",
+            "join-null-delimiter",
+            "join-null-array",
+            "join-absent",
+            "join-one",
+            "maximum-n-ok",
+            "maximum-n-more-than-length",
+            "maximum-n-zero",
+            "maximum-n-null",
+            "maximum-n-absent",
+            "maximum-n-int-array",
+            "minimum-n-ok",
+            "minimum-n-more-than-length",
+            "minimum-n-zero",
+            "minimum-n-null",
+            "minimum-n-absent",
+            "minimum-n-int-array",
+        ],
+    ),
+    (
+        "fs-ent-pipeline/o8d/stages-main",
+        &[
+            "unnest-tags",
+            "unnest-empty-array",
+            "unnest-null",
+            "unnest-string",
+            "unnest-absent",
+            "unnest-index-field",
+            "unnest-alias-is-field",
+            "unnest-alias-is-other-field",
+            "unnest-dotted-alias",
+            "unnest-reserved-alias",
+            "unnest-index-is-alias",
+            "unnest-literal-array",
+            "unnest-then-where",
+            "unnest-twice",
+            "unnest-one-argument",
+            "unnest-three-arguments",
+        ],
+        &[
+            "unnest-tags",
+            "unnest-empty-array",
+            "unnest-null",
+            "unnest-string",
+            "unnest-absent",
+            "unnest-index-field",
+            "unnest-alias-is-field",
+            "unnest-alias-is-other-field",
+            "unnest-dotted-alias",
+            "unnest-reserved-alias",
+            "unnest-index-is-alias",
+            "unnest-literal-array",
+            "unnest-then-where",
+            "unnest-twice",
+            "unnest-one-argument",
+            "unnest-three-arguments",
+        ],
+    ),
+];
 
 /// The sample set a random draw may return: the members of the input and how many to expect.
 struct SampleOf {
@@ -449,114 +597,7 @@ const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
         500,
         400,
     ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-cr",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-cr",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mime-76",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mime-76",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mime-76-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mixed-plus-underscore",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mixed-minus-slash",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-proto-name",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        400,
-        400,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-proto-name",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        404,
-        404,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#cursor-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#cursor-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
+
 ];
 
 /// Rows that only the emulator profile answers differently: strict matches. The profile keeps the
@@ -1035,10 +1076,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 192, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 185, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            127,
+            120,
             "finite emulator debt inventory"
         );
     }
@@ -1828,19 +1869,22 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             strict,
         ));
         for program in PENDING_PROGRAMS {
-            if !differing
+            let has_gap = differing
                 .iter()
-                .any(|(row, _, _)| row.split('#').next() == Some(*program))
-            {
+                .any(|(row, _, _)| row.split('#').next() == Some(*program));
+            let expected_gap = expected_program_gap(program, strict);
+            if program_gap_changed(has_gap, expected_gap) {
                 failures.push(format!(
-                    "strict={strict}: pending program no longer differs, remove it: {program}"
+                    "strict={strict}: pending program gap changed for {program}: expected {expected_gap}, got {has_gap}"
                 ));
             }
         }
+        failures.extend(base64_pin_problems(strict, &seen, &differing));
         let unexpected: Vec<_> = differing
             .iter()
             .filter(|(row, _, _)| {
                 !known(row)
+                    && !row.starts_with("fs-ent-pipeline/o8a/base64-main#")
                     && !pending(row)
                     && !debts
                         .get(row)
@@ -2035,6 +2079,147 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
         ((false, ordinary.row.clone()), ordinary.production.clone()),
     ]);
     assert!(regenerate_o5_row(&ordinary, &both).is_none());
+}
+
+const BASE64_ROWS: &[&str] = &[
+    "write-lf",
+    "get-lf",
+    "write-cr",
+    "get-cr",
+    "write-crlf",
+    "get-crlf",
+    "write-mime-76",
+    "get-mime-76",
+    "write-mime-76-lf",
+    "get-mime-76-lf",
+    "write-mixed-plus-underscore",
+    "get-mixed-plus-underscore",
+    "write-mixed-minus-slash",
+    "get-mixed-minus-slash",
+    "write-proto-name",
+    "get-proto-name",
+    "cursor-lf",
+    "cursor-crlf",
+];
+
+fn base64_pin_problems(
+    strict: bool,
+    seen: &HashSet<String>,
+    differing: &[(String, Value, Value)],
+) -> Vec<String> {
+    let prefix = "fs-ent-pipeline/o8a/base64-main#";
+    let pins: Value =
+        serde_json::from_str(include_str!("pipeline_base64_differences.json")).unwrap();
+    let expected = pins[if strict { "strict" } else { "emulator" }]
+        .as_array()
+        .unwrap();
+    let mut problems = Vec::new();
+    for suffix in BASE64_ROWS {
+        let row = format!("{prefix}{suffix}");
+        if !seen.contains(&row) {
+            problems.push(format!("strict={strict}: missing base64 row {row}"));
+        }
+        let actual = differing.iter().find(|(id, _, _)| *id == row);
+        let pin = expected.iter().find(|item| item["row"] == row);
+        match (actual, pin) {
+            (None, None) => {}
+            (Some((_, got, want)), Some(pin)) if *got == pin["got"] && *want == pin["want"] => {}
+            _ => problems.push(format!("strict={strict}: base64 pin changed {row}")),
+        }
+    }
+    for (row, _, _) in differing
+        .iter()
+        .filter(|(row, _, _)| row.starts_with(prefix))
+    {
+        if !BASE64_ROWS
+            .iter()
+            .any(|suffix| row == &format!("{prefix}{suffix}"))
+        {
+            problems.push(format!(
+                "strict={strict}: unexpected base64 difference {row}"
+            ));
+        }
+    }
+    problems
+}
+
+#[test]
+fn base64_pins_reject_missing_and_changed_profile_answers() {
+    let pins: Value =
+        serde_json::from_str(include_str!("pipeline_base64_differences.json")).unwrap();
+    let seen: HashSet<String> = BASE64_ROWS
+        .iter()
+        .map(|suffix| format!("fs-ent-pipeline/o8a/base64-main#{suffix}"))
+        .collect();
+    for (strict, profile, count) in [(true, "strict", 7), (false, "emulator", 16)] {
+        let differences: Vec<(String, Value, Value)> = pins[profile]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["row"].as_str().unwrap().to_owned(),
+                    p["got"].clone(),
+                    p["want"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(differences.len(), count);
+        assert!(base64_pin_problems(strict, &seen, &differences).is_empty());
+        let mut missing_seen = seen.clone();
+        missing_seen.remove("fs-ent-pipeline/o8a/base64-main#write-lf");
+        assert!(!base64_pin_problems(strict, &missing_seen, &differences).is_empty());
+        let mut missing_difference = differences.clone();
+        missing_difference.pop();
+        assert!(!base64_pin_problems(strict, &seen, &missing_difference).is_empty());
+        let mut changed = differences.clone();
+        changed[0].1 = json!({"status": 200});
+        assert!(!base64_pin_problems(strict, &seen, &changed).is_empty());
+    }
+}
+
+fn program_gap_changed(has_gap: bool, expected_gap: bool) -> bool {
+    has_gap != expected_gap
+}
+
+fn expected_program_gap(program: &str, strict: bool) -> bool {
+    match (program, strict) {
+        ("fs-ent-pipeline/o8c/collections-main", true) => false,
+        ("fs-ent-pipeline/o8c/collections-main" | "fs-ent-pipeline/o8d/stages-main", _) => true,
+        _ => panic!("unknown pinned program: {program}"),
+    }
+}
+
+#[test]
+fn pinned_program_gaps_are_profile_specific() {
+    assert!(!program_gap_changed(false, false));
+    assert!(program_gap_changed(true, false));
+    assert!(program_gap_changed(false, true));
+    assert!(!program_gap_changed(true, true));
+    let collections = "fs-ent-pipeline/o8c/collections-main";
+    let stages = "fs-ent-pipeline/o8d/stages-main";
+    assert!(!expected_program_gap(collections, true));
+    assert!(expected_program_gap(collections, false));
+    assert!(expected_program_gap(stages, true));
+    assert!(expected_program_gap(stages, false));
+    assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", true)).is_err());
+    assert!(std::panic::catch_unwind(|| expected_program_gap("unknown", false)).is_err());
+    assert!(is_pinned(
+        PENDING_MATCHES,
+        collections,
+        "array-reverse-none",
+        true
+    ));
+    assert!(!is_pinned(
+        PENDING_MATCHES,
+        collections,
+        "array-reverse-none",
+        false
+    ));
+    for strict in [true, false] {
+        assert!(is_pinned(PENDING_MATCHES, stages, "unnest-tags", strict));
+        assert!(!is_pinned(PENDING_MATCHES, stages, "sample", strict));
+    }
 }
 
 /// Whether a step of a pending program is pinned as matching production in a profile.
@@ -2383,5 +2568,288 @@ fn current_timestamp_comparison_checks_clock_and_full_shape() {
         let other =
             json!([{"results":[{"fields":{"v":{"timestampValue":"2000-01-01T00:00:00Z"}}}]}]);
         assert_ne!(answer_in(200, &got, true), answer_in(200, &other, true));
+    }
+}
+
+#[test]
+fn map_set_odd_count_recorded_refusal_and_shape_gate_pict() {
+    use fireemu_adapter_grpc::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+    use tonic::{Code, Status};
+    const MESSAGE: &str = "'map_set' function must have an odd number of arguments";
+    let fixture = read("fs-ent-pipeline-requests.json");
+    let program = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8c/collections-main")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "map-set-odd-entries")
+        .unwrap();
+    let body = fill(&step["body"]);
+    let cases = [
+        (true, false, false),
+        (true, true, false),
+        (true, false, true),
+        (true, true, true),
+        (false, false, false),
+        (false, true, false),
+        (false, false, true),
+    ];
+    for (strict, grpc, near) in cases {
+        if !near {
+            let (status, response) =
+                internal_case(strict, "o8c/collections-main", "map-set-odd-entries", grpc);
+            assert_eq!(status, 400, "strict={strict} grpc={grpc}: {response}");
+            let message = if grpc {
+                response["grpcMessage"].as_str()
+            } else {
+                response.pointer("/0/error/message").and_then(Value::as_str)
+            };
+            assert_eq!(message, Some(MESSAGE));
+            if !grpc {
+                let production = read("fs-ent-pipeline-production.json");
+                let expected = &production["programs"]["fs-ent-pipeline/o8c/collections-main"]
+                    ["steps"]["map-set-odd-entries"];
+                assert_eq!(response, expected["body"], "recorded REST error envelope");
+            }
+        }
+        let mut chosen = body.clone();
+        if near {
+            *chosen.pointer_mut("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields/v/functionValue/args/3").unwrap() = json!({"integerValue":"1"});
+        }
+        let shape = if grpc {
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &chosen,
+            )
+            .unwrap();
+            shape_of_request(&request)
+        } else {
+            let (parsed, order) = fireemu_adapter_grpc::rest::json_syntax::parse_with_key_order(
+                chosen.to_string().as_bytes(),
+            )
+            .unwrap();
+            shape_of_json(&parsed, &order)
+        };
+        let gate = if strict {
+            RefusalGate::Recorded(shape, "projects/demo-app/databases/(default)".into())
+        } else {
+            RefusalGate::Open
+        };
+        let expected = if strict && near {
+            Code::Unimplemented
+        } else {
+            Code::InvalidArgument
+        };
+        assert_eq!(
+            gate.answer(Status::invalid_argument(MESSAGE)).code(),
+            expected,
+            "strict={strict} grpc={grpc} near={near}"
+        );
+        if strict {
+            assert_eq!(
+                gate.answer(Status::invalid_argument(format!("{MESSAGE}!")))
+                    .code(),
+                Code::Unimplemented
+            );
+        }
+    }
+}
+
+#[test]
+fn map_set_odd_count_recorded_grpc_is_invalid_argument() {
+    let (status, body) = internal_case(true, "o8c/collections-main", "map-set-odd-entries", true);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["grpcMessage"],
+        "'map_set' function must have an odd number of arguments"
+    );
+}
+
+#[test]
+fn map_set_odd_count_near_shape_remains_refused_by_strict_routes() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let fixture = read("fs-ent-pipeline-requests.json");
+    let program = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8c/collections-main")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "map-set-odd-entries")
+        .unwrap();
+    let mut body = fill(&step["body"]);
+    *body
+        .pointer_mut(
+            "/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields/v/functionValue/args/3",
+        )
+        .unwrap() = json!({"integerValue":"1"});
+    for strict in [true, false] {
+        let s = state(strict);
+        let (status, _) = call(&s, "POST", &format!("{DOCS}:executePipeline"), &body);
+        assert_eq!(
+            status,
+            if strict { 501 } else { 400 },
+            "REST strict={strict}"
+        );
+        let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap();
+        let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let code = runtime.block_on(async {
+            use tokio_stream::StreamExt as _;
+            match Firestore::execute_pipeline(&service, tonic::Request::new(req)).await {
+                Err(error) => error.code(),
+                Ok(response) => response
+                    .into_inner()
+                    .next()
+                    .await
+                    .unwrap()
+                    .unwrap_err()
+                    .code(),
+            }
+        });
+        assert_eq!(
+            code,
+            if strict {
+                tonic::Code::Unimplemented
+            } else {
+                tonic::Code::InvalidArgument
+            },
+            "gRPC strict={strict}"
+        );
+    }
+}
+
+#[test]
+fn recorded_unnest_sixteen_cases_replay_in_both_profiles() {
+    let production = read("fs-ent-pipeline-production.json");
+    let ids = [
+        "unnest-tags",
+        "unnest-empty-array",
+        "unnest-null",
+        "unnest-string",
+        "unnest-absent",
+        "unnest-index-field",
+        "unnest-alias-is-field",
+        "unnest-alias-is-other-field",
+        "unnest-dotted-alias",
+        "unnest-reserved-alias",
+        "unnest-index-is-alias",
+        "unnest-literal-array",
+        "unnest-then-where",
+        "unnest-twice",
+        "unnest-one-argument",
+        "unnest-three-arguments",
+    ];
+    let mut failures = Vec::new();
+    for strict in [true, false] {
+        for id in ids {
+            let (status, body) = internal_case(strict, "o8d/stages-main", id, false);
+            let expected = &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id];
+            let expected_status = u16::try_from(expected["status"].as_u64().unwrap()).unwrap();
+            if answer_in(status, &body, true) != answer_in(expected_status, &expected["body"], true)
+                || framing(&body) != framing(&expected["body"])
+            {
+                failures.push(format!(
+                    "strict={strict} {id}: got {} expected {}",
+                    answer_in(status, &body, true),
+                    answer_in(expected_status, &expected["body"], true)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn recorded_unnest_grpc_preserves_rows_order_and_errors() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let requests = read("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o8d/stages-main")
+        .unwrap();
+    for strict in [true, false] {
+        for id in ["unnest-tags", "unnest-index-field"] {
+            let state = state(strict);
+            for seed in program["seed"].as_array().unwrap() {
+                let (status, body) = call(
+                    &state,
+                    "PATCH",
+                    &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                    &json!({"fields": fill(&seed[1])}),
+                );
+                assert_eq!(status, 200, "{body}");
+            }
+            let step = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|step| step["id"] == id)
+                .unwrap();
+            let body = fill(&step["body"]);
+            let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let responses = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(response) = stream.next().await {
+                    out.push(fireemu_adapter_grpc::rest::pipeline_json::response_to_json(
+                        &response.unwrap(),
+                    ));
+                }
+                Value::Array(out)
+            });
+            let expected =
+                &production["programs"]["fs-ent-pipeline/o8d/stages-main"]["steps"][id]["body"];
+            assert_eq!(
+                answer_in(200, &responses, true),
+                answer_in(200, expected, true),
+                "{id} strict={strict}"
+            );
+            assert_eq!(framing(&responses), framing(expected));
+        }
+        for id in [
+            "unnest-dotted-alias",
+            "unnest-reserved-alias",
+            "unnest-index-is-alias",
+            "unnest-one-argument",
+            "unnest-three-arguments",
+        ] {
+            let (status, _) = internal_case(strict, "o8d/stages-main", id, true);
+            assert_eq!(status, 400, "{id} strict={strict}");
+        }
     }
 }

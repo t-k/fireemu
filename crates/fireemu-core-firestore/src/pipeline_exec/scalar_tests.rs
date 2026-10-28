@@ -2583,3 +2583,552 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         assert!(is_unobserved(&call(wrong_result, mode)));
     }
 }
+
+#[test]
+fn recorded_array_subsequence_results() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    let repeated = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(1),
+    ]);
+    let null_search = array(vec![Value::Integer(1), Value::Null]);
+    let empty = array(vec![]);
+    let cases = [
+        ("array_slice", vec![a.clone(), int(1)], array(vec![Value::Integer(2), Value::Integer(3)])),
+        ("array_slice", vec![a.clone(), int(1), int(1)], array(vec![Value::Integer(2)])),
+        ("array_slice", vec![a.clone(), int(-1)], array(vec![Value::Integer(3)])),
+        ("array_slice", vec![a.clone(), int(10)], empty.clone()),
+        ("array_slice", vec![null(), int(1)], null()),
+        ("array_slice", vec![Eval::Absent, int(1)], null()),
+        ("array_slice", vec![int(5), int(1)], wrong("array_slice", "Array", "LONG")),
+        ("array_index_of", vec![repeated.clone(), int(1), text("first")], int(0)),
+        ("array_index_of", vec![repeated, int(1), text("last")], int(2)),
+        ("array_index_of", vec![a.clone(), int(9), text("first")], int(-1)),
+        ("array_index_of", vec![null_search, null(), text("first")], int(1)),
+        ("array_index_of", vec![a.clone(), int(1), text("middle")], invalid("The argument 'direction' for function 'array_index_of' must be a literal of type string from the following list: [first, last]")),
+        ("array_index_of", vec![null(), int(1), text("first")], null()),
+        ("array_index_of", vec![Eval::Absent, int(1), text("first")], null()),
+        ("array_index_of", vec![int(5), int(1), text("first")], wrong("array_index_of", "Array", "LONG")),
+    ];
+    for (name, args, expected) in cases {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for (name, result) in [
+        (
+            "array_first_n",
+            array(vec![Value::Integer(1), Value::Integer(2)]),
+        ),
+        (
+            "array_last_n",
+            array(vec![Value::Integer(2), Value::Integer(3)]),
+        ),
+    ] {
+        for (args, expected) in [
+            (vec![a.clone(), int(2)], result),
+            (vec![a.clone(), int(0)], empty.clone()),
+            (
+                vec![a.clone(), int(-1)],
+                invalid(&format!(
+                    "The function `{name}(...)` requires non-negative count."
+                )),
+            ),
+            (vec![a.clone(), int(10)], a.clone()),
+            (vec![null(), int(2)], null()),
+            (vec![Eval::Absent, int(2)], null()),
+            (
+                vec![a.clone(), dbl(1.5)],
+                invalid("Cannot coerce Float64 (1.5) to Int64"),
+            ),
+        ] {
+            assert_eq!(both(name, &args), expected, "{name} {args:?}");
+        }
+        assert_eq!(Expr::call(name, vec![Expr::Constant(Value::Null)], Placement::Value).unwrap_err().to_string(), format!("The function '{name}(array: array[any], n: int64): array[any]' takes [2..2] argument(s), but 1 was provided."));
+    }
+    assert_eq!(Expr::call("array_index_of", vec![Expr::Constant(Value::Null); 2], Placement::Value).unwrap_err().to_string(), "The function 'array_index_of(array: array[any], search: any, direction: (first|last)): int64' takes [3..3] argument(s), but 2 were provided.");
+}
+
+#[test]
+fn array_subsequence_pict_rows() {
+    let cases = [
+        ("slice", "populated", "positive", "strict"),
+        ("slice", "populated", "negative", "strict"),
+        ("first", "populated", "zero", "emulator"),
+        ("last", "populated", "large", "strict"),
+        ("index", "populated", "positive", "strict"),
+        ("index", "null", "negative", "emulator"),
+        ("first", "absent", "large", "strict"),
+        ("last", "empty", "zero", "emulator"),
+        ("first", "empty", "negative", "strict"),
+        ("index", "empty", "large", "emulator"),
+        ("first", "null", "zero", "strict"),
+        ("first", "absent", "positive", "emulator"),
+        ("slice", "empty", "positive", "emulator"),
+        ("slice", "absent", "zero", "strict"),
+        ("last", "absent", "negative", "strict"),
+        ("index", "absent", "zero", "strict"),
+        ("last", "null", "positive", "emulator"),
+        ("slice", "null", "large", "strict"),
+    ];
+    for (function, array_case, operand, profile) in cases {
+        let items = vec![Value::Integer(1), Value::Integer(2), Value::Integer(1)];
+        let input = match array_case {
+            "populated" => array(items.clone()),
+            "empty" => array(vec![]),
+            "null" => null(),
+            _ => Eval::Absent,
+        };
+        let n = match operand {
+            "positive" => 2_i64,
+            "zero" => 0,
+            "negative" => -1,
+            _ => 10,
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let name = match function {
+            "slice" => "array_slice",
+            "first" => "array_first_n",
+            "last" => "array_last_n",
+            _ => "array_index_of",
+        };
+        let args = if function == "index" {
+            vec![input, int(n), text("first")]
+        } else {
+            vec![input, int(n)]
+        };
+        let expected = if matches!(array_case, "null" | "absent") {
+            null()
+        } else if function == "index" {
+            let values: &[Value] = if array_case == "empty" { &[] } else { &items };
+            int(values
+                .iter()
+                .position(|value| *value == Value::Integer(n))
+                .map_or(-1, |index| i64::try_from(index).unwrap()))
+        } else if n < 0 && function != "slice" {
+            invalid(&format!(
+                "The function `{name}(...)` requires non-negative count."
+            ))
+        } else {
+            let values: &[Value] = if array_case == "empty" { &[] } else { &items };
+            let count = usize::try_from(n.max(0)).unwrap().min(values.len());
+            let selected = match function {
+                "slice" => {
+                    let start = if n < 0 {
+                        values
+                            .len()
+                            .saturating_sub(usize::try_from(n.unsigned_abs()).unwrap())
+                    } else {
+                        count
+                    };
+                    &values[start..]
+                }
+                "first" => &values[..count],
+                _ => &values[values.len() - count..],
+            };
+            array(selected.to_vec())
+        };
+        assert_eq!(
+            call_in(name, &args, mode, false),
+            expected,
+            "{function}/{array_case}/{operand}/{profile}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_subsequence_matches_reference(items in proptest::collection::vec(-20_i64..20, 0..25), count in 0_usize..40, offset in -40_i64..40) {
+        let values: Vec<Value> = items.iter().copied().map(Value::Integer).collect();
+        let input = array(values.clone());
+        let n = count.min(values.len());
+        prop_assert_eq!(strict("array_first_n", &[input.clone(), int(i64::try_from(count).unwrap())]), array(values[..n].to_vec()));
+        prop_assert_eq!(strict("array_last_n", &[input.clone(), int(i64::try_from(count).unwrap())]), array(values[values.len()-n..].to_vec()));
+        let start = if offset < 0 { values.len().saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap()) } else { usize::try_from(offset).unwrap().min(values.len()) };
+        prop_assert_eq!(strict("array_slice", &[input.clone(), int(offset), int(i64::try_from(count).unwrap())]), array(values[start..start.saturating_add(count).min(values.len())].to_vec()));
+        let needle = 3_i64;
+        let expected = items.iter().position(|v| *v == needle).map_or(-1, |i| i64::try_from(i).unwrap());
+        prop_assert_eq!(strict("array_index_of", &[input, int(needle), text("first")]), int(expected));
+    }
+}
+
+#[test]
+fn array_index_of_mixed_invalid_direction_remains_unobserved() {
+    for input in [null(), int(5)] {
+        assert!(is_unobserved(&strict(
+            "array_index_of",
+            &[input, int(1), text("middle")]
+        )));
+    }
+    assert_eq!(
+        strict("array_index_of", &[null(), int(1), text("first")]),
+        null()
+    );
+}
+
+#[test]
+fn array_slice_bad_arity_returns_error_without_panicking() {
+    for count in [0, 1, 4] {
+        assert!(Expr::call(
+            "array_slice",
+            vec![Expr::Constant(Value::Null); count],
+            Placement::Value
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn array_index_of_dynamic_direction_is_unobserved_only_in_strict() {
+    let mut fields = BTreeMap::new();
+    fields.insert("direction".to_owned(), Value::String("first".to_owned()));
+    let row = Row::derived(fields);
+    let value = Expr::Constant(Value::Array(vec![Value::Integer(7)]));
+    let needle = Expr::Constant(Value::Integer(7));
+    let field = Expr::Field(FieldPath::parse("direction").unwrap());
+    let computed = Expr::call(
+        "to_lower",
+        vec![Expr::Constant(Value::String("FIRST".to_owned()))],
+        Placement::Value,
+    )
+    .unwrap();
+    for direction in [field, computed] {
+        let expr = Expr::call(
+            "array_index_of",
+            vec![value.clone(), needle.clone(), direction],
+            Placement::Value,
+        )
+        .unwrap();
+        assert!(is_unobserved(&expr.eval_in(&row, Unrecorded::Refuse)));
+        assert_eq!(expr.eval_in(&row, Unrecorded::OfficialEmulator), int(0));
+    }
+    let literal = Expr::call(
+        "array_index_of",
+        vec![
+            value,
+            needle,
+            Expr::Constant(Value::String("first".to_owned())),
+        ],
+        Placement::Value,
+    )
+    .unwrap();
+    assert_eq!(literal.eval_in(&row, Unrecorded::Refuse), int(0));
+}
+
+#[test]
+fn recorded_join_results_and_arity() {
+    let strings = array(vec![
+        Value::String("a".into()),
+        Value::String("b".into()),
+        Value::String("c".into()),
+    ]);
+    let with_null = array(vec![Value::String("a".into()), Value::Null]);
+    let cases = [
+        (vec![strings.clone(), text(",")], text("a,b,c")),
+        (vec![array(vec![]), text(",")], text("")),
+        (
+            vec![with_null.clone(), text(","), text("NULL")],
+            text("a,NULL"),
+        ),
+        (vec![with_null, text(",")], text("a")),
+        (
+            vec![array(vec![Value::Integer(1), Value::Integer(2)]), text(",")],
+            invalid("Cannot join non-string types."),
+        ),
+        (vec![strings, null()], null()),
+        (vec![null(), text(",")], null()),
+        (vec![Eval::Absent, text(",")], null()),
+    ];
+    for (args, expected) in cases {
+        assert_eq!(both("join", &args), expected, "{args:?}");
+    }
+    let error = Expr::call("join", vec![Expr::Constant(Value::Null)], Placement::Value)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, "The function 'join' does not accept 1 argument(s). Valid options are:\n- join[T: string | bytes](array: array[T], delimiter: T): string with [2..2] argument(s).\n- join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string with [3..3] argument(s).");
+}
+
+#[test]
+fn join_pict_rows() {
+    let rows = [
+        ("strings", "omitted", "comma", "strict"),
+        ("empty", "omitted", "comma", "emulator"),
+        ("null_element", "omitted", "comma", "strict"),
+        ("null_element", "present", "comma", "strict"),
+        ("null_input", "present", "empty", "emulator"),
+        ("absent", "omitted", "empty", "strict"),
+        ("empty", "present", "empty", "strict"),
+        ("absent", "present", "comma", "emulator"),
+        ("null_element", "present", "empty", "emulator"),
+        ("null_input", "omitted", "comma", "strict"),
+        ("strings", "present", "empty", "emulator"),
+    ];
+    for (shape, replacement, delimiter, profile) in rows {
+        let items = match shape {
+            "strings" => vec![Value::String("a".into()), Value::String("b".into())],
+            "null_element" => vec![Value::String("a".into()), Value::Null],
+            _ => vec![],
+        };
+        let input = match shape {
+            "null_input" => null(),
+            "absent" => Eval::Absent,
+            _ => array(items.clone()),
+        };
+        let separator = if delimiter == "comma" { "," } else { "" };
+        let mut args = vec![input, text(separator)];
+        if replacement == "present" {
+            args.push(text("X"));
+        }
+        let expected = if matches!(shape, "null_input" | "absent") {
+            null()
+        } else {
+            let parts: Vec<&str> = items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(value) => Some(value.as_str()),
+                    Value::Null if replacement == "present" => Some("X"),
+                    _ => None,
+                })
+                .collect();
+            text(&parts.join(separator))
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            call_in("join", &args, mode, false),
+            expected,
+            "{shape}/{replacement}/{delimiter}/{profile}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn join_matches_string_reference(items in proptest::collection::vec(proptest::option::of("[a-z]{0,8}"), 0..24), delimiter in "[,;|]{0,3}", replacement in proptest::option::of("[A-Z]{0,4}")) {
+        let values: Vec<Value> = items.iter().map(|item| item.as_ref().map_or(Value::Null, |s| Value::String(s.clone()))).collect();
+        let mut args = vec![array(values), text(&delimiter)];
+        if let Some(value) = &replacement { args.push(text(value)); }
+        let parts: Vec<&str> = items.iter().filter_map(|item| item.as_deref().or(replacement.as_deref())).collect();
+        prop_assert_eq!(both("join", &args), text(&parts.join(&delimiter)));
+    }
+}
+
+#[test]
+fn join_bytes_and_ambiguous_invalid_arguments_are_unobserved() {
+    for values in [
+        vec![Value::Bytes(vec![97]), Value::Integer(1)],
+        vec![Value::Integer(1), Value::Bytes(vec![97])],
+    ] {
+        assert!(is_unobserved(&strict("join", &[array(values), text(",")])));
+    }
+    assert!(is_unobserved(&strict(
+        "join",
+        &[array(vec![Value::Integer(1)]), null()]
+    )));
+    assert!(is_unobserved(&strict("join", &[null(), int(4)])));
+}
+
+#[test]
+fn recorded_array_extrema_results_and_arity() {
+    let input = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    for (name, expected_two, expected_all) in [
+        (
+            "maximum_n",
+            vec![Value::Integer(3), Value::Integer(2)],
+            vec![Value::Integer(3), Value::Integer(2), Value::Integer(1)],
+        ),
+        (
+            "minimum_n",
+            vec![Value::Integer(1), Value::Integer(2)],
+            vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+        ),
+    ] {
+        for (args, expected) in [
+            (vec![input.clone(), int(2)], array(expected_two)),
+            (vec![input.clone(), int(10)], array(expected_all)),
+            (vec![input.clone(), int(0)], array(vec![])),
+            (vec![null(), int(2)], null()),
+            (vec![Eval::Absent, int(2)], null()),
+            (vec![int(5), int(2)], wrong(name, "Array", "LONG")),
+        ] {
+            assert_eq!(both(name, &args), expected, "{name} {args:?}");
+        }
+        assert_eq!(Expr::call(name, vec![], Placement::Value).unwrap_err().to_string(), format!("The function '{name}(input: array[any?], n: int64): array[any]' takes [2..2] argument(s), but 0 were provided."));
+    }
+}
+
+#[test]
+fn array_extrema_pict_rows() {
+    let cases = [
+        ("maximum", "integers", "two", "strict"),
+        ("minimum", "integers", "two", "strict"),
+        ("maximum", "null_elements", "large", "emulator"),
+        ("minimum", "strings", "large", "strict"),
+        ("maximum", "empty", "zero", "emulator"),
+        ("minimum", "null", "two", "strict"),
+        ("maximum", "absent", "large", "strict"),
+        ("minimum", "integers", "negative", "emulator"),
+        ("maximum", "integers", "large", "strict"),
+        ("maximum", "strings", "zero", "emulator"),
+        ("minimum", "empty", "large", "strict"),
+        ("minimum", "empty", "two", "emulator"),
+        ("maximum", "empty", "negative", "strict"),
+        ("minimum", "absent", "negative", "emulator"),
+        ("maximum", "null", "zero", "emulator"),
+        ("minimum", "null_elements", "two", "strict"),
+        ("maximum", "absent", "two", "strict"),
+        ("minimum", "null", "large", "emulator"),
+        ("minimum", "null_elements", "negative", "emulator"),
+        ("minimum", "absent", "zero", "strict"),
+        ("maximum", "strings", "two", "emulator"),
+        ("minimum", "integers", "zero", "emulator"),
+        ("maximum", "strings", "negative", "strict"),
+        ("minimum", "null", "negative", "emulator"),
+        ("maximum", "null_elements", "zero", "emulator"),
+    ];
+    for (function, shape, count, profile) in cases {
+        let (input, mut ordered) = match shape {
+            "integers" => (
+                array(vec![
+                    Value::Integer(3),
+                    Value::Integer(1),
+                    Value::Integer(2),
+                ]),
+                vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+            ),
+            "strings" => (
+                array(vec![Value::String("c".into()), Value::String("a".into())]),
+                vec![Value::String("a".into()), Value::String("c".into())],
+            ),
+            "null_elements" => (
+                array(vec![Value::Integer(2), Value::Null, Value::Integer(1)]),
+                vec![Value::Integer(1), Value::Integer(2)],
+            ),
+            "empty" => (array(vec![]), vec![]),
+            "null" => (null(), vec![]),
+            _ => (Eval::Absent, vec![]),
+        };
+        let n = match count {
+            "zero" => 0_i64,
+            "two" => 2,
+            "negative" => -1,
+            _ => 10,
+        };
+        let name = if function == "maximum" {
+            "maximum_n"
+        } else {
+            "minimum_n"
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let got = call_in(name, &[input, int(n)], mode, false);
+        if matches!(shape, "null" | "absent") {
+            assert_eq!(got, null());
+        } else if n < 0 {
+            assert!(is_unobserved(&got));
+        } else {
+            if function == "maximum" {
+                ordered.reverse();
+            }
+            ordered.truncate(usize::try_from(n).unwrap());
+            assert_eq!(got, array(ordered), "{function}/{shape}/{count}/{profile}");
+        }
+    }
+}
+
+#[test]
+fn extrema_mixed_types_ties_and_negative_count_remain_unobserved() {
+    for name in ["maximum_n", "minimum_n"] {
+        let mixed = array(vec![Value::Integer(1), Value::String("a".into())]);
+        assert!(is_unobserved(&strict(name, &[mixed, int(1)])));
+        assert!(is_unobserved(&strict(
+            name,
+            &[array(vec![Value::Integer(1)]), int(-1)]
+        )));
+        let duplicate = array(vec![Value::Integer(2), Value::Integer(2)]);
+        assert_eq!(
+            strict(name, &[duplicate, int(2)]),
+            array(vec![Value::Integer(2), Value::Integer(2)])
+        );
+        assert!(is_unobserved(&strict(
+            name,
+            &[array(vec![Value::Integer(1), Value::Double(1.0)]), int(1)]
+        )));
+        assert!(is_unobserved(&strict(
+            name,
+            &[
+                array(vec![Value::Double(f64::NAN), Value::Double(f64::NAN)]),
+                int(1)
+            ]
+        )));
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_extrema_matches_integer_reference(items in proptest::collection::vec(-100_i64..100, 0..30), n in 0_usize..40) {
+        let input = array(items.iter().copied().map(Value::Integer).collect());
+        let mut sorted = items.clone(); sorted.sort_unstable();
+        let first: Vec<Value> = sorted.iter().take(n).copied().map(Value::Integer).collect();
+        let last: Vec<Value> = sorted.iter().rev().take(n).copied().map(Value::Integer).collect();
+        prop_assert_eq!(strict("minimum_n", &[input.clone(), int(i64::try_from(n).unwrap())]), array(first));
+        prop_assert_eq!(strict("maximum_n", &[input, int(i64::try_from(n).unwrap())]), array(last));
+    }
+}
+
+#[test]
+fn extrema_distinguishable_signed_zero_ties_are_unobserved() {
+    for name in ["maximum_n", "minimum_n"] {
+        for (left, right) in [
+            (Value::Double(-0.0), Value::Double(0.0)),
+            (Value::Double(0.0), Value::Double(-0.0)),
+            (
+                Value::Array(vec![Value::Double(-0.0)]),
+                Value::Array(vec![Value::Double(0.0)]),
+            ),
+            (
+                Value::Array(vec![Value::Double(0.0)]),
+                Value::Array(vec![Value::Double(-0.0)]),
+            ),
+        ] {
+            assert!(
+                is_unobserved(&strict(name, &[array(vec![left, right]), int(1)])),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn map_set_odd_count_is_recorded_arity_and_minimum_still_precedes_it() {
+    let args = vec![Expr::Constant(Value::Null); 4];
+    assert!(
+        matches!(Expr::call("map_set", args, Placement::Value), Err(ExprError::Arity(message)) if message == "'map_set' function must have an odd number of arguments")
+    );
+    let args = vec![Expr::Constant(Value::Null); 2];
+    assert!(
+        matches!(Expr::call("map_set", args, Placement::Value), Err(ExprError::Arity(message)) if message.contains("takes [3..+∞)"))
+    );
+    let args = vec![Expr::Constant(Value::Null); 3];
+    assert!(Expr::call("map_set", args, Placement::Value).is_ok());
+}

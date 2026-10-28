@@ -831,6 +831,10 @@ pub fn compile_pipeline_in_order(
                         Err(error) => return Err(error),
                     }
                 }
+                "unnest" => {
+                    only_filters_so_far = false;
+                    stages.push(decode_unnest(stage, unrecorded)?);
+                }
                 "offset" => {
                     only_filters_so_far = false;
                     let offset = count_argument(stage, unrecorded)?;
@@ -2610,11 +2614,64 @@ fn decode_aggregate(
     Ok((accumulators, groups))
 }
 
+fn decode_unnest(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result<Stage, Status> {
+    use pb::value::ValueType as V;
+    let [value, alias] = stage.args.as_slice() else {
+        return Err(Status::unimplemented("unnest arity is unobserved"));
+    };
+    let Some(V::FieldReferenceValue(alias_name)) = alias.value_type.as_ref() else {
+        return Err(Status::unimplemented("unnest alias type is unobserved"));
+    };
+    let alias = parse_alias(alias_name)?;
+    if let Some(message) = reserved_alias("unnest", alias_name) {
+        return Err(Status::invalid_argument(message));
+    }
+    if alias.segments().len() != 1 {
+        let message = format!("The nested field reference '{alias_name}' is not supported in its current use case.\n\nCertain stages like `aggregate(...)` or `unnest(...)` only support assigning to top-level fields. This means you cannot use an alias like 'foo.bar' to assign the result to a nested field. If you want to use an alias that has a dot in it, escape the path with backticks, like `foo.bar`.\n\nDepending on the SDK, this can be done like so:`.distinct(field(\"address.city\").as(\"`address.city`\"))`");
+        return Err(crate::production_status::top_level_property_path_only(
+            alias_name, &message,
+        ));
+    }
+    let index_field = match stage.options.get("index_field") {
+        None => None,
+        Some(option) => {
+            let Some(V::FieldReferenceValue(name)) = option.value_type.as_ref() else {
+                return Err(Status::unimplemented(
+                    "unnest index field type is unobserved",
+                ));
+            };
+            let path = parse_alias(name)?;
+            if path.segments().len() != 1 || reserved_alias("unnest", name).is_some() {
+                return Err(Status::unimplemented(
+                    "unnest index field path is unobserved",
+                ));
+            }
+            if path == alias {
+                return Err(Status::invalid_argument(format!(
+                    "Index field `{name}` cannot be the same name as the alias `{alias_name}`."
+                )));
+            }
+            Some(path)
+        }
+    };
+    let expression = decode_operand_tree(value, unrecorded)?;
+    Ok(Stage::Unnest {
+        expression,
+        alias,
+        index_field,
+    })
+}
+
 /// The arity text production answered for a stage with a signature, before any other check of
 /// the stage (FS-ENT-ORACLE O-6 `sort-wire-errors#no-args`, O-7 `aggregate-args`,
 /// `distinct-main`, `fields-main`, `inputs-*`).
 fn stage_arity_error(stage: &pb::pipeline::Stage) -> Option<Status> {
     let (signature, min, max) = match stage.name.as_str() {
+        "unnest" => (
+            "unnest(field: Expr, alias: FieldReference, index_field: FieldReference?)",
+            2,
+            Some(2),
+        ),
         "sort" => ("sort(ordering: Order*)", 1, None),
         "distinct" => ("distinct(fields: Map[FieldPath, Expr])", 1, Some(1)),
         "aggregate" => (

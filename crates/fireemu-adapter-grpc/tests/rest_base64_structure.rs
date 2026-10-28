@@ -290,3 +290,200 @@ fn valid_empty_and_absent_transaction_and_token_commit_remain_accepted() {
         200
     );
 }
+
+#[test]
+fn typed_bytes_recorded_strict_rejections_preserve_ordinary_behavior() {
+    for text in [
+        "QUJD\nQUJD",
+        "QUJD\rQUJD",
+        "QUJD\r\nQUJD",
+        "+_AA",
+        "-/AA",
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD",
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD",
+    ] {
+        for strict in [true, false] {
+            let s = state(strict);
+            let response = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes": [{"update": {
+                    "name": format!("{RESOURCE}/base64/test"), "fields": {"b": {"bytesValue": text}}
+                }}]}),
+            );
+            if strict {
+                let field = "writes[0].update.fields[0].value.bytes_value";
+                let message = format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for \"{text}\"");
+                assert_eq!(response.status, 400, "{text:?}");
+                assert_eq!(response.body["error"]["message"], message);
+                assert_eq!(
+                    response.body["error"]["details"][0]["fieldViolations"][0],
+                    json!({"field":field,"description":message})
+                );
+            } else {
+                assert_eq!(response.status, 200, "{text:?}: {:?}", response.body);
+            }
+            let got = call(&s, "GET", &format!("{DOCS}/base64/test"), Value::Null);
+            assert_eq!(got.status, if strict { 404 } else { 200 }, "{text:?}");
+        }
+    }
+}
+
+#[test]
+fn typed_bytes_proto_alias_is_accepted_in_both_profiles() {
+    for strict in [true, false] {
+        let s = state(strict);
+        let response = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {
+                "name": format!("{RESOURCE}/base64/alias"), "fields": {"b": {"bytes_value": "QUJD"}}
+            }}]}),
+        );
+        assert_eq!(response.status, 200, "{:?}", response.body);
+        let got = call(&s, "GET", &format!("{DOCS}/base64/alias"), Value::Null);
+        assert_eq!(got.body["fields"]["b"]["bytesValue"], "QUJD");
+    }
+}
+
+#[test]
+fn typed_bytes_cursor_refusal_uses_streamed_bad_request() {
+    let s = state(true);
+    let text = "Ag==\n";
+    let response = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": {
+            "from":[{"collectionId":"bq"}], "orderBy":[{"field":{"fieldPath":"b"},"direction":"ASCENDING"}],
+            "startAt":{"values":[{"bytesValue":text}],"before":true}
+        }}),
+    );
+    let field = "structured_query.start_at.values[0].bytes_value";
+    let message =
+        format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for \"{text}\"");
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body[0]["error"]["message"], message);
+    assert_eq!(
+        response.body[0]["error"]["details"][0]["fieldViolations"][0],
+        json!({"field":field,"description":message})
+    );
+}
+
+#[test]
+fn typed_bytes_pict_generated_cases() {
+    let cases = [
+        ("strict", "lf", "camel", "commit"),
+        ("strict", "cr", "camel", "commit"),
+        ("strict", "crlf", "camel", "cursor"),
+        ("strict", "mixed_plus", "camel", "commit"),
+        ("strict", "mixed_minus", "camel", "commit"),
+        ("ordinary", "lf", "camel", "commit"),
+        ("ordinary", "mixed_plus", "camel", "commit"),
+        ("strict", "standard", "snake", "commit"),
+        ("ordinary", "standard", "snake", "commit"),
+        ("strict", "urlsafe", "camel", "commit"),
+        ("strict", "unpadded", "camel", "commit"),
+        ("strict", "standard", "camel", "cursor"),
+        ("ordinary", "crlf", "snake", "cursor"),
+        ("ordinary", "urlsafe", "snake", "cursor"),
+        ("strict", "mixed_plus", "snake", "cursor"),
+        ("ordinary", "mixed_minus", "snake", "cursor"),
+        ("strict", "crlf", "snake", "commit"),
+        ("ordinary", "unpadded", "snake", "cursor"),
+        ("ordinary", "lf", "snake", "cursor"),
+        ("ordinary", "cr", "snake", "cursor"),
+    ];
+    for (profile, kind, spelling, surface) in cases {
+        let strict = profile == "strict";
+        let text = match kind {
+            "standard" => "QUJD",
+            "urlsafe" => "_w==",
+            "unpadded" => "_w",
+            "lf" => "QUJD\nQUJD",
+            "cr" => "QUJD\rQUJD",
+            "crlf" => "QUJD\r\nQUJD",
+            "mixed_plus" => "+_AA",
+            "mixed_minus" => "-/AA",
+            _ => unreachable!(),
+        };
+        let key = if spelling == "snake" {
+            "bytes_value"
+        } else {
+            "bytesValue"
+        };
+        let v = json!({key: text});
+        let s = state(strict);
+        let response = if surface == "commit" {
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:commit"),
+                json!({"writes":[{"update":{"name":format!("{RESOURCE}/pict/a"),"fields":{"b":v}}}]}),
+            )
+        } else {
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:runQuery"),
+                json!({"structuredQuery":{"from":[{"collectionId":"pict"}],"orderBy":[{"field":{"fieldPath":"b"},"direction":"ASCENDING"}],"startAt":{"values":[v],"before":true}}}),
+            )
+        };
+        let invalid = matches!(kind, "lf" | "cr" | "crlf" | "mixed_plus" | "mixed_minus");
+        assert_eq!(
+            response.status,
+            if strict && invalid { 400 } else { 200 },
+            "{profile} {kind} {spelling} {surface}: {:?}",
+            response.body
+        );
+    }
+}
+
+#[test]
+fn typed_bytes_invalid_later_write_is_atomic() {
+    let s = state(true);
+    let existing = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes":[{"update":{"name":format!("{RESOURCE}/atomic/existing"),"fields":{"b":{"bytesValue":"AQID"}}}}]}),
+    );
+    assert_eq!(existing.status, 200);
+    let failed = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes":[
+            {"update":{"name":format!("{RESOURCE}/atomic/existing"),"fields":{"b":{"bytesValue":"BAUG"}}}},
+            {"update":{"name":format!("{RESOURCE}/atomic/new"),"fields":{"b":{"bytesValue":"QUJD\nQUJD"}}}}
+        ]}),
+    );
+    assert_eq!(failed.status, 400);
+    assert_eq!(
+        failed.body["error"]["details"][0]["fieldViolations"][0]["field"],
+        "writes[1].update.fields[0].value.bytes_value"
+    );
+    let existing = call(&s, "GET", &format!("{DOCS}/atomic/existing"), Value::Null);
+    assert_eq!(existing.body["fields"]["b"]["bytesValue"], "AQID");
+    let new = call(&s, "GET", &format!("{DOCS}/atomic/new"), Value::Null);
+    assert_eq!(new.status, 404);
+}
+
+proptest::proptest! {
+    #[test]
+    fn typed_bytes_roundtrip_and_inserted_newline(bytes in proptest::collection::vec(proptest::num::u8::ANY, 3..48)) {
+        let encoded = base64_encode(&bytes);
+        let broken = format!("{}\n{}", &encoded[..4], &encoded[4..]);
+        for strict in [true, false] {
+            let s = state(strict);
+            let valid = call(&s, "POST", &format!("{DOCS}:commit"), json!({"writes":[{"update":{"name":format!("{RESOURCE}/property/valid"),"fields":{"b":{"bytesValue":encoded}}}}]}));
+            proptest::prop_assert_eq!(valid.status, 200);
+            let got = call(&s, "GET", &format!("{DOCS}/property/valid"), Value::Null);
+            proptest::prop_assert_eq!(&got.body["fields"]["b"]["bytesValue"], &json!(encoded));
+            let changed = call(&s, "POST", &format!("{DOCS}:commit"), json!({"writes":[{"update":{"name":format!("{RESOURCE}/property/broken"),"fields":{"b":{"bytesValue":broken}}}}]}));
+            proptest::prop_assert_eq!(changed.status, if strict {400} else {200});
+        }
+    }
+}

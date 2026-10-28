@@ -1,0 +1,17 @@
+Case	Round	Status
+equalTo	r1	200
+endAt	r1	400
+startAfter	r2	400
+endBefore	r2	403
+endAt	r2	401
+equalTo	r2	400
+endBefore	r1	200
+equalTo	r1	403
+endBefore	r2	400
+endBefore	r1	401
+endAt	r2	403
+startAfter	r2	200
+endAt	r1	200
+equalTo	r2	401
+startAfter	r1	403
+startAfter	r1	401

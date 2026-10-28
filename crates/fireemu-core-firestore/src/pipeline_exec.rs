@@ -392,6 +392,61 @@ const FUNCTIONS: &[Function] = &[
         "array_get(array: array[any], index: int64): any?",
         eval_array_get,
     ),
+    array_access_function(
+        "maximum_n",
+        Arity::Exact(2),
+        "maximum_n(input: array[any?], n: int64): array[any]",
+        eval_maximum_n,
+    ),
+    array_access_function(
+        "minimum_n",
+        Arity::Exact(2),
+        "minimum_n(input: array[any?], n: int64): array[any]",
+        eval_minimum_n,
+    ),
+    Function {
+        name: "join",
+        arity: Arity::Between(2, 3),
+        returns_boolean: false,
+        signature: "",
+        overloads: &[
+            (
+                "join[T: string | bytes](array: array[T], delimiter: T): string",
+                2,
+                2,
+            ),
+            (
+                "join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string",
+                3,
+                3,
+            ),
+        ],
+        eval: eval_join,
+    },
+    array_access_function(
+        "array_slice",
+        Arity::Between(2, 3),
+        "array_slice(array: array[any], offset: int64, length: int64?): array[any]",
+        eval_array_slice,
+    ),
+    array_access_function(
+        "array_index_of",
+        Arity::Exact(3),
+        "array_index_of(array: array[any], search: any, direction: (first|last)): int64",
+        eval_array_index_of,
+    ),
+    array_access_function(
+        "array_first_n",
+        Arity::Exact(2),
+        "array_first_n(array: array[any], n: int64): array[any]",
+        eval_array_first_n,
+    ),
+    array_access_function(
+        "array_last_n",
+        Arity::Exact(2),
+        "array_last_n(array: array[any], n: int64): array[any]",
+        eval_array_last_n,
+    ),
     map_family_function(
         "map_set",
         Arity::AtLeast(3),
@@ -584,7 +639,8 @@ impl Expr {
                 "The function '{name}' does not accept {got} argument(s). Valid options are:{options}"
             )));
         }
-        if !fits && !function.signature.is_empty() {
+        if !fits && !function.signature.is_empty() && !matches!(function.arity, Arity::Between(..))
+        {
             let range = match function.arity {
                 Arity::Exact(n) => format!("[{n}..{n}]"),
                 Arity::AtLeast(n) => format!("[{n}..+\u{221e})"),
@@ -618,7 +674,7 @@ impl Expr {
             )));
         }
         if name == "map_set" && args.len() % 2 == 0 {
-            return Err(ExprError::Invalid(
+            return Err(ExprError::Arity(
                 "'map_set' function must have an odd number of arguments".to_owned(),
             ));
         }
@@ -682,6 +738,17 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
+                if unrecorded == Unrecorded::Refuse
+                    && function.name == "array_index_of"
+                    && args
+                        .get(2)
+                        .is_some_and(|arg| !matches!(arg, Self::Constant(_)))
+                {
+                    return Eval::Error(EvalError::Unobserved {
+                        function: "array_index_of",
+                        reason: "a nonliteral direction is unobserved",
+                    });
+                }
                 let args: Vec<Eval> = args
                     .iter()
                     .map(|arg| arg.eval_at(row, unrecorded, false, runtime))
@@ -950,6 +1017,282 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .and_then(|i| values.get(i))
         .cloned()
         .map_or(Eval::Absent, Eval::Value)
+}
+
+fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
+    let n = match subsequence_integer(&args[1], name, cx) {
+        Ok(n) if n >= 0 => usize::try_from(n).unwrap_or(usize::MAX),
+        Ok(_) => {
+            return Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "negative count refusal is unobserved",
+            })
+        }
+        Err(error) => return error,
+    };
+    if n == 0 {
+        return Eval::Value(Value::Array(Vec::new()));
+    }
+    let mut selected: Vec<Value> = values
+        .iter()
+        .filter(|value| !matches!(value, Value::Null))
+        .cloned()
+        .collect();
+    if let Some(first) = selected.first() {
+        if selected
+            .iter()
+            .any(|value| std::mem::discriminant(value) != std::mem::discriminant(first))
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: name,
+                reason: "cross-type ordering is unobserved",
+            });
+        }
+    }
+    selected.sort_by(Value::canonical_cmp);
+    if selected.windows(2).any(|pair| {
+        pair[0].canonical_cmp(&pair[1]) == Ordering::Equal
+            && (pair[0] != pair[1] || !pair[0].stored_eq(&pair[1]))
+    }) {
+        return Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "ordering of distinguishable ties is unobserved",
+        });
+    }
+    if maximum {
+        selected.reverse();
+    }
+    selected.truncate(n);
+    Eval::Value(Value::Array(selected))
+}
+fn eval_maximum_n(args: &[Eval], cx: Context) -> Eval {
+    eval_extrema_n(args, cx, "maximum_n", true)
+}
+fn eval_minimum_n(args: &[Eval], cx: Context) -> Eval {
+    eval_extrema_n(args, cx, "minimum_n", false)
+}
+
+fn eval_join(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong_array =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null));
+    let wrong_tail = args.iter().skip(1).any(
+        |arg| matches!(arg, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null)),
+    );
+    let invalid_elements = matches!(&args[0], Eval::Value(Value::Array(values)) if values.iter().any(|value| !matches!(value, Value::String(_) | Value::Null)));
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((missing && (wrong_array || wrong_tail || invalid_elements))
+            || (wrong_array && wrong_tail))
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "ambiguous invalid arguments",
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let Eval::Value(Value::Array(values)) = &args[0] else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "array argument type is unobserved",
+        });
+    };
+    if values.iter().any(|value| matches!(value, Value::Bytes(_))) {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "byte-array joining is unobserved",
+        });
+    }
+    let Eval::Value(Value::String(delimiter)) = &args[1] else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "delimiter type is unobserved",
+        });
+    };
+    let replacement = match args.get(2) {
+        None => None,
+        Some(Eval::Value(Value::String(value))) => Some(value.as_str()),
+        _ => {
+            return Eval::Error(EvalError::Unobserved {
+                function: "join",
+                reason: "null replacement type is unobserved",
+            })
+        }
+    };
+    let mut parts = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            Value::String(value) => parts.push(value.as_str()),
+            Value::Null => {
+                if let Some(value) = replacement {
+                    parts.push(value);
+                }
+            }
+            Value::Bytes(_) => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "join",
+                    reason: "byte-array joining is unobserved",
+                })
+            }
+            _ => {
+                return Eval::Error(EvalError::Invalid(
+                    "Cannot join non-string types.".to_owned(),
+                ))
+            }
+        }
+    }
+    Eval::Value(Value::String(parts.join(delimiter)))
+}
+
+fn subsequence_array<'a>(
+    args: &'a [Eval],
+    name: &'static str,
+    cx: Context,
+    search_null_is_value: bool,
+) -> Result<&'a [Value], Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    let missing = args.iter().enumerate().any(|(i, arg)| {
+        !(search_null_is_value && i == 1 && matches!(arg, Eval::Value(Value::Null)))
+            && matches!(arg, Eval::Absent | Eval::Value(Value::Null))
+    });
+    let invalid_array =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null));
+    let invalid_tail = args.iter().enumerate().skip(1).any(|(i, arg)| {
+        if search_null_is_value && i == 1 { return false; }
+        if search_null_is_value && i == 2 {
+            return matches!(arg, Eval::Value(value) if !matches!(value, Value::Null) && !matches!(value, Value::String(direction) if direction == "first" || direction == "last"));
+        }
+        matches!(arg, Eval::Value(value) if !matches!(value, Value::Integer(_) | Value::Null))
+    });
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((invalid_array && (missing || invalid_tail)) || (missing && invalid_tail))
+    {
+        return Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "ambiguous invalid arguments",
+        }));
+    }
+    if let Eval::Value(value) = &args[0] {
+        if invalid_array {
+            return Err(Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Array",
+                got: type_name(value),
+            }));
+        }
+    }
+    if missing {
+        return Err(Eval::Value(Value::Null));
+    }
+    match &args[0] {
+        Eval::Value(Value::Array(values)) => Ok(values),
+        _ => unreachable!(),
+    }
+}
+
+fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i64, Eval> {
+    if let Some(error) = scalar::int_argument(name, arg, cx) {
+        return Err(error);
+    }
+    match arg {
+        Eval::Value(Value::Integer(value)) => Ok(*value),
+        _ => Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "unobserved integer argument",
+        })),
+    }
+}
+
+fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
+    let values = match subsequence_array(args, "array_slice", cx, false) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let offset = match subsequence_integer(&args[1], "array_slice", cx) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let length = if let Some(arg) = args.get(2) {
+        match subsequence_integer(arg, "array_slice", cx) {
+            Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX),
+            Ok(_) => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "array_slice",
+                    reason: "negative length error text is unobserved",
+                })
+            }
+            Err(e) => return e,
+        }
+    } else {
+        usize::MAX
+    };
+    let len = values.len();
+    let start = if offset < 0 {
+        len.saturating_sub(usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX))
+    } else {
+        usize::try_from(offset).unwrap_or(usize::MAX).min(len)
+    };
+    Eval::Value(Value::Array(
+        values[start..start.saturating_add(length).min(len)].to_vec(),
+    ))
+}
+
+fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
+    let values = match subsequence_array(args, "array_index_of", cx, true) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let direction = match &args[2] { Eval::Value(Value::String(direction)) if direction == "first" || direction == "last" => direction.as_str(), _ => return Eval::Error(EvalError::Invalid("The argument 'direction' for function 'array_index_of' must be a literal of type string from the following list: [first, last]".to_owned())) };
+    let matches =
+        |v: &Value| official_order(&Eval::Value(v.clone()), &args[1]) == Some(Ordering::Equal);
+    let index = if direction == "first" {
+        values.iter().position(matches)
+    } else {
+        values.iter().rposition(matches)
+    };
+    Eval::Value(Value::Integer(
+        index.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1),
+    ))
+}
+
+fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let count = match subsequence_integer(&args[1], name, cx) {
+        Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX).min(values.len()),
+        Ok(_) => {
+            return Eval::Error(EvalError::Invalid(format!(
+                "The function `{name}(...)` requires non-negative count."
+            )))
+        }
+        Err(e) => return e,
+    };
+    let selected = if last {
+        &values[values.len() - count..]
+    } else {
+        &values[..count]
+    };
+    Eval::Value(Value::Array(selected.to_vec()))
+}
+fn eval_array_first_n(args: &[Eval], cx: Context) -> Eval {
+    eval_array_count(args, cx, "array_first_n", false)
+}
+fn eval_array_last_n(args: &[Eval], cx: Context) -> Eval {
+    eval_array_count(args, cx, "array_last_n", true)
 }
 
 /// A map function with production's recorded argument-count signature.
@@ -1508,6 +1851,15 @@ pub enum Stage {
     /// Removes the fields from the row; a missing field is ignored. Removing `__name__` drops
     /// the row's name.
     RemoveFields(Vec<FieldPath>),
+    /// Expands an expression into rows, assigning each element to an alias.
+    Unnest {
+        /// The value to expand.
+        expression: Expr,
+        /// Destination field.
+        alias: FieldPath,
+        /// Optional array element index destination.
+        index_field: Option<FieldPath>,
+    },
     /// Drops the first rows.
     Offset(u64),
     /// Keeps at most this many rows.
@@ -1559,6 +1911,15 @@ enum StageState {
     Buffer(Vec<Row>),
 }
 
+/// One lazy array expansion retained while its current child runs downstream.
+struct UnnestFrame {
+    from: usize,
+    row: Row,
+    alias: FieldPath,
+    index_field: Option<FieldPath>,
+    values: std::iter::Enumerate<std::vec::IntoIter<Value>>,
+}
+
 /// Runs stages over rows one at a time. Rows that a blocking stage (`sort`, `distinct`,
 /// `aggregate`) holds come out of [`Cursor::finish`].
 #[derive(Debug, Clone)]
@@ -1599,7 +1960,8 @@ impl Cursor {
                 Stage::Where(_)
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
-                | Stage::RemoveFields(_) => StageState::Idle,
+                | Stage::RemoveFields(_)
+                | Stage::Unnest { .. } => StageState::Idle,
             })
             .collect();
         Self {
@@ -1614,9 +1976,14 @@ impl Cursor {
     /// up, so the input need not be read further.
     #[must_use]
     pub fn is_exhausted(&self) -> bool {
+        self.exhausted_from(0)
+    }
+
+    fn exhausted_from(&self, from: usize) -> bool {
         self.stages
             .iter()
             .zip(&self.state)
+            .skip(from)
             .take_while(|(stage, _)| !stage.is_blocking())
             .any(|(stage, state)| {
                 matches!(stage, Stage::Limit(_)) && matches!(state, StageState::Remaining(0))
@@ -1661,13 +2028,85 @@ impl Cursor {
         Ok(out)
     }
 
-    /// Runs `row` through the stages from `from`; a row that gets through is appended to `out`.
+    /// Runs a row and its lazy expansions without depending on the thread stack.
+    fn run(&mut self, from: usize, row: Row, out: &mut Vec<Row>) -> Result<(), EvalError> {
+        let mut frames = Vec::new();
+        self.run_one(from, row, out, &mut frames)?;
+        while let Some(frame) = frames.last_mut() {
+            if self.exhausted_from(frame.from) {
+                frames.pop();
+                continue;
+            }
+            let Some((position, value)) = frame.values.next() else {
+                frames.pop();
+                continue;
+            };
+            let mut child = frame.row.clone();
+            set_path(&mut child.fields, &frame.alias, value);
+            if let Some(path) = &frame.index_field {
+                let position = i64::try_from(position).map_err(|_| EvalError::Unobserved {
+                    function: "unnest",
+                    reason: "array index is out of range",
+                })?;
+                set_path(&mut child.fields, path, Value::Integer(position));
+            }
+            let from = frame.from;
+            self.run_one(from, child, out, &mut frames)?;
+        }
+        Ok(())
+    }
+
+    /// Processes one row until it ends or produces a lazy expansion frame.
     #[allow(clippy::too_many_lines)]
-    fn run(&mut self, from: usize, mut row: Row, out: &mut Vec<Row>) -> Result<(), EvalError> {
+    fn run_one(
+        &mut self,
+        from: usize,
+        mut row: Row,
+        out: &mut Vec<Row>,
+        frames: &mut Vec<UnnestFrame>,
+    ) -> Result<(), EvalError> {
         for index in from..self.stages.len() {
             let stage = &self.stages[index];
             let held = &mut self.state[index];
             match stage {
+                Stage::Unnest {
+                    expression,
+                    alias,
+                    index_field,
+                } => {
+                    let value = expression.eval_at(&row, self.unrecorded, false, self.runtime);
+                    match value {
+                        Eval::Value(Value::Array(values)) => {
+                            frames.push(UnnestFrame {
+                                from: index + 1,
+                                row,
+                                alias: alias.clone(),
+                                index_field: index_field.clone(),
+                                values: values.into_iter().enumerate(),
+                            });
+                            return Ok(());
+                        }
+                        Eval::Value(value) => {
+                            if index_field.is_some() {
+                                return Err(EvalError::Unobserved {
+                                    function: "unnest",
+                                    reason: "index for a non-array value is unobserved",
+                                });
+                            }
+                            set_path(&mut row.fields, alias, value);
+                        }
+                        Eval::Absent => {
+                            if index_field.is_some() {
+                                return Err(EvalError::Unobserved {
+                                    function: "unnest",
+                                    reason: "index for an absent value is unobserved",
+                                });
+                            }
+                            remove_path(&mut row.fields, alias);
+                        }
+                        Eval::Error(error) => return Err(error),
+                    }
+                }
                 Stage::Where(condition) => {
                     match condition.eval_at(&row, self.unrecorded, true, self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
@@ -2201,6 +2640,7 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
     for stage in &stages[..=narrowing] {
         match stage {
             Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Unnest { expression, .. } => expression.collect_fields(&mut paths),
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
                 .for_each(|(_, expr)| expr.collect_fields(&mut paths)),

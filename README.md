@@ -62,7 +62,7 @@ See [Time and scheduled functions](https://t-k.github.io/fireemu/guides/time/) a
 
 | Product | Summary | Documentation |
 |---|---|---|
-| Cloud Firestore | Standard and Enterprise editions, composite index validation, Security Rules; the Enterprise Pipeline API supports a subset of read operations, and text search is a local lexical engine | [Cloud Firestore](https://t-k.github.io/fireemu/products/firestore/) |
+| Cloud Firestore | Standard and Enterprise editions, composite index validation, Security Rules; the Enterprise Pipeline API supports a subset of read operations including bounded `union` and `sample` shapes, and text search is a local lexical engine | [Cloud Firestore](https://t-k.github.io/fireemu/products/firestore/) |
 | Firebase Authentication (Identity Platform) | Sign-in methods, TOTP and SMS multi-factor authentication, multi-tenancy, OIDC and SAML providers, blocking functions; flows that talk to external identity providers are outside the scope | [Authentication](https://t-k.github.io/fireemu/products/auth/) |
 | Cloud Storage for Firebase | Firebase and JSON APIs, Security Rules; signed-URL signatures, IAM, `compose` and notification configuration are outside the scope | [Cloud Storage](https://t-k.github.io/fireemu/products/storage/) |
 | Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock | [Cloud Functions](https://t-k.github.io/fireemu/products/functions/) |

@@ -8,6 +8,17 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-28
+
+### Added
+
+- Firestore Enterprise pipelines can execute a finite subset of `union` branches over collection inputs with row-local `where` and `select` stages. Nested branches and unsupported child stages remain subject to local limits and refusal checks.
+- The `sample(size, mode)` stage supports document sampling without replacement and ordered percentage sampling, where percentage is a fraction between 0 and 1. Random outputs are evaluated by their bounded contract; production's random sequence is not reproduced.
+
+### Changed
+
+- Strict pipeline validation handles additional recorded document-reference, reserved-field, and limit/offset wrong-type cases. Unrecorded mixed requests remain gated; these finite cases do not establish full pipeline parity.
+
 ## [0.34.0] - 2026-10-28
 
 ### Added
@@ -1020,7 +1031,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/t-k/fireemu/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/t-k/fireemu/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/t-k/fireemu/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/t-k/fireemu/compare/v0.31.0...v0.32.0

@@ -2560,15 +2560,22 @@ test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifa
   }
 });
 
-
 test("reopened parents require comparisons while unrelated pending parents stay excluded", () => {
   for (const parent of ["RTDB", "FS-PIPELINE"]) {
     const closures = committedClosures();
     const entry = closures.find(({ closure }) => closure.parent === parent);
     entry.closure.parentStatus = "IMPLEMENTING";
     entry.closure.integratedRegression.comparisons = [];
-    assert.ok(planComparisons(closures, readJson).errors.some((error) => error.includes(`${parent}:`)));
+    assert.ok(
+      planComparisons(closures, readJson).errors.some((error) => error.includes(`${parent}:`)),
+    );
   }
-  const pending = { name: "OTHER.json", closure: { parent: "OTHER", parentStatus: "IMPLEMENTING" } };
-  assert.deepEqual(planComparisons([pending], readJson, { excludedKinds: [], runs: [] }).errors, []);
+  const pending = {
+    name: "OTHER.json",
+    closure: { parent: "OTHER", parentStatus: "IMPLEMENTING" },
+  };
+  assert.deepEqual(
+    planComparisons([pending], readJson, { excludedKinds: [], runs: [] }).errors,
+    [],
+  );
 });

@@ -5,7 +5,7 @@ description: The Firebase Realtime Database with Security Rules, export and impo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs), against which it has no parity claim yet, so the [compatibility contract](../../compatibility/) lists it as an open gap. Against production it is verified for the recorded cases of its closure only (see [Differences from production](#differences-from-production)). Behavior copied from the official emulator where production has not been observed may change (see [Provisional behavior](#provisional-behavior)).
+Fireemu serves the Firebase Realtime Database at `127.0.0.1:9000`: the REST API, the realtime protocol the SDKs use, Security Rules, and export and import in the Firebase CLI's format. It is compared with the official emulator (firebase-database-emulator v4.11.2, which firebase-tools 15.28.2 runs), against which it has no parity claim yet, so the [compatibility contract](../../compatibility/) lists it as an open gap. The parent compatibility assessment is in progress; recorded cases retain their individual evidence, and broader production compatibility remains unverified (see [Differences from production](#differences-from-production)). Behavior copied from the official emulator where production has not been observed may change (see [Provisional behavior](#provisional-behavior)).
 
 ## Start it
 

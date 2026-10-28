@@ -42,6 +42,8 @@ apiMode = "native"
 
 ## Enterprise pipelines
 
+The FS-PIPELINE production compatibility assessment is in progress. Recorded cases retain their individual evidence, but mismatches and unobserved behavior remain; the parent is not verified.
+
 On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group` or `documents` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset` and `limit` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
 
 | Expression | Supported |

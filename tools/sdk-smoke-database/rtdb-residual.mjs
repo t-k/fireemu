@@ -155,6 +155,7 @@ export function assertProductionSdkNextReady(packet) {
 // Conservative fixed-corpus diagnostic. Production remains blocked pending source/transport review.
 export function installSdkNextWsGuard({ host, namespace, base, secure = false, maxConnections = 2, maxMessages = 1250 }) {
   const Native = globalThis.WebSocket, originalSend = Native.prototype.send;
+  Object.defineProperty(globalThis, 'MozWebSocket', { value: undefined, writable: false, configurable: false });
   if (typeof window !== 'undefined' && window.top !== window) {
     Object.defineProperty(globalThis, 'WebSocket', { value: new Proxy(Native, { construct() { throw Error('sdk-next child frame blocked'); } }), writable: false, configurable: false });
     return;

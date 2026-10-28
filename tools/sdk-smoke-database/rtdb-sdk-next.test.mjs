@@ -188,3 +188,14 @@ test('diagnostic WS guard freezes when the first startup connection closes', asy
   vm.runInContext(`globalThis.a = new WebSocket('ws://localhost:9000/.ws?ns=demo'); a.fire('close');`, context);
   assert.throws(() => vm.runInContext(`new WebSocket('ws://localhost:9000/.ws?ns=demo')`, context), /frozen/);
 });
+
+test('required WS guard refuses an available alternate constructor before SDK actions', async () => {
+  const vm = await import('node:vm');
+  let forced = 0;
+  const D = { forceWebSockets: () => { forced++; }, forceLongPolling() {} };
+  const source = readFileSync(new URL('./rtdb-residual-page.js', import.meta.url), 'utf8').replace(/^import .*firebase-app\.js';$/m, '').replace(/^import .*firebase-database\.js';$/m, '');
+  const c = { window: { __rrEvent() {} }, D, initializeApp() {}, deleteApp() {}, performance, setTimeout, Date, MozWebSocket: function () {}, __sdkNextWsGuard: {} };
+  vm.runInNewContext(source, c);
+  await assert.rejects(c.window.__rrRun({ scenario: 'sdk-next', transport: 'ws', base: 'test', name: 'r1-ws', wsGuardRequired: true }), /guard unavailable/);
+  assert.equal(forced, 0);
+});

@@ -30,6 +30,7 @@ window.__rrRun = async (c) => {
   const waitFor = async (done, ms) => { for (const end = performance.now() + ms * scale; performance.now() < end; await sleep(Math.min(50, Math.max(1, 50 * scale)))) if (done()) return true; return done(); };
   // A wait for a required event: a bound that is hit is a recorded timeout, never a guessed answer.
   const need = async (what, done, ms) => { if (!(await waitFor(done, ms))) emit('timeout', { label: what }); };
+  if (c.wsGuardRequired && (!globalThis.__sdkNextWsGuard || typeof globalThis.MozWebSocket !== 'undefined')) throw Error('sdk-next guard unavailable');
   if (c.transport === 'ws') D.forceWebSockets(); else D.forceLongPolling();
   const apps = [];
   const open = (name) => {

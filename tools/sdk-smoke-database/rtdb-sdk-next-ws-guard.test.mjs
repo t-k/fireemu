@@ -185,3 +185,11 @@ test('oversized outbound and inbound text fails before another native send', () 
   { const { c, run } = setup(); establish(run); run(`__sdkNextWsGuard.beginOperation('seed')`); assert.throws(() => run(`a.send(JSON.stringify({t:'d',d:{r:7,a:'p',b:{p:'/local/sdk/r1-ws',d:'x'.repeat(17000)}}}))`), /size|oversize/i); assert.equal(c.writes.length, 0); }
   { const { c, run } = setup(); establish(run); run(`a.fire('message',{data:'x'.repeat(17000)})`); assert.throws(() => run(`b.send('0')`), /frozen/i); assert.equal(c.writes.length, 0); }
 });
+
+test('SDK alternate MozWebSocket cannot bypass the guarded constructor', () => {
+  const c = vm.createContext({ URL });
+  vm.runInContext(`class Socket { static OPEN=1; addEventListener() {} send() {} } globalThis.WebSocket=Socket; globalThis.MozWebSocket=Socket;`, c);
+  vm.runInContext(`(${installSdkNextWsGuard.toString()})({host:'127.0.0.1:9000',namespace:'demo',base:'local/sdk/r1-ws'})`, c);
+  assert.equal(vm.runInContext('typeof MozWebSocket', c), 'undefined');
+  assert.throws(() => vm.runInContext(`new WebSocket('ws://foreign:9000/.ws?ns=demo')`, c), /scope/i);
+});

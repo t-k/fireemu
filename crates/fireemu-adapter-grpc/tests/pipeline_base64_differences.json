@@ -1,0 +1,542 @@
+{
+  "strict": [
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/cr\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-cr",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/cr\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/crlf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-crlf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/crlf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/mime-76\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mime-76",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/mime-76-lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76-lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/mixed-plus-underscore\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-plus-underscore\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-app/databases/(default)/documents/bw/mixed-minus-slash\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-minus-slash\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    }
+  ],
+  "emulator": [
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\nQUJD\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\nQUJD\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-cr",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\rQUJD\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\rQUJD\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-cr",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/cr\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-crlf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\r\nQUJD\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\r\nQUJD\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-crlf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/crlf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-mime-76",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\r\nQUJD\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mime-76",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-mime-76-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0\nQUJD\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mime-76-lf\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-mixed-plus-underscore",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"+_AA\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"+_AA\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-plus-underscore\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#write-mixed-minus-slash",
+      "want": {
+        "body": {
+          "error": {
+            "code": 400,
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [
+                  {
+                    "description": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"-/AA\"",
+                    "field": "writes[0].update.fields[0].value.bytes_value"
+                  }
+                ]
+              }
+            ],
+            "message": "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"-/AA\"",
+            "status": "INVALID_ARGUMENT"
+          }
+        },
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
+      "want": {
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Document \"projects/demo-fs-query-index/databases/entpipe1/documents/bw/mixed-minus-slash\" not found.",
+            "status": "NOT_FOUND"
+          }
+        },
+        "status": 404
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#cursor-lf",
+      "want": {
+        "body": [
+          {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"Ag==\n\"",
+                      "field": "structured_query.start_at.values[0].bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"Ag==\n\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        ],
+        "status": 400
+      }
+    },
+    {
+      "got": {
+        "results": [],
+        "status": 200
+      },
+      "row": "fs-ent-pipeline/o8a/base64-main#cursor-crlf",
+      "want": {
+        "body": [
+          {
+            "error": {
+              "code": 400,
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "description": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"A\r\ng==\"",
+                      "field": "structured_query.start_at.values[0].bytes_value"
+                    }
+                  ]
+                }
+              ],
+              "message": "Invalid value at 'structured_query.start_at.values[0].bytes_value' (TYPE_BYTES), Base64 decoding failed for \"A\r\ng==\"",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        ],
+        "status": 400
+      }
+    }
+  ]
+}

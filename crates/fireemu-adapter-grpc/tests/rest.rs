@@ -7625,14 +7625,30 @@ fn rest_execute_pipeline_refuses_base64_the_official_emulator_does_not_read() {
                 assert_eq!(status, 200, "strict={strict} {key} {text:?}: {body}");
             }
         }
-        // A commit still reads a line break as the shared decoder does (no production row yet).
+        // The recorded strict decoder rejects the write; the emulator profile remains permissive.
         let (status, body) = call(
             &s,
             "POST",
             &format!("{DOCS}:commit"),
             json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/b64/x", "fields": {"v": {"bytesValue": "QUJD\nQUJD"}}}}]}),
         );
-        assert_eq!(status, 200, "strict={strict}: {body}");
+        if strict {
+            let description = "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"QUJD\nQUJD\"";
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(
+                body["error"],
+                json!({"code": 400, "message": description, "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "writes[0].update.fields[0].value.bytes_value", "description": description}]}]})
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+        let (status, body) = call(&s, "GET", &format!("{DOCS}/b64/x"), json!({}));
+        if strict {
+            assert_eq!(status, 404, "{body}");
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["fields"]["v"]["bytesValue"], "QUJDQUJD");
+        }
     }
 }
 

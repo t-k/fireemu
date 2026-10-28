@@ -597,114 +597,7 @@ const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
         500,
         400,
     ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-cr",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-cr",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mime-76",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mime-76",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mime-76-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mime-76-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mixed-plus-underscore",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mixed-plus-underscore",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-mixed-minus-slash",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-mixed-minus-slash",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#write-proto-name",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        400,
-        400,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#get-proto-name",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        404,
-        404,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#cursor-lf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
-    (
-        "fs-ent-pipeline/o8a/base64-main#cursor-crlf",
-        "the local REST write and read paths accept base64 that production refuses (line breaks, mixed alphabets, a proto field name); production's decoder is unmodelled (docs.local issue rest-base64)",
-        200,
-        200,
-    ),
+
 ];
 
 /// Rows that only the emulator profile answers differently: strict matches. The profile keeps the
@@ -1986,10 +1879,12 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 ));
             }
         }
+        failures.extend(base64_pin_problems(strict, &seen, &differing));
         let unexpected: Vec<_> = differing
             .iter()
             .filter(|(row, _, _)| {
                 !known(row)
+                    && !row.starts_with("fs-ent-pipeline/o8a/base64-main#")
                     && !pending(row)
                     && !debts
                         .get(row)
@@ -2184,6 +2079,103 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
         ((false, ordinary.row.clone()), ordinary.production.clone()),
     ]);
     assert!(regenerate_o5_row(&ordinary, &both).is_none());
+}
+
+const BASE64_ROWS: &[&str] = &[
+    "write-lf",
+    "get-lf",
+    "write-cr",
+    "get-cr",
+    "write-crlf",
+    "get-crlf",
+    "write-mime-76",
+    "get-mime-76",
+    "write-mime-76-lf",
+    "get-mime-76-lf",
+    "write-mixed-plus-underscore",
+    "get-mixed-plus-underscore",
+    "write-mixed-minus-slash",
+    "get-mixed-minus-slash",
+    "write-proto-name",
+    "get-proto-name",
+    "cursor-lf",
+    "cursor-crlf",
+];
+
+fn base64_pin_problems(
+    strict: bool,
+    seen: &HashSet<String>,
+    differing: &[(String, Value, Value)],
+) -> Vec<String> {
+    let prefix = "fs-ent-pipeline/o8a/base64-main#";
+    let pins: Value =
+        serde_json::from_str(include_str!("pipeline_base64_differences.json")).unwrap();
+    let expected = pins[if strict { "strict" } else { "emulator" }]
+        .as_array()
+        .unwrap();
+    let mut problems = Vec::new();
+    for suffix in BASE64_ROWS {
+        let row = format!("{prefix}{suffix}");
+        if !seen.contains(&row) {
+            problems.push(format!("strict={strict}: missing base64 row {row}"));
+        }
+        let actual = differing.iter().find(|(id, _, _)| *id == row);
+        let pin = expected.iter().find(|item| item["row"] == row);
+        match (actual, pin) {
+            (None, None) => {}
+            (Some((_, got, want)), Some(pin)) if *got == pin["got"] && *want == pin["want"] => {}
+            _ => problems.push(format!("strict={strict}: base64 pin changed {row}")),
+        }
+    }
+    for (row, _, _) in differing
+        .iter()
+        .filter(|(row, _, _)| row.starts_with(prefix))
+    {
+        if !BASE64_ROWS
+            .iter()
+            .any(|suffix| row == &format!("{prefix}{suffix}"))
+        {
+            problems.push(format!(
+                "strict={strict}: unexpected base64 difference {row}"
+            ));
+        }
+    }
+    problems
+}
+
+#[test]
+fn base64_pins_reject_missing_and_changed_profile_answers() {
+    let pins: Value =
+        serde_json::from_str(include_str!("pipeline_base64_differences.json")).unwrap();
+    let seen: HashSet<String> = BASE64_ROWS
+        .iter()
+        .map(|suffix| format!("fs-ent-pipeline/o8a/base64-main#{suffix}"))
+        .collect();
+    for (strict, profile, count) in [(true, "strict", 7), (false, "emulator", 16)] {
+        let differences: Vec<(String, Value, Value)> = pins[profile]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["row"].as_str().unwrap().to_owned(),
+                    p["got"].clone(),
+                    p["want"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(differences.len(), count);
+        assert!(base64_pin_problems(strict, &seen, &differences).is_empty());
+        let mut missing_seen = seen.clone();
+        missing_seen.remove("fs-ent-pipeline/o8a/base64-main#write-lf");
+        assert!(!base64_pin_problems(strict, &missing_seen, &differences).is_empty());
+        let mut missing_difference = differences.clone();
+        missing_difference.pop();
+        assert!(!base64_pin_problems(strict, &seen, &missing_difference).is_empty());
+        let mut changed = differences.clone();
+        changed[0].1 = json!({"status": 200});
+        assert!(!base64_pin_problems(strict, &seen, &changed).is_empty());
+    }
 }
 
 fn program_gap_changed(has_gap: bool, expected_gap: bool) -> bool {

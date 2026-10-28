@@ -284,7 +284,7 @@ test('lifecycle setup counts the worst successful four polls and uses bounded ca
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let polls=0,calls=0,sleeps=0;
-  const fetchFn=async (url,init)=>{calls++;let obj;if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/a`};else if(url.includes('/operations/'))obj={done:++polls===4};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)}};
+  const fetchFn=async (url,init)=>{calls++;let obj;if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/a`};else if(url.includes('/operations/'))obj=++polls===4?{name:`${name}/operations/a`,done:true,response:{}}:{name:`${name}/operations/a`,metadata:{}};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)}};
   const lifecycle=createStageLifecycle(ctx,{fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async ms=>{assert.equal(ms,5000);sleeps++;}});
   assert.deepEqual(await lifecycle.create(),{name,uid:'fake-uid'});assert.equal(calls,7);assert.equal(sleeps,3);
 });
@@ -294,7 +294,7 @@ test('END checks identity and empty data, sends one delete, then waits ten minut
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
   const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let now=0,calls=0,polls=0;
-  const fetchFn=async (url,init)=>{calls++;let status=200,obj;if(url.endsWith(':runQuery'))obj=[];else if(init.method==='DELETE')obj={name:`${name}/operations/d`};else if(url.includes('/operations/'))obj={done:++polls===5};else if(url.endsWith('/databases'))obj={databases:[]};else if(polls===5){status=404;obj={error:{code:404,status:'NOT_FOUND',message:`${name} missing`}};}else obj={name,uid:'fake-uid'};return {status,text:async()=>JSON.stringify(obj)}};
+  const fetchFn=async (url,init)=>{calls++;let status=200,obj;if(url.endsWith(':runQuery'))obj=[];else if(init.method==='DELETE')obj={name:`${name}/operations/d`};else if(url.includes('/operations/'))obj=++polls===5?{name:`${name}/operations/d`,done:true,response:{}}:{name:`${name}/operations/d`,metadata:{}};else if(url.endsWith('/databases'))obj={databases:[]};else if(polls===5){status=404;obj={error:{code:404,status:'NOT_FOUND',message:`${name} missing`}};}else obj={name,uid:'fake-uid'};return {status,text:async()=>JSON.stringify(obj)}};
   const lifecycle=createStageLifecycle(ctx,{knownUid:'fake-uid',fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async()=>{},nowFn:()=>now});
   await lifecycle.end();await assert.rejects(lifecycle.confirmEnd(),/ten minutes/);now=600000;await lifecycle.confirmEnd();
   assert.equal(calls,10);await assert.rejects(lifecycle.end(),/sequence/);
@@ -329,8 +329,8 @@ test('identity, setup, two rounds and END consume 51 of 53 bounded service attem
     else if(url.endsWith('/databases'))obj={databases:created&&!deleted?[{name}]:[]};
     else if(init.method==='POST'){created=true;obj={name:`${name}/operations/create`};}
     else if(init.method==='DELETE'){deleted=true;obj={name:`${name}/operations/delete`};}
-    else if(url.endsWith('/operations/create'))obj={done:++cp===4};
-    else if(url.endsWith('/operations/delete'))obj={done:++dp===5};
+    else if(url.endsWith('/operations/create'))obj=++cp===4?{name:`${name}/operations/create`,done:true,response:{}}:{name:`${name}/operations/create`,metadata:{}};
+    else if(url.endsWith('/operations/delete'))obj=++dp===5?{name:`${name}/operations/delete`,done:true,response:{}}:{name:`${name}/operations/delete`,metadata:{}};
     else if(deleted){status=404;obj={error:{code:404,status:'NOT_FOUND',message:`${name} missing`}};}
     else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};
     return {status,text:async()=>JSON.stringify(obj)};};
@@ -393,7 +393,7 @@ test('campaign executes maximum setup and both rounds while retaining database',
   const { createStageContext }=await import('./fs-ent-pipeline/stage-context-target.mjs');const { stageContextSeed }=await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`,base=`${name}/documents/`;let seeded=false,polls=0,deletes=0,grpc=0;
-  const fetchFn=async (url,init)=>{let obj;if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};else if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}else if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/create`};else if(init.method==='DELETE'){deletes++;throw Error('unexpected delete');}else if(url.endsWith('/operations/create'))obj={done:++polls===4};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)};};
+  const fetchFn=async (url,init)=>{let obj;if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};else if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}else if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/create`};else if(init.method==='DELETE'){deletes++;throw Error('unexpected delete');}else if(url.endsWith('/operations/create'))obj=++polls===4?{name:`${name}/operations/create`,done:true,response:{}}:{name:`${name}/operations/create`,metadata:{}};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)};};
   const workerFactory=(c,step)=>{grpc++;return new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:step.id}});};
   const result=await runStageCampaign(ctx,{fetchFn,workerFactory,journal:async()=>{},sleepFn:async()=>{},expectedProjectNumber:'123456'});
   assert.equal(result.used,41);assert.equal(grpc,22);assert.equal(deletes,0);assert.equal(seeded,false);assert.equal(result.database.uid,'fake-uid');
@@ -441,4 +441,53 @@ test('ADC provider refuses credential override before creating a claim', async (
   const {mkdtempSync,existsSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {acquireStageToken}=await import('./fs-ent-pipeline/stage-context-adc.mjs');
   const dir=mkdtempSync(join(tmpdir(),'stage-adc-env-')),marker=join(dir,'spent');let mints=0;
   try {assert.throws(()=>acquireStageToken({marker,packetSha256:'a'.repeat(64),gcloud:'/fake',env:{GOOGLE_APPLICATION_CREDENTIALS:'private'},mint:()=>{mints++;return 'x'.repeat(25)}}),/environment/);assert.equal(mints,0);assert.equal(existsSync(marker),false);}finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('LRO parser accepts omitted default and false pending, and validates exact completed result', async () => {
+  const { classifyStageOperation }=await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
+  const name='projects/demo/databases/owned/operations/op';
+  assert.equal(classifyStageOperation({name,metadata:{progress:1}},name),'pending');
+  assert.equal(classifyStageOperation({name,done:false},name),'pending');
+  assert.equal(classifyStageOperation({name,done:true,response:{}},name),'success');
+  assert.equal(classifyStageOperation({name,done:true,error:{code:3}},name),'error');
+  for(const body of [null,[],{}, {name:'different'}, {name,done:'false'}, {name,response:{}}, {name,done:false,error:{}}, {name,done:true}, {name,done:true,error:{},response:{}}, {name,done:true,response:null}, {name,done:true,error:'bad'}, {name,result:{}}, {name,done:true,error:{}}]) assert.throws(()=>classifyStageOperation(body,name));
+});
+
+test('generated LRO phase, done and result-shape combinations fail closed', async () => {
+  const {readFileSync}=await import('node:fs');const {classifyStageOperation}=await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
+  const rows=readFileSync(new URL('./fs-ent-pipeline/fixtures/stage-context-lro-pict.tsv',import.meta.url),'utf8').trim().split('\n').slice(1);
+  assert.equal(rows.length,18);
+  for(const row of rows){
+    const [phase,done,shape]=row.split('\t'),name=`projects/demo/databases/owned/operations/${phase}`;
+    const value={name:shape==='mismatch'?`${name}-other`:name};
+    if(done!=='omitted')value.done=done==='string'?'false':done==='true';
+    if(shape==='both'){value.error={code:3};value.response={};}
+    else if(shape==='premature'||(shape==='valid'&&done==='true'))value.response={};
+    const valid=shape!=='mismatch' && shape!=='both' && done!=='string' && (shape!=='premature'||done==='true');
+    if(!valid)assert.throws(()=>classifyStageOperation(value,name));
+    else assert.equal(classifyStageOperation(value,name),done==='true'?'success':'pending');
+  }
+});
+
+test('mismatched LRO name stops create or END without mutation retry or subsequent read', async () => {
+  const {createStageLifecycle}=await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
+  const {createStageContext}=await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const name=`projects/${ctx.project}/databases/${ctx.database}`;
+  for(const mode of ['create','end']) {
+    const calls=[];
+    const fetchFn=async(url,init)=>{calls.push([url,init.method]);let obj;
+      if(url.endsWith(':runQuery'))obj=[];
+      else if(url.endsWith('/databases'))obj={databases:[]};
+      else if(init.method==='POST'||init.method==='DELETE')obj={name:`${name}/operations/expected`};
+      else if(url.includes('/operations/'))obj={name:`${name}/operations/other`,metadata:{}};
+      else obj={name,uid:'fake-uid'};
+      return {status:200,text:async()=>JSON.stringify(obj)};
+    };
+    const lifecycle=createStageLifecycle(ctx,{...(mode==='end'?{knownUid:'fake-uid'}:{}),fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async()=>{}});
+    await assert.rejects(lifecycle[mode](),/identity/);
+    await assert.rejects(lifecycle[mode](),/sequence/);
+    assert.equal(calls.filter(([,method])=>method===(mode==='create'?'POST':'DELETE')).length,1);
+    assert.match(calls.at(-1)[0],/operations\/expected$/);
+  }
 });

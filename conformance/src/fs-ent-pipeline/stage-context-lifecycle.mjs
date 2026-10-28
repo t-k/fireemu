@@ -2,6 +2,22 @@
 import { SANDBOX_PROJECT } from './harness.mjs';
 import { createStageSupport } from './stage-context-support.mjs';
 
+// Operation is proto3 JSON: false may be omitted; results are a oneof only after completion.
+export function classifyStageOperation(value, expectedName) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['name','metadata','done','error','response'].includes(key)) || value.name !== expectedName ||
+      (Object.hasOwn(value, 'done') && typeof value.done !== 'boolean') ||
+      (Object.hasOwn(value, 'metadata') && (!value.metadata || typeof value.metadata !== 'object' || Array.isArray(value.metadata)))) throw new Error('unknown operation shape or identity');
+  const error=Object.hasOwn(value,'error'), response=Object.hasOwn(value,'response');
+  if (value.done !== true) {
+    if (error || response) throw new Error('unknown pending operation result');
+    return 'pending';
+  }
+  if (error === response) throw new Error('unknown completed operation result');
+  const result=error ? value.error : value.response;
+  if (!result || typeof result !== 'object' || Array.isArray(result) || (error && (!Number.isInteger(result.code) || result.code <= 0))) throw new Error('unknown operation result shape');
+  return error ? 'error' : 'success';
+}
+
 export function createStageLifecycle(ctx, {fetchFn=fetch, claim, journal, timeoutMs=60000, sleepFn=ms=>new Promise(resolve=>setTimeout(resolve,ms)), nowFn=()=>Date.now(), knownUid} = {}) {
   if (ctx.project !== SANDBOX_PROJECT || ctx.target?.quotaProject !== SANDBOX_PROJECT || ctx.stageContextDatabase !== ctx.database || !/^entpipe2-[0-9]{8}$/.test(ctx.database) || !ctx.target.token || typeof claim !== 'function' || typeof journal !== 'function') throw new Error('unbound lifecycle');
   const root=`https://firestore.googleapis.com/v1/projects/${ctx.project}/databases`;
@@ -35,9 +51,9 @@ export function createStageLifecycle(ctx, {fetchFn=fetch, claim, journal, timeou
       let done=false;
       for(let i=0;i<4;i++) {
         const result=await request('create-poll',`https://firestore.googleapis.com/v1/${operation.name}`,'GET');
-        if(result?.error)throw Error('known create operation error');
-        if(result?.done===true){done=true;break;}
-        if(result?.done!==false)throw Error('unknown create operation state');
+        const state=classifyStageOperation(result,operation.name);
+        if(state==='error')throw Error('known create operation error');
+        if(state==='success'){done=true;break;}
         if(i<3)await sleepFn(5000);
       }
       if(!done)throw Error('unknown create operation deadline');
@@ -60,9 +76,9 @@ export function createStageLifecycle(ctx, {fetchFn=fetch, claim, journal, timeou
       let done=false;
       for(let i=0;i<5;i++) {
         const result=await request('end-poll',`https://firestore.googleapis.com/v1/${operation.name}`,'GET');
-        if(result?.error)throw Error('known delete operation error');
-        if(result?.done===true){done=true;break;}
-        if(result?.done!==false)throw Error('unknown delete operation state');
+        const state=classifyStageOperation(result,operation.name);
+        if(state==='error')throw Error('known delete operation error');
+        if(state==='success'){done=true;break;}
         if(i<4)await sleepFn(5000);
       }
       if(!done)throw Error('unknown delete operation deadline');

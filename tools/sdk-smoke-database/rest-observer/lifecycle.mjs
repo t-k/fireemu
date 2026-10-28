@@ -14,7 +14,7 @@ export async function waitForBaseline(probe,sleep,instance) {
 }
 
 export async function waitForInstanceList(probe,sleep,project){
- for(let i=0;i<12;i++){const r=await probe();if(r?.status===200){try{return JSON.parse(r.body);}catch{throw Error('instance readiness body');}}if(!knownInstanceNotReady(r,project)||i===11)throw Error('instance readiness unresolved');await sleep(10000);}
+ for(let i=0;i<12;i++){const r=await probe();if(r?.status===200){let value;try{value=JSON.parse(r.body);}catch{throw Error('instance readiness body');}if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['instances','nextPageToken'].includes(k))||('instances' in value&&(!Array.isArray(value.instances)||value.instances.length!==0))||('nextPageToken' in value&&value.nextPageToken!==''))throw Error('instance readiness shape');return value;}if(!knownInstanceNotReady(r,project)||i===11)throw Error('instance readiness unresolved');await sleep(10000);}
 }
 
 // io must provide counted, durable and sticky-unknown request semantics.

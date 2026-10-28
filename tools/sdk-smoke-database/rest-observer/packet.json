@@ -52,7 +52,7 @@
     },
     {
       "path": "lifecycle.mjs",
-      "sha256": "50809e64d07e43699de2537079381905b78a491deb01e09088f0c6e1ced07163"
+      "sha256": "c95b11feec3c825028fe20bf0fe3a617bb60f8dedb4c0157b3342065bcde346b"
     },
     {
       "path": "transport.mjs",

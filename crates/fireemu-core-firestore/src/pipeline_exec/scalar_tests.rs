@@ -2931,7 +2931,7 @@ fn join_bytes_and_ambiguous_invalid_arguments_are_unobserved() {
         vec![Value::Bytes(vec![97]), Value::Integer(1)],
         vec![Value::Integer(1), Value::Bytes(vec![97])],
     ] {
-        assert!(is_unobserved(&strict("join", &[array(values), text(",")])))
+        assert!(is_unobserved(&strict("join", &[array(values), text(",")])));
     }
     assert!(is_unobserved(&strict(
         "join",

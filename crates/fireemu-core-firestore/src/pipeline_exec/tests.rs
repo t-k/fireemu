@@ -49,6 +49,7 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
     assert_eq!(

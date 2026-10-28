@@ -169,3 +169,102 @@ test('support refuses cleanup before verification and refuses retry after unknow
   await assert.rejects(support.stageOperation('delete-owned',{paths}), /sequence/);
   assert.equal(calls,2);
 });
+
+test('observation rejects non-corpus bodies before any gRPC call', async () => {
+  const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  let called = false;
+  const altered = structuredClone(stageContextCases()[0]); altered.body.structuredPipeline.pipeline.stages.push({name:'delete'});
+  await assert.rejects(observeStage(ctx, altered, {claim:async()=>{},journal:async()=>{},clientFactory:()=>{called=true;}}), /corpus/);
+  assert.equal(called,false);
+});
+
+test('fixed gRPC observation records bounded raw frames without credential metadata', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const events=[]; let closed=false;
+  const clientFactory=()=>({makeServerStreamRequest(_path,serialize,_deserialize,request) {const call=new EventEmitter();call.cancel=()=>{};assert.ok(serialize(request).length);queueMicrotask(()=>{call.emit('metadata',{});call.emit('data',Buffer.from([1,2,3]));call.emit('status',{code:0});});return call;},close(){closed=true;}});
+  const result=await observeStage(ctx,stageContextCases()[0],{claim:async()=>events.push({phase:'claim'}),journal:async x=>events.push(x),clientFactory});
+  assert.deepEqual(result.frames,['AQID']);assert.equal(result.code,0);
+  assert.deepEqual(events.map(x=>x.phase),['claim','attempt','headers','status']);
+  assert.ok(!JSON.stringify(events).includes('Bearer owner'));
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(closed,true);
+  await assert.rejects(observeStage(ctx,stageContextCases().find(x=>x.id==='chain-48-grpc'),{claim:async()=>{},journal:async()=>{},clientFactory}),/isolated worker/);
+});
+
+test('gRPC UNKNOWN status is preserved but stops the run as unknown', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const events=[]; const clientFactory=()=>({makeServerStreamRequest(){const call=new EventEmitter();call.cancel=()=>{};queueMicrotask(()=>call.emit('status',{code:2}));return call;},close(){}});
+  await assert.rejects(observeStage(ctx,stageContextCases()[0],{claim:async()=>{},journal:async x=>events.push(x),clientFactory}), /unknown/);
+  assert.equal(events.at(-1).code,2);
+});
+
+test('worker client acknowledges claims and journals before accepting completion', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { runObservationWorker } = await import('./fs-ent-pipeline/stage-context-worker-client.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const events=[];
+  const factory=() => {const w=new EventEmitter();let phase=0;w.postMessage=msg=>{events.push(`ack${msg.id}`);if(++phase===1) queueMicrotask(()=>w.emit('message',{kind:'journal',id:2,data:{phase:'attempt'}}));else if(phase===2) queueMicrotask(()=>w.emit('message',{kind:'journal',id:3,data:{phase:'status'}}));else queueMicrotask(()=>w.emit('message',{kind:'complete',result:{known:true,code:0}}));};w.terminate=async()=>0;queueMicrotask(()=>w.emit('message',{kind:'claim',id:1,data:{stepId:stageContextCases()[0].id}}));return w;};
+  const result=await runObservationWorker({},stageContextCases()[0],{workerFactory:factory,claim:async()=>events.push('claim'),journal:async()=>events.push('journal')});
+  assert.deepEqual(events,['claim','ack1','journal','ack2','journal','ack3']);assert.equal(result.known,true);
+});
+
+test('two rounds using scoped REST and worker handoff make exactly 32 fake transport calls', async () => {
+  const { Worker } = await import('node:worker_threads');
+  const { createStageBudget } = await import('./fs-ent-pipeline/stage-context-budget.mjs');
+  const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
+  const { runObservationWorker } = await import('./fs-ent-pipeline/stage-context-worker-client.mjs');
+  const { runStageContextRounds } = await import('./fs-ent-pipeline/stage-context-rounds.mjs');
+  const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  let seeded=false,rest=0,grpc=0; const base=`projects/${ctx.project}/databases/${ctx.database}/documents/`;
+  const fetchFn=async (url,init)=>{rest++;let result={}; if(url.endsWith(':runQuery')) result=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else {const writes=JSON.parse(init.body).writes;seeded=Boolean(writes[0].update);}return {status:200,text:async()=>JSON.stringify(result)};};
+  const budget=createStageBudget({maximum:32,cleanupReserve:2}); const journal=async()=>{},claim=budget.claim;
+  const support=createStageSupport(ctx,{fetchFn,journal,claim});
+  const workerFactory=(c,step)=>{grpc++;return new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:step.id}});};
+  const result=await runStageContextRounds((op,detail)=>op==='observe'?runObservationWorker(ctx,detail.step,{claim,journal,workerFactory}):support.stageOperation(op,detail));
+  assert.deepEqual(result,{observations:22,support:10});assert.equal(rest,10);assert.equal(grpc,22);assert.equal(budget.used(),32);assert.equal(seeded,false);
+});
+
+test('original deep requests serialize and capture in isolated fake gRPC workers', async () => {
+  const { Worker } = await import('node:worker_threads');
+  const { runObservationWorker } = await import('./fs-ent-pipeline/stage-context-worker-client.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  for(const depth of [48,100]) {
+    const step=stageContextCases().find(x=>x.id===`chain-${depth}-grpc`), events=[];
+    const result=await runObservationWorker(ctx,step,{claim:async()=>{},journal:async e=>events.push(e),workerFactory:(c,s)=>new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:s.id}})});
+    assert.deepEqual(result.frames,['AQI=']);assert.deepEqual(events.map(x=>x.phase),['attempt','headers','status']);
+  }
+});
+
+test('request ceiling preserves cleanup slots and never refunds attempted calls', async () => {
+  const { createStageBudget } = await import('./fs-ent-pipeline/stage-context-budget.mjs');
+  const budget=createStageBudget({maximum:4,cleanupReserve:2});
+  await budget.claim('baseline');await budget.claim('seed');
+  await assert.rejects(budget.claim('observe'),/reserve/);
+  await budget.claim('delete-owned');await budget.claim('verify-absence');
+  await assert.rejects(budget.claim('delete-owned'),/ceiling/);
+  assert.equal(budget.used(),4);
+});
+
+test('synchronous gRPC transport failure closes its owned client and stops', async () => {
+  const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
+  const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
+  const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
+  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  let closed=false;
+  await assert.rejects(observeStage(ctx,stageContextCases()[0],{claim:async()=>{},journal:async()=>{},clientFactory:()=>({makeServerStreamRequest(){throw Error('failed');},close(){closed=true;}})}));
+  assert.equal(closed,true);
+});

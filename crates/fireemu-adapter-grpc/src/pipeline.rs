@@ -1734,8 +1734,11 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
         Some(V::PipelineValue(pipeline)) => pipeline
             .stages
             .iter()
-            .skip(1)
-            .flat_map(|stage| stage.args.iter().chain(stage.options.values()))
+            .enumerate()
+            .flat_map(|(index, stage)| {
+                let source = usize::from(index == 0 && stage.name == "collection");
+                stage.args.iter().skip(source).chain(stage.options.values())
+            })
             .find_map(|v| reference_outside(v, own)),
         _ => None,
     }

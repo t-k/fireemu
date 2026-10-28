@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "source": {
+    "journalSha256": "ff209baafbe0f196ee0176be7f1eb2d61ab6089be8f3f7725581ca16e384126a",
+    "requestCount": 49,
+    "corpusSupportCount": 20,
+    "otherCount": 29,
+    "observationCount": 8,
+    "anchorCount": 4
+  },
+  "rulesTemplate": "{\"rules\":{\".read\":false,\".write\":false,\"__ROOT__\":{\".read\":false,\"ready\":{\".read\":true},\"r1\":{\"queryrule\":{\".read\":\"query.orderByChild == 'h' && query.limitToFirst <= 2\",\".indexOn\":[\"h\"]},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}},\"r2\":{\"queryrule\":{\".read\":\"query.orderByChild == 'h' && query.limitToFirst <= 2\",\".indexOn\":[\"h\"]},\"patch\":{\".write\":true},\"query\":{\".read\":true,\".indexOn\":[\"h\"]}}}}}",
+  "rounds": [
+    {
+      "round": 1,
+      "rows": [
+        {
+          "id": "query-seed",
+          "role": "support",
+          "requestId": 18,
+          "method": "PUT",
+          "path": "/r1/queryrule.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-readback",
+          "role": "support",
+          "requestId": 19,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-allow-2",
+          "role": "observation",
+          "requestId": 20,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&limitToFirst=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "25"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-deny-3",
+          "role": "observation",
+          "requestId": 21,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22&limitToFirst=3",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "query-deny-nolimit",
+          "role": "observation",
+          "requestId": 22,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22h%22",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "query-deny-key",
+          "role": "observation",
+          "requestId": 23,
+          "method": "GET",
+          "path": "/r1/queryrule.json",
+          "query": "orderBy=%22%24key%22&limitToFirst=2",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 24,
+          "method": "PUT",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 25,
+          "method": "PUT",
+          "path": "/r1/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 26,
+          "method": "PATCH",
+          "path": "/r1/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 27,
+          "method": "GET",
+          "path": "/r1/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "rows": [
+        {
+          "id": "query-seed",
+          "role": "support",
+          "requestId": 28,
+          "method": "PUT",
+          "path": "/r2/queryrule.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-readback",
+          "role": "support",
+          "requestId": 29,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "37"
+          },
+          "bodyBase64": "eyJhIjp7ImgiOjN9LCJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-allow-2",
+          "role": "observation",
+          "requestId": 30,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&limitToFirst=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "25"
+          },
+          "bodyBase64": "eyJiIjp7ImgiOjF9LCJjIjp7ImgiOjJ9fQ=="
+        },
+        {
+          "id": "query-deny-3",
+          "role": "observation",
+          "requestId": 31,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22&limitToFirst=3",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "query-deny-nolimit",
+          "role": "observation",
+          "requestId": 32,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22h%22",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "query-deny-key",
+          "role": "observation",
+          "requestId": 33,
+          "method": "GET",
+          "path": "/r2/queryrule.json",
+          "query": "orderBy=%22%24key%22&limitToFirst=2",
+          "requestBody": null,
+          "status": 401,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "36"
+          },
+          "bodyBase64": "ewogICJlcnJvciIgOiAiUGVybWlzc2lvbiBkZW5pZWQiCn0K"
+        },
+        {
+          "id": "patch-anchor-seed",
+          "role": "support",
+          "requestId": 34,
+          "method": "PUT",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"x\":1,\"y\":{\"z\":\"s\"}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ4IjoxLCJ5Ijp7InoiOiJzIn19"
+        },
+        {
+          "id": "query-anchor-seed",
+          "role": "support",
+          "requestId": 35,
+          "method": "PUT",
+          "path": "/r2/query.json",
+          "query": "",
+          "requestBody": "{\"a\":{\"h\":3},\"b\":{\"h\":1},\"c\":{\"h\":2},\"d\":{},\"10\":{\"h\":5},\"2\":{\"h\":5}}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "62"
+          },
+          "bodyBase64": "eyIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fSwiYSI6eyJoIjozfSwiYiI6eyJoIjoxfSwiYyI6eyJoIjoyfX0="
+        },
+        {
+          "id": "patch-anchor",
+          "role": "anchor",
+          "requestId": 36,
+          "method": "PATCH",
+          "path": "/r2/patch.json",
+          "query": "",
+          "requestBody": "{\"y/z\":\"t\",\"w\":3}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "21"
+          },
+          "bodyBase64": "eyJ5Ijp7InoiOiJ0In0sInciOjN9"
+        },
+        {
+          "id": "query-anchor",
+          "role": "anchor",
+          "requestId": 37,
+          "method": "GET",
+          "path": "/r2/query.json",
+          "query": "orderBy=%22h%22&startAt=2",
+          "requestBody": null,
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "50"
+          },
+          "bodyBase64": "eyJjIjp7ImgiOjJ9LCJhIjp7ImgiOjN9LCIyIjp7ImgiOjV9LCIxMCI6eyJoIjo1fX0="
+        }
+      ]
+    }
+  ]
+}

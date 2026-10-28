@@ -1054,10 +1054,10 @@ fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool)
         }
     }
     selected.sort_by(Value::canonical_cmp);
-    if selected
-        .windows(2)
-        .any(|pair| pair[0].canonical_cmp(&pair[1]) == Ordering::Equal && pair[0] != pair[1])
-    {
+    if selected.windows(2).any(|pair| {
+        pair[0].canonical_cmp(&pair[1]) == Ordering::Equal
+            && (pair[0] != pair[1] || !pair[0].stored_eq(&pair[1]))
+    }) {
         return Eval::Error(EvalError::Unobserved {
             function: name,
             reason: "ordering of distinguishable ties is unobserved",

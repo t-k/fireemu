@@ -3095,3 +3095,26 @@ proptest! {
         prop_assert_eq!(strict("maximum_n", &[input, int(i64::try_from(n).unwrap())]), array(last));
     }
 }
+
+#[test]
+fn extrema_distinguishable_signed_zero_ties_are_unobserved() {
+    for name in ["maximum_n", "minimum_n"] {
+        for (left, right) in [
+            (Value::Double(-0.0), Value::Double(0.0)),
+            (Value::Double(0.0), Value::Double(-0.0)),
+            (
+                Value::Array(vec![Value::Double(-0.0)]),
+                Value::Array(vec![Value::Double(0.0)]),
+            ),
+            (
+                Value::Array(vec![Value::Double(0.0)]),
+                Value::Array(vec![Value::Double(-0.0)]),
+            ),
+        ] {
+            assert!(
+                is_unobserved(&strict(name, &[array(vec![left, right]), int(1)])),
+                "{name}"
+            );
+        }
+    }
+}

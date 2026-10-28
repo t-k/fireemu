@@ -2822,3 +2822,120 @@ fn array_index_of_dynamic_direction_is_unobserved_only_in_strict() {
     .unwrap();
     assert_eq!(literal.eval_in(&row, Unrecorded::Refuse), int(0));
 }
+
+#[test]
+fn recorded_join_results_and_arity() {
+    let strings = array(vec![
+        Value::String("a".into()),
+        Value::String("b".into()),
+        Value::String("c".into()),
+    ]);
+    let with_null = array(vec![Value::String("a".into()), Value::Null]);
+    let cases = [
+        (vec![strings.clone(), text(",")], text("a,b,c")),
+        (vec![array(vec![]), text(",")], text("")),
+        (
+            vec![with_null.clone(), text(","), text("NULL")],
+            text("a,NULL"),
+        ),
+        (vec![with_null, text(",")], text("a")),
+        (
+            vec![array(vec![Value::Integer(1), Value::Integer(2)]), text(",")],
+            invalid("Cannot join non-string types."),
+        ),
+        (vec![strings, null()], null()),
+        (vec![null(), text(",")], null()),
+        (vec![Eval::Absent, text(",")], null()),
+    ];
+    for (args, expected) in cases {
+        assert_eq!(both("join", &args), expected, "{args:?}");
+    }
+    let error = Expr::call("join", vec![Expr::Constant(Value::Null)], Placement::Value)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error, "The function 'join' does not accept 1 argument(s). Valid options are:\n- join[T: string | bytes](array: array[T], delimiter: T): string with [2..2] argument(s).\n- join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string with [3..3] argument(s).");
+}
+
+#[test]
+fn join_pict_rows() {
+    let rows = [
+        ("strings", "omitted", "comma", "strict"),
+        ("empty", "omitted", "comma", "emulator"),
+        ("null_element", "omitted", "comma", "strict"),
+        ("null_element", "present", "comma", "strict"),
+        ("null_input", "present", "empty", "emulator"),
+        ("absent", "omitted", "empty", "strict"),
+        ("empty", "present", "empty", "strict"),
+        ("absent", "present", "comma", "emulator"),
+        ("null_element", "present", "empty", "emulator"),
+        ("null_input", "omitted", "comma", "strict"),
+        ("strings", "present", "empty", "emulator"),
+    ];
+    for (shape, replacement, delimiter, profile) in rows {
+        let items = match shape {
+            "strings" => vec![Value::String("a".into()), Value::String("b".into())],
+            "null_element" => vec![Value::String("a".into()), Value::Null],
+            _ => vec![],
+        };
+        let input = match shape {
+            "null_input" => null(),
+            "absent" => Eval::Absent,
+            _ => array(items.clone()),
+        };
+        let separator = if delimiter == "comma" { "," } else { "" };
+        let mut args = vec![input, text(separator)];
+        if replacement == "present" {
+            args.push(text("X"));
+        }
+        let expected = if matches!(shape, "null_input" | "absent") {
+            null()
+        } else {
+            let parts: Vec<&str> = items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(value) => Some(value.as_str()),
+                    Value::Null if replacement == "present" => Some("X"),
+                    _ => None,
+                })
+                .collect();
+            text(&parts.join(separator))
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            call_in("join", &args, mode, false),
+            expected,
+            "{shape}/{replacement}/{delimiter}/{profile}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn join_matches_string_reference(items in proptest::collection::vec(proptest::option::of("[a-z]{0,8}"), 0..24), delimiter in "[,;|]{0,3}", replacement in proptest::option::of("[A-Z]{0,4}")) {
+        let values: Vec<Value> = items.iter().map(|item| item.as_ref().map_or(Value::Null, |s| Value::String(s.clone()))).collect();
+        let mut args = vec![array(values), text(&delimiter)];
+        if let Some(value) = &replacement { args.push(text(value)); }
+        let parts: Vec<&str> = items.iter().filter_map(|item| item.as_deref().or(replacement.as_deref())).collect();
+        prop_assert_eq!(both("join", &args), text(&parts.join(&delimiter)));
+    }
+}
+
+#[test]
+fn join_bytes_and_ambiguous_invalid_arguments_are_unobserved() {
+    for values in [
+        vec![Value::Bytes(vec![97]), Value::Integer(1)],
+        vec![Value::Integer(1), Value::Bytes(vec![97])],
+    ] {
+        assert!(is_unobserved(&strict("join", &[array(values), text(",")])))
+    }
+    assert!(is_unobserved(&strict(
+        "join",
+        &[array(vec![Value::Integer(1)]), null()]
+    )));
+    assert!(is_unobserved(&strict("join", &[null(), int(4)])));
+}

@@ -67,6 +67,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "array_first",
             "array_last",
             "array_get",
+            "join",
             "array_slice",
             "array_index_of",
             "array_first_n",

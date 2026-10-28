@@ -392,6 +392,25 @@ const FUNCTIONS: &[Function] = &[
         "array_get(array: array[any], index: int64): any?",
         eval_array_get,
     ),
+    Function {
+        name: "join",
+        arity: Arity::Between(2, 3),
+        returns_boolean: false,
+        signature: "",
+        overloads: &[
+            (
+                "join[T: string | bytes](array: array[T], delimiter: T): string",
+                2,
+                2,
+            ),
+            (
+                "join[T: string | bytes](array: array[T], delimiter: T, null_text: T): string",
+                3,
+                3,
+            ),
+        ],
+        eval: eval_join,
+    },
     array_access_function(
         "array_slice",
         Arity::Between(2, 3),
@@ -986,6 +1005,84 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .and_then(|i| values.get(i))
         .cloned()
         .map_or(Eval::Absent, Eval::Value)
+}
+
+fn eval_join(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong_array =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Array(_) | Value::Null));
+    let wrong_tail = args.iter().skip(1).any(
+        |arg| matches!(arg, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null)),
+    );
+    let invalid_elements = matches!(&args[0], Eval::Value(Value::Array(values)) if values.iter().any(|value| !matches!(value, Value::String(_) | Value::Null)));
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((missing && (wrong_array || wrong_tail || invalid_elements))
+            || (wrong_array && wrong_tail))
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "ambiguous invalid arguments",
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let Eval::Value(Value::Array(values)) = &args[0] else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "array argument type is unobserved",
+        });
+    };
+    if values.iter().any(|value| matches!(value, Value::Bytes(_))) {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "byte-array joining is unobserved",
+        });
+    }
+    let Eval::Value(Value::String(delimiter)) = &args[1] else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "join",
+            reason: "delimiter type is unobserved",
+        });
+    };
+    let replacement = match args.get(2) {
+        None => None,
+        Some(Eval::Value(Value::String(value))) => Some(value.as_str()),
+        _ => {
+            return Eval::Error(EvalError::Unobserved {
+                function: "join",
+                reason: "null replacement type is unobserved",
+            })
+        }
+    };
+    let mut parts = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            Value::String(value) => parts.push(value.as_str()),
+            Value::Null => {
+                if let Some(value) = replacement {
+                    parts.push(value);
+                }
+            }
+            Value::Bytes(_) => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "join",
+                    reason: "byte-array joining is unobserved",
+                })
+            }
+            _ => {
+                return Eval::Error(EvalError::Invalid(
+                    "Cannot join non-string types.".to_owned(),
+                ))
+            }
+        }
+    }
+    Eval::Value(Value::String(parts.join(delimiter)))
 }
 
 fn subsequence_array<'a>(

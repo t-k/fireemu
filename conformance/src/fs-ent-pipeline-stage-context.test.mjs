@@ -310,8 +310,9 @@ test('END unknown deletion is sticky and cannot be resent', async () => {
   await assert.rejects(lifecycle.end(),/unknown/);await assert.rejects(lifecycle.end(),/sequence/);assert.equal(deletes,1);
 });
 
-test('worst successful setup, two rounds and END consume 49 bounded service attempts', async () => {
+test('identity, setup, two rounds and END consume 51 of 53 bounded service attempts', async () => {
   const { Worker } = await import('node:worker_threads');
+  const { verifyStageProject } = await import('./fs-ent-pipeline/stage-context-identity.mjs');
   const { createStageBudget } = await import('./fs-ent-pipeline/stage-context-budget.mjs');
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
@@ -322,7 +323,8 @@ test('worst successful setup, two rounds and END consume 49 bounded service atte
   const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`,base=`${name}/documents/`;let created=false,seeded=false,deleted=false,cp=0,dp=0,now=0,rest=0,grpc=0;
   const fetchFn=async (url,init)=>{rest++;let status=200,obj;
-    if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];
+    if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};
+    else if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];
     else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}
     else if(url.endsWith('/databases'))obj={databases:created&&!deleted?[{name}]:[]};
     else if(init.method==='POST'){created=true;obj={name:`${name}/operations/create`};}
@@ -332,13 +334,15 @@ test('worst successful setup, two rounds and END consume 49 bounded service atte
     else if(deleted){status=404;obj={error:{code:404,status:'NOT_FOUND',message:`${name} missing`}};}
     else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};
     return {status,text:async()=>JSON.stringify(obj)};};
-  const budget=createStageBudget({maximum:49,cleanupReserve:12}),journal=async()=>{},claim=budget.claim;
+  const budget=createStageBudget({maximum:53,cleanupReserve:14}),journal=async()=>{},claim=budget.claim;
+  await verifyStageProject(ctx,'123456',{fetchFn,claim,journal});
   const lifecycle=createStageLifecycle(ctx,{fetchFn,claim,journal,sleepFn:async()=>{},nowFn:()=>now});await lifecycle.create();
   const support=createStageSupport(ctx,{fetchFn,claim,journal});
   const workerFactory=(c,step)=>{grpc++;return new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:step.id}});};
   await runStageContextRounds((op,detail)=>op==='observe'?runObservationWorker(ctx,detail.step,{claim,journal,workerFactory}):support.stageOperation(op,detail));
   await lifecycle.end();now=600000;await lifecycle.confirmEnd();
-  assert.equal(rest,27);assert.equal(grpc,22);assert.equal(budget.used(),49);
+  assert.equal(rest,29);assert.equal(grpc,22);assert.equal(budget.used(),51);
+  await budget.claim('recovery-read');await budget.claim('recovery-read');assert.equal(budget.used(),53);await assert.rejects(budget.claim('recovery-read'),/ceiling/);
 });
 
 test('inventory rejects malformed 200 instead of creating a database', async () => {
@@ -379,9 +383,9 @@ test('campaign stops after uncertain create without launching any observation wo
   const { createStageContext }=await import('./fs-ent-pipeline/stage-context-target.mjs');
   const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   let calls=0,workers=0;
-  const fetchFn=async (_url,init)=>{calls++;if(init.method==='POST')throw Error('lost');return {status:200,text:async()=>'{"databases":[]}'}};
-  await assert.rejects(runStageCampaign(ctx,{fetchFn,journal:async()=>{},workerFactory:()=>{workers++}}),/unknown/);
-  assert.equal(calls,2);assert.equal(workers,0);
+  const fetchFn=async (url,init)=>{calls++;if(url.includes('cloudresourcemanager'))return {status:200,text:async()=>JSON.stringify({name:'projects/123456',projectId:'fireemu-oracle-query'})};if(init.method==='POST')throw Error('lost');return {status:200,text:async()=>'{"databases":[]}'}};
+  await assert.rejects(runStageCampaign(ctx,{fetchFn,journal:async()=>{},workerFactory:()=>{workers++},expectedProjectNumber:'123456'}),/unknown/);
+  assert.equal(calls,4);assert.equal(workers,0);
 });
 
 test('campaign executes maximum setup and both rounds while retaining database', async () => {
@@ -389,8 +393,52 @@ test('campaign executes maximum setup and both rounds while retaining database',
   const { createStageContext }=await import('./fs-ent-pipeline/stage-context-target.mjs');const { stageContextSeed }=await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`,base=`${name}/documents/`;let seeded=false,polls=0,deletes=0,grpc=0;
-  const fetchFn=async (url,init)=>{let obj;if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}else if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/create`};else if(init.method==='DELETE'){deletes++;throw Error('unexpected delete');}else if(url.endsWith('/operations/create'))obj={done:++polls===4};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)};};
+  const fetchFn=async (url,init)=>{let obj;if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};else if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}else if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/create`};else if(init.method==='DELETE'){deletes++;throw Error('unexpected delete');}else if(url.endsWith('/operations/create'))obj={done:++polls===4};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)};};
   const workerFactory=(c,step)=>{grpc++;return new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:step.id}});};
-  const result=await runStageCampaign(ctx,{fetchFn,workerFactory,journal:async()=>{},sleepFn:async()=>{}});
-  assert.equal(result.used,39);assert.equal(grpc,22);assert.equal(deletes,0);assert.equal(seeded,false);assert.equal(result.database.uid,'fake-uid');
+  const result=await runStageCampaign(ctx,{fetchFn,workerFactory,journal:async()=>{},sleepFn:async()=>{},expectedProjectNumber:'123456'});
+  assert.equal(result.used,41);assert.equal(grpc,22);assert.equal(deletes,0);assert.equal(seeded,false);assert.equal(result.database.uid,'fake-uid');
+});
+
+test('project identity checks are bounded twice and fail before database mutation on mismatch', async () => {
+  const { verifyStageProject }=await import('./fs-ent-pipeline/stage-context-identity.mjs');
+  const ctx={project:'fireemu-oracle-query',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  let calls=0;
+  const fetchFn=async()=>{calls++;return {status:200,text:async()=>JSON.stringify({name:'projects/123456',projectId:'fireemu-oracle-query'})}};
+  await verifyStageProject(ctx,'123456',{fetchFn,claim:async()=>{},journal:async()=>{}});assert.equal(calls,2);
+  calls=0;await assert.rejects(verifyStageProject(ctx,'999999',{fetchFn,claim:async()=>{},journal:async()=>{}}),/identity/);assert.equal(calls,1);
+});
+
+test('separately admitted END carries the previously journaled service count', async () => {
+  const { createStageBudget }=await import('./fs-ent-pipeline/stage-context-budget.mjs');
+  const budget=createStageBudget({maximum:53,cleanupReserve:14,initialUsed:41});
+  for(let i=0;i<10;i++)await budget.claim('end-poll');
+  assert.equal(budget.used(),51);
+  await assert.rejects(budget.claim('observe'),/reserve/);
+  assert.throws(()=>createStageBudget({maximum:53,cleanupReserve:14,initialUsed:54}));
+});
+
+test('ADC acquisition claim is durable and prevents a second mint after failure', async () => {
+  const {mkdtempSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const { acquireStageToken }=await import('./fs-ent-pipeline/stage-context-adc.mjs');
+  const dir=mkdtempSync(join(tmpdir(),'stage-adc-')),marker=join(dir,'spent');let mints=0;
+  try {
+    assert.throws(()=>acquireStageToken({marker,packetSha256:'a'.repeat(64),gcloud:'/fake',env:{},mint:()=>{mints++;throw Error('failed')}}),/acquisition/);
+    assert.throws(()=>acquireStageToken({marker,packetSha256:'a'.repeat(64),gcloud:'/fake',env:{},mint:()=>{mints++;return 'x'.repeat(25)}}));
+    assert.equal(mints,1);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('concurrent ADC callers permit only one fake mint', async () => {
+  const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {spawn}=await import('node:child_process');
+  const dir=mkdtempSync(join(tmpdir(),'stage-adc-race-')),marker=join(dir,'spent'),counter=join(dir,'count');
+  const moduleUrl=new URL('./fs-ent-pipeline/stage-context-adc.mjs',import.meta.url).href;
+  const code=`import {acquireStageToken} from ${JSON.stringify(moduleUrl)};import {appendFileSync} from 'node:fs';try{acquireStageToken({marker:process.argv[1],packetSha256:'a'.repeat(64),gcloud:'/fake',env:{},mint:()=>{appendFileSync(process.argv[2],'x');return 'x'.repeat(25)}})}catch{process.exitCode=2}`;
+  const run=()=>new Promise(resolve=>{const c=spawn(process.execPath,['--input-type=module','-e',code,marker,counter],{stdio:'ignore'});c.on('close',resolve)});
+  try {const codes=await Promise.all([run(),run()]);assert.deepEqual(codes.sort(),[0,2]);assert.equal(readFileSync(counter,'utf8'),'x');}finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('ADC provider refuses credential override before creating a claim', async () => {
+  const {mkdtempSync,existsSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {acquireStageToken}=await import('./fs-ent-pipeline/stage-context-adc.mjs');
+  const dir=mkdtempSync(join(tmpdir(),'stage-adc-env-')),marker=join(dir,'spent');let mints=0;
+  try {assert.throws(()=>acquireStageToken({marker,packetSha256:'a'.repeat(64),gcloud:'/fake',env:{GOOGLE_APPLICATION_CREDENTIALS:'private'},mint:()=>{mints++;return 'x'.repeat(25)}}),/environment/);assert.equal(mints,0);assert.equal(existsSync(marker),false);}finally{rmSync(dir,{recursive:true,force:true});}
 });

@@ -36,11 +36,11 @@ test("unknown dispatched seed stops all later cleanup requests", async () => {
   const calls=[];
   await assert.rejects(replay("http://127.0.0.1:9000", fixture, {fetchImpl: async (url, options) => {
     calls.push([url,options.method ?? "GET"]);
-    if (calls.length===3) throw Error("connection lost");
-    return new Response(calls.length===1 ? "{}" : "{}", {status:200});
+    if (calls.length===4) throw Error("connection lost");
+    return new Response(calls.length===2 ? "null" : "{}", {status:200});
   }}), /unknown/);
-  assert.equal(calls.length,3);
-  assert.equal(calls[2][1],"PUT");
+  assert.equal(calls.length,4);
+  assert.equal(calls[3][1],"PUT");
 });
 test("generated combinations exercise recorded case and transport", async () => {
   const fixture=JSON.parse(await readFile(new URL("./fixtures/production-rules-operators.json", import.meta.url)));
@@ -65,4 +65,13 @@ test("tampered valid fixture is refused before local I/O", async () => {
   const fixture=await fixtureData(); fixture.rows[0].predicate="true"; let calls=0;
   await assert.rejects(replay("http://127.0.0.1:9000",fixture,{fetchImpl:async()=>{calls++;}}),/fixture invalid/);
   assert.equal(calls,0);
+});
+test("nonempty root is preserved without rules write or cleanup", async () => {
+  const fixture=await fixtureData(); const calls=[];
+  await assert.rejects(replay("http://127.0.0.1:9000",fixture,{fetchImpl:async(url,options)=>{
+    calls.push([url,options.method ?? "GET"]);
+    return new Response(calls.length===1 ? "{}" : '{"existing":true}',{status:200});
+  }}),/root/);
+  assert.equal(calls.length,2);
+  assert.deepEqual(calls.map(x=>x[1]),["GET","GET"]);
 });

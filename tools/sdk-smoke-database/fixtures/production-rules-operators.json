@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "source": {
     "rawSha256": "a9ff0804e9c3345661990431bf91c11ef093fc43c4280cff677f2ca3781b377a",
-    "productionReview": "2026-10-29-rtdb-rules-operators-actual-sol.md"
+    "productionReview": "2026-10-29-rtdb-rules-operators-03-actual-sol.md",
+    "productionReviewSha256": "1ae656526088d320da040c7a4868c83bda69027b7d397f6209c392759cd23134"
   },
   "globalRules": {
     ".read": false,

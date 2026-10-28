@@ -46,7 +46,7 @@ export function extractFixture(bytes) {
     return validateRow({id:o.id,round:o.round,kind:o.kind,predicate:o.predicate,seed:o.seed,seedResponse:{status:seed.headers.status,body:body(seed),etag:seed.headers.headers.etag ?? null},request,status:o.status,body:o.body,etag:o.etag ?? null,readback:o.readback,rule});
   });
   if(rows.length!==98 || new Set(rows.map(x=>`${x.round}/${x.id}`)).size!==98 || Object.keys(rules.r1).length!==49 || Object.keys(rules.r2).length!==49 || rows.some(x=>!rows.some(y=>y.id===x.id && y.round!==x.round))) throw Error("incomplete recording");
-  return {schemaVersion:1,source:{rawSha256:RAW,productionReview:"2026-10-29-rtdb-rules-operators-actual-sol.md"},globalRules:{...global,["{ROOT}"]:rules,[root]:undefined},rules,rows};
+  return {schemaVersion:1,source:{rawSha256:RAW,productionReview:"2026-10-29-rtdb-rules-operators-03-actual-sol.md",productionReviewSha256:"1ae656526088d320da040c7a4868c83bda69027b7d397f6209c392759cd23134"},globalRules:{...global,["{ROOT}"]:rules,[root]:undefined},rules,rows};
 }
 export async function replayCase(expected, send, root) {
   validateRow(expected); if(!/^[A-Za-z0-9_-]+$/.test(root)) throw Error("invalid root");
@@ -78,7 +78,7 @@ export async function replay(origin, fixture, { fetchImpl = fetch } = {}) {
   )
     throw Error("fixture invalid");
   for (const row of fixture.rows) validateRow(row);
-  if (digest(JSON.stringify(fixture)) !== "2d7e6fb426325717fb04af534bfc5724cb5f96c3b766428f6ac49e1838158cca" || !isDeepStrictEqual(fixture.globalRules?.["{ROOT}"], fixture.rules)) throw Error("fixture invalid");
+  if (digest(JSON.stringify(fixture)) !== "d4c626ba72f957f1817adec06fcc50c57785067295875262b1918a0a5c803c97" || !isDeepStrictEqual(fixture.globalRules?.["{ROOT}"], fixture.rules)) throw Error("fixture invalid");
   const root = `operatorsreplay${randomBytes(8).toString("hex")}`,
     rulesUrl = `${u.origin}/.settings/rules.json`,
     rootUrl = `${u.origin}/${root}.json`,
@@ -125,11 +125,14 @@ export async function replay(origin, fixture, { fetchImpl = fetch } = {}) {
   const baseline = await local(rulesUrl, { headers });
   if (baseline.status !== 200) throw Error("rules baseline unresolved");
   const original = await baseline.text();
-  let rows;
+  const rootBaseline = await local(rootUrl, { headers });
+  if (rootBaseline.status !== 200 || parseLocal(await rootBaseline.text()) !== null) throw Error("root is not empty");
+  let rows, rulesAttempted = false;
   try {
     if (!fixture.globalRules || !fixture.rules || !isDeepStrictEqual(fixture.globalRules["{ROOT}"], fixture.rules)) throw Error("rules fixture invalid");
     const rules = {rules: {...fixture.globalRules, [root]: fixture.rules}};
     delete rules.rules["{ROOT}"];
+    rulesAttempted = true;
     const setup = await local(rulesUrl, { method: "PUT", headers, body: JSON.stringify(rules) });
     if (setup.status !== 200) throw Error("rules setup unresolved");
     const send = async (req) => {
@@ -156,7 +159,7 @@ export async function replay(origin, fixture, { fetchImpl = fetch } = {}) {
       failed = true;
     }
     if (unknown) throw unknownError();
-    try {
+    if (rulesAttempted) try {
       const put = await local(rulesUrl, { method: "PUT", headers, body: original });
       const read = await local(rulesUrl, { headers });
       if (put.status !== 200 || read.status !== 200 || (await read.text()) !== original)

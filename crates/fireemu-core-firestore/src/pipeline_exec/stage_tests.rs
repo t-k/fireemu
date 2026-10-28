@@ -1818,3 +1818,103 @@ fn union_stops_lazy_children_across_later_union_when_limit_is_full() {
     assert_eq!(cursor.push(row).unwrap().len(), 1);
     assert!(cursor.finish().unwrap().is_empty());
 }
+
+#[test]
+fn union_generated_core_combinations() {
+    let cases = [
+        ("different", "plain", "none"),
+        ("same", "plain", "none"),
+        ("empty", "plain", "none"),
+        ("different", "where", "none"),
+        ("different", "select", "none"),
+        ("different", "nested", "none"),
+        ("different", "plain", "prefix_limit"),
+        ("different", "plain", "suffix_limit"),
+        ("different", "plain", "blocking"),
+        ("same", "where", "blocking"),
+        ("empty", "where", "prefix_limit"),
+        ("same", "select", "suffix_limit"),
+        ("empty", "where", "suffix_limit"),
+        ("empty", "select", "prefix_limit"),
+        ("empty", "select", "blocking"),
+        ("empty", "nested", "suffix_limit"),
+        ("same", "nested", "prefix_limit"),
+        ("different", "nested", "blocking"),
+    ];
+    for (branch, child, boundary) in cases {
+        let row = |n| doc(&format!("p{n}"), &[("n", int(n))]);
+        let left = vec![1, 4];
+        let right = match branch {
+            "different" => vec![2, 3],
+            "same" => left.clone(),
+            "empty" => Vec::new(),
+            _ => unreachable!(),
+        };
+        let child_stages = match child {
+            "where" => vec![Stage::Where(
+                Expr::call(
+                    "equal",
+                    vec![field("n"), Expr::Constant(int(2))],
+                    Placement::Condition,
+                )
+                .unwrap(),
+            )],
+            "select" => vec![Stage::select(vec![(alias("n"), field("n"))])],
+            "plain" | "nested" => Vec::new(),
+            _ => unreachable!(),
+        };
+        let mut branches = vec![PreparedUnionBranch {
+            stages: child_stages,
+            rows: right.iter().copied().map(row).collect(),
+        }];
+        if child == "nested" {
+            branches.push(PreparedUnionBranch {
+                stages: Vec::new(),
+                rows: vec![row(5)],
+            });
+        }
+        let mut stages = Vec::new();
+        if boundary == "prefix_limit" {
+            stages.push(Stage::Limit(1));
+        }
+        stages.push(Stage::Union { branches });
+        if boundary == "suffix_limit" {
+            stages.push(Stage::Limit(2));
+        }
+        if boundary == "blocking" {
+            stages.push(Stage::Sort(vec![ascending(field("n"))]));
+        }
+        let mut cursor = Cursor::new(stages);
+        let mut actual = Vec::new();
+        for n in &left {
+            if cursor.is_exhausted() {
+                break;
+            }
+            actual.extend(cursor.push(row(*n)).unwrap());
+        }
+        actual.extend(cursor.finish().unwrap());
+        let mut expected = if boundary == "prefix_limit" {
+            vec![1]
+        } else {
+            left
+        };
+        expected.extend(right.into_iter().filter(|n| child != "where" || *n == 2));
+        if child == "nested" {
+            expected.push(5);
+        }
+        if boundary == "suffix_limit" {
+            expected.truncate(2);
+        }
+        if boundary == "blocking" {
+            expected.sort();
+        }
+        assert_eq!(
+            actual
+                .iter()
+                .map(|row| row.fields["n"].clone())
+                .collect::<Vec<_>>(),
+            expected.into_iter().map(int).collect::<Vec<_>>(),
+            "{branch} {child} {boundary}"
+        );
+    }
+}

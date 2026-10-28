@@ -1881,7 +1881,17 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
 }
 fn eval_exp(args: &[Eval], cx: Context) -> Eval {
     match numeric_inputs("exp", args, cx) {
-        Ok(v) => double(v[0].double().exp()),
+        Ok(v) => {
+            let input = v[0].double();
+            let result = input.exp();
+            if input.is_finite() && (result.is_infinite() || result == 0.0) {
+                invalid("exp(...) overflow or underflow")
+            } else if input.is_finite() && result.is_subnormal() {
+                unobserved("exp", "subnormal underflow behavior is unobserved")
+            } else {
+                double(result)
+            }
+        }
         Err(e) => e,
     }
 }

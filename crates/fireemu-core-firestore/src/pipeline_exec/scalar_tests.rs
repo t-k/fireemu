@@ -3443,6 +3443,19 @@ trunc	ordinary	null	two
         };
         if fields[1] == "strict" {
             assert!(is_unobserved(&value), "{line}");
+        } else {
+            match (name, fields[2], fields[3]) {
+                ("exp", "positive", "one") => assert_eq!(value, dbl(2.0_f64.exp()), "{line}"),
+                ("log", "positive", "two") => assert_eq!(value, dbl(1.0), "{line}"),
+                ("ln", "positive", "one") => assert_eq!(value, dbl(2.0_f64.ln()), "{line}"),
+                ("trunc", "domain", "one") => assert_eq!(value, int(0), "{line}"),
+                ("trunc", "positive", "two") => assert!(is_unobserved(&value), "{line}"),
+                (_, "null", _) => assert_eq!(value, Eval::Value(Value::Null), "{line}"),
+                (_, "wrong", _) | ("ln", "domain", _) => {
+                    assert!(matches!(value, Eval::Error(_)), "{line}");
+                }
+                _ => panic!("unexpected PICT row: {line}"),
+            }
         }
     }
     assert_eq!(emulator("trunc", &[int(-15), int(0)]), int(-15));
@@ -3484,4 +3497,18 @@ fn numeric_family_decimal_and_special_boundaries_are_conservative() {
         assert_eq!(result.to_bits(), (-0.0_f64).to_bits());
     }
     assert!(is_unobserved(&emulator("log", &[int(0), dbl(f64::NAN)])));
+}
+
+#[test]
+fn numeric_family_exp_range_and_explicit_specials() {
+    for value in [1000.0, -1000.0] {
+        assert!(matches!(emulator("exp", &[dbl(value)]), Eval::Error(_)));
+    }
+    assert_eq!(emulator("exp", &[dbl(1.0)]), dbl(1.0_f64.exp()));
+    assert!(is_unobserved(&emulator("exp", &[dbl(-720.0)])));
+    assert_eq!(emulator("exp", &[dbl(f64::INFINITY)]), dbl(f64::INFINITY));
+    assert_eq!(emulator("exp", &[dbl(f64::NEG_INFINITY)]), dbl(0.0));
+    assert!(
+        matches!(emulator("exp", &[dbl(f64::NAN)]), Eval::Value(Value::Double(x)) if x.is_nan())
+    );
 }

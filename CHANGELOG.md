@@ -8,7 +8,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
-## [0.35.0] - 2026-10-28
+## [0.35.0] - 2026-10-29
 
 ### Added
 

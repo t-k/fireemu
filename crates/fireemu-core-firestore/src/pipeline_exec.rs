@@ -392,12 +392,7 @@ const FUNCTIONS: &[Function] = &[
         "array_get(array: array[any], index: int64): any?",
         eval_array_get,
     ),
-    array_access_function(
-        "array_slice",
-        Arity::Between(2, 3),
-        "array_slice(array: array[any], offset: int64, length: int64?): array[any]",
-        eval_array_slice,
-    ),
+    array_access_function("array_slice", Arity::Between(2, 3), "", eval_array_slice),
     array_access_function(
         "array_index_of",
         Arity::Exact(3),

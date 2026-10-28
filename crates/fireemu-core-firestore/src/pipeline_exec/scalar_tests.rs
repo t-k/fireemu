@@ -2773,3 +2773,15 @@ fn array_index_of_mixed_invalid_direction_remains_unobserved() {
         null()
     );
 }
+
+#[test]
+fn array_slice_bad_arity_returns_error_without_panicking() {
+    for count in [0, 1, 4] {
+        assert!(Expr::call(
+            "array_slice",
+            vec![Expr::Constant(Value::Null); count],
+            Placement::Value
+        )
+        .is_err());
+    }
+}

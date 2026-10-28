@@ -1199,6 +1199,13 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
             FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
         Some(V::FunctionValue(function)) => {
+            if unrecorded == Unrecorded::Refuse
+                && function.name == "array_reverse"
+                && function.args.is_empty()
+                && function.options.is_empty()
+            {
+                return Err(recorded_internal("array_reverse requires an argument"));
+            }
             if pipeline_exec::function(&function.name).is_none() {
                 return Err(Status::unimplemented(format!(
                     "function {:?} is unsupported locally",
@@ -2090,6 +2097,9 @@ fn decode_select(
     for (at, (alias, path, _, _)) in aliases.iter().enumerate() {
         for (earlier_alias, earlier, _, _) in &aliases[..at] {
             if earlier == path {
+                if unrecorded == Unrecorded::Refuse && quoted_alias_pair(earlier_alias, alias) {
+                    return Err(recorded_internal("duplicate quoted select alias"));
+                }
                 return Err(Status::invalid_argument(format!(
                     "select aliases {earlier_alias:?} and {alias:?} set the same field"
                 )));
@@ -2108,6 +2118,25 @@ fn decode_select(
             .collect(),
         keeps_name,
     ))
+}
+
+/// Writes a fixed explanation without including request contents in the diagnostic.
+fn recorded_internal(reason: &'static str) -> Status {
+    use std::io::Write as _;
+    let _ = writeln!(
+        std::io::stderr(),
+        "[firestore] pipeline: {reason}; production returns an internal error"
+    );
+    Status::internal("An internal error occurred.")
+}
+
+/// A plain alias and the same complete alias in quotes.
+fn quoted_alias_pair(a: &str, b: &str) -> bool {
+    fn quotes(quoted: &str, plain: &str) -> bool {
+        !plain.contains('`')
+            && quoted.strip_prefix('`').and_then(|s| s.strip_suffix('`')) == Some(plain)
+    }
+    quotes(a, b) || quotes(b, a)
 }
 
 /// Whether strict has a production answer for this `select` over `__name__`: the name selected
@@ -2241,14 +2270,11 @@ fn count_argument(stage: &pb::pipeline::Stage, unrecorded: Unrecorded) -> Result
     use pb::value::ValueType as V;
     let name = stage.name.as_str();
     let argument = stage.args.first().and_then(|v| v.value_type.as_ref());
-    // The values production answered: a limit of 1, 2, 2147483648 and 5000000000 and -1, an
-    // offset of 1, 2, 5, 7 and 5000000000, a string for both (O-1 `results/metadata#limit`, O-4
-    // `o4/stages#limit-*`, `#offset-*`, O-6 `sort-ties`, `order-writes`); zero is a boundary it
-    // never answered.
+    // O-5 `appendix#proposed-limit-zero` and `#proposed-offset-zero` record zero for
+    // both stages. Negative offset remains unobserved; a negative limit was refused in O-4.
     let recorded = match argument {
-        Some(V::IntegerValue(n)) if name == "limit" => *n != 0,
-        // Production answered offsets of 1, 2, 5, 7 and 5000000000 (O-4, O-6).
-        Some(V::IntegerValue(n)) => *n > 0,
+        Some(V::IntegerValue(_)) if name == "limit" => true,
+        Some(V::IntegerValue(n)) => *n >= 0,
         Some(V::StringValue(_)) => true,
         _ => false,
     };
@@ -3380,6 +3406,65 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_argument_pict_cases() {
+        use pb::value::ValueType as V;
+        use tonic::Code;
+        // Pairwise rows and required seeds from the zero-count coverage model.
+        let cases = [
+            (true, "limit", "zero"),
+            (true, "offset", "zero"),
+            (false, "limit", "zero"),
+            (false, "offset", "zero"),
+            (true, "limit", "positive"),
+            (false, "limit", "string"),
+            (true, "limit", "negative"),
+            (true, "offset", "string"),
+            (false, "limit", "boolean"),
+            (false, "offset", "positive"),
+            (true, "offset", "boolean"),
+            (false, "offset", "negative"),
+            (true, "offset", "negative"),
+            (true, "limit", "boolean"),
+        ];
+        for (strict, name, kind) in cases {
+            let arg = match kind {
+                "zero" => V::IntegerValue(0),
+                "positive" => V::IntegerValue(1),
+                "negative" => V::IntegerValue(-1),
+                "string" => V::StringValue("x".to_owned()),
+                "boolean" => V::BooleanValue(true),
+                _ => unreachable!(),
+            };
+            let stage = pb::pipeline::Stage {
+                name: name.to_owned(),
+                args: vec![pb::Value {
+                    value_type: Some(arg),
+                }],
+                ..Default::default()
+            };
+            let profile = if strict {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let got = count_argument(&stage, profile);
+            match kind {
+                "zero" => assert_eq!(got.unwrap(), 0, "{strict} {name} {kind}"),
+                "positive" => assert_eq!(got.unwrap(), 1, "{strict} {name} {kind}"),
+                "negative" if strict && name == "offset" => {
+                    assert_eq!(got.unwrap_err().code(), Code::Unimplemented)
+                }
+                "boolean" if strict => assert_eq!(got.unwrap_err().code(), Code::Unimplemented),
+                _ => assert_eq!(
+                    got.unwrap_err().code(),
+                    Code::InvalidArgument,
+                    "{strict} {name} {kind}"
+                ),
+            }
+        }
+    }
 
     /// Reference constants, as the official emulator 1.22.0 answered each (probed 2026-10-21).
     #[test]

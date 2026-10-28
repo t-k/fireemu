@@ -17,6 +17,7 @@ use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningCon
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::LogicalInstant;
+use proptest::prelude::*;
 use serde_json::{json, Value};
 
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
@@ -42,7 +43,66 @@ const PENDING_PROGRAMS: &[&str] = &[
 /// `__name__` forms. Every other row of a pending program must differ. A row that stops
 /// matching, or starts to, fails the replay until this table is updated, so the work that
 /// implements a stage cannot drop or gain a match unnoticed.
-const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[];
+const PENDING_MATCHES: &[(&str, &[&str], &[&str])] = &[(
+    "fs-ent-pipeline/o8c/collections-main",
+    &[
+        "array-length-ok",
+        "array-length-empty",
+        "array-length-null",
+        "array-length-absent",
+        "array-length-string",
+        "array-length-none",
+        "array-reverse-none",
+        "array-first-ok",
+        "array-first-empty",
+        "array-first-null",
+        "array-first-absent",
+        "array-first-int",
+        "array-last-ok",
+        "array-last-empty",
+        "array-last-null",
+        "array-last-absent",
+        "array-last-int",
+        "array-get-first",
+        "array-get-last",
+        "array-get-negative",
+        "array-get-out-of-range",
+        "array-get-null-index",
+        "array-get-null-array",
+        "array-get-absent",
+        "array-get-double-index",
+        "array-get-int-array",
+        "array-get-one",
+    ],
+    &[
+        "array-length-ok",
+        "array-length-empty",
+        "array-length-null",
+        "array-length-absent",
+        "array-length-string",
+        "array-length-none",
+        "array-first-ok",
+        "array-first-empty",
+        "array-first-null",
+        "array-first-absent",
+        "array-first-int",
+        "array-last-ok",
+        "array-last-empty",
+        "array-last-null",
+        "array-last-absent",
+        "array-last-int",
+        "array-get-first",
+        "array-get-last",
+        "array-get-negative",
+        "array-get-out-of-range",
+        "array-get-null-index",
+        "array-get-null-array",
+        "array-get-absent",
+        "array-get-double-index",
+        "array-get-int-array",
+        "array-get-one",
+    ],
+)];
 
 /// The sample set a random draw may return: the members of the input and how many to expect.
 struct SampleOf {
@@ -470,32 +530,32 @@ const UNMODELLED_PRODUCTION_ROWS: &[(&str, &str, u16, u16)] = &[
     ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#same-1",
-        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
-        501,
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
+        500,
         400,
     ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#same-2",
-        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
-        501,
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
+        500,
         400,
     ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#same-3",
-        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
-        501,
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
+        500,
         400,
     ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#different-values",
-        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
-        501,
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
+        500,
         400,
     ),
     (
         "fs-ent-pipeline/o8a/dupquote-main#swapped-order",
-        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict answers UNIMPLEMENTED and the emulator profile the official emulator's 400",
-        501,
+        "production answered HTTP 500 INTERNAL in both recordings for an alias and the same alias in quotes (an observed server fault, not a validation answer); strict matches the recorded INTERNAL and the emulator profile keeps the official emulator's 400",
+        500,
         400,
     ),
     (
@@ -871,6 +931,7 @@ fn framing(body: &Value) -> Vec<usize> {
 }
 
 // Exact measured compatibility debt, not a production-parity approval.
+#[derive(Clone)]
 struct O5Difference {
     row: String,
     category: String,
@@ -878,6 +939,55 @@ struct O5Difference {
     production: Value,
     strict: Value,
     emulator: Option<Value>,
+}
+
+const O5_INTERNAL_ROW: &str = "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path";
+const O8A_INTERNAL_ROWS: &[&str] = &[
+    "fs-ent-pipeline/o8a/dupquote-main#same-1",
+    "fs-ent-pipeline/o8a/dupquote-main#same-2",
+    "fs-ent-pipeline/o8a/dupquote-main#same-3",
+    "fs-ent-pipeline/o8a/dupquote-main#different-values",
+    "fs-ent-pipeline/o8a/dupquote-main#swapped-order",
+];
+
+fn recorded_internal_answer() -> Value {
+    json!({"status":500,"body":[{"error":{"code":500,"message":"An internal error occurred.","status":"INTERNAL"}}]})
+}
+
+fn validate_o5_pin(row: &O5Difference) {
+    if row.row == O5_INTERNAL_ROW {
+        assert_eq!(row.category, "unknown-production-outcome");
+        assert_eq!(row.production, recorded_internal_answer());
+        assert_eq!(row.strict, row.production);
+    } else {
+        assert_ne!(
+            row.category, "unknown-production-outcome",
+            "unknown row: {}",
+            row.row
+        );
+        assert_eq!(row.strict["status"], 501, "strict debt: {}", row.row);
+        assert_eq!(
+            row.strict["body"][0]["error"]["status"], "UNIMPLEMENTED",
+            "strict debt: {}",
+            row.row
+        );
+        assert_ne!(row.strict, row.production, "stale strict debt: {}", row.row);
+    }
+    if let Some(emulator) = &row.emulator {
+        assert_ne!(
+            emulator, &row.production,
+            "stale emulator debt: {}",
+            row.row
+        );
+    }
+}
+
+fn o5_pinned_match_valid(row: &str, strict: bool, matches: bool) -> bool {
+    matches == (strict && row == O5_INTERNAL_ROW)
+}
+
+fn o8a_internal_binding_valid(row: &str, production: &Value) -> bool {
+    O8A_INTERNAL_ROWS.contains(&row) && *production == recorded_internal_answer()
 }
 
 fn take_debt_string(object: &mut serde_json::Map<String, Value>, key: &str) -> String {
@@ -986,10 +1096,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 223, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 217, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            156,
+            152,
             "finite emulator debt inventory"
         );
     }
@@ -1021,12 +1131,7 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
             "unknown category: {}",
             row.row
         );
-        assert_eq!(row.strict["status"], 501, "strict debt: {}", row.row);
-        assert_eq!(
-            row.strict["body"][0]["error"]["status"], "UNIMPLEMENTED",
-            "strict debt: {}",
-            row.row
-        );
+        validate_o5_pin(&row);
         if row.production["status"] == 500 {
             unknown += 1;
             assert_eq!(
@@ -1046,6 +1151,332 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
         "one merged unknown production row, not two raw captures"
     );
     table
+}
+
+#[test]
+fn o5_recorded_internal_is_a_strict_match_and_emulator_debt() {
+    let table = o5_differences();
+    let row = &table["fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path"];
+    assert_eq!(row.category, "unknown-production-outcome");
+    assert_eq!(row.strict, row.production);
+    assert_eq!(row.strict["status"], 500);
+    assert_eq!(row.strict["body"][0]["error"]["status"], "INTERNAL");
+    assert_eq!(row.emulator.as_ref().unwrap()["status"], 400);
+}
+
+#[test]
+fn zero_counts_match_the_recorded_production_answers() {
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
+    let production = read("fs-ent-pipeline-production.json");
+    let id = "fs-ent-pipeline/o5/appendix";
+    let (p, program) = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, program)| program["id"] == id)
+        .unwrap();
+    let mut differences = Vec::new();
+    for strict in [true, false] {
+        let s = state(strict);
+        for seed in program["seed"].as_array().unwrap() {
+            let (status, body) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                &json!({"fields": fill(&seed[1])}),
+            );
+            assert_eq!(status, 200, "seed: {body}");
+        }
+        for id in ["proposed-limit-zero", "proposed-offset-zero"] {
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let (status, body) = call_ordered(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                &fill(&step["body"]),
+                &order.rebased(&format!("/programs/{p}/steps/{n}/body"), ""),
+            );
+            let expected = &production["programs"]["fs-ent-pipeline/o5/appendix"]["steps"][id];
+            let got = answer_in(status, &body, true);
+            let want = answer_in(
+                u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
+                &expected["body"],
+                true,
+            );
+            if got != want || framing(&body) != framing(&expected["body"]) {
+                differences.push(format!("strict={strict}, {id}: got {got}, want {want}"));
+            }
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
+}
+
+/// Executes the recorded REST body through either real adapter route.
+fn internal_case(strict: bool, family: &str, step_id: &str, grpc: bool) -> (u16, Value) {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
+    let program_id = format!("fs-ent-pipeline/{family}");
+    let (p, program) = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, program)| program["id"] == program_id)
+        .unwrap();
+    let (n, step) = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, step)| step["id"] == step_id)
+        .unwrap();
+    let s = state(strict);
+    for seed in program["seed"].as_array().unwrap() {
+        let mut fields = fill(&seed[1]);
+        if std::env::var_os("FIREEMU_INTERNAL_DIAGNOSTIC_CASE").is_some() {
+            fields["i"] = json!({"stringValue": "private-value-marker"});
+        }
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+            &json!({"fields": fields}),
+        );
+        assert_eq!(status, 200, "seed: {body}");
+    }
+    let body = fill(&step["body"]);
+    if !grpc {
+        return call_ordered(
+            &s,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+            &order.rebased(&format!("/programs/{p}/steps/{n}/body"), ""),
+        );
+    }
+    let req = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+        "projects/demo-app/databases/(default)",
+        &body,
+    )
+    .unwrap();
+    let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(async {
+        use tokio_stream::StreamExt as _;
+        let mut stream = Firestore::execute_pipeline(&service, tonic::Request::new(req))
+            .await?
+            .into_inner();
+        while let Some(response) = stream.next().await {
+            response?;
+        }
+        Ok::<(), tonic::Status>(())
+    });
+    match result {
+        Ok(()) => (200, Value::Null),
+        Err(error) => (
+            match error.code() {
+                tonic::Code::Internal => 500,
+                tonic::Code::InvalidArgument => 400,
+                tonic::Code::Unimplemented => 501,
+                other => panic!("unexpected grpc status {other:?}"),
+            },
+            json!({"grpcMessage": error.message()}),
+        ),
+    }
+}
+
+#[test]
+fn observed_internal_fixtures_and_pict_cases() {
+    let fixture = read("fs-ent-pipeline-production.json");
+    let mut failures = Vec::new();
+    for (family, step) in [
+        ("o8a/dupquote-main", "same-1"),
+        ("o8a/dupquote-main", "same-2"),
+        ("o8a/dupquote-main", "same-3"),
+        ("o8a/dupquote-main", "different-values"),
+        ("o8a/dupquote-main", "swapped-order"),
+        ("o5/appendix", "proposed-select-duplicate-quoted-path"),
+        ("o8c/collections-main", "array-reverse-none"),
+    ] {
+        let (status, body) = internal_case(true, family, step, false);
+        let expected = &fixture["programs"][format!("fs-ent-pipeline/{family}")]["steps"][step];
+        let got = json!({"status": status, "body": body});
+        let want = json!({"status": expected["status"], "body": expected["body"]});
+        if got != want {
+            failures.push(format!("{family}#{step}: got {got}, want {want}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The nine generated PICT rows, in seed/table order.
+    for (strict, family, step, grpc, expected) in [
+        (true, "o8a/dupquote-main", "same-1", false, 500),
+        (
+            true,
+            "o8c/collections-main",
+            "array-reverse-none",
+            false,
+            500,
+        ),
+        (false, "o8a/dupquote-main", "same-1", false, 400),
+        (
+            false,
+            "o8c/collections-main",
+            "array-reverse-none",
+            false,
+            501,
+        ),
+        (true, "o8a/dupquote-main", "same-1", true, 500),
+        (
+            true,
+            "o8c/collections-main",
+            "array-reverse-none",
+            true,
+            500,
+        ),
+        (true, "o8a/dupquote-main", "dotted", false, 200),
+        (
+            true,
+            "o8c/collections-main",
+            "array-reverse-int",
+            false,
+            501,
+        ),
+        (false, "o8a/dupquote-main", "dotted", true, 200),
+    ] {
+        let (actual, body) = internal_case(strict, family, step, grpc);
+        assert_eq!(
+            actual, expected,
+            "strict={strict} grpc={grpc} {family}#{step}"
+        );
+        if grpc && expected == 500 {
+            assert_eq!(body["grpcMessage"], "An internal error occurred.");
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+    #[test]
+    fn quoted_alias_collision_is_structural(alias in "[a-z]{1,8}") {
+        let fields = json!({(alias.clone()): {"fieldReferenceValue":"i"}, (format!("`{alias}`")): {"fieldReferenceValue":"i"}});
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/dq"}]},
+            {"name":"select","args":[{"mapValue":{"fields":fields}}]}
+        ]}}});
+        let strict = call(&state(true), "POST", &format!("{DOCS}:executePipeline"), &body).0;
+        let emulator = call(&state(false), "POST", &format!("{DOCS}:executePipeline"), &body).0;
+        prop_assert_eq!(strict, 500);
+        prop_assert_eq!(emulator, 400);
+    }
+}
+
+#[test]
+fn observed_internal_near_misses_do_not_gain_internal() {
+    let collection = json!({"name":"collection","args":[{"referenceValue":"/dq"}]});
+    let select = |fields: Value| json!({"name":"select","args":[{"mapValue":{"fields":fields}}]});
+    let cases = [
+        vec![
+            collection.clone(),
+            select(json!({"v":{"functionValue":{"name":"other_unknown_function","args":[]}}})),
+        ],
+        vec![
+            collection.clone(),
+            json!({"name":"unknown_stage","args":[]}),
+            select(json!({"v":{"functionValue":{"name":"array_reverse","args":[]}}})),
+        ],
+        vec![
+            json!({"name":"collection","args":[{"stringValue":"invalid"}]}),
+            select(json!({"a":{"fieldReferenceValue":"i"},"`a`":{"fieldReferenceValue":"i"}})),
+        ],
+    ];
+    for stages in cases {
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+        let (status, _) = call(
+            &state(true),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_ne!(
+            status, 500,
+            "unobserved or invalid input must keep its earlier refusal"
+        );
+    }
+}
+
+#[test]
+fn array_reverse_with_options_keeps_its_previous_refusal() {
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/dq"}]},
+        {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{
+            "name":"array_reverse","args":[],"options":{"extra":{"stringValue":"x"}}
+        }}}}}]}
+    ]}}});
+    for strict in [true, false] {
+        let (status, body) = call(
+            &state(strict),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_eq!(status, 501, "strict={strict}");
+        assert_eq!(body[0]["error"]["status"], "UNIMPLEMENTED");
+        assert_eq!(
+            body[0]["error"]["message"],
+            "function \"array_reverse\" is unsupported locally"
+        );
+    }
+}
+
+#[test]
+fn observed_internal_console_diagnostics_are_safe() {
+    if let Ok(case) = std::env::var("FIREEMU_INTERNAL_DIAGNOSTIC_CASE") {
+        let (family, step) = match case.as_str() {
+            "duplicate" | "emulator" => ("o8a/dupquote-main", "same-1"),
+            "array" => ("o8c/collections-main", "array-reverse-none"),
+            _ => panic!("unknown diagnostic case"),
+        };
+        let strict = case != "emulator";
+        let (status, _) = internal_case(strict, family, step, false);
+        assert_eq!(status, if strict { 500 } else { 400 });
+        return;
+    }
+    for (case, expected) in [
+        ("duplicate", "duplicate quoted select alias"),
+        ("array", "array_reverse requires an argument"),
+        ("emulator", ""),
+    ] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "observed_internal_console_diagnostics_are_safe",
+                "--nocapture",
+            ])
+            .env("FIREEMU_INTERNAL_DIAGNOSTIC_CASE", case)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{case}: {stderr}");
+        if expected.is_empty() {
+            assert!(stderr.is_empty(), "{stderr}");
+        } else {
+            assert!(stderr.contains(expected), "{case}: {stderr}");
+            assert!(!stderr.contains("Bearer"));
+            assert!(!stderr.contains("private-value-marker"));
+            assert!(!stderr.contains("demo-app"));
+        }
+    }
 }
 
 #[test]
@@ -1187,6 +1618,11 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                     &expected["body"],
                     ordered,
                 );
+                if O8A_INTERNAL_ROWS.contains(&row.as_str())
+                    && !o8a_internal_binding_valid(&row, &want)
+                {
+                    failures.push(format!("{row}: recorded INTERNAL binding changed: {want}"));
+                }
                 if debts.contains_key(&row) {
                     answers.insert((strict, row.clone()), got.clone());
                 }
@@ -1207,10 +1643,9 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                                 "strict={strict} {row}: pinned local debt answer changed: {got}"
                             ));
                         }
-                        if matches || got == want {
-                            failures.push(format!(
-                                "strict={strict} {row}: stale debt now matches production"
-                            ));
+                        if !o5_pinned_match_valid(&row, strict, matches) {
+                            failures
+                                .push(format!("strict={strict} {row}: debt match status changed"));
                         }
                     } else if !matches {
                         failures.push(format!(
@@ -1331,6 +1766,15 @@ fn the_pipeline_corpus_replays_as_production_answered() {
             } else {
                 emulator_status
             };
+            if strict && O8A_INTERNAL_ROWS.contains(known) {
+                if *strict_status != 500
+                    || !seen.contains(*known)
+                    || differing.iter().any(|(row, _, _)| row == known)
+                {
+                    changed_known.push(json!({"row": known, "reason": reason}));
+                }
+                continue;
+            }
             match differing.iter().find(|(row, _, _)| row == known) {
                 Some((_, got, _)) if got["status"] == *want => {}
                 Some((_, got, _)) => {
@@ -1364,32 +1808,120 @@ fn the_pipeline_corpus_replays_as_production_answered() {
     if let Ok(path) = std::env::var("REGENERATE_O5_DEBT") {
         let rows: Vec<Value> = o5_difference_rows()
             .into_iter()
-            .filter_map(|debt| {
-                let strict = answers.get(&(true, debt.row.clone()))?;
-                let emulator = answers.get(&(false, debt.row.clone()))?;
-                if *strict == debt.production && *emulator == debt.production {
-                    return None;
-                }
-                let mut row = serde_json::Map::new();
-                row.insert("row".into(), json!(debt.row));
-                row.insert("category".into(), json!(debt.category));
-                row.insert("reason".into(), json!(debt.reason));
-                row.insert("production".into(), debt.production.clone());
-                row.insert("strict".into(), strict.clone());
-                row.insert(
-                    "emulator".into(),
-                    if *emulator == debt.production {
-                        Value::Null
-                    } else {
-                        emulator.clone()
-                    },
-                );
-                Some(Value::Object(row))
-            })
+            .filter_map(|debt| regenerate_o5_row(debt, &answers))
             .collect();
         std::fs::write(&path, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn regenerate_o5_row(
+    debt: O5Difference,
+    answers: &BTreeMap<(bool, String), Value>,
+) -> Option<Value> {
+    let strict = answers
+        .get(&(true, debt.row.clone()))
+        .unwrap_or_else(|| panic!("missing strict capture: {}", debt.row));
+    let emulator = answers
+        .get(&(false, debt.row.clone()))
+        .unwrap_or_else(|| panic!("missing emulator capture: {}", debt.row));
+    if *strict == debt.production
+        && *emulator == debt.production
+        && debt.category != "unknown-production-outcome"
+    {
+        return None;
+    }
+    Some(
+        json!({"row": debt.row, "category": debt.category, "reason": debt.reason,
+        "production": debt.production, "strict": strict,
+        "emulator": if *emulator == debt.production { Value::Null } else { emulator.clone() }}),
+    )
+}
+
+#[test]
+fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
+    let rows = o5_difference_rows();
+    let unknown = rows
+        .iter()
+        .find(|row| row.row == O5_INTERNAL_ROW)
+        .unwrap()
+        .clone();
+    validate_o5_pin(&unknown);
+    for invalid in [
+        O5Difference {
+            row: "fs-ent-pipeline/o5/other#unknown".to_owned(),
+            ..unknown.clone()
+        },
+        O5Difference {
+            category: "unsupported-subset".to_owned(),
+            ..unknown.clone()
+        },
+        O5Difference {
+            production: json!({"status":500}),
+            ..unknown.clone()
+        },
+        O5Difference {
+            strict: json!({"status":501}),
+            ..unknown.clone()
+        },
+        O5Difference {
+            emulator: Some(unknown.production.clone()),
+            ..unknown.clone()
+        },
+    ] {
+        assert!(std::panic::catch_unwind(|| validate_o5_pin(&invalid)).is_err());
+    }
+    let ordinary = rows
+        .iter()
+        .find(|row| row.row != O5_INTERNAL_ROW)
+        .unwrap()
+        .clone();
+    validate_o5_pin(&ordinary);
+    let stale = O5Difference {
+        strict: ordinary.production.clone(),
+        ..ordinary.clone()
+    };
+    assert!(std::panic::catch_unwind(|| validate_o5_pin(&stale)).is_err());
+    assert!(o5_pinned_match_valid(O5_INTERNAL_ROW, true, true));
+    assert!(!o5_pinned_match_valid(O5_INTERNAL_ROW, false, true));
+    assert!(!o5_pinned_match_valid(&ordinary.row, true, true));
+    assert!(!o5_pinned_match_valid(&ordinary.row, false, true));
+    for row in O8A_INTERNAL_ROWS {
+        assert!(o8a_internal_binding_valid(row, &recorded_internal_answer()));
+        assert!(!o8a_internal_binding_valid(row, &json!({"status":500})));
+    }
+    assert!(!o8a_internal_binding_valid(
+        "not-recorded",
+        &recorded_internal_answer()
+    ));
+}
+
+#[test]
+fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
+    let rows = o5_difference_rows();
+    let unknown = rows
+        .iter()
+        .find(|row| row.row == O5_INTERNAL_ROW)
+        .unwrap()
+        .clone();
+    let mut answers = BTreeMap::new();
+    answers.insert((true, unknown.row.clone()), unknown.production.clone());
+    assert!(std::panic::catch_unwind(|| regenerate_o5_row(unknown.clone(), &answers)).is_err());
+    answers.insert((false, unknown.row.clone()), unknown.production.clone());
+    let kept = regenerate_o5_row(unknown.clone(), &answers).unwrap();
+    assert_eq!(kept["row"], O5_INTERNAL_ROW);
+    assert_eq!(kept["category"], "unknown-production-outcome");
+    assert_eq!(kept["production"], unknown.production);
+    let ordinary = rows
+        .iter()
+        .find(|row| row.row != O5_INTERNAL_ROW)
+        .unwrap()
+        .clone();
+    let both = BTreeMap::from([
+        ((true, ordinary.row.clone()), ordinary.production.clone()),
+        ((false, ordinary.row.clone()), ordinary.production.clone()),
+    ]);
+    assert!(regenerate_o5_row(ordinary, &both).is_none());
 }
 
 /// Whether a step of a pending program is pinned as matching production in a profile.

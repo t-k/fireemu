@@ -6,11 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "std-only Firestore core: field paths, value ordering, logical size, query AST, index validation"
+description = "Firestore core: field paths, value ordering, logical size, query AST, index validation"
 
 [dependencies]
 fireemu-core-types = { path = "../fireemu-core-types" }
 fireemu-core-limits = { path = "../fireemu-core-limits" }
+regex = "1.13.1"
 
 [dev-dependencies]
 fireemu-adapter-support = { path = "../fireemu-adapter-support" }

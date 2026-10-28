@@ -15,14 +15,18 @@
 //!
 //! What production did not answer is [`EvalError::Unobserved`] under strict (the arguments of
 //! a shape no row covers, a null beside a wrong type, a function used as a whole `where`
-//! condition); the emulator profile evaluates it by the same rules. The four `regex_*`
-//! functions are not here: they need a regular expression engine.
+//! condition); the emulator profile evaluates it by the same rules. Regex inputs use a bounded
+//! Rust regex engine; general RE2 equivalence beyond the recorded cases is not established.
 
 use super::{first_error, type_name, Arity, Context, Eval, EvalError, Function, Unrecorded};
 use crate::value::Value;
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 22] = [
+pub const NAMES: [&str; 26] = [
+    "regex_contains",
+    "regex_match",
+    "regex_find",
+    "regex_find_all",
     "concat",
     "to_lower",
     "to_upper",
@@ -46,6 +50,48 @@ pub const NAMES: [&str; 22] = [
     "ceil",
     "pow",
 ];
+
+const REGEX_CONTAINS_SIGNATURE: &str =
+    "regex_contains[T: string | regex](search_space: string, regexp: T): boolean";
+const REGEX_MATCH_SIGNATURE: &str =
+    "regex_match[T: string | regex](search_space: string, regexp: T): boolean";
+const REGEX_FIND_SIGNATURE: &str =
+    "regex_find[T: string | regex](search_space: string, regexp: T): string?";
+const REGEX_FIND_ALL_SIGNATURE: &str =
+    "regex_find_all[T: string | regex](search_space: string, regexp: T): array[string?]";
+
+pub(super) const REGEX_CONTAINS: Function = function(
+    "regex_contains",
+    Arity::Exact(2),
+    true,
+    REGEX_CONTAINS_SIGNATURE,
+    &[],
+    eval_regex_contains,
+);
+pub(super) const REGEX_MATCH: Function = function(
+    "regex_match",
+    Arity::Exact(2),
+    true,
+    REGEX_MATCH_SIGNATURE,
+    &[],
+    eval_regex_match,
+);
+pub(super) const REGEX_FIND: Function = function(
+    "regex_find",
+    Arity::Exact(2),
+    false,
+    REGEX_FIND_SIGNATURE,
+    &[],
+    eval_regex_find,
+);
+pub(super) const REGEX_FIND_ALL: Function = function(
+    "regex_find_all",
+    Arity::Exact(2),
+    false,
+    REGEX_FIND_ALL_SIGNATURE,
+    &[],
+    eval_regex_find_all,
+);
 
 const fn function(
     name: &'static str,
@@ -381,6 +427,131 @@ fn int_argument(function: &'static str, arg: &Eval, cx: Context) -> Option<Eval>
         None if strict(cx) => unobserved(function, "a double with no recorded text"),
         None => invalid(format!("Cannot coerce Float64 ({d:?}) to Int64")),
     })
+}
+
+/// Recognize a conservative common RE2/Rust grammar without interpreting escaped literals as syntax.
+/// Constructs outside this subset are unobserved, not reported as production syntax failures.
+fn common_regex_grammar(pattern: &str) -> bool {
+    let mut chars = pattern.chars().peekable();
+    let mut in_class = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => match chars.next() {
+                Some(
+                    '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^'
+                    | '$',
+                ) => {}
+                Some(_) => return false,
+                None => return true,
+            },
+            '[' if in_class => return false,
+            '[' => in_class = true,
+            ']' if in_class => in_class = false,
+            '&' | '-' | '~' if in_class && chars.peek() == Some(&ch) => return false,
+            '{' | '}' if !in_class => return false,
+            '(' if !in_class && chars.peek() == Some(&'?') => {
+                chars.next();
+                if chars.peek() == Some(&':') {
+                    chars.next();
+                    continue;
+                }
+                let mut has_flag = false;
+                loop {
+                    match chars.next() {
+                        Some('i' | 'm' | 's' | 'U') => has_flag = true,
+                        Some('-') => {}
+                        Some(':' | ')') if has_flag => break,
+                        Some(_) => return false,
+                        None => return true,
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Compile a bounded pattern and preserve the distinction between syntax and resource limits.
+fn regex_input<'a>(
+    name: &'static str,
+    args: &'a [Eval],
+    cx: Context,
+    full: bool,
+) -> Result<(&'a str, regex::Regex), Eval> {
+    let values = check(
+        name,
+        args,
+        &[Param::Str("String"), Param::Str("String or Regex")],
+        cx,
+    )?;
+    let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
+        unreachable!()
+    };
+    if strict(cx) && !common_regex_grammar(pattern) {
+        return Err(unobserved(
+            name,
+            "a regex construct outside the common RE2 grammar",
+        ));
+    }
+    let pattern = if full {
+        format!(r"\A(?:{pattern})\z")
+    } else {
+        (*pattern).clone()
+    };
+    let compiled = regex::RegexBuilder::new(&pattern)
+        .size_limit(10 * 1024 * 1024)
+        .dfa_size_limit(2 * 1024 * 1024)
+        .build();
+    match compiled {
+        Ok(regex) => Ok((subject, regex)),
+        Err(regex::Error::Syntax(_)) => Err(invalid("Unsupported regex syntax.")),
+        Err(_) => Err(unobserved(
+            name,
+            "regex compilation exceeded local resources",
+        )),
+    }
+}
+
+fn eval_regex_contains(args: &[Eval], cx: Context) -> Eval {
+    match regex_input("regex_contains", args, cx, false) {
+        Ok((subject, re)) => Eval::Value(Value::Boolean(re.is_match(subject))),
+        Err(error) => error,
+    }
+}
+
+fn eval_regex_match(args: &[Eval], cx: Context) -> Eval {
+    match regex_input("regex_match", args, cx, true) {
+        Ok((subject, re)) => Eval::Value(Value::Boolean(re.is_match(subject))),
+        Err(error) => error,
+    }
+}
+
+fn eval_regex_find(args: &[Eval], cx: Context) -> Eval {
+    match regex_input("regex_find", args, cx, false) {
+        Ok((subject, re)) => re
+            .captures(subject)
+            .and_then(|c| {
+                c.get(usize::from(c.len() > 1))
+                    .map(|m| m.as_str().to_owned())
+            })
+            .map_or_else(null, |s| Eval::Value(Value::String(s))),
+        Err(error) => error,
+    }
+}
+
+fn eval_regex_find_all(args: &[Eval], cx: Context) -> Eval {
+    match regex_input("regex_find_all", args, cx, false) {
+        Ok((subject, re)) => Eval::Value(Value::Array(
+            re.captures_iter(subject)
+                .map(|c| {
+                    c.get(usize::from(c.len() > 1))
+                        .map_or(Value::Null, |m| Value::String(m.as_str().to_owned()))
+                })
+                .collect(),
+        )),
+        Err(error) => error,
+    }
 }
 
 /// `concat(a, b, ...)`: strings, bytes or arrays of one kind joined. The first argument sets the

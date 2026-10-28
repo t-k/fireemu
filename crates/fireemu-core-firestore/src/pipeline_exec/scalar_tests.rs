@@ -81,16 +81,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 22);
-    for name in [
-        "regex_contains",
-        "regex_match",
-        "regex_find",
-        "regex_find_all",
-        "sqrt",
-    ] {
-        assert!(function(name).is_none(), "{name}");
-    }
+    assert_eq!(NAMES.len(), 26);
+    assert!(function("sqrt").is_none());
 }
 
 #[test]
@@ -933,4 +925,985 @@ proptest! {
         };
         prop_assert_eq!(again, got);
     }
+}
+
+#[test]
+fn recorded_array_access_results() {
+    let a = array(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    for (name, args, expected) in [
+        ("array_length", vec![a.clone()], int(3)),
+        ("array_length", vec![array(vec![])], int(0)),
+        ("array_first", vec![a.clone()], int(1)),
+        ("array_last", vec![a.clone()], int(3)),
+        ("array_first", vec![array(vec![])], Eval::Absent),
+        ("array_last", vec![array(vec![])], Eval::Absent),
+        ("array_get", vec![a.clone(), int(0)], int(1)),
+        ("array_get", vec![a.clone(), int(2)], int(3)),
+        ("array_get", vec![a.clone(), int(-1)], int(3)),
+        ("array_get", vec![a.clone(), int(10)], Eval::Absent),
+        ("array_get", vec![a.clone(), null()], null()),
+        ("array_get", vec![null(), int(0)], null()),
+        ("array_get", vec![Eval::Absent, int(0)], null()),
+        (
+            "array_length",
+            vec![text("abc")],
+            wrong("array_length", "Array", "STRING"),
+        ),
+        ("array_first", vec![int(5)], wrong("first", "Array", "LONG")),
+        ("array_last", vec![int(5)], wrong("last", "Array", "LONG")),
+        (
+            "array_get",
+            vec![int(5), int(0)],
+            wrong("array_get", "Array", "LONG"),
+        ),
+        (
+            "array_get",
+            vec![a, dbl(1.5)],
+            invalid("Cannot coerce Float64 (1.5) to Int64"),
+        ),
+    ] {
+        assert_eq!(strict(name, &args), expected, "{name} {args:?}");
+    }
+    let nested = Eval::Error(EvalError::Invalid("nested failure".to_owned()));
+    assert_eq!(strict("array_get", &[nested.clone(), int(0)]), nested);
+    assert!(is_unobserved(&strict("array_get", &[null(), dbl(1.5)])));
+    assert!(is_unobserved(&strict(
+        "array_get",
+        &[array(vec![]), text("0")]
+    )));
+    for name in ["array_length", "array_first", "array_last"] {
+        for arg in [null(), Eval::Absent] {
+            assert_eq!(strict(name, &[arg]), null());
+        }
+    }
+    for name in ["array_first", "array_last"] {
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err().to_string(),
+            format!("The function '{name}(array: array[any]): any' takes [1..1] argument(s), but 0 were provided.")
+        );
+    }
+    assert_eq!(Expr::call("array_length", vec![], Placement::Value).unwrap_err().to_string(), "The function 'array_length(x: array[any]): int64' takes [1..1] argument(s), but 0 were provided.");
+    assert_eq!(Expr::call("array_get", vec![Expr::Constant(Value::Null)], Placement::Value).unwrap_err().to_string(), "The function 'array_get(array: array[any], index: int64): any?' takes [2..2] argument(s), but 1 was provided.");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn array_access_matches_reference_for_nonempty_integer_arrays(items in proptest::collection::vec(any::<i64>(), 1..20), offset in 0usize..40) {
+        let values = items.iter().copied().map(Value::Integer).collect::<Vec<_>>();
+        let argument = array(values);
+        prop_assert_eq!(strict("array_length", std::slice::from_ref(&argument)), int(i64::try_from(items.len()).unwrap()));
+        prop_assert_eq!(strict("array_first", std::slice::from_ref(&argument)), int(items[0]));
+        prop_assert_eq!(strict("array_last", std::slice::from_ref(&argument)), int(*items.last().unwrap()));
+        prop_assert_eq!(strict("array_get", &[argument.clone(), int(-1)]), int(*items.last().unwrap()));
+        let index = offset % items.len();
+        let negative_index = i64::try_from(index).unwrap() - i64::try_from(items.len()).unwrap();
+        prop_assert_eq!(strict("array_get", &[argument, int(negative_index)]), int(items[index]));
+    }
+}
+
+#[test]
+fn array_access_pict_generated_cases() {
+    let cases = [
+        ("length", "populated", "strict"),
+        ("first", "empty", "strict"),
+        ("last", "populated", "strict"),
+        ("get", "populated", "strict"),
+        ("get", "null", "strict"),
+        ("first", "populated", "emulator"),
+        ("last", "null", "emulator"),
+        ("first", "wrong", "strict"),
+        ("last", "wrong", "emulator"),
+        ("last", "absent", "strict"),
+        ("length", "empty", "emulator"),
+        ("last", "empty", "strict"),
+        ("get", "empty", "emulator"),
+        ("length", "absent", "emulator"),
+        ("first", "null", "strict"),
+        ("first", "absent", "strict"),
+        ("get", "absent", "emulator"),
+        ("get", "wrong", "emulator"),
+        ("length", "null", "strict"),
+        ("length", "wrong", "emulator"),
+    ];
+    for (operation, input, profile) in cases {
+        let name = format!("array_{operation}");
+        let arg = match input {
+            "populated" => array(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
+            "empty" => array(vec![]),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" if operation == "length" => text("abc"),
+            "wrong" => int(5),
+            _ => unreachable!(),
+        };
+        let mut args = vec![arg];
+        if operation == "get" {
+            args.push(int(0));
+        }
+        let expected = match (operation, input) {
+            (_, "null" | "absent") => null(),
+            ("length", "wrong") => wrong("array_length", "Array", "STRING"),
+            ("first", "wrong") => wrong("first", "Array", "LONG"),
+            ("last", "wrong") => wrong("last", "Array", "LONG"),
+            ("get", "wrong") => wrong("array_get", "Array", "LONG"),
+            ("length", "empty") => int(0),
+            (_, "empty") => Eval::Absent,
+            ("length" | "last", "populated") => int(3),
+            (_, "populated") => int(1),
+            _ => unreachable!(),
+        };
+        let actual = if profile == "strict" {
+            strict(&name, &args)
+        } else {
+            emulator(&name, &args)
+        };
+        assert_eq!(actual, expected, "{operation} {input} {profile}");
+    }
+}
+
+#[test]
+fn map_get_recorded_and_pict_cases() {
+    let inner = Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect());
+    let map = Eval::Value(Value::Map(
+        [
+            ("a".to_owned(), Value::Integer(1)),
+            ("b".to_owned(), inner.clone()),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let cases = [
+        ("present", "strict", "select"),
+        ("missing", "strict", "select"),
+        ("dotted", "strict", "select"),
+        ("null", "strict", "select"),
+        ("wrongmap", "strict", "select"),
+        ("wrongkey", "strict", "select"),
+        ("present", "emulator", "nested"),
+        ("nested", "strict", "nested"),
+        ("empty", "emulator", "select"),
+        ("absent", "strict", "nested"),
+        ("wrongmap", "emulator", "nested"),
+        ("dotted", "emulator", "nested"),
+        ("wrongkey", "emulator", "nested"),
+        ("absent", "emulator", "select"),
+        ("missing", "emulator", "nested"),
+        ("empty", "strict", "nested"),
+        ("null", "emulator", "nested"),
+        ("nested", "emulator", "select"),
+    ];
+    for (input, profile, placement) in cases {
+        let (m, key, expected) = match input {
+            "present" => (map.clone(), text("a"), int(1)),
+            "missing" => (map.clone(), text("zz"), Eval::Absent),
+            "dotted" => (map.clone(), text("b.c"), Eval::Absent),
+            "nested" => (map.clone(), text("b"), Eval::Value(inner.clone())),
+            "empty" => (
+                Eval::Value(Value::Map(BTreeMap::new())),
+                text("a"),
+                Eval::Absent,
+            ),
+            "null" => (null(), text("a"), null()),
+            "absent" => (Eval::Absent, text("a"), null()),
+            "wrongmap" => (array(vec![]), text("a"), wrong("map_get", "Map", "ARRAY")),
+            "wrongkey" => (map.clone(), int(1), wrong("map_get", "String", "LONG")),
+            _ => unreachable!(),
+        };
+        let as_expr = |value: Eval| match value {
+            Eval::Value(value) => Expr::Constant(value),
+            Eval::Absent => Expr::Field(FieldPath::parse("missing").unwrap()),
+            Eval::Error(_) => unreachable!(),
+        };
+        let call = Expr::call("map_get", vec![as_expr(m), as_expr(key)], Placement::Value).unwrap();
+        let (expr, expected) = if placement == "nested" {
+            let wrapped = match expected {
+                Eval::Value(value) => array(vec![value]),
+                Eval::Absent => array(vec![Value::Null]),
+                Eval::Error(error) => Eval::Error(error),
+            };
+            (
+                Expr::call("array", vec![call], Placement::Value).unwrap(),
+                wrapped,
+            )
+        } else {
+            (call, expected)
+        };
+        let mode = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            expr.eval_in(&Row::derived(BTreeMap::new()), mode),
+            expected,
+            "{input} {profile} {placement}"
+        );
+    }
+    assert_eq!(strict("map_get", &[map.clone(), null()]), null());
+    assert_eq!(strict("map_get", &[map.clone(), Eval::Absent]), null());
+    assert!(is_unobserved(&strict("map_get", &[null(), int(1)])));
+    assert!(is_unobserved(&strict("map_get", &[array(vec![]), int(1)])));
+    let err = invalid("nested error");
+    assert_eq!(strict("map_get", &[err.clone(), text("a")]), err);
+    for (args, n, verb) in [
+        (vec![], 0, "were"),
+        (vec![Expr::Constant(Value::Null)], 1, "was"),
+    ] {
+        assert_eq!(Expr::call("map_get", args, Placement::Value).unwrap_err().to_string(), format!("The function 'map_get(map: map[string, any], key: string): any?' takes [2..2] argument(s), but {n} {verb} provided."));
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn map_get_matches_literal_key_reference(entries in proptest::collection::btree_map(".{0,8}", any::<i64>(), 0..20), key in ".{0,8}") {
+        let expected = entries.get(&key).map_or(Eval::Absent, |v| int(*v));
+        let values = entries.into_iter().map(|(k, v)| (k, Value::Integer(v))).collect();
+        prop_assert_eq!(strict("map_get", &[Eval::Value(Value::Map(values)), text(&key)]), expected);
+    }
+}
+
+#[test]
+fn regex_recorded_production_cases() {
+    let subject = text("Hello World");
+    let yes = Eval::Value(Value::Boolean(true));
+    let no = Eval::Value(Value::Boolean(false));
+    let strings = |items: &[&str]| {
+        array(
+            items
+                .iter()
+                .map(|s| Value::String((*s).to_owned()))
+                .collect(),
+        )
+    };
+    for (name, args, expected) in [
+        (
+            "regex_contains",
+            vec![subject.clone(), text("o W")],
+            yes.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("xyz")],
+            no.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("^Hello")],
+            yes.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("^World")],
+            no.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("hello")],
+            no.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("(?i)hello")],
+            yes.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![subject.clone(), text("")],
+            yes.clone(),
+        ),
+        (
+            "regex_contains",
+            vec![text("héllo ☃😀"), text("☃")],
+            yes.clone(),
+        ),
+        (
+            "regex_match",
+            vec![subject.clone(), text("H.*d")],
+            yes.clone(),
+        ),
+        (
+            "regex_match",
+            vec![subject.clone(), text("o W")],
+            no.clone(),
+        ),
+        (
+            "regex_match",
+            vec![subject.clone(), text("^Hello World$")],
+            yes.clone(),
+        ),
+        ("regex_match", vec![text(""), text("")], yes.clone()),
+        ("regex_find", vec![subject.clone(), text("o")], text("o")),
+        ("regex_find", vec![subject.clone(), text("xyz")], null()),
+        (
+            "regex_find",
+            vec![subject.clone(), text("(W)orld")],
+            text("W"),
+        ),
+        ("regex_find", vec![subject.clone(), text("x*")], text("")),
+        (
+            "regex_find_all",
+            vec![subject.clone(), text("o")],
+            strings(&["o", "o"]),
+        ),
+        (
+            "regex_find_all",
+            vec![subject.clone(), text("xyz")],
+            strings(&[]),
+        ),
+        (
+            "regex_find_all",
+            vec![text("aaa"), text("aa")],
+            strings(&["aa"]),
+        ),
+        (
+            "regex_find_all",
+            vec![text("abc"), text("x*")],
+            strings(&["", "", "", ""]),
+        ),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    assert_eq!(
+        both("regex_match", &[subject.clone(), text("[")]),
+        invalid("Unsupported regex syntax.")
+    );
+    for name in [
+        "regex_contains",
+        "regex_match",
+        "regex_find",
+        "regex_find_all",
+    ] {
+        assert_eq!(
+            both(name, &[subject.clone(), text("(")]),
+            invalid("Unsupported regex syntax.")
+        );
+        assert_eq!(both(name, &[null(), text("a")]), null());
+        assert_eq!(both(name, &[Eval::Absent, text("a")]), null());
+        assert_eq!(
+            both(name, &[int(1), text("a")]),
+            wrong(name, "String", "LONG")
+        );
+        assert_eq!(both(name, &[subject.clone(), null()]), null());
+        assert_eq!(
+            both(name, &[subject.clone(), int(1)]),
+            wrong(name, "String or Regex", "LONG")
+        );
+        for (n, verb) in [(0, "were"), (1, "was")] {
+            let result = match name {
+                "regex_contains" | "regex_match" => "boolean",
+                "regex_find" => "string?",
+                _ => "array[string?]",
+            };
+            let args = vec![Expr::Constant(Value::Null); n];
+            let signature =
+                format!("{name}[T: string | regex](search_space: string, regexp: T): {result}");
+            assert_eq!(
+                Expr::call(name, args, Placement::Value)
+                    .unwrap_err()
+                    .to_string(),
+                format!(
+                    "The function '{signature}' takes [2..2] argument(s), but {n} {verb} provided."
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn regex_pict_generated_cases() {
+    let cases = [
+        ("contains", "text", "match", "strict"),
+        ("match", "text", "match", "strict"),
+        ("find", "text", "match", "strict"),
+        ("find_all", "text", "match", "strict"),
+        ("contains", "null", "match", "strict"),
+        ("contains", "text", "invalid", "strict"),
+        ("match", "null", "empty", "emulator"),
+        ("find_all", "absent", "match", "emulator"),
+        ("match", "empty", "no_match", "emulator"),
+        ("match", "empty", "invalid", "emulator"),
+        ("find", "empty", "null", "emulator"),
+        ("find", "empty", "invalid", "strict"),
+        ("contains", "text", "wrong", "emulator"),
+        ("contains", "absent", "empty", "strict"),
+        ("find_all", "text", "empty", "strict"),
+        ("find_all", "empty", "wrong", "strict"),
+        ("contains", "empty", "match", "emulator"),
+        ("find_all", "wrong", "no_match", "strict"),
+        ("find", "wrong", "empty", "emulator"),
+        ("find_all", "empty", "empty", "emulator"),
+        ("find", "null", "no_match", "strict"),
+        ("find", "text", "wrong", "emulator"),
+        ("find_all", "null", "null", "strict"),
+        ("contains", "text", "no_match", "strict"),
+        ("contains", "wrong", "match", "strict"),
+        ("find_all", "text", "invalid", "emulator"),
+        ("match", "absent", "null", "emulator"),
+        ("contains", "text", "null", "strict"),
+        ("match", "wrong", "match", "emulator"),
+        ("find", "absent", "no_match", "emulator"),
+        ("match", "empty", "wrong", "strict"),
+    ];
+    for (function, subject, pattern, profile) in cases {
+        let name = match function {
+            "contains" => "regex_contains",
+            "match" => "regex_match",
+            "find" => "regex_find",
+            _ => "regex_find_all",
+        };
+        let input = match subject {
+            "text" => text("abc"),
+            "empty" => text(""),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" => int(1),
+            _ => unreachable!(),
+        };
+        let pattern_arg = match pattern {
+            "match" => text("b"),
+            "no_match" => text("z"),
+            "empty" => text(""),
+            "invalid" => text("("),
+            "null" => null(),
+            "wrong" => int(1),
+            _ => unreachable!(),
+        };
+        let expected = if subject == "wrong" {
+            wrong(name, "String", "LONG")
+        } else if pattern == "wrong" {
+            wrong(name, "String or Regex", "LONG")
+        } else if subject == "null" || subject == "absent" || pattern == "null" {
+            null()
+        } else if pattern == "invalid" {
+            invalid("Unsupported regex syntax.")
+        } else {
+            let matches = pattern == "empty" || (pattern == "match" && subject == "text");
+            let full = pattern == "empty" && subject == "empty";
+            match function {
+                "contains" => Eval::Value(Value::Boolean(matches)),
+                "match" => Eval::Value(Value::Boolean(full)),
+                "find" if !matches => null(),
+                "find" => text(if pattern == "empty" { "" } else { "b" }),
+                "find_all" if !matches => array(vec![]),
+                "find_all" if pattern == "empty" => {
+                    array(vec![
+                        Value::String(String::new());
+                        if subject == "empty" { 1 } else { 4 }
+                    ])
+                }
+                "find_all" => array(vec![Value::String("b".to_owned())]),
+                _ => unreachable!(),
+            }
+        };
+        let got = if profile == "strict" {
+            strict(name, &[input, pattern_arg])
+        } else {
+            emulator(name, &[input, pattern_arg])
+        };
+        assert_eq!(got, expected, "{function} {subject} {pattern} {profile}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+    #[test]
+    fn regex_contains_and_match_agree_with_literal_reference(prefix in "[a-z]{0,8}", suffix in "[a-z]{0,8}") {
+        let subject = format!("{prefix}Q{suffix}");
+        prop_assert_eq!(strict("regex_contains", &[text(&subject), text("Q")]), Eval::Value(Value::Boolean(true)));
+        prop_assert_eq!(strict("regex_match", &[text(&subject), text("Q")]), Eval::Value(Value::Boolean(prefix.is_empty() && suffix.is_empty())));
+        prop_assert_eq!(strict("regex_find_all", &[text(&subject), text("Q")]), array(vec![Value::String("Q".to_owned())]));
+    }
+}
+
+#[test]
+fn regex_strict_guards_known_re2_differences() {
+    for (subject, pattern) in [
+        ("١", r"\d"),
+        ("١", r"\D"),
+        ("é", r"\w"),
+        ("é", r"\W"),
+        (" ", r"\s"),
+        (" ", r"\S"),
+        ("é", r"\bé\b"),
+        ("é", r"\B"),
+        ("\u{000b}", r"\s"),
+        ("ab", "(?x)a b"),
+        ("a", "[a&&b]"),
+        ("α", r"\p{Greek}"),
+        ("a", r"[\d]"),
+        ("a", r"\Qabc\E"),
+        ("a", r"\C"),
+        ("a", "(?u)a"),
+        ("a", "(?R)^a$"),
+        ("a", "[a--b]"),
+        ("a", "[a~~b]"),
+        ("a", "[a[b]]"),
+        ("a", "a{2}"),
+    ] {
+        assert!(
+            is_unobserved(&strict("regex_contains", &[text(subject), text(pattern)])),
+            "{subject:?} {pattern:?}"
+        );
+    }
+    for name in [
+        "regex_contains",
+        "regex_match",
+        "regex_find",
+        "regex_find_all",
+    ] {
+        assert!(is_unobserved(&strict(name, &[text("١"), text(r"\d")])));
+    }
+    assert_eq!(
+        emulator("regex_contains", &[text("١"), text(r"\d")]),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert_eq!(
+        strict("regex_contains", &[text("☃"), text("☃")]),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert_eq!(
+        strict("regex_contains", &[text(r"\d"), text(r"\\d")]),
+        Eval::Value(Value::Boolean(true))
+    );
+    for (subject, pattern) in [
+        ("[", r"\["),
+        ("{", r"\{"),
+        ("?", r"\?"),
+        ("a", "[a-z]"),
+        ("z", "[^a]"),
+        ("foo", "(?im:foo)"),
+        ("a&&b", "a&&b"),
+        (r"\s", r"\\s"),
+    ] {
+        assert_eq!(
+            strict("regex_contains", &[text(subject), text(pattern)]),
+            Eval::Value(Value::Boolean(true)),
+            "{pattern}"
+        );
+    }
+    assert_eq!(
+        strict("regex_contains", &[text("Hello"), text("(?i)hello")]),
+        Eval::Value(Value::Boolean(true))
+    );
+}
+
+#[test]
+fn map_family_recorded_cases() {
+    let m = Eval::Value(Value::Map(
+        [
+            ("a".to_owned(), Value::Integer(1)),
+            (
+                "b".to_owned(),
+                Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect()),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    let empty = Eval::Value(Value::Map(BTreeMap::new()));
+    let mk = |pairs: &[(&str, Value)]| {
+        Eval::Value(Value::Map(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect(),
+        ))
+    };
+    let inner = Value::Map([("c".to_owned(), Value::Integer(2))].into_iter().collect());
+    let inner_d = Value::Map([("d".to_owned(), Value::Integer(2))].into_iter().collect());
+    for (name, args, expected) in [
+        (
+            "map_set",
+            vec![m.clone(), text("z"), int(9)],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("a"), int(9)],
+            mk(&[("a", Value::Integer(9)), ("b", inner.clone())]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("y"), int(8), text("z"), int(9)],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("y", Value::Integer(8)),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("z"), null()],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Null),
+            ]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), text("a"), Eval::Absent],
+            mk(&[("b", inner.clone())]),
+        ),
+        (
+            "map_set",
+            vec![m.clone(), int(1), int(9)],
+            invalid("map_set keys must be of type STRING, given type is LONG"),
+        ),
+        (
+            "map_remove",
+            vec![m.clone(), text("a")],
+            mk(&[("b", inner.clone())]),
+        ),
+        ("map_remove", vec![m.clone(), text("zz")], m.clone()),
+        (
+            "map_remove",
+            vec![m.clone(), text("a"), text("b")],
+            empty.clone(),
+        ),
+        (
+            "map_remove",
+            vec![m.clone(), int(1)],
+            wrong("map_remove", "String", "LONG"),
+        ),
+        (
+            "map_merge",
+            vec![m.clone(), mk(&[("z", Value::Integer(9))])],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", inner.clone()),
+                ("z", Value::Integer(9)),
+            ]),
+        ),
+        (
+            "map_merge",
+            vec![
+                mk(&[("a", Value::Integer(1))]),
+                mk(&[("a", Value::Integer(2))]),
+            ],
+            mk(&[("a", Value::Integer(2))]),
+        ),
+        (
+            "map_merge",
+            vec![
+                mk(&[("a", Value::Integer(1))]),
+                mk(&[("b", Value::Integer(2))]),
+                mk(&[("c", Value::Integer(3))]),
+            ],
+            mk(&[
+                ("a", Value::Integer(1)),
+                ("b", Value::Integer(2)),
+                ("c", Value::Integer(3)),
+            ]),
+        ),
+        ("map_merge", vec![m.clone(), empty.clone()], m.clone()),
+        (
+            "map_merge",
+            vec![mk(&[("b", inner.clone())]), mk(&[("b", inner_d.clone())])],
+            mk(&[("b", inner_d)]),
+        ),
+        ("map_merge", vec![m.clone(), null()], null()),
+        ("map_merge", vec![m.clone(), Eval::Absent], null()),
+        (
+            "map_merge",
+            vec![m.clone(), array(vec![])],
+            wrong("map_merge", "Map", "ARRAY"),
+        ),
+        (
+            "map_keys",
+            vec![m.clone()],
+            array(vec![
+                Value::String("a".to_owned()),
+                Value::String("b".to_owned()),
+            ]),
+        ),
+        (
+            "map_values",
+            vec![m.clone()],
+            array(vec![Value::Integer(1), inner.clone()]),
+        ),
+        (
+            "map_entries",
+            vec![m.clone()],
+            array(vec![
+                Value::Map(
+                    [
+                        ("k".to_owned(), Value::String("a".to_owned())),
+                        ("v".to_owned(), Value::Integer(1)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                Value::Map(
+                    [
+                        ("k".to_owned(), Value::String("b".to_owned())),
+                        ("v".to_owned(), inner),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]),
+        ),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    assert!(is_unobserved(&strict("map_set", &[null(), int(1), int(9)])));
+    assert!(is_unobserved(&strict("map_remove", &[null(), int(1)])));
+    assert!(is_unobserved(&strict(
+        "map_merge",
+        &[null(), array(vec![])]
+    )));
+    for name in ["map_set", "map_remove"] {
+        for arg in [null(), Eval::Absent] {
+            let args = if name == "map_set" {
+                vec![arg, text("z"), int(9)]
+            } else {
+                vec![arg, text("a")]
+            };
+            assert_eq!(
+                both(name, &args),
+                if name == "map_set" {
+                    Eval::Absent
+                } else {
+                    null()
+                }
+            );
+        }
+    }
+    for name in ["map_keys", "map_values", "map_entries"] {
+        assert_eq!(both(name, std::slice::from_ref(&empty)), array(vec![]));
+        assert_eq!(both(name, &[null()]), null());
+        assert_eq!(both(name, &[Eval::Absent]), null());
+        assert_eq!(both(name, &[array(vec![])]), wrong(name, "Map", "ARRAY"));
+    }
+    for (name, args, expected) in [
+        ("map_set", 2, "The function 'map_set(map: map[string, any], entries: any*): map[string, any]' takes [3..+∞) argument(s), but 2 were provided."),
+        ("map_remove", 1, "The function 'map_remove(map: map[string, any], key: string*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided."),
+        ("map_merge", 1, "The function 'map_merge(maps: map[string, any]*): map[string, any]' takes [2..+∞) argument(s), but 1 was provided."),
+        ("map_keys", 0, "The function 'map_keys(map: map[string, any]): array[string]' takes [1..1] argument(s), but 0 were provided."),
+        ("map_values", 0, "The function 'map_values(map: map[string, any]): array[any]' takes [1..1] argument(s), but 0 were provided."),
+        ("map_entries", 0, "The function 'map_entries(map: map[string, any]): array[map[string, any]]' takes [1..1] argument(s), but 0 were provided."),
+    ] { assert_eq!(Expr::call(name,vec![Expr::Constant(Value::Null);args],Placement::Value).unwrap_err().to_string(),expected); }
+    for (name, signature, min) in [
+        (
+            "map_set",
+            "map_set(map: map[string, any], entries: any*): map[string, any]",
+            3,
+        ),
+        (
+            "map_remove",
+            "map_remove(map: map[string, any], key: string*): map[string, any]",
+            2,
+        ),
+        (
+            "map_merge",
+            "map_merge(maps: map[string, any]*): map[string, any]",
+            2,
+        ),
+    ] {
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "The function '{signature}' takes [{min}..+∞) argument(s), but 0 were provided."
+            )
+        );
+    }
+    assert_eq!(
+        Expr::call(
+            "map_set",
+            vec![Expr::Constant(Value::Null); 4],
+            Placement::Value
+        )
+        .unwrap_err()
+        .to_string(),
+        "'map_set' function must have an odd number of arguments"
+    );
+}
+
+#[test]
+fn map_family_pict_generated_cases() {
+    let cases = [
+        ("set", "populated", "strict"),
+        ("set", "null", "strict"),
+        ("remove", "populated", "strict"),
+        ("merge", "populated", "strict"),
+        ("keys", "populated", "strict"),
+        ("values", "populated", "strict"),
+        ("entries", "populated", "strict"),
+        ("merge", "wrong", "emulator"),
+        ("keys", "empty", "emulator"),
+        ("remove", "null", "emulator"),
+        ("remove", "empty", "strict"),
+        ("merge", "null", "strict"),
+        ("values", "empty", "emulator"),
+        ("entries", "wrong", "emulator"),
+        ("keys", "wrong", "strict"),
+        ("set", "absent", "emulator"),
+        ("values", "null", "strict"),
+        ("keys", "null", "emulator"),
+        ("keys", "absent", "strict"),
+        ("entries", "null", "emulator"),
+        ("set", "wrong", "emulator"),
+        ("merge", "empty", "strict"),
+        ("values", "absent", "emulator"),
+        ("merge", "absent", "emulator"),
+        ("entries", "empty", "emulator"),
+        ("values", "wrong", "emulator"),
+        ("remove", "wrong", "emulator"),
+        ("entries", "absent", "emulator"),
+        ("set", "empty", "emulator"),
+        ("remove", "absent", "strict"),
+        ("entries", "populated", "emulator"),
+    ];
+    for (function, input, profile) in cases {
+        let name = match function {
+            "set" => "map_set",
+            "remove" => "map_remove",
+            "merge" => "map_merge",
+            "keys" => "map_keys",
+            "values" => "map_values",
+            _ => "map_entries",
+        };
+        let m = match input {
+            "populated" => Eval::Value(Value::Map(
+                [("a".to_owned(), Value::Integer(1))].into_iter().collect(),
+            )),
+            "empty" => Eval::Value(Value::Map(BTreeMap::new())),
+            "null" => null(),
+            "absent" => Eval::Absent,
+            "wrong" => array(vec![]),
+            _ => unreachable!(),
+        };
+        let args = match function {
+            "set" => vec![m.clone(), text("b"), int(2)],
+            "remove" => vec![m.clone(), text("a")],
+            "merge" => vec![m.clone(), Eval::Value(Value::Map(BTreeMap::new()))],
+            _ => vec![m.clone()],
+        };
+        let expected = if input == "wrong" {
+            wrong(name, "Map", "ARRAY")
+        } else if input == "null" || input == "absent" {
+            if function == "set" {
+                Eval::Absent
+            } else {
+                null()
+            }
+        } else {
+            match function {
+                "set" => {
+                    let Eval::Value(Value::Map(mut m)) = m else {
+                        unreachable!()
+                    };
+                    m.insert("b".to_owned(), Value::Integer(2));
+                    Eval::Value(Value::Map(m))
+                }
+                "remove" => Eval::Value(Value::Map(BTreeMap::new())),
+                "merge" => m,
+                "keys" => array(if input == "populated" {
+                    vec![Value::String("a".to_owned())]
+                } else {
+                    vec![]
+                }),
+                "values" => array(if input == "populated" {
+                    vec![Value::Integer(1)]
+                } else {
+                    vec![]
+                }),
+                _ => array(if input == "populated" {
+                    vec![Value::Map(
+                        [
+                            ("k".to_owned(), Value::String("a".to_owned())),
+                            ("v".to_owned(), Value::Integer(1)),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )]
+                } else {
+                    vec![]
+                }),
+            }
+        };
+        let got = if profile == "strict" {
+            strict(name, &args)
+        } else {
+            emulator(name, &args)
+        };
+        assert_eq!(got, expected, "{function} {input} {profile}");
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+    #[test]
+    fn map_family_pairs_and_absent_deletion(entries in proptest::collection::btree_map("[a-z]{1,6}", any::<i64>(), 0..15), key in "[a-z]{1,6}") {
+        let original: BTreeMap<String,Value> = entries.iter().map(|(k,v)| (k.clone(),Value::Integer(*v))).collect();
+        let m = Eval::Value(Value::Map(original.clone()));
+        let mut removed = original.clone(); removed.remove(&key);
+        prop_assert_eq!(strict("map_set", &[m.clone(),text(&key),Eval::Absent]), Eval::Value(Value::Map(removed)));
+        let keys = strict("map_keys", std::slice::from_ref(&m));
+        let values = strict("map_values", std::slice::from_ref(&m));
+        let expected_keys = array(original.keys().cloned().map(Value::String).collect());
+        let expected_values = array(original.values().cloned().collect());
+        let expected_entries = array(original.iter().map(|(key,value)| Value::Map([("k".to_owned(),Value::String(key.clone())), ("v".to_owned(),value.clone())].into_iter().collect())).collect());
+        prop_assert_eq!(strict("map_entries", std::slice::from_ref(&m)), expected_entries);
+        prop_assert_eq!(keys, expected_keys);
+        prop_assert_eq!(values, expected_values);
+    }
+}
+
+#[test]
+fn map_family_mixed_precedence_is_unobserved() {
+    let m = Eval::Value(Value::Map(BTreeMap::new()));
+    for args in [
+        vec![m.clone(), int(1), null()],
+        vec![m.clone(), null(), int(1)],
+        vec![array(vec![]), int(1)],
+        vec![array(vec![]), null()],
+        vec![m.clone(), int(1), text("x"), null()],
+    ] {
+        assert!(is_unobserved(&strict("map_remove", &args)), "{args:?}");
+    }
+    for args in [
+        vec![array(vec![]), int(1), int(2)],
+        vec![m.clone(), int(1), int(2), null(), int(3)],
+        vec![m.clone(), null(), int(3), int(1), int(2)],
+        vec![array(vec![]), null(), int(2)],
+    ] {
+        assert!(is_unobserved(&strict("map_set", &args)), "{args:?}");
+    }
+    assert_eq!(
+        emulator("map_remove", &[m.clone(), int(1), null()]),
+        wrong("map_remove", "String", "LONG")
+    );
+    assert_eq!(
+        emulator("map_set", &[array(vec![]), int(1), int(2)]),
+        wrong("map_set", "Map", "ARRAY")
+    );
+    assert_eq!(
+        emulator("map_merge", &[int(1), text("x")]),
+        wrong("map_merge", "Map", "LONG")
+    );
+    assert!(is_unobserved(&strict("map_merge", &[int(1), text("x")])));
+    assert!(is_unobserved(&strict("map_merge", &[text("x"), int(1)])));
+    assert!(is_unobserved(&strict(
+        "map_merge",
+        &[array(vec![]), array(vec![])]
+    )));
 }

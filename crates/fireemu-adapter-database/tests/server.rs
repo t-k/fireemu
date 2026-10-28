@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use fireemu_adapter_database::rest::{Database, RestOptions};
 use fireemu_adapter_database::server::{serve, ServerConfig};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 async fn start(keep_alive: Duration) -> (String, Arc<Mutex<Database>>) {
@@ -1464,8 +1464,9 @@ async fn rest_reset_cannot_retain_source_without_its_reserved_event() {
 /// change ends it with the recorded `cancel` event, and the anonymous read is then refused with
 /// production's 401 body while the owner still reads the patched value. The event bytes, the
 /// refusal body and the readback are the recorded production bytes. Production sent the stream
-/// with `Connection: close` and closed the socket after the cancel event; fireemu ends its
-/// chunked body and keeps the connection (a known framing difference of the RTDB closure).
+/// with `Connection: close` and closed the socket after the cancel event. This test uses the
+/// emulator profile, which ends its chunked body and keeps the connection. The strict profile's
+/// socket close and the transfer-framing difference are covered separately below.
 #[tokio::test]
 async fn production_sse_round_replays_the_recorded_events_and_refusal() {
     let (address, _database) = start(Duration::from_secs(60)).await;
@@ -1540,4 +1541,201 @@ async fn production_sse_round_replays_the_recorded_events_and_refusal() {
         unchanged.ends_with("\r\n\r\n{\"value\":2}"),
         "{unchanged:?}"
     );
+}
+
+async fn read_sse_chunk(stream: &mut BufReader<TcpStream>) -> (Vec<u8>, Vec<u8>) {
+    let mut size_line = String::new();
+    stream.read_line(&mut size_line).await.unwrap();
+    assert!(size_line.ends_with("\r\n"), "{size_line:?}");
+    let size = usize::from_str_radix(size_line.trim_end_matches("\r\n"), 16).unwrap();
+    let mut data = vec![0; size];
+    stream.read_exact(&mut data).await.unwrap();
+    let mut crlf = [0; 2];
+    stream.read_exact(&mut crlf).await.unwrap();
+    assert_eq!(&crlf, b"\r\n");
+    let mut wire = size_line.into_bytes();
+    wire.extend_from_slice(&data);
+    wire.extend_from_slice(&crlf);
+    (data, wire)
+}
+
+async fn read_sse_event(stream: &mut BufReader<TcpStream>) -> (Vec<u8>, Vec<u8>) {
+    let mut event = Vec::new();
+    let mut wire = Vec::new();
+    while !event.ends_with(b"\n\n") {
+        let (chunk, raw) = read_sse_chunk(stream).await;
+        assert!(!chunk.is_empty(), "entity ended before the SSE event");
+        event.extend_from_slice(&chunk);
+        wire.extend_from_slice(&raw);
+    }
+    (event, wire)
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep each recorded event and the terminal socket check together.
+async fn sse_framing_matches_profile_without_ending_live_streams() {
+    use fireemu_adapter_database::rest::Credentials;
+    // PICT rows, including the recorded strict/cancel/default case and emulator control.
+    for (strict, cancel, keepalive) in [
+        (true, true, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+        (false, false, true),
+    ] {
+        let rounds = if strict && cancel && !keepalive { 2 } else { 1 };
+        for round in 1..=rounds {
+            let (address, _) = start_full(
+                ServerConfig {
+                    keep_alive: Duration::from_secs(60),
+                    ..ServerConfig::default()
+                },
+                RestOptions {
+                    credentials: Credentials {
+                        strict,
+                        ..Credentials::default()
+                    },
+                    ..RestOptions::default()
+                },
+            )
+            .await;
+            let call = |method: &'static str, target: String, owner: bool, body: &'static str| {
+                let address = address.clone();
+                async move {
+                    let mut socket = TcpStream::connect(&address).await.unwrap();
+                    let auth = if owner {
+                        "Authorization: Bearer owner\r\n"
+                    } else {
+                        ""
+                    };
+                    let request = format!("{method} {target} HTTP/1.1\r\nHost: {address}\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    socket.write_all(request.as_bytes()).await.unwrap();
+                    let mut answer = String::new();
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        socket.read_to_string(&mut answer),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                    answer
+                }
+            };
+            let rules = "/.settings/rules.json?ns=sse03".to_owned();
+            let target = format!("/sseproof20261024/round{round}.json?ns=sse03");
+            let allow = r#"{"rules":{".read":false,".write":false,"sseproof20261024":{".read":true,".write":false}}}"#;
+            let deny = r#"{"rules":{".read":false,".write":false}}"#;
+            assert!(call("PUT", rules.clone(), true, allow)
+                .await
+                .starts_with("HTTP/1.1 200"));
+            assert!(call("PUT", target.clone(), true, r#"{"value":1}"#)
+                .await
+                .starts_with("HTTP/1.1 200"));
+            let mut stream = TcpStream::connect(&address).await.unwrap();
+            let preference = if keepalive {
+                "Connection: keep-alive\r\n"
+            } else {
+                ""
+            };
+            stream.write_all(format!("GET {target} HTTP/1.1\r\nHost: {address}\r\nAccept: text/event-stream\r\n{preference}\r\n").as_bytes()).await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut headers = String::new();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let mut line = String::new();
+                    assert!(stream.read_line(&mut line).await.unwrap() > 0);
+                    headers.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let lower = headers.to_ascii_lowercase();
+            assert!(headers.starts_with("HTTP/1.1 200"), "{headers:?}");
+            assert!(
+                lower
+                    .lines()
+                    .any(|line| line == "content-type: text/event-stream; charset=utf-8"),
+                "{headers:?}"
+            );
+            assert!(
+                lower
+                    .lines()
+                    .any(|line| line == "transfer-encoding: chunked"),
+                "{headers:?}"
+            );
+            assert!(
+                !lower
+                    .lines()
+                    .any(|line| line.starts_with("content-length:")),
+                "{headers:?}"
+            );
+            assert_eq!(
+                lower.lines().any(|line| line == "connection: close"),
+                strict,
+                "{headers:?}"
+            );
+            let (put, raw_put) =
+                tokio::time::timeout(Duration::from_secs(5), read_sse_event(&mut stream))
+                    .await
+                    .unwrap();
+            assert_eq!(
+                put,
+                b"event: put\ndata: {\"path\":\"/\",\"data\":{\"value\":1}}\n\n"
+            );
+            eprintln!("SSE raw profile={strict} cancel={cancel} keepalive={keepalive} round={round} headers={headers:?} put={raw_put:?}");
+            let mut byte = [0u8; 1];
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), stream.read(&mut byte))
+                    .await
+                    .is_err(),
+                "live stream ended before cancellation"
+            );
+            if cancel {
+                assert!(call("PATCH", target.clone(), true, r#"{"value":2}"#)
+                    .await
+                    .starts_with("HTTP/1.1 200"));
+                let (patch, raw_patch) =
+                    tokio::time::timeout(Duration::from_secs(5), read_sse_event(&mut stream))
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    patch,
+                    b"event: patch\ndata: {\"path\":\"/\",\"data\":{\"value\":2}}\n\n"
+                );
+                assert!(call("PUT", rules.clone(), true, deny)
+                    .await
+                    .starts_with("HTTP/1.1 200"));
+                let (cancel_event, raw_cancel) =
+                    tokio::time::timeout(Duration::from_secs(5), read_sse_event(&mut stream))
+                        .await
+                        .unwrap();
+                assert_eq!(cancel_event, b"event: cancel\ndata: Permission denied\n\n");
+                let (terminal, raw_terminal) =
+                    tokio::time::timeout(Duration::from_secs(5), read_sse_chunk(&mut stream))
+                        .await
+                        .unwrap();
+                assert!(terminal.is_empty());
+                assert_eq!(raw_terminal, b"0\r\n\r\n");
+                eprintln!("SSE raw profile={strict} patch={raw_patch:?} cancel={raw_cancel:?} terminal={raw_terminal:?}");
+                if strict {
+                    let eof = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(eof, 0, "socket did not close after the complete entity");
+                }
+                let denied = call("GET", target.clone(), false, "").await;
+                assert!(
+                    denied.starts_with("HTTP/1.1 401")
+                        && denied.ends_with("{\n  \"error\" : \"Permission denied\"\n}\n"),
+                    "{denied:?}"
+                );
+                let owner = call("GET", target, true, "").await;
+                assert!(owner.ends_with("\r\n\r\n{\"value\":2}"), "{owner:?}");
+            }
+        }
+    }
 }

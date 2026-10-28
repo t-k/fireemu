@@ -369,6 +369,36 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(96))]
 
     #[test]
+    fn zero_counts_keep_or_remove_generated_documents(case in case(), strict in any::<bool>()) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = if strict {
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        } else {
+            fireemu_core_firestore::index::IndexValidationPolicy::Emulator
+        };
+        let service = GatewayService::local(gateway, backend);
+        let mut base = case;
+        base.literal = None;
+        base.select = None;
+        base.offset = None;
+        base.limit = None;
+        let all = runtime.block_on(executor(&service, pipeline(&base, "")));
+        base.offset = Some(0);
+        let offset = runtime.block_on(executor(&service, pipeline(&base, "")));
+        base.limit = Some(0);
+        let limit = runtime.block_on(executor(&service, pipeline(&base, "")));
+        prop_assert_eq!(offset, all);
+        prop_assert!(limit.is_empty());
+    }
+
+    #[test]
     fn executor_matches_the_lowering(case in case()) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

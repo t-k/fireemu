@@ -262,6 +262,74 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
+    array_access_function(
+        "array_length",
+        Arity::Exact(1),
+        "array_length(x: array[any]): int64",
+        eval_array_length,
+    ),
+    array_access_function(
+        "array_first",
+        Arity::Exact(1),
+        "array_first(array: array[any]): any",
+        eval_array_first,
+    ),
+    array_access_function(
+        "array_last",
+        Arity::Exact(1),
+        "array_last(array: array[any]): any",
+        eval_array_last,
+    ),
+    array_access_function(
+        "array_get",
+        Arity::Exact(2),
+        "array_get(array: array[any], index: int64): any?",
+        eval_array_get,
+    ),
+    map_family_function(
+        "map_set",
+        Arity::AtLeast(3),
+        "map_set(map: map[string, any], entries: any*): map[string, any]",
+        eval_map_set,
+    ),
+    map_family_function(
+        "map_remove",
+        Arity::AtLeast(2),
+        "map_remove(map: map[string, any], key: string*): map[string, any]",
+        eval_map_remove,
+    ),
+    map_family_function(
+        "map_merge",
+        Arity::AtLeast(2),
+        "map_merge(maps: map[string, any]*): map[string, any]",
+        eval_map_merge,
+    ),
+    map_family_function(
+        "map_keys",
+        Arity::Exact(1),
+        "map_keys(map: map[string, any]): array[string]",
+        eval_map_keys,
+    ),
+    map_family_function(
+        "map_values",
+        Arity::Exact(1),
+        "map_values(map: map[string, any]): array[any]",
+        eval_map_values,
+    ),
+    map_family_function(
+        "map_entries",
+        Arity::Exact(1),
+        "map_entries(map: map[string, any]): array[map[string, any]]",
+        eval_map_entries,
+    ),
+    Function {
+        name: "map_get",
+        arity: Arity::Exact(2),
+        returns_boolean: false,
+        signature: "map_get(map: map[string, any], key: string): any?",
+        overloads: &[],
+        eval: eval_map_get,
+    },
     Function {
         name: "map",
         arity: Arity::Pairs,
@@ -288,6 +356,10 @@ const FUNCTIONS: &[Function] = &[
     logic::ARRAY_CONTAINS_ANY,
     logic::EQUAL_ANY,
     logic::NOT_EQUAL_ANY,
+    scalar::REGEX_CONTAINS,
+    scalar::REGEX_MATCH,
+    scalar::REGEX_FIND,
+    scalar::REGEX_FIND_ALL,
     scalar::CONCAT,
     scalar::TO_LOWER,
     scalar::TO_UPPER,
@@ -420,6 +492,11 @@ impl Expr {
                 args.len()
             )));
         }
+        if name == "map_set" && args.len() % 2 == 0 {
+            return Err(ExprError::Invalid(
+                "'map_set' function must have an odd number of arguments".to_owned(),
+            ));
+        }
         Ok(Self::Call { function, args })
     }
 
@@ -549,6 +626,405 @@ fn eval_array(args: &[Eval], _cx: Context) -> Eval {
             })
             .collect(),
     ))
+}
+
+/// A recorded array-access function.
+const fn array_access_function(
+    name: &'static str,
+    arity: Arity,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
+    Function {
+        name,
+        arity,
+        returns_boolean: false,
+        signature,
+        overloads: &[],
+        eval,
+    }
+}
+
+fn array_access<'a>(
+    args: &'a [Eval],
+    name: &'static str,
+    cx: Context,
+) -> Result<&'a [Value], Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    let missing = args
+        .iter()
+        .any(|a| matches!(a, Eval::Absent | Eval::Value(Value::Null)));
+    if missing
+        && cx.unrecorded == Unrecorded::Refuse
+        && args.get(1).is_some_and(|arg| {
+            matches!(arg, Eval::Value(value) if !matches!(value, Value::Integer(_) | Value::Null))
+        })
+    {
+        return Err(Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "a null beside an argument of an unrecorded type",
+        }));
+    }
+    if let Eval::Value(value) = &args[0] {
+        if !matches!(value, Value::Array(_) | Value::Null) {
+            let recorded = matches!(
+                (name, value),
+                ("array_length", Value::String(_))
+                    | ("first" | "last" | "array_get", Value::Integer(_))
+            );
+            if cx.unrecorded == Unrecorded::Refuse && (!recorded || missing) {
+                return Err(Eval::Error(EvalError::Unobserved {
+                    function: name,
+                    reason: "an unrecorded array argument",
+                }));
+            }
+            return Err(Eval::Error(EvalError::WrongType {
+                function: name,
+                expected: "Array",
+                got: type_name(value),
+            }));
+        }
+    }
+    if missing {
+        return Err(Eval::Value(Value::Null));
+    }
+    match &args[0] {
+        Eval::Value(Value::Array(values)) => Ok(values),
+        _ => unreachable!("missing and errors were handled above"),
+    }
+}
+
+fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "array_length", cx) {
+        Ok(values) => Eval::Value(Value::Integer(
+            i64::try_from(values.len()).unwrap_or(i64::MAX),
+        )),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_first(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "first", cx) {
+        Ok(values) => values.first().cloned().map_or(Eval::Absent, Eval::Value),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_last(args: &[Eval], cx: Context) -> Eval {
+    match array_access(args, "last", cx) {
+        Ok(values) => values.last().cloned().map_or(Eval::Absent, Eval::Value),
+        Err(result) => result,
+    }
+}
+
+fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
+    let values = match array_access(args, "array_get", cx) {
+        Ok(values) => values,
+        Err(result) => return result,
+    };
+    let index = match &args[1] {
+        Eval::Value(Value::Integer(index)) => *index,
+        Eval::Value(Value::Double(value)) if value.to_bits() == 1.5_f64.to_bits() => {
+            return Eval::Error(EvalError::Invalid(
+                "Cannot coerce Float64 (1.5) to Int64".to_owned(),
+            ))
+        }
+        _ => {
+            return Eval::Error(EvalError::Unobserved {
+                function: "array_get",
+                reason: "an unrecorded index type",
+            })
+        }
+    };
+    let offset = if index < 0 {
+        i64::try_from(values.len())
+            .ok()
+            .and_then(|len| len.checked_add(index))
+            .and_then(|i| usize::try_from(i).ok())
+    } else {
+        usize::try_from(index).ok()
+    };
+    offset
+        .and_then(|i| values.get(i))
+        .cloned()
+        .map_or(Eval::Absent, Eval::Value)
+}
+
+/// A map function with production's recorded argument-count signature.
+const fn map_family_function(
+    name: &'static str,
+    arity: Arity,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
+    Function {
+        name,
+        arity,
+        returns_boolean: false,
+        signature,
+        overloads: &[],
+        eval,
+    }
+}
+
+fn map_argument<'a>(
+    arg: &'a Eval,
+    name: &'static str,
+    null_is_absent: bool,
+) -> Result<&'a BTreeMap<String, Value>, Eval> {
+    match arg {
+        Eval::Value(Value::Map(map)) => Ok(map),
+        Eval::Absent | Eval::Value(Value::Null) => Err(if null_is_absent {
+            Eval::Absent
+        } else {
+            Eval::Value(Value::Null)
+        }),
+        Eval::Value(value) => Err(Eval::Error(EvalError::WrongType {
+            function: name,
+            expected: "Map",
+            got: type_name(value),
+        })),
+        Eval::Error(error) => Err(Eval::Error(error.clone())),
+    }
+}
+
+fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if cx.unrecorded == Unrecorded::Refuse {
+        let map_missing = matches!(args[0], Eval::Absent | Eval::Value(Value::Null));
+        let map_wrong =
+            matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+        let keys = args[1..].chunks_exact(2).map(|pair| &pair[0]);
+        let missing = keys
+            .clone()
+            .any(|key| matches!(key, Eval::Absent | Eval::Value(Value::Null)));
+        let wrong = keys.filter(|key| matches!(key, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null))).count();
+        if wrong > 1
+            || (wrong > 0 && (map_missing || map_wrong || missing))
+            || (map_wrong && missing)
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_set",
+                reason: "ambiguous invalid arguments",
+            });
+        }
+    }
+    let mut map = match map_argument(&args[0], "map_set", true) {
+        Ok(map) => map.clone(),
+        Err(value) => return value,
+    };
+    for pair in args[1..].chunks_exact(2) {
+        let key = match &pair[0] {
+            Eval::Value(Value::String(key)) => key,
+            Eval::Absent | Eval::Value(Value::Null) if cx.unrecorded == Unrecorded::Refuse => {
+                return Eval::Error(EvalError::Unobserved {
+                    function: "map_set",
+                    reason: "a missing key",
+                })
+            }
+            Eval::Absent | Eval::Value(Value::Null) => return Eval::Value(Value::Null),
+            Eval::Value(value) => {
+                return Eval::Error(EvalError::Invalid(format!(
+                    "map_set keys must be of type STRING, given type is {}",
+                    type_name(value)
+                )))
+            }
+            Eval::Error(_) => unreachable!(),
+        };
+        match &pair[1] {
+            Eval::Value(value) => {
+                map.insert(key.clone(), value.clone());
+            }
+            Eval::Absent => {
+                map.remove(key);
+            }
+            Eval::Error(_) => unreachable!(),
+        }
+    }
+    Eval::Value(Value::Map(map))
+}
+
+fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if cx.unrecorded == Unrecorded::Refuse {
+        let map_missing = matches!(args[0], Eval::Absent | Eval::Value(Value::Null));
+        let map_wrong =
+            matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+        let missing = args[1..]
+            .iter()
+            .any(|key| matches!(key, Eval::Absent | Eval::Value(Value::Null)));
+        let wrong = args[1..].iter().filter(|key| matches!(key, Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null))).count();
+        if wrong > 1
+            || (wrong > 0 && (map_missing || map_wrong || missing))
+            || (map_wrong && missing)
+        {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_remove",
+                reason: "ambiguous invalid arguments",
+            });
+        }
+    }
+    let mut map = match map_argument(&args[0], "map_remove", false) {
+        Ok(map) => map.clone(),
+        Err(value) => return value,
+    };
+    let mut missing = false;
+    for arg in &args[1..] {
+        match arg {
+            Eval::Value(Value::String(key)) => {
+                map.remove(key);
+            }
+            Eval::Absent | Eval::Value(Value::Null) => missing = true,
+            Eval::Value(value) => {
+                if missing && cx.unrecorded == Unrecorded::Refuse {
+                    return Eval::Error(EvalError::Unobserved {
+                        function: "map_remove",
+                        reason: "a null beside a wrong key",
+                    });
+                }
+                return Eval::Error(EvalError::WrongType {
+                    function: "map_remove",
+                    expected: "String",
+                    got: type_name(value),
+                });
+            }
+            Eval::Error(_) => unreachable!(),
+        }
+    }
+    if missing {
+        Eval::Value(Value::Null)
+    } else {
+        Eval::Value(Value::Map(map))
+    }
+}
+
+fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|a| matches!(a, Eval::Absent | Eval::Value(Value::Null)));
+    if cx.unrecorded == Unrecorded::Refuse && args.iter().filter(|arg| matches!(arg, Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null))).count() > 1 {
+        return Eval::Error(EvalError::Unobserved { function: "map_merge", reason: "multiple wrong maps" });
+    }
+    let wrong = args.iter().find_map(|a| match a {
+        Eval::Value(v) if !matches!(v, Value::Map(_) | Value::Null) => Some(v),
+        _ => None,
+    });
+    if let Some(value) = wrong {
+        if missing && cx.unrecorded == Unrecorded::Refuse {
+            return Eval::Error(EvalError::Unobserved {
+                function: "map_merge",
+                reason: "a null beside a wrong map",
+            });
+        }
+        return Eval::Error(EvalError::WrongType {
+            function: "map_merge",
+            expected: "Map",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let mut result = BTreeMap::new();
+    for arg in args {
+        if let Eval::Value(Value::Map(map)) = arg {
+            result.extend(map.clone());
+        }
+    }
+    Eval::Value(Value::Map(result))
+}
+
+fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_keys", false) {
+        Ok(map) => Eval::Value(Value::Array(
+            map.keys().cloned().map(Value::String).collect(),
+        )),
+        Err(value) => value,
+    }
+}
+fn eval_map_values(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_values", false) {
+        Ok(map) => Eval::Value(Value::Array(map.values().cloned().collect())),
+        Err(value) => value,
+    }
+}
+fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
+    match map_argument(&args[0], "map_entries", false) {
+        Ok(map) => Eval::Value(Value::Array(
+            map.iter()
+                .map(|(key, value)| {
+                    Value::Map(
+                        [
+                            ("k".to_owned(), Value::String(key.clone())),
+                            ("v".to_owned(), value.clone()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                })
+                .collect(),
+        )),
+        Err(value) => value,
+    }
+}
+
+/// Literal map lookup; missing keys are absent and null arguments give null.
+fn eval_map_get(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let missing = args
+        .iter()
+        .any(|arg| matches!(arg, Eval::Absent | Eval::Value(Value::Null)));
+    let wrong_map =
+        matches!(&args[0], Eval::Value(value) if !matches!(value, Value::Map(_) | Value::Null));
+    let wrong_key =
+        matches!(&args[1], Eval::Value(value) if !matches!(value, Value::String(_) | Value::Null));
+    if cx.unrecorded == Unrecorded::Refuse
+        && ((missing && (wrong_map || wrong_key)) || (wrong_map && wrong_key))
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: "map_get",
+            reason: "mixed null or wrong argument types",
+        });
+    }
+    if wrong_map {
+        let Eval::Value(value) = &args[0] else {
+            unreachable!()
+        };
+        return Eval::Error(EvalError::WrongType {
+            function: "map_get",
+            expected: "Map",
+            got: type_name(value),
+        });
+    }
+    if wrong_key {
+        let Eval::Value(value) = &args[1] else {
+            unreachable!()
+        };
+        return Eval::Error(EvalError::WrongType {
+            function: "map_get",
+            expected: "String",
+            got: type_name(value),
+        });
+    }
+    if missing {
+        return Eval::Value(Value::Null);
+    }
+    let (Eval::Value(Value::Map(map)), Eval::Value(Value::String(key))) = (&args[0], &args[1])
+    else {
+        unreachable!()
+    };
+    map.get(key).cloned().map_or(Eval::Absent, Eval::Value)
 }
 
 /// The type name the official emulator's messages give a value.

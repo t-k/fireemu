@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {SANDBOX_PROJECT} from './fs-ent-pipeline/harness.mjs';import {validateAggregateVectorPacket} from './fs-ent-pipeline/aggregate-vector-record.mjs';
+const good={status:'AUTHORIZED BY ROOT AFTER REVIEW',project:SANDBOX_PROJECT,projectNumber:'123456',database:'entpipe2-20000101',databaseUid:'dummy',cases:9,rounds:2,maxRequests:47,recoveryReads:2,adcAcquisitions:1};
+test('exact packet bounds are mandatory',()=>{assert.equal(validateAggregateVectorPacket(good),true);for(const patch of [{cases:10},{rounds:1},{maxRequests:46},{recoveryReads:0},{adcAcquisitions:0},{databaseUid:''},{project:'different'},{status:'OFFLINE'}])assert.throws(()=>validateAggregateVectorPacket({...good,...patch}));});

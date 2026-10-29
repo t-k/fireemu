@@ -8,6 +8,18 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-10-29
+
+### Added
+
+- Firestore Enterprise pipelines execute finite supported `database` inputs, `replace_with` modes and `find_nearest` forms. Nearest supports the implemented Euclidean, cosine and dot-product measures with the locally required options; unsupported and unobserved combinations remain refused.
+- Pipelines support finite shapes of `byte_length`, `string_index_of`, `string_repeat`, `string_replace_all`, `string_replace_one`, `string_reverse`, `array_index_of_all`, `vector_length`, `dot_product`, `euclidean_distance` and `cosine_distance`, and lazy control functions `if_absent`, `if_null`, `if_error`, `conditional` and `switch_on`. Strict input restrictions, local size bounds and unobserved cases remain; these functions do not establish general production parity.
+
+### Changed
+
+- The gRPC pipeline route supports finite `documents` reads at a selected read time or existing transaction snapshot. New transactions and other selector/input combinations remain unsupported. A missing-only document input carries its selected execution time.
+- Strict numeric errors are admitted in finite recorded document-input and direct-expression contexts; unrecorded precedence, type and numeric shapes remain refused. Full replacement drops source document metadata, and database input preserves its read guard.
+
 ## [0.36.0] - 2026-10-29
 
 ### Added
@@ -1039,7 +1051,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/t-k/fireemu/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/t-k/fireemu/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/t-k/fireemu/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/t-k/fireemu/compare/v0.33.0...v0.34.0

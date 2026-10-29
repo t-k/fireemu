@@ -1242,8 +1242,32 @@ impl PipelineResponseStream {
         }
     }
 
-    /// Stops the stream with `error`, sent after the results already held.
+    /// Stops the stream with a refusal from the input or another non-row path.
     fn refuse(&mut self, error: Status) {
+        self.queue_refusal(self.gate.answer(error));
+    }
+
+    /// Admit the two recorded numeric errors only after a real input row is evaluated.
+    fn refuse_eval(&mut self, error: &fireemu_core_firestore::pipeline_exec::EvalError) {
+        use fireemu_core_firestore::pipeline_exec::EvalError;
+        let recorded = matches!(
+            error,
+            EvalError::WrongType {
+                function: "exp",
+                expected: "Float",
+                got: "STRING"
+            }
+        ) || matches!(error, EvalError::Invalid(message) if message == "ln(...) requires a positive number but got 0.0");
+        let status = crate::pipeline::eval_status(error);
+        if recorded {
+            self.queue_refusal(status);
+        } else {
+            self.refuse(status);
+        }
+    }
+
+    /// Stops the stream with `error`, sent after the results already held.
+    fn queue_refusal(&mut self, error: Status) {
         self.inner = None;
         self.done = true;
         if !self.batcher.is_empty() {
@@ -1252,10 +1276,8 @@ impl PipelineResponseStream {
             self.ready.push_back(Ok(response));
         }
         self.emitted = true;
-        self.ready.push_back(Err(pipeline_status(
-            self.gate.answer(error),
-            &self.canonical,
-        )));
+        self.ready
+            .push_back(Err(pipeline_status(error, &self.canonical)));
     }
 }
 
@@ -1296,13 +1318,11 @@ impl tokio_stream::Stream for PipelineResponseStream {
                         this.inner = None;
                         continue;
                     }
-                    let pushed = crate::pipeline::document_row(&document).and_then(|row| {
-                        this.cursor
-                            .push(row)
-                            .map_err(|error| crate::pipeline::eval_status(&error))
-                    });
-                    match pushed {
-                        Ok(rows) => this.absorb(&rows),
+                    match crate::pipeline::document_row(&document) {
+                        Ok(row) => match this.cursor.push(row) {
+                            Ok(rows) => this.absorb(&rows),
+                            Err(error) => this.refuse_eval(&error),
+                        },
                         Err(error) => this.refuse(error),
                     }
                     // The limit is used up: the input is not polled again.
@@ -2117,6 +2137,129 @@ mod tests {
             tonic::Code::Unavailable
         );
         assert!(failed.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn numeric_row_refusal_seeded_matrix_and_input_errors() {
+        use fireemu_core_firestore::pipeline_exec::{Cursor, Expr, Placement, Stage, Unrecorded};
+        use fireemu_core_firestore::{field_path::FieldPath, value::Value};
+        use tokio_stream::StreamExt;
+        let rows = [
+            ("missing", "exp", true),
+            ("first", "exp", true),
+            ("second", "exp", true),
+            ("mixed_before", "exp", true),
+            ("mixed_after", "exp", true),
+            ("first", "ln", true),
+            ("second", "ln", true),
+            ("first", "other", true),
+            ("first", "exp", false),
+            ("missing", "ln", false),
+            ("mixed_after", "other", false),
+            ("mixed_after", "ln", false),
+            ("missing", "other", true),
+            ("second", "other", false),
+            ("mixed_before", "ln", false),
+            ("mixed_before", "other", true),
+        ];
+        for (layout, kind, strict) in rows {
+            let (name, value) = match kind {
+                "exp" => ("exp", Value::String("not-a-number".into())),
+                "ln" => ("ln", Value::Integer(0)),
+                "other" => ("sqrt", Value::String("not-a-number".into())),
+                _ => unreachable!(),
+            };
+            let expression =
+                Expr::call(name, vec![Expr::Constant(value)], Placement::Value).unwrap();
+            let stages = vec![Stage::Select {
+                aliases: vec![(FieldPath::parse("v").unwrap(), expression)],
+                keeps_name: false,
+            }];
+            let doc = || Ok(input_document(if layout == "second" { 2 } else { 1 }, 0));
+            let missing = || Ok(pb::RunQueryResponse::default());
+            let input = match layout {
+                "missing" => vec![missing()],
+                "mixed_before" => vec![missing(), doc()],
+                "mixed_after" => vec![doc(), missing()],
+                _ => vec![doc()],
+            };
+            let mode = if strict {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let mut stream = PipelineResponseStream::new(
+                Box::pin(tokio_stream::iter(input)),
+                Cursor::new_in(stages, mode),
+            );
+            stream.gate = if strict {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    None,
+                    "projects/p/databases/(default)".into(),
+                )
+            } else {
+                crate::pipeline_shape::RefusalGate::Open
+            };
+            let first = stream.next().await.unwrap();
+            if layout == "missing" {
+                assert!(first.unwrap().results.is_empty(), "{layout} {kind}");
+            } else {
+                let error = first.unwrap_err();
+                let expected = if strict && kind == "other" {
+                    tonic::Code::Unimplemented
+                } else {
+                    tonic::Code::InvalidArgument
+                };
+                assert_eq!(error.code(), expected, "{layout} {kind} {strict}");
+                if kind == "exp" {
+                    let expected = crate::pipeline::eval_status(
+                        &fireemu_core_firestore::pipeline_exec::EvalError::WrongType {
+                            function: "exp",
+                            expected: "Float",
+                            got: "STRING",
+                        },
+                    );
+                    assert_eq!(error.message(), expected.message());
+                    assert_eq!(
+                        error.details(),
+                        expected.details(),
+                        "type ErrorInfo must survive"
+                    );
+                }
+                if kind == "ln" {
+                    assert_eq!(
+                        error.message(),
+                        "ln(...) requires a positive number but got 0.0"
+                    );
+                    assert!(error.details().is_empty());
+                }
+            }
+            assert!(stream.next().await.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn numeric_row_refusal_input_error_remains_gated() {
+        use fireemu_core_firestore::pipeline_exec::Cursor;
+        use tokio_stream::StreamExt;
+        let mut input_error = PipelineResponseStream::new(
+            Box::pin(tokio_stream::iter([Err(crate::pipeline::eval_status(
+                &fireemu_core_firestore::pipeline_exec::EvalError::WrongType {
+                    function: "exp",
+                    expected: "Float",
+                    got: "STRING",
+                },
+            ))])),
+            Cursor::new(Vec::new()),
+        );
+        input_error.gate = crate::pipeline_shape::RefusalGate::Recorded(
+            None,
+            "projects/p/databases/(default)".into(),
+        );
+        assert_eq!(
+            input_error.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::Unimplemented
+        );
     }
 
     fn input_document(index: usize, padding: usize) -> pb::RunQueryResponse {

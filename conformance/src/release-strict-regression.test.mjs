@@ -2580,3 +2580,84 @@ test("reopened parents require comparisons while unrelated pending parents stay 
     [],
   );
 });
+
+test("R21 compares the v0.36 release binary with every reviewed strict row", () => {
+  const historical = readJson("spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json");
+  const current = readJson("conformance/fs-ent-pipeline-release-v036.json");
+  const expectedIds = [
+    "fs-ent-pipeline/px1/select#is-error-sqrt-s",
+    "fs-ent-pipeline/px1/where#sqrt-s-positive",
+    "fs-ent-pipeline/px1/static-refusals#select-sqrt-a",
+    "fs-ent-pipeline/px1/static-refusals#where-sqrt-a",
+    "fs-ent-pipeline/o5/stage-order#select-empty-then-where-sqrt-string",
+    ...["sqrt", "log", "ln", "log10", "exp", "trunc"].map(
+      (name) => `fs-ent-pipeline/o5/function-names#fn-${name}`,
+    ),
+  ];
+  assert.equal(current.fixtureSha256, historical.fixtureSha256);
+  const oldRows = new Map(historical.rows.map((row) => [row.row, row]));
+  const newRows = new Map(current.rows.map((row) => [row.row, row]));
+  assert.equal(oldRows.size, 1951);
+  assert.equal(newRows.size, 1951);
+  assert.deepEqual([...newRows.keys()].toSorted(), [...oldRows.keys()].toSorted());
+  const changed = [...newRows.keys()].filter(
+    (id) => JSON.stringify(oldRows.get(id)) !== JSON.stringify(newRows.get(id)),
+  );
+  assert.deepEqual(changed.toSorted(), expectedIds.toSorted());
+  for (const id of changed) {
+    assert.equal(oldRows.get(id).status, "MISMATCH");
+    assert.deepEqual(newRows.get(id), { row: id, status: "MATCH" });
+  }
+  assert.deepEqual(current.summary, { MATCH: 1751, MISMATCH: 186, INDETERMINATE: 12, UNKNOWN: 2 });
+  const comparison = {
+    path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+    kind: historical.kind,
+    runIds: ["R21"],
+  };
+  const context = { binarySha256: BINARY, readJson };
+  const observed = { ...structuredClone(current), artifactSha256: BINARY };
+  assert.deepEqual(judge(comparison, { R21: observed }, context), []);
+  const oldObserved = { ...structuredClone(historical), artifactSha256: BINARY };
+  assert.deepEqual(judge({ ...comparison, runIds: ["R1"] }, { R1: oldObserved }, context), []);
+  assert.throws(
+    () =>
+      judge(
+        comparison,
+        { R21: observed },
+        {
+          ...context,
+          readJson: (path) => {
+            if (path === "conformance/fs-ent-pipeline-release-v036.json")
+              throw new Error("missing snapshot");
+            return readJson(path);
+          },
+        },
+      ),
+    /missing snapshot/,
+  );
+  for (const mutate of [
+    (x) => {
+      x.rows[0].status = "UNKNOWN";
+    },
+    (x) => {
+      const mismatch = x.rows.find((row) => row.status === "MISMATCH");
+      mismatch.differences.push("unexpected");
+    },
+    (x) => {
+      x.rows.pop();
+    },
+    (x) => {
+      x.rows.push(x.rows[0]);
+    },
+    (x) => {
+      x.fixtureSha256 = "0".repeat(64);
+    },
+    (x) => {
+      x.artifactSha256 = "0".repeat(64);
+    },
+  ]) {
+    const broken = structuredClone(observed);
+    mutate(broken);
+    assert.notDeepEqual(judge(comparison, { R21: broken }, context), []);
+  }
+});

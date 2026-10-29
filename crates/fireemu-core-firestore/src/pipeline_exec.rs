@@ -2358,7 +2358,11 @@ impl Cursor {
                             }
                         };
                     match mode {
-                        ReplaceMode::Full => row.fields = replacement,
+                        ReplaceMode::Full => {
+                            row.fields = replacement;
+                            row.path = None;
+                            row.times = None;
+                        }
                         ReplaceMode::Overwrite => row.fields.extend(replacement),
                         ReplaceMode::Keep => {
                             for (key, value) in replacement {

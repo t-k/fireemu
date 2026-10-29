@@ -2151,7 +2151,7 @@ fn observed_replace_modes_preserve_expected_fields() {
         ("shared".into(), Value::String("new".into())),
         ("added".into(), Value::String("a".into())),
     ]));
-    let row = doc(
+    let mut row = doc(
         "a",
         &[
             ("shared", Value::String("old".into())),
@@ -2159,6 +2159,10 @@ fn observed_replace_modes_preserve_expected_fields() {
             ("m", nested),
         ],
     );
+    row.times = Some(RowTimes {
+        created: Timestamp::new(1, 0).unwrap(),
+        updated: Timestamp::new(2, 0).unwrap(),
+    });
     for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
         for (mode, expected, keeps) in [
             (ReplaceMode::Full, "new", false),
@@ -2177,7 +2181,18 @@ fn observed_replace_modes_preserve_expected_fields() {
             assert_eq!(out[0].fields["shared"], Value::String(expected.into()));
             assert_eq!(out[0].fields["added"], Value::String("a".into()));
             assert_eq!(out[0].fields.contains_key("keep"), keeps);
-            assert_eq!(out[0].path, row.path);
+            assert_eq!(out[0].path, if keeps { row.path.clone() } else { None });
+            assert_eq!(out[0].times, if keeps { row.times } else { None });
+            let after = execute_rows_in(
+                vec![Stage::AddFields(vec![(
+                    alias("after_name"),
+                    field("__name__"),
+                )])],
+                out,
+                policy,
+            )
+            .unwrap();
+            assert_eq!(after[0].fields.contains_key("after_name"), keeps);
         }
         let result = execute_rows_in(
             vec![Stage::ReplaceWith {

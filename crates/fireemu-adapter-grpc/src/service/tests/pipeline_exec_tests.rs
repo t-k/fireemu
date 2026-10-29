@@ -1317,7 +1317,9 @@ async fn stage_context_seeded_pict_rows_execute() {
             );
             assert_eq!(rows.len(), expected, "{line}");
             if let Some(row) = rows.first() {
-                assert_eq!(row.create_time.is_some(), metadata == "present", "{line}");
+                let keeps_metadata =
+                    metadata == "present" && !(kind == "replace" && mode == "full");
+                assert_eq!(row.create_time.is_some(), keeps_metadata, "{line}");
                 if kind == "replace" && input == "wrongtype" {
                     assert!(row.fields.is_empty(), "{line}");
                 }

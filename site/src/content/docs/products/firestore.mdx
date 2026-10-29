@@ -114,7 +114,7 @@ In v0.35.0, finite `union` branches can use collection inputs with row-local `wh
 
 Finite `replace_with` supports full replacement and the implemented overwrite and keep merge modes; full replacement drops source document metadata. Finite `find_nearest` supports Euclidean, cosine and dot-product measures with the locally required limit and distance-field options. Other shapes remain unverified or refused. The gRPC route serves finite `documents` reads with a read time or existing transaction selector; new transactions, REST selectors and other selector/input combinations remain unsupported. Unsupported functions and stages are refused with `UNIMPLEMENTED`, never ignored. Recorded matches establish compatibility only for the recorded request shapes; other shapes remain unverified.
 
-On main, pending the v0.38.0 release, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
+In v0.38.0, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
 
 ## Composite indexes
 

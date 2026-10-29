@@ -8,6 +8,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-10-30
+
+### Added
+
+- Firestore Enterprise pipelines support finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if`. Aggregate ordering and unrecorded input shapes are not claimed as production parity.
+- Pipelines execute bounded subcollection and correlated scalar subquery forms. Source reads share a snapshot and local resource limits apply; unsupported inputs, stages and bindings are refused, and unrecorded forms remain unverified.
+
 ## [0.37.0] - 2026-10-29
 
 ### Added
@@ -1051,7 +1058,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/t-k/fireemu/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/t-k/fireemu/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/t-k/fireemu/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/t-k/fireemu/compare/v0.34.0...v0.35.0

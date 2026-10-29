@@ -2326,3 +2326,152 @@ fn recorded_scalar_replace_witness_remains_open() {
     .unwrap();
     assert!(out[0].fields.is_empty());
 }
+
+#[test]
+fn five_aggregate_functions_preserve_values_and_input_order() {
+    let rows = vec![
+        doc("a", &[("v", int(1)), ("b", Value::Boolean(true))]),
+        doc("b", &[("v", int(1)), ("b", Value::Boolean(false))]),
+        doc("c", &[("v", int(3)), ("b", Value::Boolean(true))]),
+    ];
+    let out = run(
+        vec![Stage::Aggregate {
+            accumulators: vec![
+                ("a".into(), accumulate(AccumulatorKind::ArrayAgg, "v")),
+                (
+                    "d".into(),
+                    accumulate(AccumulatorKind::ArrayAggDistinct, "v"),
+                ),
+                ("f".into(), accumulate(AccumulatorKind::First, "v")),
+                ("l".into(), accumulate(AccumulatorKind::Last, "v")),
+                ("c".into(), accumulate(AccumulatorKind::CountIf, "b")),
+            ],
+            groups: vec![],
+        }],
+        rows,
+    );
+    assert_eq!(
+        out[0].fields["a"],
+        Value::Array(vec![int(1), int(1), int(3)])
+    );
+    assert_eq!(out[0].fields["d"], Value::Array(vec![int(1), int(3)]));
+    assert_eq!(out[0].fields["f"], int(1));
+    assert_eq!(out[0].fields["l"], int(3));
+    assert_eq!(out[0].fields["c"], int(2));
+}
+
+#[test]
+fn aggregate_new_functions_keep_absence_and_limits_explicit() {
+    let stages = |kind| {
+        vec![Stage::Aggregate {
+            accumulators: vec![("v".into(), accumulate(kind, "v"))],
+            groups: vec![],
+        }]
+    };
+    let absent = vec![doc("a", &[])];
+    for kind in [AccumulatorKind::ArrayAgg, AccumulatorKind::ArrayAggDistinct] {
+        assert_eq!(
+            run(stages(kind), absent.clone())[0].fields["v"],
+            Value::Array(vec![Value::Null])
+        );
+    }
+    for kind in [
+        AccumulatorKind::First,
+        AccumulatorKind::Last,
+        AccumulatorKind::CountIf,
+    ] {
+        assert!(execute_rows_in(stages(kind), absent.clone(), Unrecorded::Refuse).is_err());
+    }
+    for kind in [AccumulatorKind::First, AccumulatorKind::Last] {
+        assert!(execute_rows_in(stages(kind), vec![], Unrecorded::Refuse).is_err());
+    }
+    assert!(execute_rows_in(
+        stages(AccumulatorKind::ArrayAgg),
+        vec![doc("a", &[("v", Value::String("x".repeat(1_048_576)))])],
+        Unrecorded::Refuse
+    )
+    .is_err());
+}
+
+proptest! {
+    #[test]
+    fn aggregate_arrays_match_ordered_reference(values in proptest::collection::vec(-3_i64..4, 0..30)) {
+        let rows=values.iter().enumerate().map(|(i,n)| doc(&format!("{i}"), &[("v",int(*n))])).collect();
+        let result=run(vec![Stage::Aggregate { accumulators: vec![("a".into(),accumulate(AccumulatorKind::ArrayAgg,"v")), ("d".into(),accumulate(AccumulatorKind::ArrayAggDistinct,"v"))],groups:vec![] }],rows);
+        let mut distinct=Vec::new(); for v in &values { if !distinct.contains(v) { distinct.push(*v); } }
+        prop_assert_eq!(&result[0].fields["a"], &Value::Array(values.into_iter().map(int).collect()));
+        prop_assert_eq!(&result[0].fields["d"], &Value::Array(distinct.into_iter().map(int).collect()));
+    }
+}
+
+#[test]
+fn aggregate_five_seeded_pict_rows() {
+    for (name, input, grouping) in [
+        ("array", "normal", "ungrouped"),
+        ("distinct", "normal", "ungrouped"),
+        ("first", "normal", "ungrouped"),
+        ("last", "normal", "ungrouped"),
+        ("count_if", "normal", "ungrouped"),
+        ("array", "missing", "grouped"),
+        ("distinct", "mixed", "grouped"),
+        ("first", "empty", "ungrouped"),
+        ("last", "empty", "ungrouped"),
+        ("count_if", "missing", "grouped"),
+        ("array", "empty", "grouped"),
+        ("array", "mixed", "ungrouped"),
+        ("count_if", "empty", "grouped"),
+        ("last", "missing", "ungrouped"),
+        ("last", "mixed", "grouped"),
+        ("distinct", "missing", "grouped"),
+        ("first", "missing", "grouped"),
+        ("distinct", "empty", "ungrouped"),
+        ("count_if", "mixed", "ungrouped"),
+        ("last", "normal", "grouped"),
+        ("first", "mixed", "grouped"),
+    ] {
+        let kind = match name {
+            "array" => AccumulatorKind::ArrayAgg,
+            "distinct" => AccumulatorKind::ArrayAggDistinct,
+            "first" => AccumulatorKind::First,
+            "last" => AccumulatorKind::Last,
+            "count_if" => AccumulatorKind::CountIf,
+            _ => unreachable!(),
+        };
+        let field_value = if name == "count_if" {
+            Value::Boolean(true)
+        } else {
+            int(1)
+        };
+        let rows = match input {
+            "empty" => vec![],
+            "missing" => vec![doc("a", &[("g", int(1))])],
+            "mixed" => vec![
+                doc("a", &[("g", int(1)), ("v", field_value)]),
+                doc("b", &[("g", int(1)), ("v", int(2))]),
+            ],
+            "normal" => vec![doc("a", &[("g", int(1)), ("v", field_value)])],
+            _ => unreachable!(),
+        };
+        let groups = if grouping == "grouped" {
+            vec![("g".to_owned(), field("g"))]
+        } else {
+            vec![]
+        };
+        let result = execute_rows_in(
+            vec![Stage::Aggregate {
+                accumulators: vec![("out".to_owned(), accumulate(kind, "v"))],
+                groups,
+            }],
+            rows,
+            Unrecorded::Refuse,
+        );
+        let should_fail = (input == "missing" && matches!(name, "first" | "last" | "count_if"))
+            || (input == "mixed" && name == "count_if")
+            || (input == "empty" && grouping == "ungrouped" && matches!(name, "first" | "last"));
+        assert_eq!(
+            result.is_err(),
+            should_fail,
+            "{name}/{input}/{grouping}: {result:?}"
+        );
+    }
+}

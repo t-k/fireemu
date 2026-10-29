@@ -646,6 +646,24 @@ impl std::error::Error for ExprError {}
 pub enum Expr {
     /// A field reference (`__name__` evaluates to the row's document reference).
     Field(FieldPath),
+    /// A bounded direct-subcollection array prepared by the adapter under one snapshot.
+    SubcollectionArray {
+        /// The direct subcollection ID.
+        collection: String,
+        /// The field selected from each child.
+        field: FieldPath,
+    },
+    /// A correlated scalar prepared by the adapter under a single guarded snapshot.
+    CorrelatedScalar {
+        /// The collection-group ID.
+        collection: String,
+        /// The child field compared to the lexical variable.
+        predicate: FieldPath,
+        /// The lexical variable name.
+        variable: String,
+        /// The child field selected as a scalar.
+        field: FieldPath,
+    },
     /// A constant.
     Constant(Value),
     /// A call of a table function.
@@ -742,7 +760,8 @@ impl Expr {
     fn collect_fields(&self, out: &mut Vec<FieldPath>) {
         match self {
             Self::Field(path) => out.push(path.clone()),
-            Self::Constant(_) => {}
+            Self::Constant(_) | Self::SubcollectionArray { .. } | Self::CorrelatedScalar { .. } => {
+            }
             Self::Call { args, .. } => args.iter().for_each(|arg| arg.collect_fields(out)),
         }
     }
@@ -794,6 +813,14 @@ impl Expr {
                 .cloned()
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
+            Self::CorrelatedScalar { .. } => Eval::Error(EvalError::Unobserved {
+                function: "scalar",
+                reason: "correlated input was not prepared",
+            }),
+            Self::SubcollectionArray { .. } => Eval::Error(EvalError::Unobserved {
+                function: "array",
+                reason: "subcollection input was not prepared",
+            }),
             Self::Call { function, args } => {
                 if matches!(
                     function.name,
@@ -1948,6 +1975,16 @@ pub enum AccumulatorKind {
     Minimum,
     /// `maximum(x)`: the greatest.
     Maximum,
+    /// All values, with absent converted to null.
+    ArrayAgg,
+    /// Distinct values, with absent converted to null.
+    ArrayAggDistinct,
+    /// First input value.
+    First,
+    /// Last input value.
+    Last,
+    /// Count true values.
+    CountIf,
 }
 
 /// An accumulator of an `aggregate` stage.
@@ -2818,6 +2855,8 @@ enum Running {
     Distinct(std::collections::BTreeSet<GroupKey>),
     Sum(NumberSum, i64),
     Extreme(Option<Value>),
+    Array(Vec<Value>, usize),
+    Edge(Option<Value>),
 }
 
 /// A running sum of numbers: integers stay integers until a double joins them.
@@ -2850,10 +2889,16 @@ impl NumberSum {
 impl Accumulator {
     fn start(&self) -> Running {
         match self.kind {
-            AccumulatorKind::CountAll | AccumulatorKind::Count => Running::Count(0),
+            AccumulatorKind::CountAll | AccumulatorKind::Count | AccumulatorKind::CountIf => {
+                Running::Count(0)
+            }
             AccumulatorKind::CountDistinct => Running::Distinct(std::collections::BTreeSet::new()),
             AccumulatorKind::Sum | AccumulatorKind::Average => Running::Sum(NumberSum::Nothing, 0),
             AccumulatorKind::Minimum | AccumulatorKind::Maximum => Running::Extreme(None),
+            AccumulatorKind::ArrayAgg | AccumulatorKind::ArrayAggDistinct => {
+                Running::Array(Vec::new(), 0)
+            }
+            AccumulatorKind::First | AccumulatorKind::Last => Running::Edge(None),
         }
     }
 
@@ -2874,6 +2919,20 @@ impl Accumulator {
         };
         match (running, self.kind) {
             (Running::Count(n), AccumulatorKind::CountAll) => *n += 1,
+            (Running::Count(n), AccumulatorKind::CountIf) => match value {
+                Some(Value::Boolean(true)) => {
+                    *n = n
+                        .checked_add(1)
+                        .ok_or_else(|| EvalError::Invalid("Long overflow".to_owned()))?;
+                }
+                Some(Value::Boolean(false)) => {}
+                _ => {
+                    return Err(EvalError::Unobserved {
+                        function: "count_if",
+                        reason: "a non-boolean or missing predicate",
+                    })
+                }
+            },
             (Running::Count(n), _) => {
                 if value.is_some_and(|v| v != Value::Null) {
                     *n += 1;
@@ -2888,6 +2947,42 @@ impl Accumulator {
                 if let Some(value @ (Value::Integer(_) | Value::Double(_))) = value {
                     *sum = sum.add(&value)?;
                     *numbers += 1;
+                }
+            }
+            (Running::Array(values, bytes), kind) => {
+                let value = value.unwrap_or(Value::Null);
+                if kind == AccumulatorKind::ArrayAggDistinct
+                    && values
+                        .iter()
+                        .any(|v| v.canonical_cmp(&value) == Ordering::Equal)
+                {
+                    return Ok(());
+                }
+                if values.len() >= 4096 {
+                    return Err(EvalError::Unobserved {
+                        function: "aggregate",
+                        reason: "too many output values",
+                    });
+                }
+                let size = aggregate_value_size(&value).ok_or(EvalError::Unobserved {
+                    function: "aggregate",
+                    reason: "an excessive output size",
+                })?;
+                *bytes = bytes.checked_add(size).filter(|n| *n <= 1_048_576).ok_or(
+                    EvalError::Unobserved {
+                        function: "aggregate",
+                        reason: "an excessive output size",
+                    },
+                )?;
+                values.push(value);
+            }
+            (Running::Edge(edge), kind) => {
+                let value = value.ok_or(EvalError::Unobserved {
+                    function: "aggregate",
+                    reason: "a missing first or last value",
+                })?;
+                if kind == AccumulatorKind::Last || edge.is_none() {
+                    *edge = Some(value);
                 }
             }
             (Running::Extreme(best), kind) => {
@@ -2910,8 +3005,8 @@ impl Accumulator {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    fn finish(&self, running: Running) -> Value {
-        match running {
+    fn finish(&self, running: Running) -> Result<Value, EvalError> {
+        Ok(match running {
             Running::Count(n) => Value::Integer(n),
             Running::Distinct(set) => Value::Integer(i64::try_from(set.len()).unwrap_or(i64::MAX)),
             Running::Sum(sum, numbers) => match (self.kind, sum) {
@@ -2922,8 +3017,31 @@ impl Accumulator {
                 (_, NumberSum::Double(d)) => Value::Double(d / numbers as f64),
             },
             Running::Extreme(best) => best.unwrap_or(Value::Null),
-        }
+            Running::Array(values, _) => Value::Array(values),
+            Running::Edge(value) => value.ok_or(EvalError::Unobserved {
+                function: "aggregate",
+                reason: "first or last over empty input",
+            })?,
+        })
     }
+}
+
+// Conservative local allocation guard, not a claim about production limits.
+fn aggregate_value_size(value: &Value) -> Option<usize> {
+    let extra = match value {
+        Value::String(s) | Value::Reference(s) => s.len(),
+        Value::Bytes(b) => b.len(),
+        Value::Vector(v) => v.len().checked_mul(std::mem::size_of::<f64>())?,
+        Value::Array(v) => v
+            .iter()
+            .try_fold(0usize, |n, x| n.checked_add(aggregate_value_size(x)?))?,
+        Value::Map(m) => m.iter().try_fold(0usize, |n, (k, v)| {
+            n.checked_add(k.len())?
+                .checked_add(aggregate_value_size(v)?)
+        })?,
+        _ => 0,
+    };
+    std::mem::size_of::<Value>().checked_add(extra)
 }
 
 /// `aggregate`: the groups in the order first met; without group aliases one group, which
@@ -2962,7 +3080,7 @@ fn aggregate_rows(
             accumulator.add(state, row, unrecorded, runtime)?;
         }
     }
-    Ok(order
+    order
         .into_iter()
         .map(|(key, running)| {
             let mut fields = BTreeMap::new();
@@ -2970,11 +3088,11 @@ fn aggregate_rows(
                 fields.insert(name.clone(), value);
             }
             for ((name, accumulator), state) in accumulators.iter().zip(running) {
-                fields.insert(name.clone(), accumulator.finish(state));
+                fields.insert(name.clone(), accumulator.finish(state)?);
             }
-            Row::derived(fields)
+            Ok(Row::derived(fields))
         })
-        .collect())
+        .collect::<Result<Vec<_>, EvalError>>()
 }
 
 /// Removes the value at `path` (nothing happens when a segment is missing or not a map).

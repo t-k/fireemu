@@ -692,6 +692,8 @@ impl Firestore for GatewayService {
         {
             compiler_request.consistency_selector = None;
         }
+        let correlated_binding =
+            crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
         let ast = crate::pipeline::validate_pipeline(&compiler_request, registry_unrecorded)
             .map_err(|error| gate.answer(error))?;
         if self.local_backend().is_some() {
@@ -716,6 +718,60 @@ impl Firestore for GatewayService {
                 return Err(Status::unimplemented(
                     "pipeline consistency is unsupported for this input",
                 ));
+            }
+            if crate::pipeline::has_correlated_scalar(&compiled) {
+                if request.get_ref().consistency_selector.is_some() {
+                    return Err(Status::unimplemented("correlated selector is unobserved"));
+                }
+                let database = request.get_ref().database.clone();
+                let binding = correlated_binding
+                    .ok_or_else(|| Status::unimplemented("correlated variable is unbound"))?;
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let runtime =
+                    crate::pipeline_timezone::runtime_for_stages(&local, &compiled.stages);
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::pipeline::execute_correlated_scalar(
+                            local, &database, &compiled, &binding, guard, unrecorded, runtime,
+                        )
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                return Ok(Response::new(Box::pin(tokio_stream::iter(
+                    responses.into_iter().map(Ok),
+                ))));
+            }
+            if correlated_binding.is_some() {
+                return Err(Status::unimplemented(
+                    "correlated binding without scalar is unobserved",
+                ));
+            }
+            if crate::pipeline::has_subcollection_array(&compiled) {
+                if request.get_ref().consistency_selector.is_some() {
+                    return Err(Status::unimplemented(
+                        "subcollection selector is unobserved",
+                    ));
+                }
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let runtime =
+                    crate::pipeline_timezone::runtime_for_stages(&local, &compiled.stages);
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::pipeline::execute_subcollection_array(
+                            local, &compiled, guard, unrecorded, runtime,
+                        )
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                return Ok(Response::new(Box::pin(tokio_stream::iter(
+                    responses.into_iter().map(Ok),
+                ))));
             }
             if !compiled.unions.is_empty() {
                 let local = self

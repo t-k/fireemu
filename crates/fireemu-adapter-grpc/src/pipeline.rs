@@ -1339,6 +1339,372 @@ fn flatten_union_sources(compiled: CompiledExecution) -> Result<Vec<UnionSource>
     Ok(result)
 }
 
+/// Selects a prepared direct-subcollection array from the same guarded snapshot as its parent.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn execute_subcollection_array(
+    local: &crate::local::LocalBackend,
+    compiled: &CompiledExecution,
+    guard: crate::rules::ReadGuard<'_>,
+    unrecorded: Unrecorded,
+    runtime: pipeline_exec::RuntimeContext,
+) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
+    use prost::Message as _;
+    let [Stage::Select {
+        aliases,
+        keeps_name,
+    }] = compiled.stages.as_slice()
+    else {
+        return Err(Status::unimplemented(
+            "unsupported subcollection outer stages",
+        ));
+    };
+    if compiled.documents.is_some()
+        || compiled.database
+        || compiled.search.is_some()
+        || !compiled.unions.is_empty()
+    {
+        return Err(Status::unimplemented(
+            "unsupported subcollection outer input",
+        ));
+    }
+    let specs: Vec<_> = aliases
+        .iter()
+        .filter_map(|(_, expr)| match expr {
+            Expr::SubcollectionArray { collection, field } => Some((collection, field)),
+            _ => None,
+        })
+        .collect();
+    if aliases.len() > 32
+        || specs.len() != 1
+        || aliases
+            .iter()
+            .any(|(_, expr)| !matches!(expr, Expr::Field(_) | Expr::SubcollectionArray { .. }))
+    {
+        return Err(Status::unimplemented("unsupported subcollection select"));
+    }
+    let (collection, field) = specs[0];
+    let (read_time, sources) =
+        local.run_pipeline_subcollections(&compiled.input, collection, guard)?;
+    let mut children = std::collections::BTreeMap::new();
+    let mut parents = Vec::new();
+    for (parent, nested) in sources {
+        let name = parent
+            .document
+            .as_ref()
+            .ok_or_else(|| Status::internal("missing parent document"))?
+            .name
+            .clone();
+        if children.insert(name, nested).is_some() {
+            return Err(Status::internal("duplicate parent"));
+        }
+        parents.push(parent);
+    }
+    let mut output = Vec::new();
+    let mut output_bytes = 0usize;
+    for parent in in_scan_order(parents) {
+        let document = parent
+            .document
+            .as_ref()
+            .ok_or_else(|| Status::internal("missing parent document"))?;
+        let nested = children
+            .remove(&document.name)
+            .ok_or_else(|| Status::internal("missing child input"))?;
+        let mut values = Vec::new();
+        for child in in_scan_order(nested)
+            .iter()
+            .filter_map(|r| r.document.as_ref())
+        {
+            let row = document_row(child)?;
+            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime) {
+                pipeline_exec::Eval::Value(value) => values.push(value),
+                _ => {
+                    return Err(Status::unimplemented(
+                        "subcollection selected value is unobserved",
+                    ))
+                }
+            }
+        }
+        let aliases = aliases
+            .iter()
+            .map(|(name, expr)| {
+                (
+                    name.clone(),
+                    if matches!(expr, Expr::SubcollectionArray { .. }) {
+                        Expr::Constant(fireemu_core_firestore::value::Value::Array(values.clone()))
+                    } else {
+                        expr.clone()
+                    },
+                )
+            })
+            .collect();
+        let mut cursor = pipeline_exec::Cursor::new_in_with_runtime(
+            vec![Stage::Select {
+                aliases,
+                keeps_name: *keeps_name,
+            }],
+            unrecorded,
+            runtime,
+        );
+        let mut rows = cursor
+            .push(document_row(document)?)
+            .map_err(|e| eval_status(&e))?;
+        rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);
+        for row in rows {
+            let result = row_document(&row);
+            output_bytes = output_bytes
+                .checked_add(result.encoded_len())
+                .filter(|n| *n <= 1_048_576)
+                .ok_or_else(|| Status::unimplemented("subquery result exceeds local bound"))?;
+            output.push(result);
+        }
+    }
+    Ok(pack_results(output, read_time))
+}
+
+/// Executes the observed one-binding scalar form from two guarded same-snapshot sources.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn execute_correlated_scalar(
+    local: &crate::local::LocalBackend,
+    database: &str,
+    compiled: &CompiledExecution,
+    binding: &(String, FieldPath),
+    guard: crate::rules::ReadGuard<'_>,
+    unrecorded: Unrecorded,
+    runtime: pipeline_exec::RuntimeContext,
+) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
+    use fireemu_core_firestore::value::Value;
+    use prost::Message as _;
+    let [Stage::Select {
+        aliases,
+        keeps_name,
+    }] = compiled.stages.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported correlated outer stages"));
+    };
+    if compiled.documents.is_some()
+        || compiled.database
+        || compiled.search.is_some()
+        || !compiled.unions.is_empty()
+        || aliases.len() > 32
+    {
+        return Err(Status::unimplemented("unsupported correlated outer input"));
+    }
+    let specs: Vec<_> = aliases
+        .iter()
+        .filter_map(|(_, expr)| match expr {
+            Expr::CorrelatedScalar {
+                collection,
+                predicate,
+                variable,
+                field,
+            } => Some((collection, predicate, variable, field)),
+            _ => None,
+        })
+        .collect();
+    if specs.len() != 1
+        || aliases
+            .iter()
+            .any(|(_, expr)| !matches!(expr, Expr::Field(_) | Expr::CorrelatedScalar { .. }))
+    {
+        return Err(Status::unimplemented("unsupported correlated select"));
+    }
+    let (collection, predicate, variable, field) = specs[0];
+    if variable != &binding.0 {
+        return Err(Status::unimplemented("correlated variable is unbound"));
+    }
+    let mut outer = compiled.input.clone();
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = outer.query_type.as_mut()
+    else {
+        return Err(Status::unimplemented("unsupported correlated input"));
+    };
+    if query.from.len() != 1 || query.from[0].all_descendants {
+        return Err(Status::unimplemented("unsupported correlated input"));
+    }
+    query.select = None;
+    query.limit = Some(33);
+    let mut inner = collection_query(
+        format!("{database}/documents"),
+        collection.clone(),
+        None,
+        None,
+        0,
+        Some(65),
+    );
+    let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = inner.query_type.as_mut()
+    else {
+        return Err(Status::internal("missing correlated query"));
+    };
+    query.from[0].all_descendants = true;
+    let mut sources = local
+        .run_pipeline_sources(&[outer, inner], guard)?
+        .into_iter();
+    let parents = in_scan_order(
+        sources
+            .next()
+            .ok_or_else(|| Status::internal("missing correlated parent"))?,
+    );
+    let children = in_scan_order(
+        sources
+            .next()
+            .ok_or_else(|| Status::internal("missing correlated source"))?,
+    );
+    let read_time = parents.iter().find_map(|r| r.read_time);
+    let parents: Vec<_> = parents.into_iter().filter_map(|r| r.document).collect();
+    let children: Vec<_> = children.into_iter().filter_map(|r| r.document).collect();
+    if parents.len() > 32 || children.len() > 64 {
+        return Err(Status::unimplemented(
+            "correlated input exceeds local bound",
+        ));
+    }
+    let mut input_bytes = 0usize;
+    for d in parents.iter().chain(&children) {
+        input_bytes = input_bytes
+            .checked_add(d.encoded_len())
+            .filter(|n| *n <= 1_048_576)
+            .ok_or_else(|| Status::unimplemented("correlated input exceeds local bound"))?;
+    }
+    let mut output = Vec::new();
+    let mut output_bytes = 0usize;
+    for document in parents {
+        let parent_row = document_row(&document)?;
+        let pipeline_exec::Eval::Value(Value::String(parent_value)) =
+            Expr::Field(binding.1.clone()).eval_in_with_runtime(&parent_row, unrecorded, runtime)
+        else {
+            return Err(Status::unimplemented(
+                "correlated binding type is unobserved",
+            ));
+        };
+        let mut matched = None;
+        for child in &children {
+            let child_row = document_row(child)?;
+            let pipeline_exec::Eval::Value(Value::String(key)) = Expr::Field(predicate.clone())
+                .eval_in_with_runtime(&child_row, unrecorded, runtime)
+            else {
+                return Err(Status::unimplemented(
+                    "correlated predicate type is unobserved",
+                ));
+            };
+            if key != parent_value {
+                continue;
+            }
+            if matched.is_some() {
+                return Err(Status::unimplemented(
+                    "multiple scalar results are unobserved",
+                ));
+            }
+            matched = Some(
+                match Expr::Field(field.clone())
+                    .eval_in_with_runtime(&child_row, unrecorded, runtime)
+                {
+                    pipeline_exec::Eval::Value(Value::String(value)) => Value::String(value),
+                    _ => {
+                        return Err(Status::unimplemented(
+                            "correlated scalar value is unobserved",
+                        ))
+                    }
+                },
+            );
+        }
+        let replacement = matched.unwrap_or(Value::Null);
+        let aliases = aliases
+            .iter()
+            .map(|(name, expr)| {
+                (
+                    name.clone(),
+                    if matches!(expr, Expr::CorrelatedScalar { .. }) {
+                        Expr::Constant(replacement.clone())
+                    } else {
+                        expr.clone()
+                    },
+                )
+            })
+            .collect();
+        let mut cursor = pipeline_exec::Cursor::new_in_with_runtime(
+            vec![Stage::Select {
+                aliases,
+                keeps_name: *keeps_name,
+            }],
+            unrecorded,
+            runtime,
+        );
+        let mut rows = cursor.push(parent_row).map_err(|e| eval_status(&e))?;
+        rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);
+        for row in rows {
+            let result = row_document(&row);
+            output_bytes = output_bytes
+                .checked_add(result.encoded_len())
+                .filter(|n| *n <= 1_048_576)
+                .ok_or_else(|| Status::unimplemented("correlated output exceeds local bound"))?;
+            output.push(result);
+        }
+    }
+    Ok(pack_results(output, read_time))
+}
+
+/// Extracts the sole observed lexical binding and removes it from the compiler-only clone.
+pub(crate) fn prepare_correlated_binding(
+    request: &mut pb::ExecutePipelineRequest,
+) -> Result<Option<(String, FieldPath)>, Status> {
+    use pb::value::ValueType as V;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        return Ok(None);
+    };
+    let Some(pipeline) = structured.pipeline.as_mut() else {
+        return Ok(None);
+    };
+    if !pipeline.stages.iter().any(|stage| stage.name == "let") {
+        return Ok(None);
+    }
+    let [outer, binding, select] = pipeline.stages.as_slice() else {
+        return Err(Status::unimplemented("unsupported correlated stages"));
+    };
+    if outer.name != "collection"
+        || binding.name != "let"
+        || select.name != "select"
+        || !binding.options.is_empty()
+    {
+        return Err(Status::unimplemented("unsupported correlated stages"));
+    }
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = binding.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported correlated binding"));
+    };
+    if map.fields.len() != 1 {
+        return Err(Status::unimplemented("unsupported correlated binding"));
+    }
+    let Some((
+        name,
+        pb::Value {
+            value_type: Some(V::FieldReferenceValue(field)),
+        },
+    )) = map.fields.iter().next()
+    else {
+        return Err(Status::unimplemented("unsupported correlated binding"));
+    };
+    if decode_alias(name)?.segments().len() != 1 {
+        return Err(Status::unimplemented("unsupported correlated binding"));
+    }
+    let field = FieldPath::parse(field)
+        .map_err(|_| Status::unimplemented("unsupported correlated binding field"))?;
+    let name = name.clone();
+    pipeline.stages.remove(1);
+    Ok(Some((name, field)))
+}
+
+/// Whether the selected expression requires a correlated scalar source.
+pub(crate) fn has_correlated_scalar(compiled: &CompiledExecution) -> bool {
+    compiled.stages.iter().any(|stage| matches!(stage, Stage::Select { aliases, .. } if aliases.iter().any(|(_, expr)| matches!(expr, Expr::CorrelatedScalar { .. }))))
+}
+
+/// Whether a direct selected operand requires prepared subcollection input.
+pub(crate) fn has_subcollection_array(compiled: &CompiledExecution) -> bool {
+    compiled.stages.iter().any(|stage| matches!(stage, Stage::Select { aliases, .. } if aliases.iter().any(|(_, expr)| matches!(expr, Expr::SubcollectionArray { .. }))))
+}
+
 /// Executes the admitted union plan from one guarded, immutable snapshot.
 pub(crate) fn execute_union(
     local: &crate::local::LocalBackend,
@@ -1544,7 +1910,9 @@ fn expression_text(value: &pb::Value) -> Option<String> {
 fn constant_call_error(expr: &Expr) -> Option<Status> {
     fn reads_field(expr: &Expr) -> bool {
         match expr {
-            Expr::Field(_) => true,
+            Expr::Field(_) | Expr::SubcollectionArray { .. } | Expr::CorrelatedScalar { .. } => {
+                true
+            }
             Expr::Constant(_) => false,
             Expr::Call { args, .. } => args.iter().any(reads_field),
         }
@@ -1629,6 +1997,140 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
 }
 
 #[allow(clippy::too_many_lines)]
+fn decode_correlated_scalar(nested: &pb::Pipeline) -> Result<Expr, Status> {
+    use pb::value::ValueType as V;
+    let [input, filter, select] = nested.stages.as_slice() else {
+        return Err(Status::unimplemented("unsupported scalar pipeline"));
+    };
+    if input.name != "collection_group"
+        || filter.name != "where"
+        || select.name != "select"
+        || !input.options.is_empty()
+        || !filter.options.is_empty()
+        || !select.options.is_empty()
+    {
+        return Err(Status::unimplemented("unsupported scalar pipeline"));
+    }
+    let [pb::Value {
+        value_type: Some(V::ReferenceValue(ancestor)),
+    }, pb::Value {
+        value_type: Some(V::StringValue(collection)),
+    }] = input.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported scalar collection group"));
+    };
+    if !ancestor.is_empty() {
+        return Err(Status::unimplemented("scalar group ancestor is unobserved"));
+    }
+    fireemu_core_types::ids::CollectionId::try_new(collection.as_str())
+        .map_err(|_| Status::unimplemented("unsupported scalar collection id"))?;
+    let [pb::Value {
+        value_type: Some(V::FunctionValue(equal)),
+    }] = filter.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported scalar predicate"));
+    };
+    if equal.name != "equal" || !equal.options.is_empty() {
+        return Err(Status::unimplemented("unsupported scalar predicate"));
+    }
+    let [pb::Value {
+        value_type: Some(V::FieldReferenceValue(predicate)),
+    }, pb::Value {
+        value_type: Some(V::VariableReferenceValue(variable)),
+    }] = equal.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported scalar predicate"));
+    };
+    let predicate = FieldPath::parse(predicate)
+        .map_err(|_| Status::unimplemented("unsupported scalar predicate field"))?;
+    let variable_path = decode_alias(variable)?;
+    if variable_path.segments().len() != 1 {
+        return Err(Status::unimplemented("unsupported scalar variable"));
+    }
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = select.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported scalar select"));
+    };
+    if map.fields.len() != 1 {
+        return Err(Status::unimplemented("unsupported scalar select"));
+    }
+    let Some((
+        alias,
+        pb::Value {
+            value_type: Some(V::FieldReferenceValue(field)),
+        },
+    )) = map.fields.iter().next()
+    else {
+        return Err(Status::unimplemented("unsupported scalar select"));
+    };
+    if decode_alias(alias)?.segments().len() != 1 {
+        return Err(Status::unimplemented("unsupported scalar alias"));
+    }
+    let field = FieldPath::parse(field)
+        .map_err(|_| Status::unimplemented("unsupported scalar select field"))?;
+    Ok(Expr::CorrelatedScalar {
+        collection: collection.clone(),
+        predicate,
+        variable: variable.clone(),
+        field,
+    })
+}
+
+fn decode_subcollection_array(nested: &pb::Pipeline) -> Result<Expr, Status> {
+    use pb::value::ValueType as V;
+    let [input, select] = nested.stages.as_slice() else {
+        return Err(Status::unimplemented("unsupported nested pipeline"));
+    };
+    if input.name != "subcollection"
+        || select.name != "select"
+        || !input.options.is_empty()
+        || !select.options.is_empty()
+    {
+        return Err(Status::unimplemented("unsupported nested pipeline"));
+    }
+    let [pb::Value {
+        value_type: Some(V::StringValue(collection)),
+    }] = input.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported subcollection input"));
+    };
+    fireemu_core_types::ids::CollectionId::try_new(collection.as_str())
+        .map_err(|_| Status::unimplemented("unsupported subcollection id"))?;
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = select.args.as_slice()
+    else {
+        return Err(Status::unimplemented("unsupported nested select"));
+    };
+    if map.fields.len() != 1 {
+        return Err(Status::unimplemented("unsupported nested select"));
+    }
+    let Some((
+        alias,
+        pb::Value {
+            value_type: Some(V::FieldReferenceValue(field)),
+        },
+    )) = map.fields.iter().next()
+    else {
+        return Err(Status::unimplemented("unsupported nested select"));
+    };
+    let alias = decode_alias(alias)?;
+    if alias.segments().len() != 1 {
+        return Err(Status::unimplemented(
+            "nested select alias paths are unobserved",
+        ));
+    }
+    let field =
+        FieldPath::parse(field).map_err(|_| Status::unimplemented("unsupported nested field"))?;
+    Ok(Expr::SubcollectionArray {
+        collection: collection.clone(),
+        field,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
 fn decode_operand_tree_in(
     value: &pb::Value,
     unrecorded: Unrecorded,
@@ -1644,6 +2146,22 @@ fn decode_operand_tree_in(
             FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
         Some(V::FunctionValue(function)) => {
+            if function.name == "scalar" && function.options.is_empty() {
+                if let [pb::Value {
+                    value_type: Some(V::PipelineValue(nested)),
+                }] = function.args.as_slice()
+                {
+                    return decode_correlated_scalar(nested);
+                }
+            }
+            if function.name == "array" && function.options.is_empty() {
+                if let [pb::Value {
+                    value_type: Some(V::PipelineValue(nested)),
+                }] = function.args.as_slice()
+                {
+                    return decode_subcollection_array(nested);
+                }
+            }
             if unrecorded == Unrecorded::Refuse
                 && function.name == "array_reverse"
                 && function.args.is_empty()
@@ -1856,11 +2374,23 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
         Some(V::MapValue(map)) => sorted_values(&map.fields)
             .into_iter()
             .find_map(|v| reference_outside(v, own)),
-        Some(V::FunctionValue(function)) => function
-            .args
-            .iter()
-            .chain(function.options.values())
-            .find_map(|v| reference_outside(v, own)),
+        Some(V::FunctionValue(function)) => {
+            if function.name == "scalar" && function.options.is_empty() {
+                if let [pb::Value {
+                    value_type: Some(V::PipelineValue(nested)),
+                }] = function.args.as_slice()
+                {
+                    if decode_correlated_scalar(nested).is_ok() {
+                        return None;
+                    }
+                }
+            }
+            function
+                .args
+                .iter()
+                .chain(function.options.values())
+                .find_map(|v| reference_outside(v, own))
+        }
         Some(V::PipelineValue(pipeline)) => pipeline
             .stages
             .iter()
@@ -3009,6 +3539,14 @@ fn accumulator_kind(name: &str) -> Option<(pipeline_exec::AccumulatorKind, &'sta
         "average" => (K::Average, "average(expression: any?): number?"),
         "minimum" => (K::Minimum, "minimum(expression: any?): any?"),
         "maximum" => (K::Maximum, "maximum(expression: any?): any?"),
+        "array_agg" => (K::ArrayAgg, "array_agg(expression: any): array[any]"),
+        "array_agg_distinct" => (
+            K::ArrayAggDistinct,
+            "array_agg_distinct(expression: any): array[any]",
+        ),
+        "first" => (K::First, "first(expression: any): any"),
+        "last" => (K::Last, "last(expression: any): any"),
+        "count_if" => (K::CountIf, "count_if(expression: boolean): int64"),
         _ => return None,
     })
 }
@@ -5748,5 +6286,96 @@ mod tests {
                 assert_eq!(refused.code(), tonic::Code::Unimplemented, "{entries:?}");
             }
         }
+    }
+    #[test]
+    fn observed_aggregate_functions_decode() {
+        for name in [
+            "array_agg",
+            "array_agg_distinct",
+            "first",
+            "last",
+            "count_if",
+        ] {
+            let input = pb::Value {
+                value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![pb::Value {
+                        value_type: Some(pb::value::ValueType::FieldReferenceValue("v".to_owned())),
+                    }],
+                    ..Default::default()
+                })),
+            };
+            assert!(
+                decode_accumulator(&input, Unrecorded::Refuse).is_ok(),
+                "{name}"
+            );
+        }
+    }
+    #[test]
+    fn subcollection_nested_select_alias_validation() {
+        use pb::value::ValueType as V;
+        for alias in ["", "__reserved__", "__name__", "a.b"] {
+            let nested = pb::Pipeline {
+                stages: vec![
+                    pb::pipeline::Stage {
+                        name: "subcollection".to_owned(),
+                        args: vec![pb::Value {
+                            value_type: Some(V::StringValue("kids".to_owned())),
+                        }],
+                        ..Default::default()
+                    },
+                    pb::pipeline::Stage {
+                        name: "select".to_owned(),
+                        args: vec![pb::Value {
+                            value_type: Some(V::MapValue(pb::MapValue {
+                                fields: [(
+                                    alias.to_owned(),
+                                    pb::Value {
+                                        value_type: Some(V::FieldReferenceValue(
+                                            "value".to_owned(),
+                                        )),
+                                    },
+                                )]
+                                .into_iter()
+                                .collect(),
+                            })),
+                        }],
+                        ..Default::default()
+                    },
+                ],
+            };
+            assert!(decode_subcollection_array(&nested).is_err(), "{alias:?}");
+        }
+        let nested = pb::Pipeline {
+            stages: vec![
+                pb::pipeline::Stage {
+                    name: "subcollection".to_owned(),
+                    args: vec![pb::Value {
+                        value_type: Some(V::StringValue("kids".to_owned())),
+                    }],
+                    ..Default::default()
+                },
+                pb::pipeline::Stage {
+                    name: "select".to_owned(),
+                    args: vec![pb::Value {
+                        value_type: Some(V::MapValue(pb::MapValue {
+                            fields: [(
+                                "renamed".to_owned(),
+                                pb::Value {
+                                    value_type: Some(V::FieldReferenceValue("value".to_owned())),
+                                },
+                            )]
+                            .into_iter()
+                            .collect(),
+                        })),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+        assert!(matches!(
+            decode_subcollection_array(&nested),
+            Ok(Expr::SubcollectionArray { .. })
+        ));
     }
 }

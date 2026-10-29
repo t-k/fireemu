@@ -6929,6 +6929,112 @@ impl LocalBackend {
         })
     }
 
+    /// Reads an outer collection and each direct subcollection under the same guarded snapshot.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn run_pipeline_subcollections(
+        &self,
+        request: &pb::RunQueryRequest,
+        collection: &str,
+        guard: ReadGuard<'_>,
+    ) -> Result<
+        (
+            Option<prost_types::Timestamp>,
+            Vec<(pb::RunQueryResponse, Vec<pb::RunQueryResponse>)>,
+        ),
+        Status,
+    > {
+        use prost::Message as _;
+        const LIMIT: u32 = 64;
+        const TOTAL: usize = 256;
+        const MAX_BYTES: usize = 1_048_576;
+        let parent = crate::query_messages::parse_query_parent(&request.parent).map_err(status)?;
+        let Some(pb::run_query_request::QueryType::StructuredQuery(query)) = &request.query_type
+        else {
+            return Err(Status::invalid_argument(
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
+            ));
+        };
+        self.fault(parent.project.as_str(), "firestore.read")?;
+        let accepted = self.accepted_query(&parent, query)?;
+        let now = self.write_time();
+        self.with_selected_snapshot(&parent, SnapshotSelector::Latest, now, |access| {
+            let version = access.version()?;
+            guard(
+                access.db(),
+                version,
+                ReadCheck::Query {
+                    parent: &parent,
+                    query: &accepted.query,
+                },
+            )?;
+            let mut bounded = accepted.query.clone();
+            bounded.limit = Some(LIMIT + 1);
+            let (parents, _) = access.run_query_with_stats(&bounded, &accepted.query, false)?;
+            if parents.len() > LIMIT as usize {
+                return Err(Status::unimplemented(
+                    "subquery outer input exceeds local bound",
+                ));
+            }
+            let read_time = Some(encode_instant(access.read_time(now)?));
+            let mut output = Vec::with_capacity(parents.len());
+            let mut total = 0usize;
+            let mut bytes = 0usize;
+            for document in parents {
+                bytes = bytes
+                    .checked_add(crate::encode::encode_document(&document).encoded_len())
+                    .filter(|n| *n <= MAX_BYTES)
+                    .ok_or_else(|| Status::unimplemented("subquery output exceeds local bound"))?;
+                let child_parent =
+                    crate::query_messages::parse_query_parent(&document.path.resource_name())
+                        .map_err(status)?;
+                let child = pb::StructuredQuery {
+                    from: vec![pb::structured_query::CollectionSelector {
+                        collection_id: collection.to_owned(),
+                        all_descendants: false,
+                    }],
+                    ..Default::default()
+                };
+                self.fault(child_parent.project.as_str(), "firestore.read")?;
+                let child_query = self.accepted_query(&child_parent, &child)?;
+                guard(
+                    access.db(),
+                    version,
+                    ReadCheck::Query {
+                        parent: &child_parent,
+                        query: &child_query.query,
+                    },
+                )?;
+                let mut limited = child_query.query.clone();
+                limited.limit = Some(LIMIT + 1);
+                let (children, _) =
+                    access.run_query_with_stats(&limited, &child_query.query, false)?;
+                total = total
+                    .checked_add(children.len())
+                    .ok_or_else(|| Status::unimplemented("subquery work exceeds local bound"))?;
+                if children.len() > LIMIT as usize || total > TOTAL {
+                    return Err(Status::unimplemented("subquery work exceeds local bound"));
+                }
+                for child in &children {
+                    bytes = bytes
+                        .checked_add(crate::encode::encode_document(child).encoded_len())
+                        .filter(|n| *n <= MAX_BYTES)
+                        .ok_or_else(|| {
+                            Status::unimplemented("subquery output exceeds local bound")
+                        })?;
+                }
+                let parent_response = query_responses(&[document], read_time, access.report(), 0)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| Status::internal("missing parent response"))?;
+                output.push((
+                    parent_response,
+                    query_responses(&children, read_time, access.report(), 0),
+                ));
+            }
+            Ok((read_time, output))
+        })
+    }
+
     /// Executes a bounded page while authorizing the caller's original query shape.
     /// Synthetic pagination limits and offsets are an adapter implementation detail and must
     /// not change `request.query` as observed by Security Rules.

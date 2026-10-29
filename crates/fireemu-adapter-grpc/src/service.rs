@@ -678,7 +678,21 @@ impl Firestore for GatewayService {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
-        let ast = crate::pipeline::validate_pipeline(request.get_ref(), registry_unrecorded)
+        // Preserve the common compiler's refusal for REST and other entrypoints. Only this
+        // gRPC route admits the observed existing-transaction/read-time document reads.
+        let mut compiler_request = request.get_ref().clone();
+        if !compiler_request.auto_commit_transaction
+            && matches!(
+                compiler_request.consistency_selector,
+                Some(
+                    pb::execute_pipeline_request::ConsistencySelector::Transaction(_)
+                        | pb::execute_pipeline_request::ConsistencySelector::ReadTime(_)
+                )
+            )
+        {
+            compiler_request.consistency_selector = None;
+        }
+        let ast = crate::pipeline::validate_pipeline(&compiler_request, registry_unrecorded)
             .map_err(|error| gate.answer(error))?;
         if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
@@ -692,8 +706,17 @@ impl Firestore for GatewayService {
                 fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
             };
             let compiled =
-                crate::pipeline::compile_pipeline(request.get_ref(), &parent, unrecorded)
+                crate::pipeline::compile_pipeline(&compiler_request, &parent, unrecorded)
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+            if request.get_ref().consistency_selector.is_some()
+                && (compiled.documents.is_none()
+                    || !compiled.unions.is_empty()
+                    || compiled.search.is_some())
+            {
+                return Err(Status::unimplemented(
+                    "pipeline consistency is unsupported for this input",
+                ));
+            }
             if !compiled.unions.is_empty() {
                 let local = self
                     .local_backend()
@@ -749,9 +772,29 @@ impl Firestore for GatewayService {
                     .cloned()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?;
                 let database = request.get_ref().database.clone();
+                let selector = match &request.get_ref().consistency_selector {
+                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
+                        Some(
+                            pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                                token.clone(),
+                            ),
+                        )
+                    }
+                    Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(time)) => {
+                        Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(*time))
+                    }
+                    Some(_) => {
+                        return Err(Status::unimplemented(
+                            "new pipeline transactions are unsupported locally",
+                        ))
+                    }
+                    None => None,
+                };
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
-                        crate::pipeline::documents_input(local, &database, &names, guard)
+                        crate::pipeline::documents_input_selected(
+                            local, &database, &names, guard, selector,
+                        )
                     })
                     .await
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;

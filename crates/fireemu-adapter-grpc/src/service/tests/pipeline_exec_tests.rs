@@ -1633,3 +1633,252 @@ async fn lazy_control_defers_constant_child_errors_in_both_profiles() {
         assert_eq!(rows[0]["catch"], "String(\"caught\")");
     }
 }
+
+#[tokio::test]
+async fn documents_pipeline_uses_existing_transaction_snapshot() {
+    let backend = test_backend();
+    let case = Case {
+        docs: vec![(Some(value(pb::value::ValueType::IntegerValue(1))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    seed(&backend, &case);
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend.clone());
+    let tx = backend
+        .begin_transaction(&pb::BeginTransactionRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            options: Some(pb::TransactionOptions {
+                mode: Some(pb::transaction_options::Mode::ReadOnly(
+                    pb::transaction_options::ReadOnly::default(),
+                )),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut request = pipeline(&case, "");
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(ref mut structured)) =
+        request.pipeline_type
+    else {
+        panic!()
+    };
+    structured.pipeline.as_mut().unwrap().stages[0] = stage(
+        "documents",
+        value(pb::value::ValueType::ReferenceValue(
+            "/items/000".to_owned(),
+        )),
+    );
+    request.consistency_selector =
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(tx));
+    let before = stored_document(&service, &format!("{PARENT}/items/000")).await;
+    let read_time = before.update_time.unwrap();
+    assert_eq!(
+        executor(&service, request.clone()).await[0]["f"],
+        "Integer(1)"
+    );
+    let mut updated = before;
+    updated
+        .fields
+        .insert("f".to_owned(), value(pb::value::ValueType::IntegerValue(2)));
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(updated)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        executor(&service, request.clone()).await[0]["f"],
+        "Integer(1)"
+    );
+    request.consistency_selector = Some(
+        pb::execute_pipeline_request::ConsistencySelector::ReadTime(read_time),
+    );
+    assert_eq!(
+        executor(&service, request.clone()).await[0]["f"],
+        "Integer(1)"
+    );
+    request.consistency_selector = None;
+    assert_eq!(
+        executor(&service, request.clone()).await[0]["f"],
+        "Integer(2)"
+    );
+    request.consistency_selector =
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1, 2, 3]));
+    assert!(Firestore::execute_pipeline(&service, Request::new(request))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn consistency_selector_scope_covers_seeded_cases() {
+    for (selector, phase, input) in [
+        ("transaction", "before", "documents"),
+        ("transaction", "after", "documents"),
+        ("readTime", "after", "documents"),
+        ("strong", "after", "documents"),
+        ("invalid", "before", "documents"),
+        ("transaction", "after", "other"),
+        ("strong", "before", "other"),
+        ("invalid", "after", "other"),
+        ("readTime", "before", "other"),
+    ] {
+        let backend = test_backend();
+        let case = Case {
+            docs: vec![(Some(value(pb::value::ValueType::IntegerValue(1))), None)],
+            m_shapes: vec![],
+            literal: None,
+            select: None,
+            offset: None,
+            limit: None,
+        };
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        let service = GatewayService::local(gateway, backend.clone());
+        let read_time = stored_document(&service, &format!("{PARENT}/items/000"))
+            .await
+            .update_time
+            .unwrap();
+        let tx = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                options: Some(pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadOnly(
+                        pb::transaction_options::ReadOnly::default(),
+                    )),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        if phase == "after" {
+            let mut updated = stored_document(&service, &format!("{PARENT}/items/000")).await;
+            updated
+                .fields
+                .insert("f".to_owned(), value(pb::value::ValueType::IntegerValue(2)));
+            backend
+                .commit(&pb::CommitRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    writes: vec![pb::Write {
+                        operation: Some(pb::write::Operation::Update(updated)),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let mut request = pipeline(&case, "");
+        if input == "documents" {
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                ref mut structured,
+            )) = request.pipeline_type
+            else {
+                panic!()
+            };
+            structured.pipeline.as_mut().unwrap().stages[0] = stage(
+                "documents",
+                value(pb::value::ValueType::ReferenceValue(
+                    "/items/000".to_owned(),
+                )),
+            );
+        }
+        request.consistency_selector = match selector {
+            "strong" => None,
+            "transaction" => {
+                Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(tx.clone()))
+            }
+            "invalid" => {
+                Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1, 2, 3]))
+            }
+            "readTime" => Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                read_time,
+            )),
+            _ => unreachable!(),
+        };
+        let response = Firestore::execute_pipeline(&service, Request::new(request)).await;
+        assert_eq!(
+            response.is_ok(),
+            selector == "strong" || (input == "documents" && selector != "invalid"),
+            "{selector}/{phase}/{input}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn pipeline_new_transaction_and_auto_commit_stay_unimplemented() {
+    let case = Case {
+        docs: vec![],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let service = service_for(&case);
+    let mut request = pipeline(&case, "");
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(ref mut structured)) =
+        request.pipeline_type
+    else {
+        panic!()
+    };
+    structured.pipeline.as_mut().unwrap().stages[0] = stage(
+        "documents",
+        value(pb::value::ValueType::ReferenceValue(
+            "/items/000".to_owned(),
+        )),
+    );
+    request.consistency_selector = Some(
+        pb::execute_pipeline_request::ConsistencySelector::NewTransaction(
+            pb::TransactionOptions::default(),
+        ),
+    );
+    assert_eq!(
+        Firestore::execute_pipeline(&service, Request::new(request.clone()))
+            .await
+            .err()
+            .unwrap()
+            .code(),
+        tonic::Code::Unimplemented
+    );
+    request.consistency_selector =
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
+    request.auto_commit_transaction = true;
+    assert_eq!(
+        Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .err()
+            .unwrap()
+            .code(),
+        tonic::Code::Unimplemented
+    );
+}
+
+#[test]
+fn shared_compiler_still_refuses_transaction_selectors() {
+    let case = Case {
+        docs: vec![],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let mut request = pipeline(&case, "");
+    request.consistency_selector =
+        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
+    let parent = crate::decode::parse_parent(PARENT).unwrap();
+    let status = crate::pipeline::compile_pipeline(
+        &request,
+        &parent,
+        fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse,
+    )
+    .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::Unimplemented);
+}

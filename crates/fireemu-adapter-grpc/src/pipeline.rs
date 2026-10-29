@@ -3717,10 +3717,22 @@ pub fn documents_input(
     names: &[String],
     guard: crate::rules::ReadGuard<'_>,
 ) -> Result<Vec<pb::RunQueryResponse>, Status> {
+    documents_input_selected(local, database, names, guard, None)
+}
+
+/// Reads document inputs through the existing selected-snapshot transaction machinery.
+pub fn documents_input_selected(
+    local: &crate::local::LocalBackend,
+    database: &str,
+    names: &[String],
+    guard: crate::rules::ReadGuard<'_>,
+    selector: Option<pb::batch_get_documents_request::ConsistencySelector>,
+) -> Result<Vec<pb::RunQueryResponse>, Status> {
     let outcome = local.batch_get_documents(
         &pb::BatchGetDocumentsRequest {
             database: database.to_owned(),
             documents: names.to_vec(),
+            consistency_selector: selector,
             ..Default::default()
         },
         guard,

@@ -2179,16 +2179,15 @@ fn observed_replace_modes_preserve_expected_fields() {
             assert_eq!(out[0].fields.contains_key("keep"), keeps);
             assert_eq!(out[0].path, row.path);
         }
-        let out = execute_rows_in(
+        let result = execute_rows_in(
             vec![Stage::ReplaceWith {
                 expression: Expr::Constant(int(7)),
                 mode: ReplaceMode::Full,
             }],
             vec![row.clone()],
             policy,
-        )
-        .unwrap();
-        assert!(out[0].fields.is_empty());
+        );
+        assert!(matches!(result, Err(EvalError::Unobserved { .. })));
     }
 }
 
@@ -2295,4 +2294,20 @@ fn nearest_zero_and_overflow_distances_are_unobserved() {
         ),
         None
     );
+}
+
+#[test]
+#[ignore = "recorded scalar replacement remains unserved pending a general semantic rule"]
+fn recorded_scalar_replace_witness_remains_open() {
+    let row = doc("a", &[("keep", int(1))]);
+    let out = execute_rows_in(
+        vec![Stage::ReplaceWith {
+            expression: Expr::Constant(int(7)),
+            mode: ReplaceMode::Full,
+        }],
+        vec![row],
+        Unrecorded::Refuse,
+    )
+    .unwrap();
+    assert!(out[0].fields.is_empty());
 }

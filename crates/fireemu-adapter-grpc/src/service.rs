@@ -737,8 +737,8 @@ impl Firestore for GatewayService {
                     .cloned()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?;
                 let responses =
-                    blocking_read(local, self.rules.clone(), caller, move |local, _guard| {
-                        crate::pipeline::database_input(local, &parent)
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::pipeline::database_input(local, &parent, guard)
                     })
                     .await
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;

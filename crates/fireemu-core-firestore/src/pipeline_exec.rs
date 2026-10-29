@@ -2349,12 +2349,6 @@ impl Cursor {
                     let replacement =
                         match expression.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(Value::Map(fields)) => fields,
-                            Eval::Value(Value::Integer(7))
-                                if *mode == ReplaceMode::Full
-                                    && matches!(expression, Expr::Constant(Value::Integer(7))) =>
-                            {
-                                BTreeMap::new()
-                            }
                             Eval::Error(error) => return Err(error),
                             _ => {
                                 return Err(EvalError::Unobserved {

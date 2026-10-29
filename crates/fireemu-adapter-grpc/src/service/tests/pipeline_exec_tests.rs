@@ -1094,7 +1094,7 @@ async fn observed_nearest_euclidean_returns_ranked_distances() {
 }
 
 #[tokio::test]
-async fn observed_replace_modes_and_scalar_seven_serve_in_both_profiles() {
+async fn observed_replace_map_modes_serve_in_both_profiles() {
     let case = Case {
         docs: vec![(Some(value(pb::value::ValueType::IntegerValue(7))), None)],
         m_shapes: vec![0],
@@ -1113,15 +1113,10 @@ async fn observed_replace_modes_and_scalar_seven_serve_in_both_profiles() {
         gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
         gateway.ctx.policy = policy;
         let service = GatewayService::local(gateway, backend);
-        for (mode, expression, empty) in [
-            ("full_replace", field_ref("m"), false),
-            ("merge_overwrite_existing", field_ref("m"), false),
-            ("merge_keep_existing", field_ref("m"), false),
-            (
-                "full_replace",
-                value(pb::value::ValueType::IntegerValue(7)),
-                true,
-            ),
+        for (mode, expression) in [
+            ("full_replace", field_ref("m")),
+            ("merge_overwrite_existing", field_ref("m")),
+            ("merge_keep_existing", field_ref("m")),
         ] {
             let mut request = pipeline(&case, "");
             let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
@@ -1144,10 +1139,6 @@ async fn observed_replace_modes_and_scalar_seven_serve_in_both_profiles() {
                 });
             let rows = executor(&service, request).await;
             assert_eq!(rows.len(), 1);
-            if empty {
-                assert!(rows[0].is_empty());
-                continue;
-            }
             assert_eq!(rows[0].get("f").map(String::as_str), Some("Integer(7)"));
         }
     }
@@ -1302,7 +1293,7 @@ async fn stage_context_seeded_pict_rows_execute() {
             });
         }
         let error_expected = input != "empty"
-            && ((kind == "replace" && input == "wrongtype" && mode != "full")
+            && ((kind == "replace" && input == "wrongtype")
                 || (kind == "nearest" && input == "wrongtype" && profile == "strict"));
         let response = Firestore::execute_pipeline(&service, Request::new(request)).await;
         let mut rows = Vec::new();
@@ -1331,6 +1322,64 @@ async fn stage_context_seeded_pict_rows_execute() {
                     assert!(row.fields.is_empty(), "{line}");
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn database_input_enforces_snapshot_guard_for_empty_and_nonempty() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let parent = crate::decode::parse_parent(PARENT).unwrap();
+    for populated in [false, true] {
+        let backend = test_backend();
+        if populated {
+            let case = Case {
+                docs: vec![(Some(value(pb::value::ValueType::IntegerValue(1))), None)],
+                m_shapes: vec![],
+                literal: None,
+                select: None,
+                offset: None,
+                limit: None,
+            };
+            seed(&backend, &case);
+        }
+        let calls = AtomicUsize::new(0);
+        let guard = |_: &fireemu_core_firestore::store::FirestoreState,
+                     version: Option<fireemu_core_firestore::store::CommitVersion>,
+                     check: crate::rules::ReadCheck<'_>| {
+            assert!(version.is_some());
+            let crate::rules::ReadCheck::Documents(documents) = check else {
+                panic!("expected document read check")
+            };
+            assert_eq!(documents.len(), usize::from(populated));
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(Status::permission_denied("test guard"))
+        };
+        let result = crate::pipeline::database_input(&backend, &parent, &guard);
+        assert_eq!(result.unwrap_err().code(), tonic::Code::PermissionDenied);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn database_input_rejects_stale_epoch_even_when_empty() {
+    let backend = test_backend();
+    let old_epoch = backend.barrier().epoch();
+    drop(backend.barrier().exclusive());
+    for (epoch, stale) in [(old_epoch, true), (backend.barrier().epoch(), false)] {
+        let caller = Caller {
+            principal: Principal::Owner,
+            epoch,
+        };
+        let result = blocking_read(backend.clone(), None, caller, |local, guard| {
+            let parent = parse_parent(PARENT).unwrap();
+            crate::pipeline::database_input(local, &parent, guard)
+        })
+        .await;
+        if stale {
+            assert_eq!(result.unwrap_err().code(), tonic::Code::Unavailable);
+        } else {
+            assert!(result.unwrap().is_empty());
         }
     }
 }

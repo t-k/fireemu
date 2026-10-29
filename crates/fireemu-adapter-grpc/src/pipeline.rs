@@ -3728,18 +3728,30 @@ pub fn documents_input(
 pub fn database_input(
     local: &crate::local::LocalBackend,
     parent: &Parent,
+    guard: crate::rules::ReadGuard<'_>,
 ) -> Result<Vec<pb::RunQueryResponse>, Status> {
-    local.with_snapshot(parent, |db, _, read_time, _| {
+    local.with_snapshot(parent, |db, version, read_time, _| {
         let read_time = Some(crate::encode::encode_instant(read_time));
-        db.documents()
-            .iter()
+        let documents: Vec<_> = db
+            .documents()
+            .into_iter()
+            .map(|document| (document.path.clone(), Some(document)))
+            .collect();
+        guard(
+            db,
+            Some(version),
+            crate::rules::ReadCheck::Documents(&documents),
+        )?;
+        Ok(documents
+            .into_iter()
+            .filter_map(|(_, document)| document)
             .map(|document| pb::RunQueryResponse {
-                document: Some(crate::encode::encode_document(document)),
+                document: Some(crate::encode::encode_document(&document)),
                 read_time,
                 ..Default::default()
             })
-            .collect()
-    })
+            .collect())
+    })?
 }
 
 /// The CRC-32 (IEEE, as zlib computes it) of `bytes`.

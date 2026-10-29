@@ -3144,15 +3144,7 @@ fn map_set_odd_count_is_recorded_arity_and_minimum_still_precedes_it() {
 fn sqrt_observed_wrong_type_and_unobserved_strict_numeric() {
     assert!(function("sqrt").is_some(), "sqrt must be registered");
     assert_eq!(both("sqrt", &[text("s")]), wrong("sqrt", "Float", "STRING"));
-    for value in [
-        int(25),
-        dbl(0.0),
-        dbl(-1.0),
-        dbl(f64::NAN),
-        dbl(f64::INFINITY),
-        null(),
-        Eval::Absent,
-    ] {
+    for value in [dbl(f64::NAN), dbl(f64::INFINITY), Eval::Absent] {
         assert!(
             is_unobserved(&strict("sqrt", &[value])),
             "strict sqrt must not claim unobserved values"
@@ -3274,7 +3266,9 @@ other	strict	where	empty	valid
             assert_eq!(result.unwrap().len(), 0, "{line}");
             continue;
         }
-        if strict_profile && *kind != "string" {
+        if strict_profile && *kind == "positive" && *position == "where" {
+            assert_eq!(result.unwrap().len(), 0, "{line}");
+        } else if strict_profile && *kind != "string" {
             assert!(
                 matches!(result, Err(EvalError::Unobserved { .. })),
                 "{line}: {result:?}"
@@ -3297,7 +3291,7 @@ proptest! {
         let result = emulator("sqrt", &[dbl(f64::from(value))]);
         let Eval::Value(Value::Double(root)) = result else { panic!("expected numeric result") };
         prop_assert!((root * root - f64::from(value)).abs() <= 1e-8);
-        prop_assert!(is_unobserved(&strict("sqrt", &[dbl(f64::from(value))])));
+        prop_assert_eq!(strict("sqrt", &[dbl(f64::from(value))]), dbl(root));
     }
 }
 
@@ -3388,7 +3382,7 @@ fn numeric_family_documented_cases_and_strict_boundary() {
         ("trunc", vec![dbl(15.5)], 15.0),
     ] {
         assert_eq!(emulator(name, &args), dbl(expected), "{name}");
-        assert!(is_unobserved(&strict(name, &args)), "{name}");
+        assert_eq!(strict(name, &args), dbl(expected), "{name}");
     }
     assert_eq!(emulator("trunc", &[int(15), int(0)]), int(15));
     assert!(matches!(emulator("ln", &[int(0)]), Eval::Error(_)));
@@ -3442,7 +3436,30 @@ trunc	ordinary	null	two
             emulator(name, &args)
         };
         if fields[1] == "strict" {
-            assert!(is_unobserved(&value), "{line}");
+            match (name, fields[2], fields[3]) {
+                ("ln" | "exp", "null", "one") => assert_eq!(value, null(), "{line}"),
+                ("log", "wrong", "one") => {
+                    assert_eq!(value, wrong("ln", "Float", "STRING"), "{line}");
+                }
+                ("exp", "domain", "one") => assert_eq!(value, dbl(1.0), "{line}"),
+                ("log10", "positive", "one") => assert_eq!(value, dbl(2.0_f64.log10()), "{line}"),
+                ("log", "domain", "two") => assert_eq!(
+                    value,
+                    invalid(
+                        "log(...) base must be larger than 0 and argument must be larger than 0"
+                    ),
+                    "{line}"
+                ),
+                ("log10", "domain", "one") => assert_eq!(
+                    value,
+                    invalid("log10(...) requires a positive number but got 0.0"),
+                    "{line}"
+                ),
+                ("log", "null", "two") | ("trunc", "wrong", "two") => {
+                    assert!(is_unobserved(&value), "{line}");
+                }
+                _ => panic!("unexpected strict PICT row: {line}"),
+            }
         } else {
             match (name, fields[2], fields[3]) {
                 ("exp", "positive", "one") => assert_eq!(value, dbl(2.0_f64.exp()), "{line}"),
@@ -3478,7 +3495,7 @@ proptest! {
     #[test]
     fn numeric_family_trunc_integer_is_toward_zero(value in -1_000_000_i64..1_000_000) {
         prop_assert_eq!(emulator("trunc", &[int(value), int(0)]), int(value));
-        prop_assert!(is_unobserved(&strict("trunc", &[int(value), int(0)])));
+        prop_assert_eq!(strict("trunc", &[int(value), int(0)]), int(value));
     }
 }
 
@@ -3511,4 +3528,70 @@ fn numeric_family_exp_range_and_explicit_specials() {
     assert!(
         matches!(emulator("exp", &[dbl(f64::NAN)]), Eval::Value(Value::Double(x)) if x.is_nan())
     );
+}
+
+#[test]
+fn observed_numeric_strict_finite_null_and_errors() {
+    for (name, args, expected) in [
+        ("exp", vec![int(0)], 1.0),
+        ("ln", vec![int(1)], 0.0),
+        ("log", vec![int(1)], 0.0),
+        ("log", vec![int(100), int(10)], 2.0),
+        ("log10", vec![int(100)], 2.0),
+        ("trunc", vec![dbl(-15.5)], -15.0),
+        ("sqrt", vec![int(25)], 5.0),
+    ] {
+        assert_eq!(strict(name, &args), dbl(expected), "{name}");
+    }
+    for name in ["exp", "ln", "log", "log10", "trunc", "sqrt"] {
+        assert_eq!(strict(name, &[null()]), null(), "{name}");
+        let error_name = if name == "log" { "ln" } else { name };
+        let expected = if name == "trunc" { "Number" } else { "Float" };
+        assert_eq!(
+            strict(name, &[text("x")]),
+            wrong(error_name, expected, "STRING"),
+            "{name}"
+        );
+        assert!(is_unobserved(&strict(name, &[Eval::Absent])), "{name}");
+    }
+    assert_eq!(
+        strict("ln", &[int(0)]),
+        invalid("ln(...) requires a positive number but got 0.0")
+    );
+    assert_eq!(
+        strict("log10", &[int(0)]),
+        invalid("log10(...) requires a positive number but got 0.0")
+    );
+    assert_eq!(
+        strict("log", &[int(10), int(1)]),
+        invalid("log(...) base must be larger than 0 and argument must be larger than 0")
+    );
+    assert_eq!(
+        strict("sqrt", &[int(-1)]),
+        invalid("sqrt(...) cannot be used on negative numbers")
+    );
+}
+
+#[test]
+fn observed_numeric_ordinary_sqrt_preserves_nonstring_type_error() {
+    assert_eq!(
+        emulator("sqrt", &[Eval::Value(Value::Boolean(true))]),
+        wrong("sqrt", "Float", "BOOLEAN")
+    );
+}
+
+#[test]
+fn ordinary_numeric_string_diagnostics_match_recorded_types() {
+    for (name, function) in [
+        ("exp", "exp"),
+        ("ln", "ln"),
+        ("log", "ln"),
+        ("log10", "log10"),
+    ] {
+        let result = emulator(name, &[text("not-a-number")]);
+        assert!(
+            matches!(result, Eval::Error(EvalError::WrongType { function: actual, expected: "Float", got: "STRING" }) if actual == function),
+            "{name}: {result:?}"
+        );
+    }
 }

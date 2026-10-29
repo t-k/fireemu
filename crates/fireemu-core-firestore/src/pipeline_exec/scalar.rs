@@ -1840,31 +1840,13 @@ fn eval_pow(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
-    if let Some(error) = first_error(args) {
-        return error;
-    }
-    match &args[0] {
-        Eval::Value(Value::String(_)) => Eval::Error(EvalError::WrongType {
-            function: "sqrt",
-            expected: "Float",
-            got: "STRING",
-        }),
-        _ if strict(cx) => unobserved("sqrt", "numeric and other argument behavior is unobserved"),
-        Eval::Value(Value::Null) | Eval::Absent => null(),
-        Eval::Value(Value::Integer(value)) => sqrt_number(Num::Int(*value).double()),
-        Eval::Value(Value::Double(value)) => sqrt_number(*value),
-        Eval::Value(value) => Eval::Error(EvalError::WrongType {
-            function: "sqrt",
-            expected: "Float",
-            got: type_name(value),
-        }),
-        Eval::Error(_) => unreachable!("errors are returned above"),
-    }
-}
-
-fn sqrt_number(value: f64) -> Eval {
+    let values = match numeric_inputs("sqrt", args, cx) {
+        Ok(values) => values,
+        Err(answer) => return answer,
+    };
+    let value = values[0].double();
     if value < 0.0 {
-        invalid("sqrt(...) requires a non-negative number")
+        invalid("sqrt(...) cannot be used on negative numbers")
     } else {
         double(value.sqrt())
     }
@@ -1874,11 +1856,56 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
     if let Some(error) = first_error(args) {
         return Err(error);
     }
+    if !strict(cx)
+        && args.len() == 1
+        && matches!(name, "exp" | "ln" | "log" | "log10")
+        && matches!(&args[0], Eval::Value(Value::String(_)))
+    {
+        return Err(Eval::Error(EvalError::WrongType {
+            function: if name == "log" { "ln" } else { name },
+            expected: "Float",
+            got: "STRING",
+        }));
+    }
+    if !strict(cx) && name == "sqrt" {
+        if let Some(Eval::Value(value)) = args.first() {
+            if !matches!(value, Value::Null | Value::Integer(_) | Value::Double(_)) {
+                return Err(Eval::Error(EvalError::WrongType {
+                    function: "sqrt",
+                    expected: "Float",
+                    got: type_name(value),
+                }));
+            }
+        }
+    }
     if strict(cx) {
-        return Err(unobserved(name, "numeric arguments are unobserved"));
+        if args.len() == 1 {
+            match &args[0] {
+                Eval::Value(Value::Null) => return Err(null()),
+                Eval::Value(Value::String(_)) => {
+                    return Err(Eval::Error(EvalError::WrongType {
+                        function: if name == "log" { "ln" } else { name },
+                        expected: if name == "trunc" { "Number" } else { "Float" },
+                        got: "STRING",
+                    }))
+                }
+                _ => {}
+            }
+        }
+        if !args.iter().all(|a| match a {
+            Eval::Value(Value::Integer(_)) => true,
+            Eval::Value(Value::Double(d)) => d.is_finite() && !(d.is_sign_negative() && *d == 0.0),
+            _ => false,
+        }) {
+            return Err(unobserved(
+                name,
+                "argument shape or special value is unobserved",
+            ));
+        }
     }
     numbers(name, args, args.len(), cx)
 }
+
 fn eval_exp(args: &[Eval], cx: Context) -> Eval {
     match numeric_inputs("exp", args, cx) {
         Ok(v) => {
@@ -1916,7 +1943,18 @@ fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
         return double(f64::NAN);
     }
     if x <= 0.0 || base.is_some_and(|b| b <= 0.0 || b.to_bits() == 1.0_f64.to_bits()) {
-        return invalid(format!("{name}(...) invalid logarithm domain"));
+        if name == "log" && base.is_some() {
+            return invalid(
+                "log(...) base must be larger than 0 and argument must be larger than 0",
+            );
+        }
+        let label = if name == "log" { "ln" } else { name };
+        return match java_double(x) {
+            Some(value) => invalid(format!(
+                "{label}(...) requires a positive number but got {value}"
+            )),
+            None => unobserved(name, "domain error text is unobserved"),
+        };
     }
     double(match base {
         Some(b) => x.log(b),
@@ -1937,8 +1975,37 @@ fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    if strict(cx) {
-        return unobserved("trunc", "numeric arguments are unobserved");
+    if strict(cx) && args.len() == 1 {
+        match &args[0] {
+            Eval::Value(Value::Null) => return null(),
+            Eval::Value(Value::String(_)) => {
+                return Eval::Error(EvalError::WrongType {
+                    function: "trunc",
+                    expected: "Number",
+                    got: "STRING",
+                })
+            }
+            _ => {}
+        }
+    }
+    if strict(cx)
+        && (args.iter().any(is_missing)
+            || args
+                .iter()
+                .any(|a| matches!(a, Eval::Value(Value::Double(d)) if !d.is_finite())))
+    {
+        return unobserved("trunc", "argument shape or special value is unobserved");
+    }
+    if strict(cx)
+        && !args.iter().enumerate().all(|(i, arg)| match (i, arg) {
+            (0 | 1, Eval::Value(Value::Integer(_))) => true,
+            (0, Eval::Value(Value::Double(d))) => {
+                d.is_finite() && !(d.is_sign_negative() && *d == 0.0)
+            }
+            _ => false,
+        })
+    {
+        return unobserved("trunc", "argument shape is unobserved");
     }
     let values = match check("trunc", args, &[Param::Number, Param::Int], cx) {
         Ok(v) => v,

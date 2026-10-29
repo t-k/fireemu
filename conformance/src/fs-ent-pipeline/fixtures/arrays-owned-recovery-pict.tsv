@@ -1,0 +1,8 @@
+document	delete	budget
+exact	ok	full
+changed	ok	full
+mismatch	ok	full
+exact	unknown	full
+exact	ok	low
+mismatch	unknown	low
+changed	unknown	low

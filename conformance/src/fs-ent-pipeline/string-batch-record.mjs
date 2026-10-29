@@ -8,7 +8,7 @@ import {createStageContext} from './stage-context-target.mjs';
 import {runStringAdapter} from './string-batch-adapter.mjs';
 
 export function validateStringPacket(p) {
-  if(p?.status!=='AUTHORIZED BY ROOT AFTER REVIEW' || p.project!==SANDBOX_PROJECT || !/^[1-9]\d{5,}$/.test(p.projectNumber) || !/^entpipe2-[0-9]{8}$/.test(p.database) || typeof p.databaseUid!=='string' || !p.databaseUid || p.cases!==11 || p.rounds!==2 || p.maxRequests!==37 || p.recoveryReads!==2 || p.adcAcquisitions!==1)throw Error('unapproved numeric packet');return true;
+  if(p?.status!=='AUTHORIZED BY ROOT AFTER REVIEW' || p.project!==SANDBOX_PROJECT || !/^[1-9]\d{5,}$/.test(p.projectNumber) || !/^entpipe2-[0-9]{8}$/.test(p.database) || typeof p.databaseUid!=='string' || !p.databaseUid || p.cases!==11 || p.rounds!==2 || p.maxRequests!==39 || p.recoveryReads!==2 || p.adcAcquisitions!==1)throw Error('unapproved numeric packet');return true;
 }
 export async function recordString({packetPath,packetSha256,out,marker,leasePath}) {
   if(!/^[a-f0-9]{64}$/.test(packetSha256))throw Error('invalid packet binding');

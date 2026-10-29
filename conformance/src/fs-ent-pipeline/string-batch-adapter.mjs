@@ -7,7 +7,7 @@ import {runStringBatch} from './string-batch.mjs';
 // The campaign holds two separately admitted recovery reads and two cleanup calls.
 export async function runStringAdapter(ctx,{uid,projectNumber,journal,fetchFn,clientFactory}={}) {
   if(typeof journal!=='function')throw Error('durable journal required');
-  const budget=createStageBudget({maximum:37,cleanupReserve:4});
+  const budget=createStageBudget({maximum:39,cleanupReserve:4});
   const claim=budget.claim;
   const identity=createNumericIdentity(ctx,{uid,projectNumber,claim,journal,...(fetchFn?{fetchFn}:{})});
   const support=createStringSupport(ctx,{claim,journal,...(fetchFn?{fetchFn}:{})});

@@ -666,9 +666,9 @@ impl Firestore for GatewayService {
         } else {
             fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
         };
-        // Strict answers a refusal only for a request of a shape production refused, with
-        // production's text (coordinator ruling of 2026-10-21); a decoded gRPC map keeps no
-        // wire order.
+        // The strict refusal gate matches recorded request shapes and texts (coordinator ruling
+        // of 2026-10-21); a decoded gRPC map keeps no wire order. The generalized gRPC function
+        // depth limit below is enforced separately from the gate.
         crate::pipeline::admit_union(request.get_ref())?;
         let gate = if self.gateway.production_refusals() {
             crate::pipeline_shape::RefusalGate::Recorded(
@@ -696,6 +696,8 @@ impl Firestore for GatewayService {
             crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
         let ast = crate::pipeline::validate_pipeline(&compiler_request, registry_unrecorded)
             .map_err(|error| gate.answer(error))?;
+        crate::pipeline::validate_function_depth(&compiler_request)
+            .map_err(|error| pipeline_status(error, &ast.canonical_text()))?;
         if self.local_backend().is_some() {
             let parent = parse_parent(&format!("{}/documents", request.get_ref().database))
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;

@@ -611,3 +611,94 @@ fn a_stalled_rest_body_ends_at_the_deadline_without_refusing_anyone_else() {
         .join()
         .unwrap();
 }
+
+#[tokio::test]
+async fn execute_pipeline_grpc_recursion_refusal_follows_profile() {
+    for strict in [true, false] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let backend = Arc::new(LocalBackend::new(
+            gateway(strict),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            7,
+        ));
+        let rest = Arc::new(RestState {
+            local: backend.clone(),
+            gateway: Arc::new(gateway(strict)),
+            rules: None,
+            app_check: None,
+            control_token: None,
+        });
+        let server = tokio::spawn(serve_multiplexed(
+            listener,
+            FirestoreServer::new(GatewayService::local(gateway(strict), backend)),
+            rest,
+        ));
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = FirestoreClient::new(channel);
+        let mut value = pb::Value {
+            value_type: Some(pb::value::ValueType::FieldReferenceValue("i".into())),
+        };
+        for _ in 0..47 {
+            value = pb::Value {
+                value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                    name: "array".into(),
+                    args: vec![value],
+                    ..Default::default()
+                })),
+            };
+        }
+        let map = pb::MapValue {
+            fields: [("v".to_owned(), value)].into_iter().collect(),
+        };
+        let request = pb::ExecutePipelineRequest {
+            database: DB.into(),
+            pipeline_type: Some(
+                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                    pb::StructuredPipeline {
+                        pipeline: Some(pb::Pipeline {
+                            stages: vec![
+                                pb::pipeline::Stage {
+                                    name: "collection".into(),
+                                    args: vec![pb::Value {
+                                        value_type: Some(pb::value::ValueType::ReferenceValue(
+                                            "/ne".into(),
+                                        )),
+                                    }],
+                                    ..Default::default()
+                                },
+                                pb::pipeline::Stage {
+                                    name: "select".into(),
+                                    args: vec![pb::Value {
+                                        value_type: Some(pb::value::ValueType::MapValue(map)),
+                                    }],
+                                    ..Default::default()
+                                },
+                            ],
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        let error = match client.execute_pipeline(request).await {
+            Err(error) => error,
+            Ok(response) => response.into_inner().message().await.unwrap_err(),
+        };
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        if strict {
+            assert_eq!(error.message(), "Request contains an invalid argument.");
+        } else {
+            assert!(error.message().ends_with("recursion limit reached"));
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}

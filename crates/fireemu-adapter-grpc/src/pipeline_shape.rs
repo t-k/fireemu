@@ -1,7 +1,9 @@
 //! The strict profile's shape-match rule for pipeline refusals (coordinator ruling of
-//! 2026-10-21 for `PX1d` round 5): strict answers an `INVALID_ARGUMENT` only when the request's
-//! normalized shape equals the shape of a request production refused in a committed O-n
-//! fixture, and its text is that row's text. Anything else is `UNIMPLEMENTED`.
+//! 2026-10-21 for `PX1d` round 5): the gate answers an `INVALID_ARGUMENT` only when the
+//! request's normalized shape equals a request production refused in a committed O-n fixture,
+//! and its text is that row's text. Otherwise the gate answers `UNIMPLEMENTED`. Separately, the
+//! gRPC service enforces a generalized 32-function nesting limit outside this gate; production
+//! recorded the boundary for an array-function chain, while other expression shapes are inferred.
 //!
 //! A shape keeps the stages in order, stage and function names, the value kinds, the count of
 //! array elements, and every map's entries in wire order. It replaces only field names and

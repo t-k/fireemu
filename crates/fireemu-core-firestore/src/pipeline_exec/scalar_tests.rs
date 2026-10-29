@@ -82,7 +82,7 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 50);
+    assert_eq!(NAMES.len(), 54);
     for name in ["exp", "ln", "log", "log10", "trunc"] {
         assert!(function(name).is_some());
     }
@@ -3705,5 +3705,172 @@ proptest! {
         prop_assert_eq!(both("byte_length", &[text(&s)]), int(i64::try_from(s.len()).unwrap()));
         let reverse: String = s.chars().rev().collect();
         prop_assert_eq!(both("string_reverse", &[text(&s)]), text(&reverse));
+    }
+}
+
+#[test]
+fn vector_scalars_reproduce_observed_typed_results_and_generalize() {
+    let left = Eval::Value(Value::Vector(vec![1.0, 2.0]));
+    let right = Eval::Value(Value::Vector(vec![3.0, 4.0]));
+    assert_eq!(both("vector_length", std::slice::from_ref(&left)), int(2));
+    assert_eq!(
+        both("dot_product", &[left.clone(), right.clone()]),
+        dbl(11.0)
+    );
+    assert_eq!(
+        both("euclidean_distance", &[left.clone(), right.clone()]),
+        dbl(8.0_f64.sqrt())
+    );
+    assert_eq!(
+        both("cosine_distance", &[left, right]),
+        dbl(0.016_130_089_900_092_57)
+    );
+    let a = Eval::Value(Value::Vector(vec![2.0, -1.0, 4.0]));
+    let b = Eval::Value(Value::Vector(vec![1.0, 3.0, 2.0]));
+    assert_eq!(both("dot_product", &[a.clone(), b.clone()]), dbl(7.0));
+    assert_eq!(both("vector_length", std::slice::from_ref(&a)), int(3));
+    assert_eq!(both("euclidean_distance", &[a, b]), dbl(21.0_f64.sqrt()));
+}
+
+#[test]
+fn vector_scalars_keep_unobserved_inputs_and_prior_errors_distinct() {
+    for name in ["dot_product", "euclidean_distance", "cosine_distance"] {
+        let good = Eval::Value(Value::Vector(vec![1.0, 2.0]));
+        let shorter = Eval::Value(Value::Vector(vec![1.0]));
+        assert!(is_unobserved(&strict(name, &[good.clone(), shorter])));
+        assert!(is_unobserved(&strict(name, &[good.clone(), text("bad")])));
+        assert!(is_unobserved(&strict(name, &[good.clone(), null()])));
+        let error = invalid("upstream");
+        assert_eq!(strict(name, &[error.clone(), good]), error);
+    }
+    assert!(is_unobserved(&strict("vector_length", &[text("bad")])));
+}
+
+#[test]
+fn vector_scalars_boundaries_and_zero_norm() {
+    let zero = Eval::Value(Value::Vector(vec![0.0, 0.0]));
+    let one = Eval::Value(Value::Vector(vec![1.0, 0.0]));
+    assert_eq!(both("vector_length", std::slice::from_ref(&zero)), int(2));
+    assert_eq!(both("dot_product", &[zero.clone(), one.clone()]), dbl(0.0));
+    assert_eq!(
+        both("euclidean_distance", &[zero.clone(), one.clone()]),
+        dbl(1.0)
+    );
+    assert!(is_unobserved(&strict("cosine_distance", &[zero, one])));
+    let huge = Eval::Value(Value::Vector(vec![1e200, 1e200]));
+    assert!(is_unobserved(&strict(
+        "cosine_distance",
+        &[huge.clone(), huge]
+    )));
+
+    for name in ["dot_product", "euclidean_distance", "cosine_distance"] {
+        assert!(is_unobserved(&strict(
+            name,
+            &[
+                Eval::Value(Value::Vector(vec![])),
+                Eval::Value(Value::Vector(vec![]))
+            ]
+        )));
+        assert!(is_unobserved(&strict(
+            name,
+            &[
+                Eval::Value(Value::Vector(vec![f64::INFINITY])),
+                Eval::Value(Value::Vector(vec![1.0]))
+            ]
+        )));
+    }
+}
+
+proptest! {
+    #[test]
+    fn vector_dot_and_distance_are_symmetric(a in -100i16..100, b in -100i16..100, c in -100i16..100, d in -100i16..100) {
+        let left = Eval::Value(Value::Vector(vec![f64::from(a), f64::from(b)]));
+        let right = Eval::Value(Value::Vector(vec![f64::from(c), f64::from(d)]));
+        let ab = [left.clone(), right.clone()];
+        let ba = [right, left];
+        prop_assert_eq!(strict("dot_product", &ab), strict("dot_product", &ba));
+        prop_assert_eq!(strict("euclidean_distance", &ab), strict("euclidean_distance", &ba));
+    }
+}
+
+#[test]
+fn vector_scalars_execute_generated_pict_cases() {
+    for row in include_str!("vector_scalars.generated.tsv").lines().skip(1) {
+        let columns: Vec<_> = row.split('\t').collect();
+        let [name, shape, profile] = columns.as_slice() else {
+            panic!("invalid PICT row")
+        };
+        let left = match *shape {
+            "empty" => Eval::Value(Value::Vector(vec![])),
+            "zero" => Eval::Value(Value::Vector(vec![0.0, 0.0])),
+            "nonfinite" => Eval::Value(Value::Vector(vec![f64::INFINITY])),
+            "wrong" => text("bad"),
+            "error" => invalid("upstream"),
+            _ => Eval::Value(Value::Vector(vec![1.0, 2.0])),
+        };
+        let right = if *shape == "mismatch" {
+            Eval::Value(Value::Vector(vec![1.0]))
+        } else if *shape == "empty" {
+            Eval::Value(Value::Vector(vec![]))
+        } else {
+            Eval::Value(Value::Vector(vec![3.0, 4.0]))
+        };
+        let args = if *name == "vector_length" {
+            vec![left]
+        } else {
+            vec![left, right]
+        };
+        let mode = if *profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        let result = call_in(name, &args, mode, false);
+        if *shape == "error" {
+            assert_eq!(result, invalid("upstream"), "{row}");
+        } else if *shape == "wrong"
+            || (*name != "vector_length"
+                && (matches!(*shape, "empty" | "nonfinite" | "mismatch")
+                    || (*shape == "zero" && *name == "cosine_distance")))
+        {
+            assert!(is_unobserved(&result), "{row}: {result:?}");
+        } else if *name == "vector_length" {
+            assert!(
+                matches!(result, Eval::Value(Value::Integer(_))),
+                "{row}: {result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Eval::Value(Value::Double(_))),
+                "{row}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vector_scalars_preserve_recorded_zero_arity_signatures() {
+    for (name, signature, arity) in [
+        ("vector_length", "vector_length(vector: vector): int64", 1),
+        (
+            "dot_product",
+            "dot_product(x: vector, y: vector): float64",
+            2,
+        ),
+        (
+            "euclidean_distance",
+            "euclidean_distance(x: vector, y: vector): float64",
+            2,
+        ),
+        (
+            "cosine_distance",
+            "cosine_distance(x: vector, y: vector): float64",
+            2,
+        ),
+    ] {
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err().to_string(),
+            format!("The function '{signature}' takes [{arity}..{arity}] argument(s), but 0 were provided.")
+        );
     }
 }

@@ -26,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 50] = [
+pub const NAMES: [&str; 54] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -72,6 +72,10 @@ pub const NAMES: [&str; 50] = [
     "ceil",
     "pow",
     "sqrt",
+    "vector_length",
+    "dot_product",
+    "euclidean_distance",
+    "cosine_distance",
     "exp",
     "ln",
     "log",
@@ -467,6 +471,98 @@ pub(super) const SQRT: Function = function(
     &[],
     eval_sqrt,
 );
+
+pub(super) const VECTOR_LENGTH: Function = function(
+    "vector_length",
+    Arity::Exact(1),
+    false,
+    "vector_length(vector: vector): int64",
+    &[],
+    eval_vector_length,
+);
+pub(super) const DOT_PRODUCT: Function = function(
+    "dot_product",
+    Arity::Exact(2),
+    false,
+    "dot_product(x: vector, y: vector): float64",
+    &[],
+    |args, _cx| {
+        eval_vector_distance(
+            "dot_product",
+            args,
+            crate::query::DistanceMeasure::DotProduct,
+        )
+    },
+);
+pub(super) const EUCLIDEAN_DISTANCE: Function = function(
+    "euclidean_distance",
+    Arity::Exact(2),
+    false,
+    "euclidean_distance(x: vector, y: vector): float64",
+    &[],
+    |args, _cx| {
+        eval_vector_distance(
+            "euclidean_distance",
+            args,
+            crate::query::DistanceMeasure::Euclidean,
+        )
+    },
+);
+pub(super) const COSINE_DISTANCE: Function = function(
+    "cosine_distance",
+    Arity::Exact(2),
+    false,
+    "cosine_distance(x: vector, y: vector): float64",
+    &[],
+    |args, _cx| {
+        eval_vector_distance(
+            "cosine_distance",
+            args,
+            crate::query::DistanceMeasure::Cosine,
+        )
+    },
+);
+
+fn eval_vector_length(args: &[Eval], _cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Vector(vector))] = args else {
+        return unobserved("vector_length", "an unrecorded argument shape");
+    };
+    i64::try_from(vector.len()).map_or_else(
+        |_| unobserved("vector_length", "vector length exceeds int64"),
+        |length| Eval::Value(Value::Integer(length)),
+    )
+}
+
+fn eval_vector_distance(
+    name: &'static str,
+    args: &[Eval],
+    measure: crate::query::DistanceMeasure,
+) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Vector(left)), Eval::Value(Value::Vector(right))] = args else {
+        return unobserved(name, "an unrecorded argument shape");
+    };
+    if left.is_empty()
+        || left.len() != right.len()
+        || left.iter().chain(right).any(|v| !v.is_finite())
+    {
+        return unobserved(name, "an empty, mismatched or non-finite vector");
+    }
+    let result = if measure == crate::query::DistanceMeasure::Cosine {
+        super::pipeline_vector_distance(left, right, measure)
+    } else {
+        crate::store::vector_distance(left, right, measure)
+    };
+    result.map_or_else(
+        || unobserved(name, "a distance outside the finite supported domain"),
+        |value| Eval::Value(Value::Double(value)),
+    )
+}
 
 pub(super) const EXP: Function = function(
     "exp",

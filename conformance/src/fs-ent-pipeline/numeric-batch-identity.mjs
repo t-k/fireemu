@@ -1,7 +1,7 @@
 import {SANDBOX_PROJECT} from './harness.mjs';
 
 export function createNumericIdentity(ctx,{uid,projectNumber,claim,journal,fetchFn=fetch,timeoutMs=60000}={}) {
-  if(ctx.project!==SANDBOX_PROJECT || ctx.database!=='entpipe2-20261029' || ctx.stageContextDatabase!==ctx.database || ctx.target?.kind!=='production' || ctx.target.quotaProject!==ctx.project || !ctx.target.token || typeof uid!=='string' || !uid || !/^[1-9]\d{5,}$/.test(projectNumber) || typeof claim!=='function' || typeof journal!=='function')throw Error('unbound identity');
+  if(ctx.project!==SANDBOX_PROJECT || !/^entpipe2-[0-9]{8}$/.test(ctx.database) || ctx.stageContextDatabase!==ctx.database || ctx.target?.kind!=='production' || ctx.target.quotaProject!==ctx.project || !ctx.target.token || typeof uid!=='string' || !uid || !/^[1-9]\d{5,}$/.test(projectNumber) || typeof claim!=='function' || typeof journal!=='function')throw Error('unbound identity');
   return async function identity(op) {
     if(!['identity','describe'].includes(op))throw Error('invalid identity operation');
     const url=op==='identity'?`https://cloudresourcemanager.googleapis.com/v3/projects/${projectNumber}`:`https://firestore.googleapis.com/v1/projects/${ctx.project}/databases/${ctx.database}`;

@@ -1,3 +1,4 @@
+import {SANDBOX_PROJECT} from './harness.mjs';
 import {createHash} from 'node:crypto';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
@@ -7,7 +8,7 @@ import {createStageContext} from './stage-context-target.mjs';
 import {runNumericAdapter} from './numeric-batch-adapter.mjs';
 
 export function validateNumericPacket(p) {
-  if(p?.status!=='AUTHORIZED BY ROOT AFTER REVIEW' || p.project!=='fireemu-oracle-query' || !/^[1-9]\d{5,}$/.test(p.projectNumber) || p.database!=='entpipe2-20261029' || typeof p.databaseUid!=='string' || !p.databaseUid || p.cases!==27 || p.rounds!==2 || p.maxRequests!==69 || p.recoveryReads!==2 || p.adcAcquisitions!==1)throw Error('unapproved numeric packet');return true;
+  if(p?.status!=='AUTHORIZED BY ROOT AFTER REVIEW' || p.project!==SANDBOX_PROJECT || !/^[1-9]\d{5,}$/.test(p.projectNumber) || !/^entpipe2-[0-9]{8}$/.test(p.database) || typeof p.databaseUid!=='string' || !p.databaseUid || p.cases!==27 || p.rounds!==2 || p.maxRequests!==69 || p.recoveryReads!==2 || p.adcAcquisitions!==1)throw Error('unapproved numeric packet');return true;
 }
 export async function recordNumeric({packetPath,packetSha256,out,marker,leasePath}) {
   if(!/^[a-f0-9]{64}$/.test(packetSha256))throw Error('invalid packet binding');

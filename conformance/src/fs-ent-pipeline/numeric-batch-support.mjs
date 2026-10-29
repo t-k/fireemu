@@ -3,7 +3,7 @@ import {buildRestRequest,documentsName,guardRestRequest,SANDBOX_PROJECT} from '.
 
 // The only mutable resource is this fixed document inside the reviewed database.
 export function createNumericSupport(ctx,{fetchFn=fetch,claim,journal,timeoutMs=60000}={}) {
-  if(ctx.project!==SANDBOX_PROJECT || ctx.database!=='entpipe2-20261029' || ctx.stageContextDatabase!==ctx.database || ctx.target?.kind!=='production' || ctx.target.quotaProject!==ctx.project || !ctx.target.token || typeof claim!=='function' || typeof journal!=='function')throw Error('unbound numeric target');
+  if(ctx.project!==SANDBOX_PROJECT || !/^entpipe2-[0-9]{8}$/.test(ctx.database) || ctx.stageContextDatabase!==ctx.database || ctx.target?.kind!=='production' || ctx.target.quotaProject!==ctx.project || !ctx.target.token || typeof claim!=='function' || typeof journal!=='function')throw Error('unbound numeric target');
   const name=`${documentsName(ctx)}/numeric-probe/d1`,fields={anchor:{integerValue:'1'}};let phase='initial',updateTime;
   return async function support(op) {
     const expected={baseline:'initial',seed:'baseline',verify:'seeded','delete-owned':'verified','verify-absence':'deleted'};

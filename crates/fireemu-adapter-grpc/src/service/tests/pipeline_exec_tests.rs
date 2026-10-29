@@ -3340,9 +3340,20 @@ async fn correlated_scalar_filters_before_cardinality_for_recorded_four_stage_sh
 #[allow(clippy::too_many_lines)]
 async fn correlated_scalar_second_filter_generated_boundaries() {
     use pb::value::ValueType as V;
-    for line in include_str!("../../../tests/scalar_one.generated.tsv")
-        .lines()
-        .skip(1)
+    for line in r"profile	matches	filter	shape
+production	two	first	valid
+emulator	two	first	valid
+production	two	all	valid
+production	zero	none	valid
+production	one	first	invalid
+emulator	zero	first	invalid
+emulator	two	none	invalid
+emulator	one	all	valid
+emulator	one	none	invalid
+emulator	zero	all	invalid
+"
+    .lines()
+    .skip(1)
     {
         let columns: Vec<_> = line.split('\t').collect();
         let [profile, count, filter, shape] = columns.as_slice() else {

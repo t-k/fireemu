@@ -336,7 +336,9 @@
       "-p",
       "fireemu",
       "--bin",
-      "fireemu"
+      "fireemu",
+      "--manifest-path",
+      "$CUSTODY_MANIFEST"
     ],
     "buildLogSha256": "cca3095c6d9ae0c0b161f0209ee9e25d1b875b92f51cbabc1941b608982ebb6b",
     "sourceUnchanged": true,

@@ -1,0 +1,11 @@
+identity	parent	group	missing	seed	observation	cleanup	budget
+exact	empty	empty	absent	ok	known	ok	full
+wrong	empty	empty	absent	ok	known	ok	full
+exact	occupied	empty	absent	ok	known	ok	full
+exact	empty	occupied	absent	ok	known	ok	full
+exact	empty	empty	present	ok	known	ok	full
+exact	empty	empty	absent	unknown	known	ok	full
+exact	empty	empty	absent	ok	unknown	ok	full
+exact	empty	empty	absent	ok	known	unknown	full
+exact	empty	empty	absent	ok	known	ok	low
+wrong	occupied	occupied	present	unknown	unknown	unknown	low

@@ -116,7 +116,7 @@ Finite `replace_with` supports full replacement and the implemented overwrite an
 
 In v0.38.0, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
 
-On main, pending v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
+In v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
 
 ## Composite indexes
 

@@ -2581,7 +2581,7 @@ test("reopened parents require comparisons while unrelated pending parents stay 
   );
 });
 
-test("R21 compares the v0.36 release binary with every reviewed strict row", () => {
+test("the historical v0.36 release baseline preserves every reviewed strict row", () => {
   const historical = readJson("spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json");
   const current = readJson("conformance/fs-ent-pipeline-release-v036.json");
   const expectedIds = [
@@ -2616,25 +2616,9 @@ test("R21 compares the v0.36 release binary with every reviewed strict row", () 
   };
   const context = { binarySha256: BINARY, readJson };
   const observed = { ...structuredClone(current), artifactSha256: BINARY };
-  assert.deepEqual(judge(comparison, { R21: observed }, context), []);
+  assert.deepEqual(compareLaneExport(current, observed, BINARY), []);
   const oldObserved = { ...structuredClone(historical), artifactSha256: BINARY };
   assert.deepEqual(judge({ ...comparison, runIds: ["R1"] }, { R1: oldObserved }, context), []);
-  assert.throws(
-    () =>
-      judge(
-        comparison,
-        { R21: observed },
-        {
-          ...context,
-          readJson: (path) => {
-            if (path === "conformance/fs-ent-pipeline-release-v036.json")
-              throw new Error("missing snapshot");
-            return readJson(path);
-          },
-        },
-      ),
-    /missing snapshot/,
-  );
   for (const mutate of [
     (x) => {
       x.rows[0].status = "UNKNOWN";
@@ -2648,6 +2632,98 @@ test("R21 compares the v0.36 release binary with every reviewed strict row", () 
     },
     (x) => {
       x.rows.push(x.rows[0]);
+    },
+    (x) => {
+      x.fixtureSha256 = "0".repeat(64);
+    },
+    (x) => {
+      x.artifactSha256 = "0".repeat(64);
+    },
+  ]) {
+    const broken = structuredClone(observed);
+    mutate(broken);
+    assert.notDeepEqual(compareLaneExport(current, broken, BINARY), []);
+  }
+});
+
+test("R21 uses the v0.37 complete reviewed strict baseline", () => {
+  const previous = readJson("conformance/fs-ent-pipeline-release-v036.json");
+  const current = readJson("conformance/fs-ent-pipeline-release-v037.json");
+  const expectedIds = [
+    ...[
+      "array_index_of_all",
+      "if_error",
+      "if_absent",
+      "conditional",
+      "switch_on",
+      "if_null",
+      "byte_length",
+      "string_reverse",
+      "string_repeat",
+      "string_replace_all",
+      "string_replace_one",
+      "string_index_of",
+      "euclidean_distance",
+      "cosine_distance",
+      "dot_product",
+      "vector_length",
+    ].map((name) => `fs-ent-pipeline/o5/function-names#fn-${name}`),
+    "fs-ent-pipeline/o7/inputs-documents#missing",
+  ];
+  assert.equal(current.fixtureSha256, previous.fixtureSha256);
+  const before = new Map(previous.rows.map((row) => [row.row, row]));
+  const after = new Map(current.rows.map((row) => [row.row, row]));
+  assert.equal(before.size, 1951);
+  assert.equal(after.size, 1951);
+  assert.deepEqual([...after.keys()].toSorted(), [...before.keys()].toSorted());
+  const changed = [...after.keys()].filter(
+    (id) => JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id)),
+  );
+  assert.deepEqual(changed.toSorted(), expectedIds.toSorted());
+  for (const id of changed) {
+    assert.equal(before.get(id).status, "MISMATCH", id);
+    assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
+  }
+  assert.deepEqual(current.summary, { MATCH: 1768, MISMATCH: 169, INDETERMINATE: 12, UNKNOWN: 2 });
+  const comparison = {
+    path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+    kind: current.kind,
+    runIds: ["R21"],
+  };
+  const context = { binarySha256: BINARY, readJson };
+  const observed = { ...structuredClone(current), artifactSha256: BINARY };
+  assert.deepEqual(judge(comparison, { R21: observed }, context), []);
+  assert.throws(
+    () =>
+      judge(
+        comparison,
+        { R21: observed },
+        {
+          ...context,
+          readJson: (path) => {
+            if (path === "conformance/fs-ent-pipeline-release-v037.json")
+              throw new Error("missing v037 snapshot");
+            return readJson(path);
+          },
+        },
+      ),
+    /missing v037 snapshot/,
+  );
+  for (const mutate of [
+    (x) => {
+      x.summary.MATCH--;
+    },
+    (x) => {
+      x.rows.find((row) => row.status === "MISMATCH").differences.push("unexpected");
+    },
+    (x) => {
+      x.rows.pop();
+    },
+    (x) => {
+      x.rows.push(x.rows[0]);
+    },
+    (x) => {
+      x.rows.push({ row: "unexpected", status: "MATCH" });
     },
     (x) => {
       x.fixtureSha256 = "0".repeat(64);

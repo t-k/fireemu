@@ -8,6 +8,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-10-30
+
+### Fixed
+
+- Firestore Enterprise pipeline refusals now match recorded cases for ordinary REST JSON depth and the strict gRPC 65-field select request. Other request shapes remain subject to existing profile restrictions.
+- gRPC pipeline function expressions over 32 levels receive an `INVALID_ARGUMENT` depth refusal in both profiles, and strict protobuf recursion failures receive the recorded invalid-argument diagnostic. The function-depth rule generalizes beyond the recorded chain cases; precedence and other unrecorded forms remain unverified.
+
 ## [0.38.0] - 2026-10-30
 
 ### Added
@@ -1058,7 +1065,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.38.1...HEAD
+[0.38.1]: https://github.com/t-k/fireemu/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/t-k/fireemu/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/t-k/fireemu/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/t-k/fireemu/compare/v0.35.0...v0.36.0

@@ -26,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 44] = [
+pub const NAMES: [&str; 50] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -50,6 +50,12 @@ pub const NAMES: [&str; 44] = [
     "ends_with",
     "string_contains",
     "char_length",
+    "byte_length",
+    "string_index_of",
+    "string_repeat",
+    "string_replace_all",
+    "string_replace_one",
+    "string_reverse",
     "substring",
     "trim",
     "ltrim",
@@ -265,6 +271,55 @@ pub(super) const CHAR_LENGTH: Function = function(
     &[],
     eval_char_length,
 );
+pub(super) const BYTE_LENGTH: Function = function(
+    "byte_length",
+    Arity::Exact(1),
+    false,
+    "byte_length[T: string | bytes](input: T): int64",
+    &[],
+    eval_byte_length,
+);
+pub(super) const STRING_INDEX_OF: Function = function(
+    "string_index_of",
+    Arity::Exact(2),
+    false,
+    "string_index_of[T: string | bytes](value: T, search: T): int64",
+    &[],
+    eval_string_index_of,
+);
+pub(super) const STRING_REPEAT: Function = function(
+    "string_repeat",
+    Arity::Exact(2),
+    false,
+    "string_repeat[T: string | bytes](input: T, repetitions: int64): T",
+    &[],
+    eval_string_repeat,
+);
+pub(super) const STRING_REPLACE_ALL: Function = function(
+    "string_replace_all",
+    Arity::Exact(3),
+    false,
+    "string_replace_all[T: string | bytes](input: T, find: T, replacement: T): T",
+    &[],
+    |args, cx| eval_string_replace("string_replace_all", args, cx, true),
+);
+pub(super) const STRING_REPLACE_ONE: Function = function(
+    "string_replace_one",
+    Arity::Exact(3),
+    false,
+    "string_replace_one[T: string | bytes](input: T, find: T, replacement: T): T",
+    &[],
+    |args, cx| eval_string_replace("string_replace_one", args, cx, false),
+);
+pub(super) const STRING_REVERSE: Function = function(
+    "string_reverse",
+    Arity::Exact(1),
+    false,
+    "string_reverse[T: string | bytes](input: T): T",
+    &[],
+    eval_string_reverse,
+);
+
 pub(super) const SUBSTRING: Function = function(
     "substring",
     Arity::Between(2, 3),
@@ -1252,6 +1307,158 @@ fn eval_char_length(args: &[Eval], cx: Context) -> Eval {
         )),
         _ => unreachable!("checked above"),
     }
+}
+
+// The recorded cases use string arguments; other types and null are not promoted.
+fn recorded_string_args<'a>(
+    function: &'static str,
+    args: &'a [Eval],
+    cx: Context,
+    params: &[Param],
+) -> Result<Vec<&'a Value>, Eval> {
+    if let Some(error) = first_error(args) {
+        return Err(error);
+    }
+    if strict(cx)
+        && args.iter().zip(params).any(|(arg, param)| {
+            !matches!(
+                (arg, param),
+                (Eval::Value(Value::String(_)), Param::Str(_))
+                    | (Eval::Value(Value::Integer(_)), Param::Int)
+            )
+        })
+    {
+        return Err(unobserved(function, "an unrecorded argument type or null"));
+    }
+    check(function, args, params, cx)
+}
+
+fn eval_byte_length(args: &[Eval], cx: Context) -> Eval {
+    let values = match recorded_string_args("byte_length", args, cx, &[Param::Str("String")]) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let Value::String(value) = values[0] else {
+        unreachable!("checked above")
+    };
+    Eval::Value(Value::Integer(
+        i64::try_from(value.len()).unwrap_or(i64::MAX),
+    ))
+}
+
+fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
+    let values = match recorded_string_args(
+        "string_index_of",
+        args,
+        cx,
+        &[Param::Str("String"), Param::Str("String")],
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let (Value::String(value), Value::String(search)) = (values[0], values[1]) else {
+        unreachable!("checked above")
+    };
+    if strict(cx) && !value.is_ascii() && !search.is_empty() {
+        return unobserved("string_index_of", "a non-ASCII search offset");
+    }
+    let index = value.find(search).map_or(-1, |byte| {
+        i64::try_from(value[..byte].chars().count()).unwrap_or(i64::MAX)
+    });
+    Eval::Value(Value::Integer(index))
+}
+
+fn eval_string_repeat(args: &[Eval], cx: Context) -> Eval {
+    let values = match recorded_string_args(
+        "string_repeat",
+        args,
+        cx,
+        &[Param::Str("String"), Param::Int],
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let (Value::String(value), Value::Integer(count)) = (values[0], values[1]) else {
+        unreachable!("checked above")
+    };
+    if *count < 0 {
+        return invalid("string_repeat(...) repetition must be non-negative");
+    }
+    if value.is_empty() || *count == 0 {
+        return Eval::Value(Value::String(String::new()));
+    }
+    let Ok(count) = usize::try_from(*count) else {
+        return unobserved("string_repeat", "an excessive output size");
+    };
+    // This local bound protects allocation; it is not a production limit claim.
+    if value
+        .len()
+        .checked_mul(count)
+        .is_none_or(|size| size > 1_048_576)
+    {
+        return unobserved("string_repeat", "an excessive output size");
+    }
+    Eval::Value(Value::String(value.repeat(count)))
+}
+
+fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context, all: bool) -> Eval {
+    let values = match recorded_string_args(
+        function,
+        args,
+        cx,
+        &[
+            Param::Str("String"),
+            Param::Str("String"),
+            Param::Str("String"),
+        ],
+    ) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let (Value::String(value), Value::String(find), Value::String(replacement)) =
+        (values[0], values[1], values[2])
+    else {
+        unreachable!("checked above")
+    };
+    if find.is_empty() {
+        return Eval::Value(Value::String(value.clone()));
+    }
+    let matches = if all {
+        value.matches(find).count()
+    } else {
+        usize::from(value.contains(find))
+    };
+    let Some(size) = value
+        .len()
+        .checked_sub(matches.saturating_mul(find.len()))
+        .and_then(|n| {
+            replacement
+                .len()
+                .checked_mul(matches)
+                .and_then(|extra| n.checked_add(extra))
+        })
+    else {
+        return unobserved(function, "an excessive output size");
+    };
+    if size > 1_048_576 {
+        return unobserved(function, "an excessive output size");
+    }
+    Eval::Value(Value::String(if all {
+        value.replace(find, replacement)
+    } else {
+        value.replacen(find, replacement, 1)
+    }))
+}
+
+fn eval_string_reverse(args: &[Eval], cx: Context) -> Eval {
+    let values = match recorded_string_args("string_reverse", args, cx, &[Param::Str("String")]) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let Value::String(value) = values[0] else {
+        unreachable!("checked above")
+    };
+    Eval::Value(Value::String(value.chars().rev().collect()))
 }
 
 fn eval_substring(args: &[Eval], cx: Context) -> Eval {

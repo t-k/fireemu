@@ -82,7 +82,7 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 44);
+    assert_eq!(NAMES.len(), 50);
     for name in ["exp", "ln", "log", "log10", "trunc"] {
         assert!(function(name).is_some());
     }
@@ -3593,5 +3593,117 @@ fn ordinary_numeric_string_diagnostics_match_recorded_types() {
             matches!(result, Eval::Error(EvalError::WrongType { function: actual, expected: "Float", got: "STRING" }) if actual == function),
             "{name}: {result:?}"
         );
+    }
+}
+
+#[test]
+fn recorded_string_functions_match_observed_values() {
+    let cases: Vec<(&str, Vec<Eval>, Eval)> = vec![
+        ("byte_length", vec![text("Aé🙂")], int(7)),
+        ("string_index_of", vec![text("banana"), text("ana")], int(1)),
+        ("string_index_of", vec![text("banana"), text("z")], int(-1)),
+        ("string_index_of", vec![text("banana"), text("")], int(0)),
+        ("string_repeat", vec![text("ab"), int(3)], text("ababab")),
+        ("string_repeat", vec![text("ab"), int(0)], text("")),
+        (
+            "string_repeat",
+            vec![text("ab"), int(-1)],
+            invalid("string_repeat(...) repetition must be non-negative"),
+        ),
+        (
+            "string_replace_all",
+            vec![text("aba"), text("a"), text("X")],
+            text("XbX"),
+        ),
+        (
+            "string_replace_one",
+            vec![text("aba"), text("a"), text("X")],
+            text("Xba"),
+        ),
+        (
+            "string_replace_all",
+            vec![text("aba"), text(""), text("X")],
+            text("aba"),
+        ),
+        (
+            "string_replace_one",
+            vec![text("aba"), text(""), text("X")],
+            text("aba"),
+        ),
+        ("string_reverse", vec![text("A🙂B")], text("B🙂A")),
+    ];
+    for (name, args, expected) in cases {
+        assert_eq!(both(name, &args), expected, "{name}");
+    }
+}
+
+#[test]
+fn string_unobserved_types_and_output_bounds_remain_refused() {
+    for (name, args) in [
+        ("byte_length", vec![bytes(b"x")]),
+        ("string_index_of", vec![text("éx"), text("x")]),
+        ("string_repeat", vec![text("x"), null()]),
+        ("string_repeat", vec![text("xx"), int(i64::MAX)]),
+        (
+            "string_replace_all",
+            vec![text("a"), text("a"), text(&"x".repeat(1_048_577))],
+        ),
+    ] {
+        assert!(is_unobserved(&strict(name, &args)), "{name}");
+    }
+}
+
+#[test]
+fn string_seeded_pict_rows_execute() {
+    let Ok(path) = std::env::var("STRING_FUNCTIONS_PICT") else {
+        return;
+    };
+    let matrix = std::fs::read_to_string(path).unwrap();
+    for line in matrix.lines().skip(1) {
+        let cols: Vec<_> = line.split('\t').collect();
+        assert_eq!(cols.len(), 3, "{line}");
+        let (name, profile, partition) = (cols[0], cols[1], cols[2]);
+        let (args, want) = match (name, partition) {
+            ("byte_length", "unicode") => (vec![text("Aé🙂")], int(7)),
+            ("byte_length", "empty") => (vec![text("")], int(0)),
+            ("byte_length", _) => (vec![text("abc")], int(3)),
+            ("string_index_of", "empty") => (vec![text("banana"), text("")], int(0)),
+            ("string_index_of", "unicode") if profile == "strict" => {
+                assert!(is_unobserved(&strict(name, &[text("éx"), text("x")])));
+                continue;
+            }
+            ("string_index_of", "unicode") => (vec![text("éx"), text("x")], int(1)),
+            ("string_index_of", _) => (vec![text("banana"), text("ana")], int(1)),
+            ("string_repeat", "negative") => (
+                vec![text("ab"), int(-1)],
+                invalid("string_repeat(...) repetition must be non-negative"),
+            ),
+            ("string_repeat", "empty") => (vec![text(""), int(3)], text("")),
+            ("string_repeat", _) => (vec![text("ab"), int(3)], text("ababab")),
+            ("string_replace_all" | "string_replace_one", "empty") => {
+                (vec![text("aba"), text(""), text("X")], text("aba"))
+            }
+            ("string_replace_all", _) => (vec![text("aba"), text("a"), text("X")], text("XbX")),
+            ("string_replace_one", _) => (vec![text("aba"), text("a"), text("X")], text("Xba")),
+            ("string_reverse", "empty") => (vec![text("")], text("")),
+            ("string_reverse", "unicode") => (vec![text("A🙂B")], text("B🙂A")),
+            ("string_reverse", _) => (vec![text("abc")], text("cba")),
+            _ => panic!("unexpected PICT row {line}"),
+        };
+        let policy = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(call_in(name, &args, policy, false), want, "{line}");
+    }
+}
+
+proptest! {
+    #[test]
+    fn string_byte_length_and_reverse_agree_with_bounded_models(s in ".{0,32}") {
+        prop_assert_eq!(both("byte_length", &[text(&s)]), int(i64::try_from(s.len()).unwrap()));
+        let reverse: String = s.chars().rev().collect();
+        prop_assert_eq!(both("string_reverse", &[text(&s)]), text(&reverse));
     }
 }

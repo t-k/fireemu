@@ -1385,3 +1385,78 @@ async fn database_input_rejects_stale_epoch_even_when_empty() {
         }
     }
 }
+
+#[tokio::test]
+async fn string_functions_serve_typed_results_in_both_profiles() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::StringValue("banana".to_owned()))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let string = |s: &str| value(V::StringValue(s.to_owned()));
+    let call = |name: &str, extras: Vec<pb::Value>| {
+        let mut args = vec![field_ref("f")];
+        args.extend(extras);
+        value(V::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        }))
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        structured.pipeline.as_mut().unwrap().stages.push(stage(
+            "select",
+            value(V::MapValue(pb::MapValue {
+                fields: [
+                    ("len".to_owned(), call("byte_length", vec![])),
+                    (
+                        "index".to_owned(),
+                        call("string_index_of", vec![string("ana")]),
+                    ),
+                    (
+                        "repeat".to_owned(),
+                        call("string_repeat", vec![value(V::IntegerValue(2))]),
+                    ),
+                    (
+                        "all".to_owned(),
+                        call("string_replace_all", vec![string("a"), string("X")]),
+                    ),
+                    (
+                        "one".to_owned(),
+                        call("string_replace_one", vec![string("a"), string("X")]),
+                    ),
+                    ("reverse".to_owned(), call("string_reverse", vec![])),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        ));
+        let rows = executor(&service, request).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["len"], "Integer(6)");
+        assert_eq!(rows[0]["index"], "Integer(1)");
+        assert_eq!(rows[0]["repeat"], "String(\"bananabanana\")");
+        assert_eq!(rows[0]["all"], "String(\"bXnXnX\")");
+        assert_eq!(rows[0]["one"], "String(\"bXnana\")");
+        assert_eq!(rows[0]["reverse"], "String(\"ananab\")");
+    }
+}

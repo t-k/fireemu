@@ -1105,7 +1105,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+∞) argument(s).",
+            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+\u221e) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -1146,7 +1146,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+∞) argument(s).",
+            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+\u221e) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -3172,7 +3172,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'switch_on(x: any*): any?' takes [2..+∞) argument(s), but 0 were provided.",
+            "message": "The function 'switch_on(x: any*): any?' takes [2..+\u221e) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -3295,7 +3295,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'coalesce(x: any?*): any?' takes [2..+∞) argument(s), but 0 were provided.",
+            "message": "The function 'coalesce(x: any?*): any?' takes [2..+\u221e) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -4056,7 +4056,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'string_concat(strings: string*): string' takes [2..+∞) argument(s), but 0 were provided.",
+            "message": "The function 'string_concat(strings: string*): string' takes [2..+\u221e) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -4112,211 +4112,6 @@
           "error": {
             "code": 501,
             "message": "function \"like\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"byte_length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'byte_length[T: string | bytes](input: T): int64' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-byte_length",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"byte_length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_reverse\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_reverse[T: string | bytes](input: T): T' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_reverse",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_reverse\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_repeat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_repeat[T: string | bytes](input: T, repetitions: int64): T' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_repeat",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_repeat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_replace_all\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_replace_all[T: string | bytes](input: T, find: T, replacement: T): T' takes [3..3] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_replace_all",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_replace_all\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_replace_one\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_replace_one[T: string | bytes](input: T, find: T, replacement: T): T' takes [3..3] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_replace_one",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_replace_one\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -4399,47 +4194,6 @@
           "error": {
             "code": 501,
             "message": "function \"rtrim\" takes 1 to 2 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_index_of\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'string_index_of[T: string | bytes](value: T, search: T): int64' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-string_index_of",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"string_index_of\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }

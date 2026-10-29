@@ -20,10 +20,10 @@ test('new context is bound to the exact fresh database without widening generic 
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
   const { createContext } = await import('./fs-ent-pipeline/harness.mjs');
   const target = { kind: 'local', origin: 'http://127.0.0.1:1', grpcHost: '127.0.0.1', grpcPort: 1 };
-  assert.throws(() => createContext({run: 1, target, database: 'entpipe2-20261029'}));
-  const fresh = createStageContext({run: 1, target, database: 'entpipe2-20261029', approvedDatabase: 'entpipe2-20261029'});
-  assert.equal(fresh.database, 'entpipe2-20261029');
-  for (const database of ['entpipe1', '(default)', 'foreign']) assert.throws(() => createStageContext({run: 1, target, database, approvedDatabase: 'entpipe2-20261029'}));
+  assert.throws(() => createContext({run: 1, target, database: 'entpipe2-20000101'}));
+  const fresh = createStageContext({run: 1, target, database: 'entpipe2-20000101', approvedDatabase: 'entpipe2-20000101'});
+  assert.equal(fresh.database, 'entpipe2-20000101');
+  for (const database of ['entpipe1', '(default)', 'foreign']) assert.throws(() => createStageContext({run: 1, target, database, approvedDatabase: 'entpipe2-20000101'}));
 });
 
 test('owned seed includes distinct vector rankings and the original nesting seed', async () => {
@@ -111,7 +111,7 @@ test('session scoped support uses one REST RPC per action and never wipes unrela
   const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
   const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx = createStageContext({run: 1, database: 'entpipe2-20261029', approvedDatabase: 'entpipe2-20261029', target: {kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
+  const ctx = createStageContext({run: 1, database: 'entpipe2-20000101', approvedDatabase: 'entpipe2-20000101', target: {kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
   const base = `projects/${ctx.project}/databases/${ctx.database}/documents/`;
   const paths = stageContextSeed().map(([path]) => path);
   const calls = [];
@@ -135,7 +135,7 @@ test('session scoped support uses one REST RPC per action and never wipes unrela
 test('scoped baseline rejects malformed successful query responses and extra resources', async () => {
   const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
+  const ctx = createStageContext({run:1, database:'entpipe2-20000101', approvedDatabase:'entpipe2-20000101', target:{kind:'local', origin:'http://127.0.0.1:1', grpcHost:'127.0.0.1', grpcPort:1}});
   for (const response of [[{error:{message:'x'}}], [null], [{document:{name:'projects/foreign/databases/demo/documents/x/y'}}]]) {
     const session = createStageSupport(ctx, {fetchFn:async () => ({status:200, text:async () => JSON.stringify(response)}), journal:async () => {}, claim:async () => {}});
     try { await assert.rejects(session.stageOperation('baseline'), /scoped read/); } finally { await session.close(); }
@@ -145,7 +145,7 @@ test('scoped baseline rejects malformed successful query responses and extra res
 test('support journals response status before body failure and never records authorization', async () => {
   const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx = createStageContext({run:1, database:'entpipe2-20000101', approvedDatabase:'entpipe2-20000101', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   const journal = [];
   const support = createStageSupport(ctx, {claim:async () => {}, journal:async x => journal.push(x), fetchFn:async () => ({status:403, text:async () => {throw Error('interrupted')}})});
   await assert.rejects(support.stageOperation('baseline'), /unknown/);
@@ -158,7 +158,7 @@ test('support refuses cleanup before verification and refuses retry after unknow
   const { createStageSupport } = await import('./fs-ent-pipeline/stage-context-support.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
   const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
-  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx = createStageContext({run:1, database:'entpipe2-20000101', approvedDatabase:'entpipe2-20000101', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   let calls = 0;
   const support = createStageSupport(ctx, {claim:async () => {}, journal:async () => {}, fetchFn:async () => {calls++; if (calls === 1) return {status:200,text:async () => '[]'}; throw Error('lost');}});
   const paths=stageContextSeed().map(([path])=>path);
@@ -174,7 +174,7 @@ test('observation rejects non-corpus bodies before any gRPC call', async () => {
   const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
   const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx = createStageContext({run:1, database:'entpipe2-20261029', approvedDatabase:'entpipe2-20261029', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx = createStageContext({run:1, database:'entpipe2-20000101', approvedDatabase:'entpipe2-20000101', target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   let called = false;
   const altered = structuredClone(stageContextCases()[0]); altered.body.structuredPipeline.pipeline.stages.push({name:'delete'});
   await assert.rejects(observeStage(ctx, altered, {claim:async()=>{},journal:async()=>{},clientFactory:()=>{called=true;}}), /corpus/);
@@ -186,7 +186,7 @@ test('fixed gRPC observation records bounded raw frames without credential metad
   const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
   const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   const events=[]; let closed=false;
   const clientFactory=()=>({makeServerStreamRequest(_path,serialize,_deserialize,request) {const call=new EventEmitter();call.cancel=()=>{};assert.ok(serialize(request).length);queueMicrotask(()=>{call.emit('metadata',{});call.emit('data',Buffer.from([1,2,3]));call.emit('status',{code:0});});return call;},close(){closed=true;}});
   const result=await observeStage(ctx,stageContextCases()[0],{claim:async()=>events.push({phase:'claim'}),journal:async x=>events.push(x),clientFactory});
@@ -202,7 +202,7 @@ test('gRPC UNKNOWN status is preserved but stops the run as unknown', async () =
   const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
   const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   const events=[]; const clientFactory=()=>({makeServerStreamRequest(){const call=new EventEmitter();call.cancel=()=>{};queueMicrotask(()=>call.emit('status',{code:2}));return call;},close(){}});
   await assert.rejects(observeStage(ctx,stageContextCases()[0],{claim:async()=>{},journal:async x=>events.push(x),clientFactory}), /unknown/);
   assert.equal(events.at(-1).code,2);
@@ -226,7 +226,7 @@ test('two rounds using scoped REST and worker handoff make exactly 32 fake trans
   const { runStageContextRounds } = await import('./fs-ent-pipeline/stage-context-rounds.mjs');
   const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   let seeded=false,rest=0,grpc=0; const base=`projects/${ctx.project}/databases/${ctx.database}/documents/`;
   const fetchFn=async (url,init)=>{rest++;let result={}; if(url.endsWith(':runQuery')) result=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else {const writes=JSON.parse(init.body).writes;seeded=Boolean(writes[0].update);}return {status:200,text:async()=>JSON.stringify(result)};};
   const budget=createStageBudget({maximum:32,cleanupReserve:2}); const journal=async()=>{},claim=budget.claim;
@@ -241,7 +241,7 @@ test('original deep requests serialize and capture in isolated fake gRPC workers
   const { runObservationWorker } = await import('./fs-ent-pipeline/stage-context-worker-client.mjs');
   const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   for(const depth of [48,100]) {
     const step=stageContextCases().find(x=>x.id===`chain-${depth}-grpc`), events=[];
     const result=await runObservationWorker(ctx,step,{claim:async()=>{},journal:async e=>events.push(e),workerFactory:(c,s)=>new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:s.id}})});
@@ -263,7 +263,7 @@ test('synchronous gRPC transport failure closes its owned client and stops', asy
   const { observeStage } = await import('./fs-ent-pipeline/stage-context-observation.mjs');
   const { stageContextCases } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'local',origin:'http://127.0.0.1:1',grpcHost:'127.0.0.1',grpcPort:1}});
   let closed=false;
   await assert.rejects(observeStage(ctx,stageContextCases()[0],{claim:async()=>{},journal:async()=>{},clientFactory:()=>({makeServerStreamRequest(){throw Error('failed');},close(){closed=true;}})}));
   assert.equal(closed,true);
@@ -271,7 +271,7 @@ test('synchronous gRPC transport failure closes its owned client and stops', asy
 
 test('lifecycle creates one owned target and stops after unknown create without retry', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
-  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20000101',stageContextDatabase:'entpipe2-20000101',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
   const calls=[];
   const fetchFn=async (url,init)=>{calls.push([url,init.method]);if(init.method==='POST') throw Error('unknown');return {status:200,text:async()=>'{"databases":[]}'}};
   const lifecycle=createStageLifecycle(ctx,{fetchFn,claim:async()=>{},journal:async()=>{}});
@@ -282,7 +282,7 @@ test('lifecycle creates one owned target and stops after unknown create without 
 
 test('lifecycle setup counts the worst successful four polls and uses bounded cadence', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
-  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20000101',stageContextDatabase:'entpipe2-20000101',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let polls=0,calls=0,sleeps=0;
   const fetchFn=async (url,init)=>{calls++;let obj;if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/a`};else if(url.includes('/operations/'))obj=++polls===4?{name:`${name}/operations/a`,done:true,response:{}}:{name:`${name}/operations/a`,metadata:{}};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)}};
   const lifecycle=createStageLifecycle(ctx,{fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async ms=>{assert.equal(ms,5000);sleeps++;}});
@@ -292,7 +292,7 @@ test('lifecycle setup counts the worst successful four polls and uses bounded ca
 test('END checks identity and empty data, sends one delete, then waits ten minutes for typed absence', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let now=0,calls=0,polls=0;
   const fetchFn=async (url,init)=>{calls++;let status=200,obj;if(url.endsWith(':runQuery'))obj=[];else if(init.method==='DELETE')obj={name:`${name}/operations/d`};else if(url.includes('/operations/'))obj=++polls===5?{name:`${name}/operations/d`,done:true,response:{}}:{name:`${name}/operations/d`,metadata:{}};else if(url.endsWith('/databases'))obj={databases:[]};else if(polls===5){status=404;obj={error:{code:404,status:'NOT_FOUND',message:`${name} missing`}};}else obj={name,uid:'fake-uid'};return {status,text:async()=>JSON.stringify(obj)}};
   const lifecycle=createStageLifecycle(ctx,{knownUid:'fake-uid',fetchFn,claim:async()=>{},journal:async()=>{},sleepFn:async()=>{},nowFn:()=>now});
@@ -303,7 +303,7 @@ test('END checks identity and empty data, sends one delete, then waits ten minut
 test('END unknown deletion is sticky and cannot be resent', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let deletes=0;
   const fetchFn=async (url,init)=>{if(init.method==='DELETE'){deletes++;throw Error('lost');}return {status:200,text:async()=>JSON.stringify(url.endsWith(':runQuery')?[]:{name,uid:'fake-uid'})}};
   const lifecycle=createStageLifecycle(ctx,{knownUid:'fake-uid',fetchFn,claim:async()=>{},journal:async()=>{}});
@@ -320,7 +320,7 @@ test('identity, setup, two rounds and END consume 51 of 53 bounded service attem
   const { runStageContextRounds } = await import('./fs-ent-pipeline/stage-context-rounds.mjs');
   const { stageContextSeed } = await import('./fs-ent-pipeline/stage-context-corpus.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`,base=`${name}/documents/`;let created=false,seeded=false,deleted=false,cp=0,dp=0,now=0,rest=0,grpc=0;
   const fetchFn=async (url,init)=>{rest++;let status=200,obj;
     if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};
@@ -347,7 +347,7 @@ test('identity, setup, two rounds and END consume 51 of 53 bounded service attem
 
 test('inventory rejects malformed 200 instead of creating a database', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
-  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20261029',stageContextDatabase:'entpipe2-20261029',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
+  const ctx={project:'fireemu-oracle-query',database:'entpipe2-20000101',stageContextDatabase:'entpipe2-20000101',target:{token:'fake-token',quotaProject:'fireemu-oracle-query'}};
   for(const body of [{error:{message:'bad'}},[],{databases:'bad'},{nextPageToken:'more'}]) {
     let calls=0;const lifecycle=createStageLifecycle(ctx,{fetchFn:async()=>{calls++;return {status:200,text:async()=>JSON.stringify(body)}},claim:async()=>{},journal:async()=>{}});
     await assert.rejects(lifecycle.create(),/inventory/);assert.equal(calls,1);
@@ -357,7 +357,7 @@ test('inventory rejects malformed 200 instead of creating a database', async () 
 test('END refuses a changed database UID before any delete', async () => {
   const { createStageLifecycle } = await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const { createStageContext } = await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`;let calls=0;
   const lifecycle=createStageLifecycle(ctx,{knownUid:'expected',fetchFn:async()=>{calls++;return {status:200,text:async()=>JSON.stringify({name,uid:'different'})}},claim:async()=>{},journal:async()=>{}});
   await assert.rejects(lifecycle.end(),/identity/);assert.equal(calls,1);
@@ -381,7 +381,7 @@ test('private journal is exclusive, durable per event, and refuses credential ma
 test('campaign stops after uncertain create without launching any observation worker', async () => {
   const { runStageCampaign }=await import('./fs-ent-pipeline/stage-context-campaign.mjs');
   const { createStageContext }=await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   let calls=0,workers=0;
   const fetchFn=async (url,init)=>{calls++;if(url.includes('cloudresourcemanager'))return {status:200,text:async()=>JSON.stringify({name:'projects/123456',projectId:'fireemu-oracle-query'})};if(init.method==='POST')throw Error('lost');return {status:200,text:async()=>'{"databases":[]}'}};
   await assert.rejects(runStageCampaign(ctx,{fetchFn,journal:async()=>{},workerFactory:()=>{workers++},expectedProjectNumber:'123456'}),/unknown/);
@@ -391,7 +391,7 @@ test('campaign stops after uncertain create without launching any observation wo
 test('campaign executes maximum setup and both rounds while retaining database', async () => {
   const { Worker }=await import('node:worker_threads');const { runStageCampaign }=await import('./fs-ent-pipeline/stage-context-campaign.mjs');
   const { createStageContext }=await import('./fs-ent-pipeline/stage-context-target.mjs');const { stageContextSeed }=await import('./fs-ent-pipeline/stage-context-corpus.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`,base=`${name}/documents/`;let seeded=false,polls=0,deletes=0,grpc=0;
   const fetchFn=async (url,init)=>{let obj;if(url.includes('cloudresourcemanager'))obj={name:'projects/123456',projectId:'fireemu-oracle-query'};else if(url.endsWith(':runQuery'))obj=seeded?stageContextSeed().map(([path])=>({document:{name:base+path}})):[];else if(url.endsWith(':commit')){seeded=Boolean(JSON.parse(init.body).writes[0].update);obj={};}else if(url.endsWith('/databases'))obj={databases:[]};else if(init.method==='POST')obj={name:`${name}/operations/create`};else if(init.method==='DELETE'){deletes++;throw Error('unexpected delete');}else if(url.endsWith('/operations/create'))obj=++polls===4?{name:`${name}/operations/create`,done:true,response:{}}:{name:`${name}/operations/create`,metadata:{}};else obj={name,uid:'fake-uid',locationId:'us-central1',type:'FIRESTORE_NATIVE',databaseEdition:'ENTERPRISE',firestoreDataAccessMode:'DATA_ACCESS_MODE_ENABLED',deleteProtectionState:'DELETE_PROTECTION_DISABLED'};return {status:200,text:async()=>JSON.stringify(obj)};};
   const workerFactory=(c,step)=>{grpc++;return new Worker(new URL('./fs-ent-pipeline/fixtures/stage-context-fake-worker.mjs',import.meta.url),{workerData:{ctx:c,stepId:step.id}});};
@@ -472,7 +472,7 @@ test('generated LRO phase, done and result-shape combinations fail closed', asyn
 test('mismatched LRO name stops create or END without mutation retry or subsequent read', async () => {
   const {createStageLifecycle}=await import('./fs-ent-pipeline/stage-context-lifecycle.mjs');
   const {createStageContext}=await import('./fs-ent-pipeline/stage-context-target.mjs');
-  const ctx=createStageContext({run:1,database:'entpipe2-20261029',approvedDatabase:'entpipe2-20261029',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
+  const ctx=createStageContext({run:1,database:'entpipe2-20000101',approvedDatabase:'entpipe2-20000101',target:{kind:'production',token:'fake-token',quotaProject:'fireemu-oracle-query'}});
   const name=`projects/${ctx.project}/databases/${ctx.database}`;
   for(const mode of ['create','end']) {
     const calls=[];

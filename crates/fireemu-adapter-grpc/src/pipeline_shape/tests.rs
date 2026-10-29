@@ -357,7 +357,10 @@ fn rest_and_grpc_shapes_agree_where_no_map_needs_an_order() {
                 &order.rebased(&format!("/programs/{p}/steps/{s}/body"), ""),
             );
             let grpc = shape_of_request(&request);
-            if grpc.is_some() {
+            if grpc.as_deref() == Some(GRPC_SELECT_WIDTH_KEY) {
+                // This exact decoded gRPC request uses its own transport-specific evidence.
+                assert!(json.is_some(), "{}", step["id"]);
+            } else if grpc.is_some() {
                 assert_eq!(json, grpc, "{}", step["id"]);
                 compared += 1;
             } else {
@@ -589,4 +592,75 @@ fn own_database_matches_whole_database_ids_only() {
         assert_eq!(own_database(message, db), want, "{message}");
     }
     assert_eq!(own_database("projects/p", ""), "projects/p");
+}
+
+#[test]
+fn select_width_refusal_matches_recorded_transport_and_request() {
+    let fixture: Value = serde_json::from_str(REQUESTS).unwrap();
+    let steps = fixture["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o2/select-width")
+        .unwrap()["steps"]
+        .as_array()
+        .unwrap();
+    let message = "The 'select(...)' stage is limited to 64 fields but this stage has 65.";
+    for grpc in [true, false] {
+        for changed in [false, true] {
+            for internal in [false, true] {
+                let id = "select-65";
+                let mut body = steps.iter().find(|s| s["id"] == id).unwrap()["body"].clone();
+                if changed {
+                    let fields = body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]
+                        ["mapValue"]["fields"]
+                        .as_object_mut()
+                        .unwrap();
+                    let value = fields.remove("a00").unwrap();
+                    fields.insert("__x__".into(), value);
+                }
+                let shape = if grpc {
+                    let request = crate::rest::pipeline_json::request_from_json(DB, &body).unwrap();
+                    shape_of_request(&request)
+                } else {
+                    shape_of_text(&body.to_string())
+                };
+                let error = if internal {
+                    Status::internal(message)
+                } else {
+                    invalid(message)
+                };
+                let answer = RefusalGate::Recorded(shape, DB.to_owned()).answer(error);
+                let expected = if internal {
+                    tonic::Code::Internal
+                } else if changed {
+                    tonic::Code::Unimplemented
+                } else {
+                    tonic::Code::InvalidArgument
+                };
+                assert_eq!(
+                    answer.code(),
+                    expected,
+                    "grpc={grpc}, changed={changed}, internal={internal}"
+                );
+            }
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn grpc_select_width_different_field_references_do_not_match(field in "[a-z]{1,8}") {
+        prop_assume!(field != "i");
+        let fixture: Value = serde_json::from_str(REQUESTS).unwrap();
+        let program = fixture["programs"].as_array().unwrap().iter()
+            .find(|p| p["id"] == "fs-ent-pipeline/o2/select-width").unwrap();
+        let step = program["steps"].as_array().unwrap().iter()
+            .find(|s| s["id"] == "select-65").unwrap();
+        let mut body = step["body"].clone();
+        body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]["fields"]["a00"]["fieldReferenceValue"] = field.into();
+        let request = crate::rest::pipeline_json::request_from_json(DB, &body).unwrap();
+        let shape = shape_of_request(&request);
+        prop_assert_ne!(shape.as_deref(), Some(GRPC_SELECT_WIDTH_KEY));
+    }
 }

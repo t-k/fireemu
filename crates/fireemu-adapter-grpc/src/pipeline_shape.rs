@@ -11,7 +11,8 @@
 //! (`__name__`, empty, dotted, quoted, reserved, long) and option names stay as written, since
 //! production's checks and texts depend on them. A map of two or more entries
 //! whose wire order the transport did not keep (gRPC, whose decoded maps are unordered) has no
-//! generic shape, so strict answers no generic refusal of such a request. The TEXT namespace
+//! generic shape, so strict answers no generic refusal of such a request. The recorded gRPC
+//! select-width request is matched as a decoded request. The TEXT namespace
 //! instead compares the decoded request with a recorded one of the same transport, apart from
 //! the database, the collection and the `document_matches` literal, which production's
 //! search-option checks never read; every option value is kept.
@@ -180,6 +181,13 @@ pub fn raw_shape(body: &[u8]) -> String {
 /// The shape of a gRPC request, whose maps carry no wire order.
 #[must_use]
 pub fn shape_of_request(request: &pb::ExecutePipelineRequest) -> Option<String> {
+    if let Some((recorded, _)) = recorded_grpc_select_width() {
+        let mut candidate = request.clone();
+        candidate.database.clear();
+        if &candidate == recorded {
+            return Some(GRPC_SELECT_WIDTH_KEY.to_owned());
+        }
+    }
     if let Some(key) = text_key_of(request, true) {
         return Some(key);
     }
@@ -740,9 +748,45 @@ fn recorded_text() -> &'static HashMap<String, HashSet<String>> {
     &RECORDED
 }
 
+const GRPC_SELECT_WIDTH_KEY: &str = "grpc:fs-ent-pipeline/o2/select-width#select-65-grpc";
+
+/// gRPC has no map order; compare the decoded request with the exact recorded width case.
+fn recorded_grpc_select_width() -> Option<&'static (pb::ExecutePipelineRequest, String)> {
+    static ROW: LazyLock<Option<(pb::ExecutePipelineRequest, String)>> = LazyLock::new(|| {
+        let requests: Value = serde_json::from_str(REQUESTS).ok()?;
+        let production: Value = serde_json::from_str(PRODUCTION).ok()?;
+        let id = "fs-ent-pipeline/o2/select-width";
+        let program = requests["programs"]
+            .as_array()?
+            .iter()
+            .find(|p| p["id"] == id)?;
+        // The corpus sends the same body for select-65 and select-65-grpc.
+        let step = program["steps"]
+            .as_array()?
+            .iter()
+            .find(|s| s["id"] == "select-65")?;
+        let answer = &production["programs"][id]["steps"]["select-65-grpc"];
+        if answer["transport"] != "grpc" || answer["code"] != 3 {
+            return None;
+        }
+        let message = answer["message"].as_str()?.to_owned();
+        let request = crate::rest::pipeline_json::request_from_json("", &step["body"]).ok()?;
+        Some((request, message))
+    });
+    ROW.as_ref()
+}
+
 fn recorded() -> &'static HashMap<String, HashSet<String>> {
-    static RECORDED: LazyLock<HashMap<String, HashSet<String>>> =
-        LazyLock::new(|| recorded_refusals(REQUESTS, PRODUCTION));
+    static RECORDED: LazyLock<HashMap<String, HashSet<String>>> = LazyLock::new(|| {
+        let mut table = recorded_refusals(REQUESTS, PRODUCTION);
+        if let Some((_, message)) = recorded_grpc_select_width() {
+            table
+                .entry(GRPC_SELECT_WIDTH_KEY.to_owned())
+                .or_default()
+                .insert(normalized_text(message));
+        }
+        table
+    });
     &RECORDED
 }
 

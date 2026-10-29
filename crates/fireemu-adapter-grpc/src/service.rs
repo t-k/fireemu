@@ -761,8 +761,15 @@ impl Firestore for GatewayService {
                     .await
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
             };
+            let numeric_scope = numeric_row_scope(request.get_ref(), &compiled);
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
-                input, compiled, unrecorded, canonical, gate, runtime,
+                input,
+                compiled,
+                unrecorded,
+                canonical,
+                gate,
+                runtime,
+                numeric_scope,
             ))));
         }
         let mut status = Status::unimplemented(format!(
@@ -1135,6 +1142,66 @@ pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
 // the results are packed into responses the way production frames them (a small answer is one
 // response). A blocking stage (`sort`, `distinct`, `aggregate`) holds its rows until the input
 // ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NumericRowScope {
+    Exp,
+    Ln,
+}
+
+fn numeric_row_scope(
+    request: &pb::ExecutePipelineRequest,
+    compiled: &crate::pipeline::CompiledExecution,
+) -> Option<NumericRowScope> {
+    use fireemu_core_firestore::pipeline_exec::{Expr, Stage};
+    use fireemu_core_firestore::value::Value;
+    let names = compiled.documents.as_ref()?;
+    if !(1..=2).contains(&names.len())
+        || compiled.database
+        || compiled.search.is_some()
+        || !compiled.unions.is_empty()
+        || request.consistency_selector.is_some()
+    {
+        return None;
+    }
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return None;
+    };
+    let pipeline = structured.pipeline.as_ref()?;
+    if !structured.options.is_empty()
+        || pipeline.stages.len() != 2
+        || pipeline.stages[0].name != "documents"
+        || pipeline.stages[1].name != "select"
+        || pipeline
+            .stages
+            .iter()
+            .any(|stage| !stage.options.is_empty())
+    {
+        return None;
+    }
+    let [Stage::Select {
+        aliases,
+        keeps_name: false,
+    }] = compiled.stages.as_slice()
+    else {
+        return None;
+    };
+    let [(alias, Expr::Call { function, args })] = aliases.as_slice() else {
+        return None;
+    };
+    if alias.segments().len() != 1 {
+        return None;
+    }
+    match (function.name, args.as_slice()) {
+        ("exp", [Expr::Constant(Value::String(value))]) if value == "not-a-number" => {
+            Some(NumericRowScope::Exp)
+        }
+        ("ln", [Expr::Constant(Value::Integer(0))]) => Some(NumericRowScope::Ln),
+        _ => None,
+    }
+}
+
 struct PipelineResponseStream {
     inner: Option<BoxStream<pb::RunQueryResponse>>,
     cursor: fireemu_core_firestore::pipeline_exec::Cursor,
@@ -1143,6 +1210,7 @@ struct PipelineResponseStream {
     canonical: String,
     /// Which refusals the stream may answer.
     gate: crate::pipeline_shape::RefusalGate,
+    numeric_row_scope: Option<NumericRowScope>,
     emitted: bool,
     /// Results not yet sent.
     batcher: crate::pipeline::ResultBatcher,
@@ -1163,6 +1231,7 @@ impl PipelineResponseStream {
             read_time: None,
             canonical: "collection(items)".to_owned(),
             gate: crate::pipeline_shape::RefusalGate::Open,
+            numeric_row_scope: None,
             emitted: false,
             batcher: crate::pipeline::ResultBatcher::default(),
             ready: std::collections::VecDeque::new(),
@@ -1178,6 +1247,7 @@ impl PipelineResponseStream {
         canonical: String,
         gate: crate::pipeline_shape::RefusalGate,
         runtime: fireemu_core_firestore::pipeline_exec::RuntimeContext,
+        numeric_row_scope: Option<NumericRowScope>,
     ) -> Self {
         Self {
             inner: Some(inner),
@@ -1189,6 +1259,7 @@ impl PipelineResponseStream {
             read_time: None,
             canonical,
             gate,
+            numeric_row_scope,
             emitted: false,
             batcher: crate::pipeline::ResultBatcher::default(),
             ready: std::collections::VecDeque::new(),
@@ -1250,14 +1321,17 @@ impl PipelineResponseStream {
     /// Admit the two recorded numeric errors only after a real input row is evaluated.
     fn refuse_eval(&mut self, error: &fireemu_core_firestore::pipeline_exec::EvalError) {
         use fireemu_core_firestore::pipeline_exec::EvalError;
-        let recorded = matches!(
-            error,
-            EvalError::WrongType {
-                function: "exp",
-                expected: "Float",
-                got: "STRING"
-            }
-        ) || matches!(error, EvalError::Invalid(message) if message == "ln(...) requires a positive number but got 0.0");
+        let recorded = (self.numeric_row_scope == Some(NumericRowScope::Exp)
+            && matches!(
+                error,
+                EvalError::WrongType {
+                    function: "exp",
+                    expected: "Float",
+                    got: "STRING"
+                }
+            ))
+            || (self.numeric_row_scope == Some(NumericRowScope::Ln)
+                && matches!(error, EvalError::Invalid(message) if message == "ln(...) requires a positive number but got 0.0"));
         let status = crate::pipeline::eval_status(error);
         if recorded {
             self.queue_refusal(status);
@@ -2192,6 +2266,11 @@ mod tests {
                 Box::pin(tokio_stream::iter(input)),
                 Cursor::new_in(stages, mode),
             );
+            stream.numeric_row_scope = match kind {
+                "exp" => Some(NumericRowScope::Exp),
+                "ln" => Some(NumericRowScope::Ln),
+                _ => None,
+            };
             stream.gate = if strict {
                 crate::pipeline_shape::RefusalGate::Recorded(
                     None,
@@ -2236,6 +2315,188 @@ mod tests {
             }
             assert!(stream.next().await.is_none());
         }
+    }
+
+    #[test]
+    fn numeric_row_scope_context_matrix_and_neighbors() {
+        use fireemu_core_firestore::pipeline_exec::Unrecorded;
+        use serde_json::json;
+        let rows = [
+            ("documents", "select", "exp", true),
+            ("documents", "select", "ln", true),
+            ("collection", "select", "exp", true),
+            ("database", "select", "exp", true),
+            ("documents", "added", "exp", true),
+            ("documents", "nested", "exp", true),
+            ("documents", "select", "neighbor", true),
+            ("documents", "select", "exp", false),
+            ("collection", "nested", "ln", false),
+            ("database", "added", "neighbor", false),
+            ("collection", "added", "neighbor", true),
+            ("database", "added", "ln", true),
+            ("database", "nested", "neighbor", true),
+        ];
+        for (input, stage, literal, strict) in rows {
+            let source = match input {
+                "documents" => json!({"name":"documents","args":[{"referenceValue":"/c/d"}]}),
+                "collection" => json!({"name":"collection","args":[{"referenceValue":"/c"}]}),
+                _ => json!({"name":"database"}),
+            };
+            let expr = match literal {
+                "exp" => {
+                    json!({"functionValue":{"name":"exp","args":[{"stringValue":"not-a-number"}]}})
+                }
+                "ln" => json!({"functionValue":{"name":"ln","args":[{"integerValue":"0"}]}}),
+                _ => json!({"functionValue":{"name":"log","args":[{"integerValue":"0"}]}}),
+            };
+            let selected = if stage == "nested" {
+                json!({"functionValue":{"name":"abs","args":[expr]}})
+            } else {
+                expr
+            };
+            let mut stages = vec![
+                source,
+                json!({"name":"select","args":[{"mapValue":{"fields":{"v":selected}}}]}),
+            ];
+            if stage == "added" {
+                stages.push(json!({"name":"limit","args":[{"integerValue":"1"}]}));
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(
+                "projects/p/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let parent = parse_parent("projects/p/databases/(default)/documents").unwrap();
+            let mode = if strict {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let expected = input == "documents" && stage == "select" && literal != "neighbor";
+            let actual = crate::pipeline::compile_pipeline(&request, &parent, mode)
+                .ok()
+                .and_then(|compiled| numeric_row_scope(&request, &compiled))
+                .is_some();
+            assert_eq!(actual, expected, "{input} {stage} {literal} {strict}");
+        }
+    }
+
+    #[test]
+    fn numeric_row_scope_allows_independent_alias_and_document_path() {
+        use fireemu_core_firestore::pipeline_exec::Unrecorded;
+        use serde_json::json;
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"documents","args":[{"referenceValue":"/different/doc"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"result":{"functionValue":{"name":"exp","args":[{"stringValue":"not-a-number"}]}}}}}]}
+        ]}}});
+        let request =
+            crate::rest::pipeline_json::request_from_json("projects/p/databases/(default)", &body)
+                .unwrap();
+        let parent = parse_parent("projects/p/databases/(default)/documents").unwrap();
+        let compiled =
+            crate::pipeline::compile_pipeline(&request, &parent, Unrecorded::Refuse).unwrap();
+        assert_eq!(
+            numeric_row_scope(&request, &compiled),
+            Some(NumericRowScope::Exp)
+        );
+    }
+
+    #[test]
+    fn numeric_row_scope_rejects_options_selectors_aliases_and_extra_documents() {
+        use fireemu_core_firestore::pipeline_exec::Unrecorded;
+        use serde_json::json;
+        let base = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"documents","args":[{"referenceValue":"/c/d"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{"name":"exp","args":[{"stringValue":"not-a-number"}]}}}}}]}
+        ]}}});
+        let mut cases = Vec::new();
+        let mut body = base.clone();
+        body["transaction"] = json!("AQ==");
+        cases.push(body);
+        let mut body = base.clone();
+        body["structuredPipeline"]["options"] = json!({"x":{"booleanValue":true}});
+        cases.push(body);
+        let mut body = base.clone();
+        body["structuredPipeline"]["pipeline"]["stages"][1]["options"] =
+            json!({"x":{"booleanValue":true}});
+        cases.push(body);
+        let mut body = base.clone();
+        body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]["fields"]
+            ["other"] = json!({"integerValue":"1"});
+        cases.push(body);
+        let mut body = base.clone();
+        body["structuredPipeline"]["pipeline"]["stages"][0]["args"] =
+            json!([{"referenceValue":"/c/d"},{"referenceValue":"/c/e"},{"referenceValue":"/c/f"}]);
+        cases.push(body);
+        let mut body = base.clone();
+        body["structuredPipeline"]["pipeline"]["stages"][0]["args"][0]["referenceValue"] =
+            json!("projects/foreign/databases/d/documents/c/d");
+        cases.push(body);
+        for body in cases {
+            let request = crate::rest::pipeline_json::request_from_json(
+                "projects/p/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let parent = parse_parent("projects/p/databases/(default)/documents").unwrap();
+            assert!(
+                crate::pipeline::compile_pipeline(&request, &parent, Unrecorded::Refuse)
+                    .ok()
+                    .and_then(|compiled| numeric_row_scope(&request, &compiled))
+                    .is_none(),
+                "{body}"
+            );
+        }
+        let request =
+            crate::rest::pipeline_json::request_from_json("projects/p/databases/(default)", &base)
+                .unwrap();
+        let status = crate::pipeline::eval_status(
+            &fireemu_core_firestore::pipeline_exec::EvalError::WrongType {
+                function: "exp",
+                expected: "Float",
+                got: "STRING",
+            },
+        );
+        let rest_gate = crate::pipeline_shape::RefusalGate::Recorded(
+            crate::pipeline_shape::shape_of_json(
+                &base,
+                &crate::rest::json_syntax::parse_with_key_order(base.to_string().as_bytes())
+                    .unwrap()
+                    .1,
+            ),
+            request.database,
+        );
+        assert_eq!(rest_gate.answer(status).code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn numeric_row_refusal_unobserved_context_remains_gated() {
+        use fireemu_core_firestore::pipeline_exec::{Cursor, Expr, Placement, Stage, Unrecorded};
+        use fireemu_core_firestore::{field_path::FieldPath, value::Value};
+        use tokio_stream::StreamExt;
+        let expression = Expr::call(
+            "exp",
+            vec![Expr::Constant(Value::String("not-a-number".into()))],
+            Placement::Value,
+        )
+        .unwrap();
+        let stages = vec![Stage::Select {
+            aliases: vec![(FieldPath::parse("v").unwrap(), expression)],
+            keeps_name: false,
+        }];
+        let mut stream = PipelineResponseStream::new(
+            Box::pin(tokio_stream::iter([Ok(input_document(1, 0))])),
+            Cursor::new_in(stages, Unrecorded::Refuse),
+        );
+        stream.gate = crate::pipeline_shape::RefusalGate::Recorded(
+            None,
+            "projects/p/databases/(default)".into(),
+        );
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().code(),
+            tonic::Code::Unimplemented
+        );
     }
 
     #[tokio::test]

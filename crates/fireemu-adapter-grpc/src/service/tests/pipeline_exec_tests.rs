@@ -1460,3 +1460,53 @@ async fn string_functions_serve_typed_results_in_both_profiles() {
         assert_eq!(rows[0]["reverse"], "String(\"ananab\")");
     }
 }
+
+#[tokio::test]
+async fn array_index_of_all_returns_typed_positions_in_both_profiles() {
+    use pb::value::ValueType as V;
+    let item = |n| value(V::IntegerValue(n));
+    let case = Case {
+        docs: vec![(
+            Some(value(V::ArrayValue(pb::ArrayValue {
+                values: vec![item(2), item(1), item(2)],
+            }))),
+            None,
+        )],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        let function = value(V::FunctionValue(pb::Function {
+            name: "array_index_of_all".to_owned(),
+            args: vec![field_ref("f"), item(2)],
+            ..Default::default()
+        }));
+        structured.pipeline.as_mut().unwrap().stages.push(stage(
+            "select",
+            value(V::MapValue(pb::MapValue {
+                fields: [("out".to_owned(), function)].into_iter().collect(),
+            })),
+        ));
+        let rows = executor(&service, request).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["out"], "Array([Integer(0), Integer(2)])");
+    }
+}

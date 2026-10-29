@@ -435,6 +435,12 @@ const FUNCTIONS: &[Function] = &[
         eval_array_slice,
     ),
     array_access_function(
+        "array_index_of_all",
+        Arity::Exact(2),
+        "array_index_of_all(array: array[any], search: any): array[int64]",
+        eval_array_index_of_all,
+    ),
+    array_access_function(
         "array_index_of",
         Arity::Exact(3),
         "array_index_of(array: array[any], search: any, direction: (first|last)): int64",
@@ -1264,6 +1270,36 @@ fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Array(
         values[start..start.saturating_add(length).min(len)].to_vec(),
     ))
+}
+
+fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    if cx.unrecorded == Unrecorded::Refuse
+        && !matches!((&args[0], &args[1]), (Eval::Value(Value::Array(values)), Eval::Value(Value::Integer(_))) if values.iter().all(|v| matches!(v, Value::Integer(_))))
+    {
+        return Eval::Error(EvalError::Unobserved {
+            function: "array_index_of_all",
+            reason: "unrecorded argument or element types",
+        });
+    }
+    let values = match subsequence_array(args, "array_index_of_all", cx, true) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
+    let result = values
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            if official_order(&Eval::Value(value.clone()), &args[1]) == Some(Ordering::Equal) {
+                i64::try_from(index).ok().map(Value::Integer)
+            } else {
+                None
+            }
+        })
+        .collect();
+    Eval::Value(Value::Array(result))
 }
 
 fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {

@@ -72,6 +72,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "minimum_n",
             "join",
             "array_slice",
+            "array_index_of_all",
             "array_index_of",
             "array_first_n",
             "array_last_n",
@@ -1338,4 +1339,96 @@ fn document_argument_generated_type_profile_origin_cases() {
         count += 1;
     }
     assert_eq!(count, 42);
+}
+
+#[test]
+fn observed_array_index_of_all_returns_all_matching_positions() {
+    let row = row("c/a", &[]);
+    let array = |xs: &[i64]| {
+        Expr::Constant(Value::Array(
+            xs.iter().copied().map(Value::Integer).collect(),
+        ))
+    };
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let expr = Expr::call(
+            "array_index_of_all",
+            vec![array(&[2, 1, 2]), Expr::Constant(Value::Integer(2))],
+            Placement::Value,
+        )
+        .expect("recorded function should be registered");
+        assert_eq!(
+            expr.eval_in(&row, policy),
+            Eval::Value(Value::Array(vec![Value::Integer(0), Value::Integer(2)]))
+        );
+        let absent = Expr::call(
+            "array_index_of_all",
+            vec![array(&[1, 3]), Expr::Constant(Value::Integer(2))],
+            Placement::Value,
+        )
+        .unwrap();
+        assert_eq!(
+            absent.eval_in(&row, policy),
+            Eval::Value(Value::Array(vec![]))
+        );
+    }
+}
+
+#[test]
+fn array_index_of_all_pict_rows_and_strict_unknowns() {
+    let Ok(path) = std::env::var("ARRAY_INDEX_ALL_PICT") else {
+        return;
+    };
+    let data = std::fs::read_to_string(path).unwrap();
+    let document = row("c/a", &[]);
+    for line in data.lines().skip(1) {
+        let cols: Vec<_> = line.split('\t').collect();
+        assert_eq!(cols.len(), 3, "{line}");
+        let (input, expected) = match cols[1] {
+            "repeated" => (vec![2, 1, 2], vec![0, 2]),
+            "absent" => (vec![1, 3], vec![]),
+            "single" => (vec![1, 2, 3], vec![1]),
+            "empty" => (vec![], vec![]),
+            _ => panic!("unexpected case {line}"),
+        };
+        let expr = call(
+            "array_index_of_all",
+            vec![
+                Expr::Constant(Value::Array(
+                    input.into_iter().map(Value::Integer).collect(),
+                )),
+                Expr::Constant(Value::Integer(2)),
+            ],
+        );
+        let policy = if cols[0] == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            expr.eval_in(&document, policy),
+            Eval::Value(Value::Array(
+                expected.into_iter().map(Value::Integer).collect()
+            )),
+            "{line}"
+        );
+    }
+    let mixed = call(
+        "array_index_of_all",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::String("a".into())])),
+            Expr::Constant(Value::Integer(2)),
+        ],
+    );
+    assert!(unobserved(&mixed.eval_in(&document, Unrecorded::Refuse)));
+}
+
+proptest! {
+    #[test]
+    fn array_index_of_all_matches_integer_reference(values in prop::collection::vec(-3_i64..4, 0..32), needle in -3_i64..4) {
+        let want: Vec<_> = values.iter().enumerate().filter_map(|(i,v)| (*v == needle).then_some(Value::Integer(i as i64))).collect();
+        let expr = call("array_index_of_all", vec![Expr::Constant(Value::Array(values.into_iter().map(Value::Integer).collect())), Expr::Constant(Value::Integer(needle))]);
+        for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            prop_assert_eq!(expr.eval_in(&row("c/a", &[]), policy), Eval::Value(Value::Array(want.clone())));
+        }
+    }
 }

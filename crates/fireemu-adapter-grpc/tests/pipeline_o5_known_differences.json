@@ -2012,47 +2012,6 @@
     }
   },
   {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_index_of_all\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'array_index_of_all(array: array[any], search: any): array[int64]' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array_index_of_all",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_index_of_all\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "arity-wording",
     "emulator": {
       "body": [

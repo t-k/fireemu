@@ -765,7 +765,8 @@ fn request_body(
 /// goes through the shape gate (501 unless the exact body was recorded, O-8A), as the transcoder's do (ruling (c)). The emulator profile
 /// reads it as the official emulator 1.22.0 does (`json_syntax::parse_official_with_key_order`:
 /// bare keys and single quotes, no trailing comma or unknown escape, trailing input ignored),
-/// and refuses any other body with `Payload isn't valid for request.`
+/// and reports depth refusals in production's words while refusing other malformed bodies
+/// with `Payload isn't valid for request.`
 fn pipeline_body(
     bytes: &[u8],
     production_refusals: bool,
@@ -800,7 +801,14 @@ fn pipeline_body(
     }
     crate::rest::json_syntax::parse_official_with_key_order(bytes)
         .map(|(value, order)| (value, Vec::new(), order))
-        .map_err(|_| refuse(Status::invalid_argument("Payload isn't valid for request.")))
+        .map_err(|error| {
+        let message = error.render(bytes);
+        if message.starts_with("Invalid JSON payload received. Message too deep. Max recursion depth reached for key '") {
+            refuse(Status::invalid_argument(message))
+        } else {
+            refuse(Status::invalid_argument("Payload isn't valid for request."))
+        }
+    })
 }
 
 fn is_decoded_message_too_large(status: &Status) -> bool {
@@ -1160,6 +1168,59 @@ mod tests {
             "Invalid JSON payload received. Unexpected token.\nnot json\n^"
         );
     }
+    #[test]
+    fn ordinary_pipeline_depth_refusal_reports_the_parser_diagnostic() {
+        let requests: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-requests.json"
+        ))
+        .unwrap();
+        let program = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "fs-ent-pipeline/o8a/nesting-main")
+            .unwrap();
+        let path = "/v1/projects/p/databases/(default)/documents:executePipeline";
+        let mut checked = Vec::new();
+        for step in program["steps"].as_array().unwrap() {
+            let id = step["id"].as_str().unwrap();
+            if id == "chain-20" {
+                let body = serde_json::to_vec(&step["body"]).unwrap();
+                assert!(super::request_body(&body, path, false).is_ok());
+                checked.push(id);
+            } else if ["chain-32", "chain-33", "chain-47", "chain-48", "chain-100"].contains(&id) {
+                let body = step["rawBody"].as_str().unwrap();
+                let response = super::request_body(body.as_bytes(), path, false).unwrap_err();
+                assert_eq!(response.status, 400, "{id}");
+                assert_eq!(
+                    response.body[0]["error"]["status"], "INVALID_ARGUMENT",
+                    "{id}"
+                );
+                assert_eq!(response.body[0]["error"]["message"], "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'functionValue'", "{id}");
+                checked.push(id);
+            }
+        }
+        assert_eq!(
+            checked,
+            [
+                "chain-20",
+                "chain-32",
+                "chain-33",
+                "chain-47",
+                "chain-48",
+                "chain-100"
+            ]
+        );
+        let body = format!("{{\"other\":{}0{}}}", "[".repeat(100), "]".repeat(100));
+        let response = super::request_body(body.as_bytes(), path, false).unwrap_err();
+        assert_eq!(response.body[0]["error"]["message"], "Invalid JSON payload received. Message too deep. Max recursion depth reached for key 'other'");
+        let response = super::request_body(b"{", path, false).unwrap_err();
+        assert_eq!(
+            response.body[0]["error"]["message"],
+            "Payload isn't valid for request."
+        );
+    }
+
     /// FS-ENT-ORACLE O-8A `precedence-main`: the executePipeline bodies production refused as
     /// text (not JSON, truncated) are answered in production's words under strict, for those
     /// exact bodies; any other body that grammar refuses keeps no recorded answer (501). The

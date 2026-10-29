@@ -3801,6 +3801,7 @@ fn vector_scalars_execute_generated_pict_cases() {
             panic!("invalid PICT row")
         };
         let left = match *shape {
+            "generic" => Eval::Value(Value::Vector(vec![2.0, -1.0])),
             "empty" => Eval::Value(Value::Vector(vec![])),
             "zero" => Eval::Value(Value::Vector(vec![0.0, 0.0])),
             "nonfinite" => Eval::Value(Value::Vector(vec![f64::INFINITY])),
@@ -3808,7 +3809,9 @@ fn vector_scalars_execute_generated_pict_cases() {
             "error" => invalid("upstream"),
             _ => Eval::Value(Value::Vector(vec![1.0, 2.0])),
         };
-        let right = if *shape == "mismatch" {
+        let right = if *shape == "generic" {
+            Eval::Value(Value::Vector(vec![1.0, 3.0]))
+        } else if *shape == "mismatch" {
             Eval::Value(Value::Vector(vec![1.0]))
         } else if *shape == "empty" {
             Eval::Value(Value::Vector(vec![]))
@@ -3873,4 +3876,29 @@ fn vector_scalars_preserve_recorded_zero_arity_signatures() {
             format!("The function '{signature}' takes [{arity}..{arity}] argument(s), but 0 were provided.")
         );
     }
+}
+
+#[test]
+fn vector_scalars_finite_cancellation_nan_and_underflow_are_bounded() {
+    let nan = Eval::Value(Value::Vector(vec![f64::NAN]));
+    let one = Eval::Value(Value::Vector(vec![1.0]));
+    assert_eq!(both("vector_length", std::slice::from_ref(&nan)), int(1));
+    for name in ["dot_product", "euclidean_distance", "cosine_distance"] {
+        assert!(is_unobserved(&strict(name, &[nan.clone(), one.clone()])));
+        assert!(is_unobserved(&emulator(name, &[nan.clone(), one.clone()])));
+    }
+    let cancellation = Eval::Value(Value::Vector(vec![1e16, 1.0, -1e16]));
+    let ones = Eval::Value(Value::Vector(vec![1.0, 1.0, 1.0]));
+    assert_eq!(both("dot_product", &[cancellation, ones]), dbl(0.0));
+    let tiny = Eval::Value(Value::Vector(vec![1e-200, 0.0]));
+    let zero = Eval::Value(Value::Vector(vec![0.0, 0.0]));
+    assert_eq!(
+        both("euclidean_distance", &[tiny.clone(), zero]),
+        dbl(1e-200)
+    );
+    assert_eq!(both("dot_product", &[tiny.clone(), tiny.clone()]), dbl(0.0));
+    assert!(is_unobserved(&strict(
+        "cosine_distance",
+        &[tiny.clone(), tiny]
+    )));
 }

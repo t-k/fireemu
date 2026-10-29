@@ -26,6 +26,66 @@ const PIPELINE_OPTIONS: &[&str] = &["index_mode"];
 /// Stages the official emulator 1.22.0 knows (probed 2026-10-27) and the registry does not.
 const OFFICIAL_ONLY_STAGES: &[&str] = &["let", "insert", "upsert", "literals"];
 
+/// Bounds nested function expressions after the request and stage registry have been validated.
+pub(crate) fn validate_function_depth(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
+    use pb::value::ValueType as V;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return Ok(());
+    };
+    let Some(pipeline) = &structured.pipeline else {
+        return Ok(());
+    };
+    let mut stack: Vec<_> = pipeline
+        .stages
+        .iter()
+        .flat_map(|stage| {
+            stage
+                .args
+                .iter()
+                .chain(stage.options.values())
+                .map(|value| (value, 0_usize))
+        })
+        .collect();
+    while let Some((value, depth)) = stack.pop() {
+        match value.value_type.as_ref() {
+            Some(V::FunctionValue(function)) => {
+                let depth = depth + 1;
+                if depth > 32 {
+                    return Err(Status::invalid_argument(
+                        "Expressions can be at most 32 levels deep.",
+                    ));
+                }
+                stack.extend(
+                    function
+                        .args
+                        .iter()
+                        .chain(function.options.values())
+                        .map(|value| (value, depth)),
+                );
+            }
+            Some(V::ArrayValue(array)) => {
+                stack.extend(array.values.iter().map(|value| (value, depth)));
+            }
+            Some(V::MapValue(map)) => stack.extend(map.fields.values().map(|value| (value, depth))),
+            Some(V::PipelineValue(pipeline)) => {
+                for stage in &pipeline.stages {
+                    stack.extend(
+                        stage
+                            .args
+                            .iter()
+                            .chain(stage.options.values())
+                            .map(|value| (value, depth)),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Bounds nested union planning before recursive validation and shape inspection.
 pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
     enum Item<'a> {
@@ -4573,6 +4633,80 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    proptest::proptest! {
+        #[test]
+        fn function_depth_tracks_each_branch(depth in 0_usize..45, width in 1_usize..5) {
+            let mut value = pb::Value { value_type: Some(pb::value::ValueType::IntegerValue(1)) };
+            for _ in 0..depth {
+                value = pb::Value { value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                    name: "array".into(), args: vec![value], ..Default::default()
+                })) };
+            }
+            let mut fields = std::collections::HashMap::new();
+            for index in 0..width { fields.insert(format!("a{index}"), value.clone()); }
+            let request = pb::ExecutePipelineRequest {
+                pipeline_type: Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline { stages: vec![pb::pipeline::Stage {
+                        args: vec![pb::Value { value_type: Some(pb::value::ValueType::MapValue(pb::MapValue { fields })) }],
+                        ..Default::default()
+                    }] }), ..Default::default()
+                })), ..Default::default()
+            };
+            let result = validate_function_depth(&request);
+            proptest::prop_assert_eq!(result.is_err(), depth > 32);
+        }
+    }
+
+    #[test]
+    fn function_depth_reaches_arrays_and_nested_pipelines() {
+        use pb::value::ValueType as V;
+        let mut value = pb::Value {
+            value_type: Some(V::IntegerValue(1)),
+        };
+        for _ in 0..33 {
+            value = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "array".into(),
+                    args: vec![value],
+                    ..Default::default()
+                })),
+            };
+        }
+        let array = pb::Value {
+            value_type: Some(V::ArrayValue(pb::ArrayValue {
+                values: vec![value],
+            })),
+        };
+        let nested = pb::Value {
+            value_type: Some(V::PipelineValue(pb::Pipeline {
+                stages: vec![pb::pipeline::Stage {
+                    args: vec![array],
+                    ..Default::default()
+                }],
+            })),
+        };
+        let request = pb::ExecutePipelineRequest {
+            pipeline_type: Some(
+                pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                    pb::StructuredPipeline {
+                        pipeline: Some(pb::Pipeline {
+                            stages: vec![pb::pipeline::Stage {
+                                args: vec![nested],
+                                ..Default::default()
+                            }],
+                        }),
+                        ..Default::default()
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_function_depth(&request).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+    }
 
     #[test]
     fn lazy_control_keeps_standalone_constant_errors_and_nested_arity_checks() {

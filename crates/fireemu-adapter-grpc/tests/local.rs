@@ -13975,3 +13975,58 @@ async fn execute_pipeline_literal_field_paths_hold_at_most_1500_bytes() {
         handle.abort();
     }
 }
+
+#[tokio::test]
+async fn grpc_expression_function_depth_is_limited_to_32() {
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        for depth in [32, 33, 34] {
+            for collection in ["ne", "other"] {
+                let mut value = pipeline_field("i");
+                for _ in 0..depth {
+                    value = pipeline_function("array", vec![value]);
+                }
+                let stages = vec![
+                    pipeline_stage("collection", collection_ref(collection)),
+                    pipeline_select_map(vec![("v", value)]),
+                ];
+                if depth > 32 {
+                    let error = pipeline_error(&mut client, stages).await;
+                    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                    assert_eq!(
+                        error.message(),
+                        "Expressions can be at most 32 levels deep."
+                    );
+                } else {
+                    let response = client.execute_pipeline(pipeline_request(stages)).await;
+                    assert!(
+                        response.is_ok(),
+                        "{policy:?} depth={depth} collection={collection}: {:?}",
+                        response.err()
+                    );
+                    let _ = drain_pipeline(response.unwrap().into_inner(), 1).await;
+                }
+            }
+        }
+        let mut value = pipeline_field("i");
+        for _ in 0..33 {
+            value = pipeline_function("array", vec![value]);
+        }
+        let mut invalid = pipeline_request(vec![
+            pipeline_stage("collection", collection_ref("ne")),
+            pipeline_select_map(vec![("v", value)]),
+        ]);
+        invalid.auto_commit_transaction = true;
+        let error = client.execute_pipeline(invalid).await.unwrap_err();
+        assert!(
+            error.message().contains("auto_commit_transaction"),
+            "{error}"
+        );
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+    }
+}

@@ -818,13 +818,17 @@ fn is_decoded_message_too_large(status: &Status) -> bool {
             .starts_with("Error, decoded message length too large")
 }
 
-fn normalize_transport_status(headers: &mut HeaderMap) {
+fn normalize_transport_status(headers: &mut HeaderMap, strict_pipeline: bool) {
     crate::production_status::respec_grpc_message(headers);
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };
     let replacement = if is_prost_recursion(&status) {
-        Status::invalid_argument(status.message().to_owned())
+        Status::invalid_argument(if strict_pipeline {
+            "Request contains an invalid argument.".to_owned()
+        } else {
+            status.message().to_owned()
+        })
     } else if is_decoded_message_too_large(&status) {
         Status::invalid_argument(api_request_too_large_message())
     } else {
@@ -850,6 +854,7 @@ fn shape_grpc_response(
     mut response: Response<tonic::body::Body>,
     production_scope: bool,
     write_stream: bool,
+    strict_pipeline: bool,
 ) -> Response<http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>> {
     if production_scope && response.headers().contains_key(Status::GRPC_STATUS) {
         let trailers = split_trailers_only(response.headers_mut());
@@ -858,6 +863,7 @@ fn shape_grpc_response(
             production_scope,
             write_stream,
             false,
+            strict_pipeline,
         );
         let body = http_body_util::StreamBody::new(tokio_stream::once(Ok::<_, BoxError>(frame)))
             .boxed_unsync();
@@ -867,7 +873,13 @@ fn shape_grpc_response(
         let mut responded = false;
         b.map_frame(move |frame| {
             responded |= frame.is_data();
-            normalize_transport_frame(frame, production_scope, write_stream, responded)
+            normalize_transport_frame(
+                frame,
+                production_scope,
+                write_stream,
+                responded,
+                strict_pipeline,
+            )
         })
         .map_err(|e| Box::new(e) as BoxError)
         .boxed_unsync()
@@ -889,14 +901,16 @@ fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
 /// stream with `content-disposition: attachment` after a response
 /// (`write-stream-terminal/*`), but not when it ends without one
 /// (`grpc-stream-request-bytes/*`, recorded twice).
+#[allow(clippy::fn_params_excessive_bools)]
 fn normalize_transport_frame(
     mut frame: Frame<Bytes>,
     production_scope: bool,
     write_stream: bool,
     responded: bool,
+    strict_pipeline: bool,
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
-        normalize_transport_status(trailers);
+        normalize_transport_status(trailers, strict_pipeline);
         let write_terminal = production_scope
             && write_stream
             && Status::from_header_map(trailers).is_some_and(|status| {
@@ -1000,6 +1014,8 @@ where
                     if is_grpc(&req) {
                         let write_stream =
                             req.uri().path() == "/google.firestore.v1.Firestore/Write";
+                        let strict_pipeline = rest.gateway.production_refusals()
+                            && req.uri().path() == "/google.firestore.v1.Firestore/ExecutePipeline";
                         let req = req.map(|b| {
                             tonic::body::Body::new(b.map_err(|e| Status::internal(e.to_string())))
                         });
@@ -1008,7 +1024,7 @@ where
                             Err(never) => match never {},
                         };
                         let production_scope = rest.gateway.production_scope();
-                        normalize_transport_status(response.headers_mut());
+                        normalize_transport_status(response.headers_mut(), strict_pipeline);
                         if response
                             .headers()
                             .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -1021,6 +1037,7 @@ where
                             response,
                             production_scope,
                             write_stream,
+                            strict_pipeline,
                         ));
                     }
                     if let Some(origin) = header(&req, "origin") {
@@ -1306,7 +1323,7 @@ mod tests {
     #[test]
     fn successful_write_terminal_retains_stable_content_disposition() {
         let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(Code::Ok, "")));
-        let trailers = normalize_transport_frame(frame, true, true, true)
+        let trailers = normalize_transport_frame(frame, true, true, true, false)
             .into_trailers()
             .expect("terminal trailers");
         assert_eq!(
@@ -1323,10 +1340,66 @@ mod tests {
             (true, true, Code::Ok, false),
         ] {
             let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(code, "refused")));
-            let trailers = normalize_transport_frame(frame, strict, write_stream, responded)
+            let trailers = normalize_transport_frame(frame, strict, write_stream, responded, false)
                 .into_trailers()
                 .expect("terminal trailers");
             assert!(!trailers.contains_key("content-disposition"));
+        }
+    }
+
+    #[test]
+    fn pipeline_recursion_transport_matrix() {
+        let recursion =
+            "failed to decode Protobuf message: Value.value_type: recursion limit reached";
+        for strict in [false, true] {
+            for pipeline in [false, true] {
+                for trailers in [false, true] {
+                    for is_recursion in [false, true] {
+                        let original = if is_recursion {
+                            recursion
+                        } else {
+                            "backend failed"
+                        };
+                        let status = Status::internal(original);
+                        let selected = strict && pipeline;
+                        let actual = if trailers {
+                            let frame: Frame<Bytes> = Frame::trailers(headers(&status));
+                            let frame =
+                                normalize_transport_frame(frame, strict, false, false, selected);
+                            Status::from_header_map(&frame.into_trailers().unwrap()).unwrap()
+                        } else {
+                            let mut header = headers(&status);
+                            normalize_transport_status(&mut header, selected);
+                            Status::from_header_map(&header).unwrap()
+                        };
+                        let expected = if is_recursion && selected {
+                            "Request contains an invalid argument."
+                        } else {
+                            original
+                        };
+                        assert_eq!(actual.message(), expected, "strict={strict} pipeline={pipeline} trailers={trailers} recursion={is_recursion}");
+                        assert_eq!(
+                            actual.code(),
+                            if is_recursion {
+                                Code::InvalidArgument
+                            } else {
+                                Code::Internal
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unrelated_internal_messages_are_not_rewritten(message in "[a-z ]{0,80}") {
+            let mut header = headers(&Status::internal(message.clone()));
+            normalize_transport_status(&mut header, true);
+            let status = Status::from_header_map(&header).unwrap();
+            proptest::prop_assert_eq!(status.code(), Code::Internal);
+            proptest::prop_assert_eq!(status.message(), message);
         }
     }
 
@@ -1338,7 +1411,7 @@ mod tests {
             Bytes::from_static(b"details"),
         );
         let mut ordinary_headers = headers(&ordinary);
-        normalize_transport_status(&mut ordinary_headers);
+        normalize_transport_status(&mut ordinary_headers, false);
         let unchanged = Status::from_header_map(&ordinary_headers).unwrap();
         assert_eq!(unchanged.code(), Code::Internal);
         assert_eq!(unchanged.message(), "backend failed");
@@ -1347,7 +1420,7 @@ mod tests {
         let already_client_error =
             Status::invalid_argument("failed to decode Protobuf message: recursion limit reached");
         let mut client_headers = headers(&already_client_error);
-        normalize_transport_status(&mut client_headers);
+        normalize_transport_status(&mut client_headers, false);
         assert_eq!(
             Status::from_header_map(&client_headers).unwrap().message(),
             already_client_error.message()
@@ -1359,7 +1432,7 @@ mod tests {
             Bytes::from_static(b"stale-internal-details"),
         );
         let mut prost_headers = headers(&prost);
-        normalize_transport_status(&mut prost_headers);
+        normalize_transport_status(&mut prost_headers, false);
         let normalized = Status::from_header_map(&prost_headers).unwrap();
         assert_eq!(normalized.code(), Code::InvalidArgument);
         assert_eq!(
@@ -1376,7 +1449,7 @@ mod tests {
         let tonic_wording =
             "Error, decoded message length too large: found 11534337 bytes, the limit is: 11534336 bytes";
         let mut decoded = headers(&Status::new(Code::OutOfRange, tonic_wording));
-        normalize_transport_status(&mut decoded);
+        normalize_transport_status(&mut decoded, false);
         let reshaped = Status::from_header_map(&decoded).unwrap();
         assert_eq!(reshaped.code(), Code::InvalidArgument);
         assert_eq!(reshaped.message(), api_request_too_large_message());
@@ -1391,14 +1464,14 @@ mod tests {
         // must not be dressed up as production refusing the client's request.
         let encode_side = "Error, encoded message length too large: found 10485761 bytes, the limit is: 10485760 bytes";
         let mut encoded = headers(&Status::new(Code::OutOfRange, encode_side));
-        normalize_transport_status(&mut encoded);
+        normalize_transport_status(&mut encoded, false);
         let kept = Status::from_header_map(&encoded).unwrap();
         assert_eq!(kept.code(), Code::OutOfRange);
         assert_eq!(kept.message(), encode_side);
 
         // An unrelated OUT_OF_RANGE is never touched.
         let mut unrelated = headers(&Status::new(Code::OutOfRange, "cursor past the end"));
-        normalize_transport_status(&mut unrelated);
+        normalize_transport_status(&mut unrelated, false);
         let kept = Status::from_header_map(&unrelated).unwrap();
         assert_eq!(kept.code(), Code::OutOfRange);
         assert_eq!(kept.message(), "cursor past the end");

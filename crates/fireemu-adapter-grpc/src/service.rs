@@ -731,25 +731,36 @@ impl Firestore for GatewayService {
                     .ok_or_else(|| Status::internal("local backend disappeared"))?,
                 &compiled.stages,
             );
-            let input: BoxStream<pb::RunQueryResponse> =
-                if let Some(names) = compiled.documents.clone() {
-                    let local = self
-                        .local_backend()
-                        .cloned()
-                        .ok_or_else(|| Status::internal("local backend disappeared"))?;
-                    let database = request.get_ref().database.clone();
-                    let responses =
-                        blocking_read(local, self.rules.clone(), caller, move |local, guard| {
-                            crate::pipeline::documents_input(local, &database, &names, guard)
-                        })
-                        .await
-                        .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
-                    Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
-                } else {
-                    self.scan_ordered_input(caller, &compiled.input)
-                        .await
-                        .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
-                };
+            let input: BoxStream<pb::RunQueryResponse> = if compiled.database {
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, _guard| {
+                        crate::pipeline::database_input(local, &parent)
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
+            } else if let Some(names) = compiled.documents.clone() {
+                let local = self
+                    .local_backend()
+                    .cloned()
+                    .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                let database = request.get_ref().database.clone();
+                let responses =
+                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
+                        crate::pipeline::documents_input(local, &database, &names, guard)
+                    })
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
+            } else {
+                self.scan_ordered_input(caller, &compiled.input)
+                    .await
+                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
+            };
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
                 input, compiled, unrecorded, canonical, gate, runtime,
             ))));

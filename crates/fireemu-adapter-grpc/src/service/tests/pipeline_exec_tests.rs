@@ -874,3 +874,463 @@ async fn sqrt_wrong_type_is_captured_or_reported_and_empty_rows_are_lazy() {
             .is_empty());
     }
 }
+
+#[tokio::test]
+async fn observed_replace_with_full_serves_map_fields() {
+    let case = Case {
+        docs: vec![(Some(value(pb::value::ValueType::IntegerValue(7))), None)],
+        m_shapes: vec![0],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let backend = test_backend();
+    seed(&backend, &case);
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend);
+    let mut request = pipeline(&case, "");
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        unreachable!()
+    };
+    structured
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stages
+        .push(pb::pipeline::Stage {
+            name: "replace_with".to_owned(),
+            args: vec![
+                field_ref("m"),
+                value(pb::value::ValueType::StringValue("full_replace".to_owned())),
+            ],
+            ..Default::default()
+        });
+    let rows = executor(&service, request).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("f").map(String::as_str), Some("Integer(7)"));
+    assert!(!rows[0].contains_key("m"));
+}
+
+#[tokio::test]
+async fn database_input_returns_all_collections_in_its_database() {
+    let case = Case {
+        docs: vec![(Some(value(pb::value::ValueType::IntegerValue(1))), None); 3],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let backend = test_backend();
+    seed(&backend, &case);
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: ["other/a", "ne/d1"]
+                .into_iter()
+                .map(|name| pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{PARENT}/{name}"),
+                        fields: [("x".to_owned(), value(pb::value::ValueType::IntegerValue(2)))]
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/other-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "projects/other-app/databases/(default)/documents/foreign/a".to_owned(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    backend
+        .ensure_database(
+            &crate::decode::parse_parent("projects/demo-app/databases/other/documents").unwrap(),
+        )
+        .unwrap();
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/demo-app/databases/other".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "projects/demo-app/databases/other/documents/foreign/b".to_owned(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend);
+    let mut request = pipeline(&case, "");
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        unreachable!()
+    };
+    structured.pipeline.as_mut().unwrap().stages = vec![pb::pipeline::Stage {
+        name: "database".to_owned(),
+        ..Default::default()
+    }];
+    let (rows, timed) = executor_documents(&service, request).await;
+    assert!(timed);
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().any(|row| row.name.ends_with("/items/000")));
+    assert!(rows.iter().any(|row| row.name.ends_with("/other/a")));
+    assert!(rows
+        .iter()
+        .all(|row| row.create_time.is_some() && row.update_time.is_some()));
+}
+
+#[tokio::test]
+async fn observed_nearest_euclidean_returns_ranked_distances() {
+    use pb::value::ValueType as V;
+    let vector = |items: &[f64]| {
+        value(V::MapValue(pb::MapValue {
+            fields: [
+                (
+                    "__type__".to_owned(),
+                    value(V::StringValue("__vector__".to_owned())),
+                ),
+                (
+                    "value".to_owned(),
+                    value(V::ArrayValue(pb::ArrayValue {
+                        values: items.iter().map(|n| value(V::DoubleValue(*n))).collect(),
+                    })),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        }))
+    };
+    let backend = test_backend();
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: [
+                ("a", vec![2.0, 1.0]),
+                ("b", vec![3.0, 2.0]),
+                ("c", vec![2.0, 4.0]),
+            ]
+            .into_iter()
+            .map(|(name, coordinates)| pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: format!("{PARENT}/items/{name}"),
+                    fields: [("vec".to_owned(), vector(&coordinates))]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend);
+    let case = Case {
+        docs: vec![],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let mut request = pipeline(&case, "");
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        request.pipeline_type.as_mut()
+    else {
+        unreachable!()
+    };
+    structured
+        .pipeline
+        .as_mut()
+        .unwrap()
+        .stages
+        .push(pb::pipeline::Stage {
+            name: "find_nearest".to_owned(),
+            args: vec![
+                field_ref("vec"),
+                vector(&[1.0, 2.0]),
+                value(V::StringValue("euclidean".to_owned())),
+            ],
+            options: [
+                ("limit".to_owned(), value(V::IntegerValue(3))),
+                ("distance_field".to_owned(), field_ref("dist")),
+            ]
+            .into_iter()
+            .collect(),
+        });
+    let (rows, _) = executor_documents(&service, request).await;
+    assert_eq!(rows.len(), 3);
+    let values: Vec<_> = rows
+        .iter()
+        .map(|r| match r.fields["dist"].value_type.as_ref().unwrap() {
+            V::DoubleValue(v) => *v,
+            _ => panic!("distance type"),
+        })
+        .collect();
+    assert_eq!(values, [2.0_f64.sqrt(), 2.0, 5.0_f64.sqrt()]);
+}
+
+#[tokio::test]
+async fn observed_replace_modes_and_scalar_seven_serve_in_both_profiles() {
+    let case = Case {
+        docs: vec![(Some(value(pb::value::ValueType::IntegerValue(7))), None)],
+        m_shapes: vec![0],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        for (mode, expression, empty) in [
+            ("full_replace", field_ref("m"), false),
+            ("merge_overwrite_existing", field_ref("m"), false),
+            ("merge_keep_existing", field_ref("m"), false),
+            (
+                "full_replace",
+                value(pb::value::ValueType::IntegerValue(7)),
+                true,
+            ),
+        ] {
+            let mut request = pipeline(&case, "");
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+                request.pipeline_type.as_mut()
+            else {
+                unreachable!()
+            };
+            structured
+                .pipeline
+                .as_mut()
+                .unwrap()
+                .stages
+                .push(pb::pipeline::Stage {
+                    name: "replace_with".to_owned(),
+                    args: vec![
+                        expression,
+                        value(pb::value::ValueType::StringValue(mode.to_owned())),
+                    ],
+                    ..Default::default()
+                });
+            let rows = executor(&service, request).await;
+            assert_eq!(rows.len(), 1);
+            if empty {
+                assert!(rows[0].is_empty());
+                continue;
+            }
+            assert_eq!(rows[0].get("f").map(String::as_str), Some("Integer(7)"));
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn stage_context_seeded_pict_rows_execute() {
+    use pb::value::ValueType as V;
+    let Ok(matrix) = std::env::var("STAGE_CONTEXT_PICT") else {
+        return;
+    };
+    let text = std::fs::read_to_string(matrix).unwrap();
+    let vector = |items: &[f64]| {
+        value(V::MapValue(pb::MapValue {
+            fields: [
+                (
+                    "__type__".to_owned(),
+                    value(V::StringValue("__vector__".to_owned())),
+                ),
+                (
+                    "value".to_owned(),
+                    value(V::ArrayValue(pb::ArrayValue {
+                        values: items.iter().map(|n| value(V::DoubleValue(*n))).collect(),
+                    })),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        }))
+    };
+    for line in text.lines().skip(1) {
+        let cols: Vec<_> = line.split('\t').collect();
+        assert_eq!(cols.len(), 5);
+        let (kind, profile, input, mode, metadata) = (cols[0], cols[1], cols[2], cols[3], cols[4]);
+        let backend = test_backend();
+        if input != "empty" {
+            let map = value(V::MapValue(pb::MapValue {
+                fields: [
+                    ("shared".to_owned(), value(V::StringValue("new".into()))),
+                    ("added".to_owned(), value(V::StringValue("a".into()))),
+                ]
+                .into_iter()
+                .collect(),
+            }));
+            let vec = if kind == "nearest" && input == "wrongtype" {
+                value(V::IntegerValue(7))
+            } else {
+                vector(&[2.0, 1.0])
+            };
+            backend
+                .commit(&pb::CommitRequest {
+                    database: "projects/demo-app/databases/(default)".into(),
+                    writes: vec![pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{PARENT}/items/a"),
+                            fields: [
+                                ("m".into(), map),
+                                ("vec".into(), vec),
+                                ("shared".into(), value(V::StringValue("old".into()))),
+                            ]
+                            .into_iter()
+                            .collect(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = if profile == "strict" {
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        } else {
+            fireemu_core_firestore::index::IndexValidationPolicy::Emulator
+        };
+        let service = GatewayService::local(gateway, backend);
+        let case = Case {
+            docs: vec![],
+            m_shapes: vec![],
+            literal: None,
+            select: None,
+            offset: None,
+            limit: None,
+        };
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        let stages = &mut structured.pipeline.as_mut().unwrap().stages;
+        if kind == "database" {
+            stages[0] = pb::pipeline::Stage {
+                name: "database".into(),
+                ..Default::default()
+            };
+        }
+        if metadata == "absent" {
+            stages.push(stage(
+                "select",
+                value(V::MapValue(pb::MapValue {
+                    fields: ["m", "vec", "shared"]
+                        .into_iter()
+                        .map(|f| (f.to_owned(), field_ref(f)))
+                        .collect(),
+                })),
+            ));
+        }
+        if kind == "replace" {
+            let wire_mode = match mode {
+                "full" => "full_replace",
+                "merge_overwrite" => "merge_overwrite_existing",
+                "merge_keep" => "merge_keep_existing",
+                _ => unreachable!(),
+            };
+            stages.push(pb::pipeline::Stage {
+                name: "replace_with".into(),
+                args: vec![
+                    if input == "wrongtype" {
+                        value(V::IntegerValue(7))
+                    } else {
+                        field_ref("m")
+                    },
+                    value(V::StringValue(wire_mode.into())),
+                ],
+                ..Default::default()
+            });
+        }
+        if kind == "nearest" {
+            stages.push(pb::pipeline::Stage {
+                name: "find_nearest".into(),
+                args: vec![
+                    field_ref("vec"),
+                    vector(if input == "dimension" {
+                        &[1.0, 2.0, 3.0]
+                    } else {
+                        &[1.0, 2.0]
+                    }),
+                    value(V::StringValue(
+                        if mode == "dot" { "dot_product" } else { mode }.into(),
+                    )),
+                ],
+                options: [
+                    ("limit".into(), value(V::IntegerValue(3))),
+                    ("distance_field".into(), field_ref("dist")),
+                ]
+                .into_iter()
+                .collect(),
+            });
+        }
+        let error_expected = input != "empty"
+            && ((kind == "replace" && input == "wrongtype" && mode != "full")
+                || (kind == "nearest" && input == "wrongtype" && profile == "strict"));
+        let response = Firestore::execute_pipeline(&service, Request::new(request)).await;
+        let mut rows = Vec::new();
+        let mut error = response.is_err();
+        if let Ok(response) = response {
+            let mut stream = response.into_inner();
+            while let Some(item) = stream.next().await {
+                if let Ok(value) = item {
+                    rows.extend(value.results);
+                } else {
+                    error = true;
+                    break;
+                }
+            }
+        }
+        assert_eq!(error, error_expected, "{line}");
+        if !error {
+            let expected = usize::from(
+                input != "empty"
+                    && !(kind == "nearest" && matches!(input, "wrongtype" | "dimension")),
+            );
+            assert_eq!(rows.len(), expected, "{line}");
+            if let Some(row) = rows.first() {
+                assert_eq!(row.create_time.is_some(), metadata == "present", "{line}");
+                if kind == "replace" && input == "wrongtype" {
+                    assert!(row.fields.is_empty(), "{line}");
+                }
+            }
+        }
+    }
+}

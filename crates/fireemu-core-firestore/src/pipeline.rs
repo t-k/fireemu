@@ -394,7 +394,11 @@ fn check_arguments(name: &str, args: &[Arg]) -> Result<(), PipelineError> {
                 Some(Arg::String(m))
                     if matches!(
                         m.as_str(),
-                        "full_replace" | "merge_prefer_nest" | "merge_prefer_parent"
+                        "full_replace"
+                            | "merge_prefer_nest"
+                            | "merge_prefer_parent"
+                            | "merge_overwrite_existing"
+                            | "merge_keep_existing"
                     ) =>
                 {
                     Ok(())

@@ -1278,6 +1278,10 @@ fn the_registry_checks_the_replace_with_mode() {
     };
     assert!(canonicalize(&[users(), replace(None)]).is_ok());
     assert!(canonicalize(&[users(), replace(Some("full_replace"))]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("merge_overwrite_existing"))]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("merge_keep_existing"))]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("merge_prefer_nest"))]).is_ok());
+    assert!(canonicalize(&[users(), replace(Some("merge_prefer_parent"))]).is_ok());
     assert!(canonicalize(&[users(), replace(Some("sideways"))]).is_err());
 }
 
@@ -2139,4 +2143,156 @@ fn sampling_seed_variation_limit_and_finish_contracts() {
         .map(|row| rows.iter().position(|r| r == row).unwrap())
         .collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+}
+
+#[test]
+fn observed_replace_modes_preserve_expected_fields() {
+    let nested = Value::Map(BTreeMap::from([
+        ("shared".into(), Value::String("new".into())),
+        ("added".into(), Value::String("a".into())),
+    ]));
+    let row = doc(
+        "a",
+        &[
+            ("shared", Value::String("old".into())),
+            ("keep", int(1)),
+            ("m", nested),
+        ],
+    );
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        for (mode, expected, keeps) in [
+            (ReplaceMode::Full, "new", false),
+            (ReplaceMode::Overwrite, "new", true),
+            (ReplaceMode::Keep, "old", true),
+        ] {
+            let out = execute_rows_in(
+                vec![Stage::ReplaceWith {
+                    expression: field("m"),
+                    mode,
+                }],
+                vec![row.clone()],
+                policy,
+            )
+            .unwrap();
+            assert_eq!(out[0].fields["shared"], Value::String(expected.into()));
+            assert_eq!(out[0].fields["added"], Value::String("a".into()));
+            assert_eq!(out[0].fields.contains_key("keep"), keeps);
+            assert_eq!(out[0].path, row.path);
+        }
+        let out = execute_rows_in(
+            vec![Stage::ReplaceWith {
+                expression: Expr::Constant(int(7)),
+                mode: ReplaceMode::Full,
+            }],
+            vec![row.clone()],
+            policy,
+        )
+        .unwrap();
+        assert!(out[0].fields.is_empty());
+    }
+}
+
+proptest! {
+    #[test]
+    fn replace_keep_preserves_existing_collision_and_adds_new(old in any::<i64>(), new in any::<i64>()) {
+        let map = Value::Map(BTreeMap::from([("collision".into(), int(new)), ("added".into(), int(new))]));
+        let row = doc("a", &[("collision", int(old)), ("m", map)]);
+        let out = execute_rows_in(vec![Stage::ReplaceWith { expression: field("m"), mode: ReplaceMode::Keep }], vec![row], Unrecorded::Refuse).unwrap();
+        prop_assert_eq!(&out[0].fields["collision"], &int(old));
+        prop_assert_eq!(&out[0].fields["added"], &int(new));
+    }
+}
+
+#[test]
+fn observed_nearest_cosine_distances_match_exact_typed_results() {
+    let rows = vec![
+        doc("a", &[("vec", Value::Vector(vec![2.0, 1.0]))]),
+        doc("b", &[("vec", Value::Vector(vec![3.0, 2.0]))]),
+        doc("c", &[("vec", Value::Vector(vec![2.0, 4.0]))]),
+    ];
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let out = execute_rows_in(
+            vec![Stage::FindNearest {
+                expression: field("vec"),
+                query: vec![1.0, 2.0],
+                measure: DistanceMeasure::Cosine,
+                limit: 3,
+                distance_field: Some(alias("dist")),
+            }],
+            rows.clone(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(names(&out), ["c", "b", "a"]);
+        let distances: Vec<f64> = out
+            .iter()
+            .map(|row| match row.fields["dist"] {
+                Value::Double(x) => x,
+                _ => panic!("distance type"),
+            })
+            .collect();
+        assert_eq!(
+            distances,
+            [0.0, 0.131_756_857_875_540_7, 0.199_999_999_999_999_96]
+        );
+    }
+}
+
+#[test]
+fn nearest_observed_dimension_mismatch_is_empty_and_dot_ranks_descending() {
+    let rows = vec![
+        doc("a", &[("vec", Value::Vector(vec![2.0, 1.0]))]),
+        doc("b", &[("vec", Value::Vector(vec![3.0, 2.0]))]),
+        doc("c", &[("vec", Value::Vector(vec![2.0, 4.0]))]),
+    ];
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let stage = |query, measure| Stage::FindNearest {
+            expression: field("vec"),
+            query,
+            measure,
+            limit: 3,
+            distance_field: Some(alias("dist")),
+        };
+        let mismatch = execute_rows_in(
+            vec![stage(vec![1.0, 2.0, 3.0], DistanceMeasure::Euclidean)],
+            rows.clone(),
+            policy,
+        );
+        assert!(mismatch.is_ok());
+        assert!(mismatch.unwrap().is_empty());
+        let out = execute_rows_in(
+            vec![stage(vec![1.0, 2.0], DistanceMeasure::DotProduct)],
+            rows.clone(),
+            policy,
+        )
+        .unwrap();
+        assert_eq!(names(&out), ["c", "b", "a"]);
+        assert_eq!(
+            out.iter()
+                .map(|r| r.fields["dist"].clone())
+                .collect::<Vec<_>>(),
+            [Value::Double(10.0), Value::Double(7.0), Value::Double(4.0)]
+        );
+        assert_eq!(out[0].path, rows[2].path);
+    }
+}
+
+#[test]
+fn nearest_zero_and_overflow_distances_are_unobserved() {
+    assert_eq!(
+        pipeline_vector_distance(&[0.0, 0.0], &[1.0, 2.0], DistanceMeasure::Cosine),
+        None
+    );
+    assert_eq!(
+        pipeline_vector_distance(&[1e200, 1e200], &[1e200, 1e200], DistanceMeasure::Cosine),
+        None
+    );
+    assert_eq!(
+        pipeline_vector_distance(
+            &[1e-200, 1e-200],
+            &[1e-200, 1e-200],
+            DistanceMeasure::Cosine
+        ),
+        None
+    );
 }

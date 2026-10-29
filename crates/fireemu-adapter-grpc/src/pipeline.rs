@@ -13,7 +13,7 @@ use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::pipeline::{canonicalize, Arg, PipelineAst, PipelineError, StageSpec};
 use fireemu_core_firestore::pipeline_exec::{
-    self, Arity, Expr, ExprError, Placement, Stage, Unrecorded,
+    self, Arity, Expr, ExprError, Placement, ReplaceMode, Stage, Unrecorded,
 };
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
@@ -432,6 +432,7 @@ struct Input<'a> {
     all_descendants: bool,
     /// The documents a `documents` input names, as resource names; nothing is scanned then.
     documents: Option<Vec<String>>,
+    database: bool,
 }
 
 /// The input of a pipeline: `collection`, `collection_group` or `documents`.
@@ -445,6 +446,14 @@ fn pipeline_input<'a>(
     );
     let pipeline = structured_pipeline(req)?;
     match pipeline.stages.first().map(|stage| stage.name.as_str()) {
+        Some("database") => Ok(Input {
+            pipeline,
+            query_parent: root,
+            collection_id: String::new(),
+            all_descendants: false,
+            documents: None,
+            database: true,
+        }),
         Some("collection_group") => {
             let stage = &pipeline.stages[0];
             // The ancestor is accepted and ignored, whatever document it names (FS-ENT-ORACLE
@@ -480,6 +489,7 @@ fn pipeline_input<'a>(
                 collection_id: id.clone(),
                 all_descendants: true,
                 documents: None,
+                database: false,
             })
         }
         Some("documents") => {
@@ -508,6 +518,7 @@ fn pipeline_input<'a>(
                 collection_id: String::new(),
                 all_descendants: false,
                 documents: Some(names),
+                database: false,
             })
         }
         _ => {
@@ -518,6 +529,7 @@ fn pipeline_input<'a>(
                 collection_id,
                 all_descendants: false,
                 documents: None,
+                database: false,
             })
         }
     }
@@ -838,6 +850,8 @@ pub struct CompiledExecution {
     /// The documents a `documents` input names (resource names); the rows are those that exist
     /// and `input` is not used.
     pub documents: Option<Vec<String>>,
+    /// Read all live documents in the request database at one snapshot.
+    pub database: bool,
     /// The stages the executor runs over the input rows.
     pub stages: Vec<Stage>,
     /// A local lexical search before the existing streaming suffix.
@@ -904,6 +918,7 @@ pub fn compile_pipeline_in_order(
         collection_id,
         all_descendants,
         documents,
+        database,
     } = pipeline_input(req, parent)?;
     if unrecorded == Unrecorded::Refuse {
         if let Some(error) = unrecorded_input_path(&pipeline.stages[0]) {
@@ -1038,6 +1053,92 @@ pub fn compile_pipeline_in_order(
                     only_filters_so_far = false;
                     stages.push(decode_unnest(stage, unrecorded)?);
                 }
+                "replace_with" => {
+                    only_filters_so_far = false;
+                    let expression = decode_operand(&stage.args[0], unrecorded)?;
+                    let mode = match stage.args.get(1).and_then(|v| v.value_type.as_ref()) {
+                        None => ReplaceMode::Full,
+                        Some(pb::value::ValueType::StringValue(m)) if m == "full_replace" => {
+                            ReplaceMode::Full
+                        }
+                        Some(pb::value::ValueType::StringValue(m))
+                            if m == "merge_overwrite_existing" =>
+                        {
+                            ReplaceMode::Overwrite
+                        }
+                        Some(pb::value::ValueType::StringValue(m))
+                            if m == "merge_keep_existing" =>
+                        {
+                            ReplaceMode::Keep
+                        }
+                        _ => {
+                            return Err(Status::unimplemented(
+                                "replace_with mode is not observed locally",
+                            ))
+                        }
+                    };
+                    stages.push(Stage::ReplaceWith { expression, mode });
+                }
+                "find_nearest" => {
+                    only_filters_so_far = false;
+                    let expression = decode_operand(&stage.args[0], unrecorded)?;
+                    let fireemu_core_firestore::value::Value::Vector(query) =
+                        crate::decode::decode_value(&stage.args[1])
+                            .map_err(|error| Status::invalid_argument(error.to_string()))?
+                    else {
+                        return Err(Status::unimplemented(
+                            "this nearest vector form is not observed locally",
+                        ));
+                    };
+                    let measure = match stage.args[2].value_type.as_ref() {
+                        Some(pb::value::ValueType::StringValue(name)) if name == "euclidean" => {
+                            fireemu_core_firestore::query::DistanceMeasure::Euclidean
+                        }
+                        Some(pb::value::ValueType::StringValue(name)) if name == "cosine" => {
+                            fireemu_core_firestore::query::DistanceMeasure::Cosine
+                        }
+                        Some(pb::value::ValueType::StringValue(name)) if name == "dot_product" => {
+                            fireemu_core_firestore::query::DistanceMeasure::DotProduct
+                        }
+                        _ => {
+                            return Err(Status::unimplemented(
+                                "this nearest measure is unsupported locally",
+                            ))
+                        }
+                    };
+                    let Some(pb::value::ValueType::IntegerValue(limit)) = stage
+                        .options
+                        .get("limit")
+                        .and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::unimplemented(
+                            "nearest without an observed limit is unsupported locally",
+                        ));
+                    };
+                    let limit = usize::try_from(*limit).map_err(|_| {
+                        Status::unimplemented("nearest limit is unsupported locally")
+                    })?;
+                    let Some(pb::value::ValueType::FieldReferenceValue(field)) = stage
+                        .options
+                        .get("distance_field")
+                        .and_then(|v| v.value_type.as_ref())
+                    else {
+                        return Err(Status::unimplemented(
+                            "nearest without an observed distance field is unsupported locally",
+                        ));
+                    };
+                    let distance_field = Some(
+                        FieldPath::parse(field)
+                            .map_err(|e| Status::invalid_argument(e.to_string()))?,
+                    );
+                    stages.push(Stage::FindNearest {
+                        expression,
+                        query,
+                        measure,
+                        limit,
+                        distance_field,
+                    });
+                }
                 "offset" => {
                     only_filters_so_far = false;
                     let offset = count_argument(stage)?;
@@ -1162,6 +1263,11 @@ pub fn compile_pipeline_in_order(
     } else {
         projection
     };
+    if database && (search.is_some() || !unions.is_empty()) {
+        return Err(Status::unimplemented(
+            "database input with search or union is unsupported locally",
+        ));
+    }
     let mut input = collection_query(query_parent, collection_id, pushdown, projection, 0, None);
     if all_descendants {
         if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
@@ -1177,6 +1283,7 @@ pub fn compile_pipeline_in_order(
     Ok(CompiledExecution {
         input,
         documents,
+        database,
         stages,
         search,
         unions,
@@ -3615,6 +3722,24 @@ pub fn documents_input(
             crate::local::BatchGetItem::Missing(_) => None,
         })
         .collect())
+}
+
+/// Reads every live document of the requested database from one latest snapshot.
+pub fn database_input(
+    local: &crate::local::LocalBackend,
+    parent: &Parent,
+) -> Result<Vec<pb::RunQueryResponse>, Status> {
+    local.with_snapshot(parent, |db, _, read_time, _| {
+        let read_time = Some(crate::encode::encode_instant(read_time));
+        db.documents()
+            .iter()
+            .map(|document| pb::RunQueryResponse {
+                document: Some(crate::encode::encode_document(document)),
+                read_time,
+                ..Default::default()
+            })
+            .collect()
+    })
 }
 
 /// The CRC-32 (IEEE, as zlib computes it) of `bytes`.

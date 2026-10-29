@@ -7117,7 +7117,9 @@ impl<'a> PreparedVectorDistance<'a> {
     }
 }
 
-fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
+/// Computes a finite distance for vectors with equal dimensions.
+#[must_use]
+pub fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) -> Option<f64> {
     if vector.len() != query.len() {
         return None;
     }

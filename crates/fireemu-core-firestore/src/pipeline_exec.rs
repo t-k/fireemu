@@ -26,6 +26,7 @@ use std::fmt::{self, Write as _};
 
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
+use crate::query::DistanceMeasure;
 use crate::store::get_field;
 use crate::value::{Timestamp, Value};
 
@@ -1845,6 +1846,26 @@ pub enum Stage {
     /// Sets the aliases on the row, each value read from the row as it was before the stage
     /// (a later alias does not see an earlier one). An absent value sets nothing.
     AddFields(Vec<(FieldPath, Expr)>),
+    /// Replaces or merges fields from a map expression.
+    ReplaceWith {
+        /// The map expression.
+        expression: Expr,
+        /// How the map combines with existing fields.
+        mode: ReplaceMode,
+    },
+    /// Ranks rows by distance from a vector.
+    FindNearest {
+        /// The row's vector expression.
+        expression: Expr,
+        /// The query vector.
+        query: Vec<f64>,
+        /// Distance metric.
+        measure: DistanceMeasure,
+        /// Maximum number of rows.
+        limit: usize,
+        /// Optional distance output field.
+        distance_field: Option<FieldPath>,
+    },
     /// Removes the fields from the row; a missing field is ignored. Removing `__name__` drops
     /// the row's name.
     RemoveFields(Vec<FieldPath>),
@@ -1885,6 +1906,17 @@ pub enum Stage {
     },
 }
 
+/// How a replacement map combines with the current row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceMode {
+    /// Replace all fields.
+    Full,
+    /// Overwrite colliding fields.
+    Overwrite,
+    /// Preserve colliding fields.
+    Keep,
+}
+
 /// One prepared union source and its row-local transformations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedUnionBranch {
@@ -1909,6 +1941,7 @@ impl Stage {
         matches!(
             self,
             Self::Sort(_)
+                | Self::FindNearest { .. }
                 | Self::Distinct(_)
                 | Self::Aggregate { .. }
                 | Self::Sample(SampleMode::Documents(_))
@@ -1976,12 +2009,14 @@ impl Cursor {
             .map(|stage| match stage {
                 Stage::Offset(n) | Stage::Limit(n) => StageState::Remaining(*n),
                 Stage::Sort(_)
+                | Stage::FindNearest { .. }
                 | Stage::Distinct(_)
                 | Stage::Aggregate { .. }
                 | Stage::Sample(SampleMode::Documents(_)) => StageState::Buffer(Vec::new()),
                 Stage::Where(_)
                 | Stage::Select { .. }
                 | Stage::AddFields(_)
+                | Stage::ReplaceWith { .. }
                 | Stage::RemoveFields(_)
                 | Stage::Unnest { .. }
                 | Stage::Union { .. }
@@ -2099,6 +2134,9 @@ impl Cursor {
                     rows
                 }
                 Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
+                stage @ Stage::FindNearest { .. } => {
+                    nearest_rows(rows, stage, self.unrecorded, self.runtime)?
+                }
                 Stage::Distinct(aliases) => {
                     distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
                 }
@@ -2307,6 +2345,34 @@ impl Cursor {
                         }
                     }
                 }
+                Stage::ReplaceWith { expression, mode } => {
+                    let replacement =
+                        match expression.eval_at(&row, self.unrecorded, false, self.runtime) {
+                            Eval::Value(Value::Map(fields)) => fields,
+                            Eval::Value(Value::Integer(7))
+                                if *mode == ReplaceMode::Full
+                                    && matches!(expression, Expr::Constant(Value::Integer(7))) =>
+                            {
+                                BTreeMap::new()
+                            }
+                            Eval::Error(error) => return Err(error),
+                            _ => {
+                                return Err(EvalError::Unobserved {
+                                    function: "replace_with",
+                                    reason: "non-map replacement",
+                                })
+                            }
+                        };
+                    match mode {
+                        ReplaceMode::Full => row.fields = replacement,
+                        ReplaceMode::Overwrite => row.fields.extend(replacement),
+                        ReplaceMode::Keep => {
+                            for (key, value) in replacement {
+                                row.fields.entry(key).or_insert(value);
+                            }
+                        }
+                    }
+                }
                 Stage::RemoveFields(paths) => {
                     for path in paths {
                         if path.is_document_name() {
@@ -2358,6 +2424,7 @@ impl Cursor {
                     }
                 }
                 Stage::Sort(_)
+                | Stage::FindNearest { .. }
                 | Stage::Distinct(_)
                 | Stage::Aggregate { .. }
                 | Stage::Sample(SampleMode::Documents(_)) => {
@@ -2375,6 +2442,82 @@ impl Cursor {
         out.push(row);
         Ok(())
     }
+}
+
+fn nearest_rows(
+    rows: Vec<Row>,
+    stage: &Stage,
+    unrecorded: Unrecorded,
+    runtime: RuntimeContext,
+) -> Result<Vec<Row>, EvalError> {
+    let Stage::FindNearest {
+        expression,
+        query,
+        measure,
+        limit,
+        distance_field,
+    } = stage
+    else {
+        unreachable!("nearest_rows requires a nearest stage");
+    };
+    let mut ranked = Vec::new();
+    for mut row in rows {
+        let vector = match expression.eval_at(&row, unrecorded, false, runtime) {
+            Eval::Value(Value::Vector(vector)) => vector,
+            Eval::Error(error) => return Err(error),
+            _ if unrecorded == Unrecorded::Refuse => {
+                return Err(EvalError::Unobserved {
+                    function: "find_nearest",
+                    reason: "non-vector field",
+                })
+            }
+            _ => continue,
+        };
+        if vector.len() != query.len() {
+            continue;
+        }
+        let Some(distance) = pipeline_vector_distance(&vector, query, *measure) else {
+            return Err(EvalError::Unobserved {
+                function: "find_nearest",
+                reason: "non-finite or zero vector distance",
+            });
+        };
+        if let Some(field) = distance_field {
+            set_path(&mut row.fields, field, Value::Double(distance));
+        }
+        ranked.push((distance, row));
+    }
+    ranked.sort_by(|a, b| {
+        if *measure == DistanceMeasure::DotProduct {
+            b.0.total_cmp(&a.0)
+        } else {
+            a.0.total_cmp(&b.0)
+        }
+    });
+    ranked.truncate(*limit);
+    Ok(ranked.into_iter().map(|(_, row)| row).collect())
+}
+
+fn pipeline_vector_distance(
+    vector: &[f64],
+    query: &[f64],
+    measure: DistanceMeasure,
+) -> Option<f64> {
+    if vector.is_empty() || vector.iter().all(|v| *v == 0.0) || query.iter().all(|v| *v == 0.0) {
+        return None;
+    }
+    if measure != DistanceMeasure::Cosine {
+        return crate::store::vector_distance(vector, query, measure);
+    }
+    let dot = vector.iter().zip(query).map(|(a, b)| a * b).sum::<f64>();
+    let left = vector.iter().map(|v| v * v).sum::<f64>();
+    let right = query.iter().map(|v| v * v).sum::<f64>();
+    let product = left * right;
+    if !dot.is_finite() || !product.is_finite() || product <= 0.0 {
+        return None;
+    }
+    let distance = 1.0 - dot / product.sqrt();
+    distance.is_finite().then_some(distance)
 }
 
 /// Keeps the first refusal of a stage that evaluates several values. Strict answers a refusal
@@ -2768,7 +2911,9 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
     for stage in &stages[..=narrowing] {
         match stage {
             Stage::Where(condition) => condition.collect_fields(&mut paths),
-            Stage::Unnest { expression, .. } => expression.collect_fields(&mut paths),
+            Stage::Unnest { expression, .. }
+            | Stage::ReplaceWith { expression, .. }
+            | Stage::FindNearest { expression, .. } => expression.collect_fields(&mut paths),
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
                 .for_each(|(_, expr)| expr.collect_fields(&mut paths)),

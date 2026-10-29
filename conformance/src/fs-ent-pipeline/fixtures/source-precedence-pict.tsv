@@ -1,0 +1,11 @@
+identity	collection	missing	seed	observation	budget
+exact	empty	absent	ok	known	full
+wrong	empty	absent	ok	known	full
+exact	occupied	absent	ok	known	full
+exact	paginated	absent	ok	known	full
+exact	empty	present	ok	known	full
+exact	empty	absent	unknown	known	full
+exact	empty	absent	ok	unknown	full
+exact	empty	absent	ok	known	low
+wrong	occupied	present	unknown	unknown	low
+wrong	paginated	present	unknown	unknown	low

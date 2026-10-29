@@ -366,6 +366,36 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
+    array_access_function(
+        "if_absent",
+        Arity::Exact(2),
+        "if_absent(value: any?, replacement: any?): any?",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "if_null",
+        Arity::Exact(2),
+        "if_null(left: any?, right: any?): any?",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "if_error",
+        Arity::Exact(2),
+        "if_error(try: any?, catch: any?): any?",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "conditional",
+        Arity::Exact(3),
+        "conditional(condition: boolean?, true_case: any?, false_case: any?): any?",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "switch_on",
+        Arity::AtLeast(2),
+        "switch_on(x: any*): any?",
+        eval_control_fallback,
+    ),
     array_access_function("array_reverse", Arity::Exact(1), "", eval_array_reverse),
     array_access_function(
         "array_concat",
@@ -761,6 +791,12 @@ impl Expr {
                 .map_or(Eval::Absent, Eval::Value),
             Self::Constant(value) => Eval::Value(value.clone()),
             Self::Call { function, args } => {
+                if matches!(
+                    function.name,
+                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                ) {
+                    return eval_control(function.name, args, row, unrecorded, runtime);
+                }
                 if unrecorded == Unrecorded::Refuse
                     && function.name == "array_index_of"
                     && args
@@ -784,6 +820,66 @@ impl Expr {
                 (function.eval)(&args, cx)
             }
         }
+    }
+}
+
+// The table requires an evaluator, but control expressions are evaluated lazily in Expr.
+fn eval_control_fallback(_args: &[Eval], _cx: Context) -> Eval {
+    Eval::Error(EvalError::Unobserved {
+        function: "control",
+        reason: "control requires lazy expression evaluation",
+    })
+}
+
+fn eval_control(
+    name: &'static str,
+    args: &[Expr],
+    row: &Row,
+    policy: Unrecorded,
+    runtime: RuntimeContext,
+) -> Eval {
+    let evaluate = |expr: &Expr| expr.eval_at(row, policy, false, runtime);
+    let unknown = || {
+        Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "unrecorded control condition or default",
+        })
+    };
+    match name {
+        "if_absent" | "if_null" | "if_error" => {
+            let first = evaluate(&args[0]);
+            let use_fallback = match (&first, name) {
+                (Eval::Error(EvalError::Unobserved { .. }), _) => return first,
+                (Eval::Absent, "if_absent" | "if_null")
+                | (Eval::Value(Value::Null), "if_null")
+                | (Eval::Error(_), "if_error") => true,
+                _ => false,
+            };
+            if use_fallback {
+                evaluate(&args[1])
+            } else {
+                first
+            }
+        }
+        "conditional" => match evaluate(&args[0]) {
+            Eval::Value(Value::Boolean(true)) => evaluate(&args[1]),
+            Eval::Value(Value::Boolean(false)) => evaluate(&args[2]),
+            Eval::Error(error) => Eval::Error(error),
+            _ => unknown(),
+        },
+        "switch_on" => {
+            let mut chunks = args.chunks_exact(2);
+            for pair in &mut chunks {
+                match evaluate(&pair[0]) {
+                    Eval::Value(Value::Boolean(true)) => return evaluate(&pair[1]),
+                    Eval::Value(Value::Boolean(false)) => {}
+                    Eval::Error(error) => return Eval::Error(error),
+                    _ => return unknown(),
+                }
+            }
+            chunks.remainder().first().map_or_else(unknown, evaluate)
+        }
+        _ => unreachable!("control name checked"),
     }
 }
 

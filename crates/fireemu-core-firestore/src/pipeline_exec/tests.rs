@@ -62,6 +62,11 @@ fn table_lists_exactly_the_recorded_functions() {
             "greater_than",
             "greater_than_or_equal",
             "array",
+            "if_absent",
+            "if_null",
+            "if_error",
+            "conditional",
+            "switch_on",
             "array_reverse",
             "array_concat",
             "array_length",
@@ -1430,5 +1435,165 @@ proptest! {
         for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
             prop_assert_eq!(expr.eval_in(&row("c/a", &[]), policy), Eval::Value(Value::Array(want.clone())));
         }
+    }
+}
+
+#[test]
+fn recorded_lazy_control_preserves_absence_null_and_selected_branches() {
+    let document = row(
+        "c/a",
+        &[
+            ("present", s("ready")),
+            ("null", Value::Null),
+            ("empty", Value::Array(vec![])),
+        ],
+    );
+    let lit = |v| Expr::Constant(v);
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let cases = vec![
+            (
+                "if_absent",
+                vec![field("missing"), lit(s("fallback"))],
+                Eval::Value(s("fallback")),
+            ),
+            (
+                "if_absent",
+                vec![field("present"), lit(s("fallback"))],
+                Eval::Value(s("ready")),
+            ),
+            (
+                "if_null",
+                vec![field("null"), lit(s("fallback"))],
+                Eval::Value(s("fallback")),
+            ),
+            (
+                "if_null",
+                vec![field("missing"), lit(s("fallback"))],
+                Eval::Value(s("fallback")),
+            ),
+            (
+                "conditional",
+                vec![lit(Value::Boolean(true)), lit(s("yes")), lit(s("no"))],
+                Eval::Value(s("yes")),
+            ),
+            (
+                "conditional",
+                vec![lit(Value::Boolean(false)), lit(s("yes")), lit(s("no"))],
+                Eval::Value(s("no")),
+            ),
+            (
+                "switch_on",
+                vec![lit(Value::Boolean(true)), lit(s("yes")), lit(s("no"))],
+                Eval::Value(s("yes")),
+            ),
+            (
+                "switch_on",
+                vec![lit(Value::Boolean(false)), lit(s("yes")), lit(s("no"))],
+                Eval::Value(s("no")),
+            ),
+            (
+                "if_error",
+                vec![
+                    call("array_get", vec![field("empty"), lit(Value::Integer(0))]),
+                    lit(s("fallback")),
+                ],
+                Eval::Absent,
+            ),
+        ];
+        for (name, args, expected) in cases {
+            let expression =
+                Expr::call(name, args, Placement::Value).expect("recorded function registered");
+            assert_eq!(expression.eval_in(&document, policy), expected, "{name}");
+        }
+    }
+}
+
+#[test]
+fn lazy_control_does_not_evaluate_unused_branches_or_mask_unobserved() {
+    let document = row("c/a", &[]);
+    let lit = |v| Expr::Constant(v);
+    let error = || {
+        call(
+            "divide",
+            vec![lit(Value::Integer(1)), lit(Value::Integer(0))],
+        )
+    };
+    for policy in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        let selected = call(
+            "conditional",
+            vec![lit(Value::Boolean(true)), lit(s("ok")), error()],
+        );
+        assert_eq!(selected.eval_in(&document, policy), Eval::Value(s("ok")));
+        let skip = call("if_absent", vec![lit(s("ok")), error()]);
+        assert_eq!(skip.eval_in(&document, policy), Eval::Value(s("ok")));
+        let null_kept = call("if_absent", vec![lit(Value::Null), error()]);
+        assert_eq!(
+            null_kept.eval_in(&document, policy),
+            Eval::Value(Value::Null)
+        );
+        let switch = call(
+            "switch_on",
+            vec![lit(Value::Boolean(true)), lit(s("ok")), error()],
+        );
+        assert_eq!(switch.eval_in(&document, policy), Eval::Value(s("ok")));
+
+        let caught = call("if_error", vec![error(), lit(s("caught"))]);
+        assert_eq!(caught.eval_in(&document, policy), Eval::Value(s("caught")));
+    }
+    let unrecorded = call("string_index_of", vec![lit(s("éx")), lit(s("x"))]);
+    let no_mask = call("if_error", vec![unrecorded, lit(s("wrong"))]);
+    assert!(unobserved(&no_mask.eval_in(&document, Unrecorded::Refuse)));
+}
+
+#[test]
+fn lazy_control_seeded_pict_rows_execute() {
+    let Ok(path) = std::env::var("LAZY_CONTROL_PICT") else {
+        return;
+    };
+    let data = std::fs::read_to_string(path).unwrap();
+    let document = row("c/a", &[]);
+    for line in data.lines().skip(1) {
+        let cols: Vec<_> = line.split('\t').collect();
+        assert_eq!(cols.len(), 3, "{line}");
+        let (name, profile, branch) = (cols[0], cols[1], cols[2]);
+        let selected = branch == "selected";
+        let lit = |v| Expr::Constant(v);
+        let args = match name {
+            "if_absent" | "if_null" => vec![
+                if selected {
+                    lit(s("first"))
+                } else {
+                    field("missing")
+                },
+                lit(s("fallback")),
+            ],
+            "if_error" => vec![
+                if selected {
+                    lit(s("first"))
+                } else {
+                    call(
+                        "divide",
+                        vec![lit(Value::Integer(1)), lit(Value::Integer(0))],
+                    )
+                },
+                lit(s("fallback")),
+            ],
+            "conditional" | "switch_on" => vec![
+                lit(Value::Boolean(selected)),
+                lit(s("first")),
+                lit(s("fallback")),
+            ],
+            _ => panic!("unexpected PICT row {line}"),
+        };
+        let policy = if profile == "strict" {
+            Unrecorded::Refuse
+        } else {
+            Unrecorded::OfficialEmulator
+        };
+        assert_eq!(
+            call(name, args).eval_in(&document, policy),
+            Eval::Value(s(if selected { "first" } else { "fallback" })),
+            "{line}"
+        );
     }
 }

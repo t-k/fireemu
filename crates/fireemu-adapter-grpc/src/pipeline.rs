@@ -1624,8 +1624,16 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
     function.args.iter().find_map(map_key_error)
 }
 
-#[allow(clippy::too_many_lines)]
 fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
+    decode_operand_tree_in(value, unrecorded, false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn decode_operand_tree_in(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+    defer_constant: bool,
+) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         None => Err(own_text(
@@ -1720,7 +1728,15 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                             )),
                         }
                     }
-                    _ => decode_operand_tree(arg, unrecorded),
+                    _ => decode_operand_tree_in(
+                        arg,
+                        unrecorded,
+                        defer_constant
+                            || matches!(
+                                function.name.as_str(),
+                                "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                            ),
+                    ),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             // `is_type` takes its type name as a literal, checked before any row is read
@@ -1742,7 +1758,7 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
                 .map_err(|e| expr_status(e, unrecorded))?;
             // Under strict a call of constants that fails is refused before any row is read,
             // so it never falls through to an empty answer (ruling of 2026-10-21, PX1d r6 (d)).
-            if unrecorded == Unrecorded::Refuse {
+            if unrecorded == Unrecorded::Refuse && !defer_constant {
                 if let Some(error) = constant_call_error(&expr) {
                     return Err(error);
                 }
@@ -4000,6 +4016,36 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_control_keeps_standalone_constant_errors_and_nested_arity_checks() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let call = |name: &str, args: Vec<pb::Value>| {
+            value(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let bad = call(
+            "array_length",
+            vec![value(V::StringValue("bad".to_owned()))],
+        );
+        assert!(decode_operand_tree(&bad, Unrecorded::Refuse).is_err());
+        let invalid_arity = call("array_length", vec![]);
+        let expression = call(
+            "conditional",
+            vec![
+                value(V::BooleanValue(true)),
+                value(V::StringValue("ok".to_owned())),
+                invalid_arity,
+            ],
+        );
+        assert!(decode_operand_tree(&expression, Unrecorded::Refuse).is_err());
+    }
 
     #[test]
     fn count_argument_retains_the_full_positive_i64_range() {

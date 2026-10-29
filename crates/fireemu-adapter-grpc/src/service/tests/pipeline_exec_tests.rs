@@ -1510,3 +1510,126 @@ async fn array_index_of_all_returns_typed_positions_in_both_profiles() {
         assert_eq!(rows[0]["out"], "Array([Integer(0), Integer(2)])");
     }
 }
+
+#[tokio::test]
+async fn lazy_control_preserves_missing_output_in_both_profiles() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(
+            Some(value(V::ArrayValue(pb::ArrayValue { values: vec![] }))),
+            None,
+        )],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let function = |name: &str, args: Vec<pb::Value>| {
+        value(V::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        }))
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        let empty_get = function("array_get", vec![field_ref("f"), value(V::IntegerValue(0))]);
+        let absent = function(
+            "if_error",
+            vec![empty_get, value(V::StringValue("fallback".to_owned()))],
+        );
+        let null_fallback = function(
+            "if_null",
+            vec![
+                field_ref("missing"),
+                value(V::StringValue("fallback".to_owned())),
+            ],
+        );
+        structured.pipeline.as_mut().unwrap().stages.push(stage(
+            "select",
+            value(V::MapValue(pb::MapValue {
+                fields: [
+                    ("out".to_owned(), absent),
+                    ("null_out".to_owned(), null_fallback),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        ));
+        let rows = executor(&service, request).await;
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].contains_key("out"));
+        assert_eq!(rows[0]["null_out"], "String(\"fallback\")");
+    }
+}
+
+#[tokio::test]
+async fn lazy_control_defers_constant_child_errors_in_both_profiles() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::IntegerValue(1))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let string = |s: &str| value(V::StringValue(s.to_owned()));
+    let function = |name: &str, args: Vec<pb::Value>| {
+        value(V::FunctionValue(pb::Function {
+            name: name.to_owned(),
+            args,
+            ..Default::default()
+        }))
+    };
+    for policy in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            request.pipeline_type.as_mut()
+        else {
+            unreachable!()
+        };
+        let bad = || function("array_length", vec![string("bad")]);
+        let skip = function(
+            "conditional",
+            vec![value(V::BooleanValue(true)), string("ok"), bad()],
+        );
+        let catch = function("if_error", vec![bad(), string("caught")]);
+        structured.pipeline.as_mut().unwrap().stages.push(stage(
+            "select",
+            value(V::MapValue(pb::MapValue {
+                fields: [("skip".to_owned(), skip), ("catch".to_owned(), catch)]
+                    .into_iter()
+                    .collect(),
+            })),
+        ));
+        let rows = executor(&service, request).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["skip"], "String(\"ok\")");
+        assert_eq!(rows[0]["catch"], "String(\"caught\")");
+    }
+}

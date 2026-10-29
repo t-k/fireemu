@@ -3738,7 +3738,7 @@ pub fn documents_input_selected(
         guard,
     )?;
     let read_time = Some(crate::encode::encode_instant(outcome.read_time));
-    Ok(outcome
+    let mut responses: Vec<_> = outcome
         .items
         .iter()
         .filter_map(|item| match item {
@@ -3749,7 +3749,14 @@ pub fn documents_input_selected(
             }),
             crate::local::BatchGetItem::Missing(_) => None,
         })
-        .collect())
+        .collect();
+    if responses.is_empty() {
+        responses.push(pb::RunQueryResponse {
+            read_time,
+            ..Default::default()
+        });
+    }
+    Ok(responses)
 }
 
 /// Reads every live document of the requested database from one latest snapshot.

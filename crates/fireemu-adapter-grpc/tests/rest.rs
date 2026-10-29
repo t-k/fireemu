@@ -7134,6 +7134,31 @@ fn rest_execute_pipeline_executes_the_finite_subset_on_enterprise() {
     }
 }
 
+#[test]
+fn rest_documents_missing_preserves_snapshot_time_without_a_row() {
+    for strict in [true, false] {
+        let s = enterprise_state(strict, None);
+        seed_nest(&s);
+        let run = |names: &[&str]| {
+            call(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                pipeline_body(
+                    &json!([{ "name": "documents", "args": names.iter().map(|name| json!({"referenceValue": name})).collect::<Vec<_>>() }]),
+                ),
+            )
+        };
+        let (status, body) = run(&["/nest/missing"]);
+        assert_eq!(without_execution_time(status, body), (200, json!([{}])));
+        let (status, body) = run(&["/nest/missing", "/nest/a"]);
+        let (status, body) = without_execution_time(status, body);
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["results"].as_array().unwrap().len(), 1);
+    }
+}
+
 /// The refusals keep their gRPC codes inside the stream array: unknown functions and
 /// stages `UNIMPLEMENTED`, malformed pipelines `INVALID_ARGUMENT`, a run-time refusal under
 /// strict UNIMPLEMENTED; a refusal answers no partial results over REST.

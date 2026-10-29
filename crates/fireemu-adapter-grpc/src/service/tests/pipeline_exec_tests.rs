@@ -1882,3 +1882,103 @@ fn shared_compiler_still_refuses_transaction_selectors() {
     .unwrap_err();
     assert_eq!(status.code(), tonic::Code::Unimplemented);
 }
+
+#[tokio::test]
+async fn documents_snapshot_time_seeded_matrix() {
+    let rows = [
+        ("missing", "strong", true),
+        ("missing", "strong", false),
+        ("missing", "readTime", true),
+        ("missing", "transaction", true),
+        ("found", "strong", true),
+        ("mixed", "strong", true),
+        ("found", "readTime", false),
+        ("mixed", "transaction", false),
+        ("found", "transaction", false),
+        ("mixed", "readTime", true),
+    ];
+    for (layout, selector, strict) in rows {
+        let backend = test_backend();
+        let case = Case {
+            docs: vec![(Some(value(pb::value::ValueType::IntegerValue(1))), None)],
+            m_shapes: vec![],
+            literal: None,
+            select: None,
+            offset: None,
+            limit: None,
+        };
+        seed(&backend, &case);
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        if !strict {
+            gateway.ctx.policy = fireemu_core_firestore::index::IndexValidationPolicy::Emulator;
+        }
+        let service = GatewayService::local(gateway, backend.clone());
+        let read_time = stored_document(&service, &format!("{PARENT}/items/000"))
+            .await
+            .update_time
+            .unwrap();
+        let tx = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: "projects/demo-app/databases/(default)".into(),
+                options: Some(pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadOnly(
+                        pb::transaction_options::ReadOnly::default(),
+                    )),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut request = pipeline(&case, "");
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+            ref mut structured,
+        )) = request.pipeline_type
+        else {
+            panic!()
+        };
+        let refs: &[&str] = match layout {
+            "missing" => &["/items/missing"],
+            "found" => &["/items/000"],
+            _ => &["/items/missing", "/items/000"],
+        };
+        structured.pipeline.as_mut().unwrap().stages[0] = pb::pipeline::Stage {
+            name: "documents".into(),
+            args: refs
+                .iter()
+                .map(|p| value(pb::value::ValueType::ReferenceValue((*p).into())))
+                .collect(),
+            ..Default::default()
+        };
+        request.consistency_selector = match selector {
+            "readTime" => Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                read_time,
+            )),
+            "transaction" => {
+                Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(tx))
+            }
+            _ => None,
+        };
+        let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        let response = stream.next().await.unwrap().unwrap();
+        assert_eq!(
+            response.results.len(),
+            usize::from(layout != "missing"),
+            "{layout}/{selector}/{strict}"
+        );
+        assert!(
+            response.execution_time.is_some(),
+            "{layout}/{selector}/{strict}"
+        );
+        if selector == "readTime" {
+            assert_eq!(
+                response.execution_time,
+                Some(read_time),
+                "{layout}/{strict}"
+            );
+        }
+        assert!(stream.next().await.is_none());
+    }
+}

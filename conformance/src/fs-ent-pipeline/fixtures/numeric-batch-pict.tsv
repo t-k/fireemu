@@ -1,0 +1,6 @@
+identity	write	budget
+exact	ok	full
+wrong	ok	full
+exact	unknown	full
+exact	ok	low
+wrong	unknown	low

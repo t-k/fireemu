@@ -1558,9 +1558,10 @@ pub(crate) fn execute_correlated_scalar(
             Expr::CorrelatedScalar {
                 collection,
                 predicate,
+                filter,
                 variable,
                 field,
-            } => Some((collection, predicate, variable, field)),
+            } => Some((collection, predicate, filter, variable, field)),
             _ => None,
         })
         .collect();
@@ -1571,7 +1572,7 @@ pub(crate) fn execute_correlated_scalar(
     {
         return Err(Status::unimplemented("unsupported correlated select"));
     }
-    let (collection, predicate, variable, field) = specs[0];
+    let (collection, predicate, filter, variable, field) = specs[0];
     if variable != &binding.0 {
         return Err(Status::unimplemented("correlated variable is unbound"));
     }
@@ -1649,6 +1650,19 @@ pub(crate) fn execute_correlated_scalar(
             };
             if key != parent_value {
                 continue;
+            }
+            if let Some((filter_field, expected)) = filter {
+                let pipeline_exec::Eval::Value(Value::String(actual)) =
+                    Expr::Field(filter_field.clone())
+                        .eval_in_with_runtime(&child_row, unrecorded, runtime)
+                else {
+                    return Err(Status::unimplemented(
+                        "correlated filter type is unobserved",
+                    ));
+                };
+                if &actual != expected {
+                    continue;
+                }
             }
             if matched.is_some() {
                 return Err(Status::invalid_argument(SCALAR_MULTIPLE_RESULTS));
@@ -2060,8 +2074,10 @@ fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr
 #[allow(clippy::too_many_lines)]
 fn decode_correlated_scalar(nested: &pb::Pipeline) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
-    let [input, filter, select] = nested.stages.as_slice() else {
-        return Err(Status::unimplemented("unsupported scalar pipeline"));
+    let (input, filter, extra_filter, select) = match nested.stages.as_slice() {
+        [input, filter, select] => (input, filter, None, select),
+        [input, filter, extra_filter, select] => (input, filter, Some(extra_filter), select),
+        _ => return Err(Status::unimplemented("unsupported scalar pipeline")),
     };
     if input.name != "collection_group"
         || filter.name != "where"
@@ -2108,6 +2124,35 @@ fn decode_correlated_scalar(nested: &pb::Pipeline) -> Result<Expr, Status> {
     if variable_path.segments().len() != 1 {
         return Err(Status::unimplemented("unsupported scalar variable"));
     }
+    let extra_filter = if let Some(stage) = extra_filter {
+        if stage.name != "where" || !stage.options.is_empty() {
+            return Err(Status::unimplemented("unsupported scalar filter"));
+        }
+        let [pb::Value {
+            value_type: Some(V::FunctionValue(equal)),
+        }] = stage.args.as_slice()
+        else {
+            return Err(Status::unimplemented("unsupported scalar filter"));
+        };
+        if equal.name != "equal" || !equal.options.is_empty() {
+            return Err(Status::unimplemented("unsupported scalar filter"));
+        }
+        let [pb::Value {
+            value_type: Some(V::FieldReferenceValue(field)),
+        }, pb::Value {
+            value_type: Some(V::StringValue(expected)),
+        }] = equal.args.as_slice()
+        else {
+            return Err(Status::unimplemented("unsupported scalar filter"));
+        };
+        Some((
+            FieldPath::parse(field)
+                .map_err(|_| Status::unimplemented("unsupported scalar filter field"))?,
+            expected.clone(),
+        ))
+    } else {
+        None
+    };
     let [pb::Value {
         value_type: Some(V::MapValue(map)),
     }] = select.args.as_slice()
@@ -2134,6 +2179,7 @@ fn decode_correlated_scalar(nested: &pb::Pipeline) -> Result<Expr, Status> {
     Ok(Expr::CorrelatedScalar {
         collection: collection.clone(),
         predicate,
+        filter: extra_filter,
         variable: variable.clone(),
         field,
     })

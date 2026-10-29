@@ -86,6 +86,9 @@ pub(crate) fn validate_function_depth(request: &pb::ExecutePipelineRequest) -> R
     Ok(())
 }
 
+/// Production's scalar-subquery cardinality refusal.
+pub(crate) const SCALAR_MULTIPLE_RESULTS: &str = "Subpipeline returned multiple results.";
+
 /// Bounds nested union planning before recursive validation and shape inspection.
 pub(crate) fn admit_union(request: &pb::ExecutePipelineRequest) -> Result<(), Status> {
     enum Item<'a> {
@@ -1648,9 +1651,7 @@ pub(crate) fn execute_correlated_scalar(
                 continue;
             }
             if matched.is_some() {
-                return Err(Status::unimplemented(
-                    "multiple scalar results are unobserved",
-                ));
+                return Err(Status::invalid_argument(SCALAR_MULTIPLE_RESULTS));
             }
             matched = Some(
                 match Expr::Field(field.clone())

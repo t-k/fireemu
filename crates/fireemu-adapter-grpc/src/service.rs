@@ -741,7 +741,18 @@ impl Firestore for GatewayService {
                         )
                     })
                     .await
-                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                    .map_err(|error| {
+                        // This runtime cardinality refusal was recorded in production; the gate
+                        // otherwise has no request-shape fixture for the correlated scalar.
+                        let error = if error.code() == tonic::Code::InvalidArgument
+                            && error.message() == crate::pipeline::SCALAR_MULTIPLE_RESULTS
+                        {
+                            error
+                        } else {
+                            gate.answer(error)
+                        };
+                        pipeline_status(error, &canonical)
+                    })?;
                 return Ok(Response::new(Box::pin(tokio_stream::iter(
                     responses.into_iter().map(Ok),
                 ))));

@@ -3137,3 +3137,113 @@ proptest! {
         let (rows,_)=runtime.block_on(executor_documents(&service,correlated_test_request(&case)));prop_assert_eq!(rows.len(),3);for row in rows {let Some(V::StringValue(key))=row.fields["f"].value_type.as_ref() else {panic!()};let i:usize=key.strip_prefix("key").unwrap().parse().unwrap();let expected=if present[i] {V::StringValue(format!("child{i}"))} else {V::NullValue(0)};prop_assert_eq!(row.fields["child"].value_type.clone(),Some(expected));}
     }
 }
+
+#[tokio::test]
+async fn correlated_scalar_cardinality_follows_the_recorded_multiple_result_refusal() {
+    use pb::value::ValueType as V;
+    for profile in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        for matches in 0..=2 {
+            for other in [false, true] {
+                let case = Case {
+                    docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+                    m_shapes: vec![],
+                    literal: None,
+                    select: None,
+                    offset: None,
+                    limit: None,
+                };
+                let backend = test_backend();
+                seed(&backend, &case);
+                let mut writes = Vec::new();
+                for i in 0..(matches + usize::from(other)) {
+                    let key = if i < matches { "A" } else { "B" };
+                    writes.push(pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{PARENT}/items/000/kids/{i}"),
+                            fields: [
+                                (
+                                    "parentKey".to_owned(),
+                                    value(V::StringValue(key.to_owned())),
+                                ),
+                                ("v".to_owned(), value(V::StringValue("child".to_owned()))),
+                            ]
+                            .into_iter()
+                            .collect(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    });
+                }
+                backend
+                    .commit(&pb::CommitRequest {
+                        database: "projects/demo-app/databases/(default)".to_owned(),
+                        writes,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                let mut gateway = test_gateway();
+                gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+                gateway.ctx.policy = profile;
+                let service = GatewayService::local(gateway, backend);
+                let response = Firestore::execute_pipeline(
+                    &service,
+                    Request::new(correlated_test_request(&case)),
+                )
+                .await;
+                if matches == 2 {
+                    let error = response.err().expect("multiple scalar results must fail");
+                    assert_eq!(
+                        error.code(),
+                        tonic::Code::InvalidArgument,
+                        "{profile:?} other={other}"
+                    );
+                    assert_eq!(error.message(), "Subpipeline returned multiple results.");
+                } else {
+                    let mut stream = response.unwrap().into_inner();
+                    let document = stream.next().await.unwrap().unwrap().results.remove(0);
+                    let expected = if matches == 0 {
+                        V::NullValue(0)
+                    } else {
+                        V::StringValue("child".to_owned())
+                    };
+                    assert_eq!(
+                        document.fields["child"].value_type,
+                        Some(expected),
+                        "{profile:?} matches={matches} other={other}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+    #[test]
+    fn correlated_scalar_rejects_multiple_matching_children(matches in 2_usize..8, other in 0_usize..4, strict in any::<bool>()) {
+        use pb::value::ValueType as V;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let case = Case { docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)], m_shapes: vec![], literal: None, select: None, offset: None, limit: None };
+        let backend = test_backend();
+        seed(&backend, &case);
+        let writes = (0..matches + other).map(|i| pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{PARENT}/items/000/kids/{i}"),
+                fields: [("parentKey".to_owned(), value(V::StringValue(if i < matches { "A" } else { "B" }.to_owned()))), ("v".to_owned(), value(V::StringValue(format!("child{i}"))))].into_iter().collect(),
+                ..Default::default()
+            })), ..Default::default()
+        }).collect();
+        backend.commit(&pb::CommitRequest { database: "projects/demo-app/databases/(default)".to_owned(), writes, ..Default::default() }).unwrap();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = if strict { fireemu_core_firestore::index::IndexValidationPolicy::Production } else { fireemu_core_firestore::index::IndexValidationPolicy::Emulator };
+        let service = GatewayService::local(gateway, backend);
+        let result = runtime.block_on(Firestore::execute_pipeline(&service, Request::new(correlated_test_request(&case))));
+        let error = result.err().expect("multiple matches must fail");
+        prop_assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        prop_assert_eq!(error.message(), "Subpipeline returned multiple results.");
+    }
+}

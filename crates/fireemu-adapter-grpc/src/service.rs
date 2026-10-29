@@ -1194,9 +1194,7 @@ fn numeric_row_scope(
         return None;
     }
     match (function.name, args.as_slice()) {
-        ("exp", [Expr::Constant(Value::String(value))]) if value == "not-a-number" => {
-            Some(NumericRowScope::Exp)
-        }
+        ("exp", [Expr::Constant(Value::String(_))]) => Some(NumericRowScope::Exp),
         ("ln", [Expr::Constant(Value::Integer(0))]) => Some(NumericRowScope::Ln),
         _ => None,
     }
@@ -2400,6 +2398,34 @@ mod tests {
             numeric_row_scope(&request, &compiled),
             Some(NumericRowScope::Exp)
         );
+    }
+
+    #[test]
+    fn numeric_row_scope_exp_string_type_is_independent_of_content() {
+        use fireemu_core_firestore::pipeline_exec::Unrecorded;
+        use serde_json::json;
+        for (arg, expected) in [
+            (json!({"stringValue":"different-content"}), true),
+            (json!({"integerValue":"7"}), false),
+            (json!({"booleanValue":true}), false),
+            (json!({"nullValue":"NULL_VALUE"}), false),
+        ] {
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+                {"name":"documents","args":[{"referenceValue":"/c/d"}]},
+                {"name":"select","args":[{"mapValue":{"fields":{"result":{"functionValue":{"name":"exp","args":[arg]}}}}}]}
+            ]}}});
+            let request = crate::rest::pipeline_json::request_from_json(
+                "projects/p/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let parent = parse_parent("projects/p/databases/(default)/documents").unwrap();
+            let actual = crate::pipeline::compile_pipeline(&request, &parent, Unrecorded::Refuse)
+                .ok()
+                .and_then(|compiled| numeric_row_scope(&request, &compiled))
+                .is_some();
+            assert_eq!(actual, expected, "{body}");
+        }
     }
 
     #[test]

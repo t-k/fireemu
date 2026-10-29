@@ -2,7 +2,7 @@ import {arraysControlFields} from './arrays-control-corpus.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {buildRestRequest,documentsName,guardRestRequest,SANDBOX_PROJECT} from './harness.mjs';
 
-const normalizeFields=x=>Array.isArray(x)?x.map(normalizeFields):x&&typeof x==='object'?Object.fromEntries(Object.entries(x).filter(([k,v])=>!(k==='values'&&Array.isArray(v)&&v.length===0)).map(([k,v])=>[k,normalizeFields(v)])):x;
+const normalizeFields=x=>Array.isArray(x)?x.map(normalizeFields):x&&typeof x==='object'?Object.fromEntries(Object.entries(x).filter(([k,v])=>!(k==='values'&&Array.isArray(v)&&v.length===0)).map(([k,v])=>[k,k==='nullValue'&&(v===null||v==='NULL_VALUE')?null:normalizeFields(v)])):x;
 
 // The only mutable resource is this fixed document inside the reviewed database.
 export function createArraysControlSupport(ctx,{fetchFn=fetch,claim,journal,timeoutMs=60000}={}) {

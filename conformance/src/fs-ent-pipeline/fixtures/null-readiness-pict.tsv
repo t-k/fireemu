@@ -1,0 +1,8 @@
+null	field	array
+json	exact	omitted
+enum	exact	explicit
+invalid	exact	omitted
+json	changed	explicit
+invalid	changed	omitted
+enum	changed	omitted
+invalid	exact	explicit

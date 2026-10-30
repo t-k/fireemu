@@ -4100,3 +4100,47 @@ fn arity_review_pict_rows() {
         }
     }
 }
+
+#[test]
+fn observed_generic_sequence_and_map_forms() {
+    let map = Value::Map(
+        [("answer".to_owned(), Value::Integer(7))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(both("cmp", &[int(2), int(7)]), int(-1));
+    assert_eq!(both("storage_size", &[text("abc")]), int(4));
+    assert_eq!(
+        both("get_field", &[Eval::Value(map.clone()), text("answer")]),
+        int(7)
+    );
+    assert_eq!(
+        both(
+            "offset",
+            &[array(vec![Value::Integer(10), Value::Integer(20)]), int(1)]
+        ),
+        int(20)
+    );
+    assert_eq!(both("reverse", &[text("abc")]), text("cba"));
+    assert_eq!(both("reverse", &[bytes(b"abc")]), bytes(b"cba"));
+    assert_eq!(
+        both(
+            "reverse",
+            &[array(vec![Value::Integer(1), Value::Integer(2)])]
+        ),
+        array(vec![Value::Integer(2), Value::Integer(1)])
+    );
+    for (value, expected) in [
+        (text("abc"), 3),
+        (bytes(b"abc"), 3),
+        (array(vec![Value::Integer(1), Value::Integer(2)]), 2),
+        (Eval::Value(map), 1),
+        (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2),
+    ] {
+        assert_eq!(both("length", &[value]), int(expected));
+    }
+    assert_eq!(
+        both("string_concat", &[text("ab"), text("cd")]),
+        text("abcd")
+    );
+}

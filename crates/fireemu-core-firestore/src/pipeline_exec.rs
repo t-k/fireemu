@@ -351,6 +351,22 @@ const fn document_function(
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
+    array_access_function("namespace", Arity::Exact(1), "", eval_namespace),
+    array_access_function("has_ancestor", Arity::Exact(2), "", eval_has_ancestor),
+    array_access_function("reference_slice", Arity::Exact(3), "", eval_reference_slice),
+    array_access_function(
+        "replace_document_id",
+        Arity::Exact(2),
+        "",
+        eval_replace_document_id,
+    ),
+    array_access_function(
+        "autogen_document_id",
+        Arity::Exact(0),
+        "",
+        eval_autogen_document_id,
+    ),
+    array_access_function("coalesce", Arity::AtLeast(2), "", eval_control_fallback),
     array_access_function("cmp", Arity::Exact(2), "", eval_generic_cmp),
     array_access_function(
         "storage_size",
@@ -968,7 +984,7 @@ impl Expr {
                 }
                 if matches!(
                     function.name,
-                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on" | "coalesce"
                 ) {
                     return eval_control(function.name, args, row, unrecorded, runtime, bindings);
                 }
@@ -1100,6 +1116,15 @@ fn eval_control(
         })
     };
     match name {
+        "coalesce" => {
+            for arg in args {
+                match evaluate(arg) {
+                    Eval::Absent | Eval::Value(Value::Null) => {}
+                    value => return value,
+                }
+            }
+            Eval::Value(Value::Null)
+        }
         "if_absent" | "if_null" | "if_error" => {
             let first = evaluate(&args[0]);
             let use_fallback = match (&first, name) {
@@ -1277,6 +1302,103 @@ fn array_access<'a>(
         Eval::Value(Value::Array(values)) => Ok(values),
         _ => unreachable!("missing and errors were handled above"),
     }
+}
+
+fn eval_namespace(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Reference(name))] if DocumentPath::from_resource_name(name).is_ok() => {
+            Eval::Value(Value::String(String::new()))
+        }
+        _ => generic_unobserved("namespace"),
+    }
+}
+
+fn eval_has_ancestor(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Reference(ancestor))] = args
+    else {
+        return generic_unobserved("has_ancestor");
+    };
+    let (Ok(path), Ok(parent)) = (
+        DocumentPath::from_resource_name(name),
+        DocumentPath::from_resource_name(ancestor),
+    ) else {
+        return generic_unobserved("has_ancestor");
+    };
+    Eval::Value(Value::Boolean(
+        path.project() == parent.project()
+            && path.database() == parent.database()
+            && path.pairs().len() > parent.pairs().len()
+            && path.pairs().starts_with(parent.pairs()),
+    ))
+}
+
+fn eval_reference_slice(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Integer(0)), Eval::Value(Value::Integer(end))] =
+        args
+    else {
+        return generic_unobserved("reference_slice");
+    };
+    let Ok(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("reference_slice");
+    };
+    let Ok(end) = usize::try_from(*end) else {
+        return generic_unobserved("reference_slice");
+    };
+    if end == 0 || end > path.pairs().len() {
+        return generic_unobserved("reference_slice");
+    }
+    path.ancestor(end).map_or_else(
+        || generic_unobserved("reference_slice"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::String(id))] = args else {
+        return generic_unobserved("replace_document_id");
+    };
+    let Ok(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("replace_document_id");
+    };
+    let mut pairs = path
+        .pairs()
+        .iter()
+        .map(|(collection, document)| format!("{}/{}", collection.as_str(), document.as_str()))
+        .collect::<Vec<_>>();
+    let Some(last) = pairs.last_mut() else {
+        return generic_unobserved("replace_document_id");
+    };
+    *last = format!("{}/{}", path.collection_id().as_str(), id);
+    DocumentPath::parse(path.project(), path.database(), &pairs.join("/")).map_or_else(
+        |_| generic_unobserved("replace_document_id"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_autogen_document_id(_args: &[Eval], cx: Context<'_>) -> Eval {
+    let Some(rng) = &cx.runtime.expr_rng else {
+        return generic_unobserved("autogen_document_id");
+    };
+    let mut rng = rng
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let id = (0..20)
+        .map(|_| ALPHABET[usize::try_from(rng.next_below(62)).unwrap_or(0)] as char)
+        .collect();
+    Eval::Value(Value::String(id))
 }
 
 fn generic_unobserved(name: &'static str) -> Eval {

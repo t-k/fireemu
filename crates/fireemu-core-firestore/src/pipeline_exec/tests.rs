@@ -1815,6 +1815,27 @@ fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
         second,
         rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control)
     );
+    let nested = call(
+        "array_transform",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(0), Value::Integer(1)])),
+            Expr::Constant(s("item")),
+            rand,
+        ],
+    );
+    let Eval::Value(Value::Double(first_value)) = first else {
+        unreachable!()
+    };
+    let Eval::Value(Value::Double(second_value)) = second else {
+        unreachable!()
+    };
+    assert_eq!(
+        nested.eval_in_with_runtime(&doc, Unrecorded::Refuse, make_runtime()),
+        Eval::Value(Value::Array(vec![
+            Value::Double(first_value),
+            Value::Double(second_value)
+        ]))
+    );
 }
 
 #[test]

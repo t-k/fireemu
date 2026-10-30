@@ -5962,6 +5962,99 @@ vector	grpc	emulator	function	foreign";
         }
     }
 
+    #[test]
+    fn captured_generic_expressions_preserve_typed_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use serde_json::json;
+        let cases: serde_json::Value = serde_json::from_str(r###"[{"id":"cmp-int","expression":{"functionValue":{"name":"cmp","args":[{"integerValue":"2"},{"integerValue":"7"}]}},"expected":{"integerValue":"-1"}},{"id":"storage-size-string","expression":{"functionValue":{"name":"storage_size","args":[{"stringValue":"abc"}]}},"expected":{"integerValue":"4"}},{"id":"coalesce-null-string","expression":{"functionValue":{"name":"coalesce","args":[{"nullValue":"NULL_VALUE"},{"stringValue":"fallback"}]}},"expected":{"stringValue":"fallback"}},{"id":"namespace-reference","expression":{"functionValue":{"name":"namespace","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}]}},"expected":{"stringValue":""}},{"id":"has-ancestor-reference","expression":{"functionValue":{"name":"has_ancestor","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1/children/c1"},{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}]}},"expected":{"booleanValue":true}},{"id":"reference-slice","expression":{"functionValue":{"name":"reference_slice","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1/children/c1"},{"integerValue":"0"},{"integerValue":"1"}]}},"expected":{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}},{"id":"autogen-document-id","expression":{"functionValue":{"name":"autogen_document_id","args":[]}},"expected":null},{"id":"replace-document-id","expression":{"functionValue":{"name":"replace_document_id","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"},{"stringValue":"d2"}]}},"expected":{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d2"}},{"id":"get-field-map","expression":{"functionValue":{"name":"get_field","args":[{"mapValue":{"fields":{"answer":{"integerValue":"7"}}}},{"stringValue":"answer"}]}},"expected":{"integerValue":"7"}},{"id":"offset-array","expression":{"functionValue":{"name":"offset","args":[{"arrayValue":{"values":[{"integerValue":"10"},{"integerValue":"20"}]}},{"integerValue":"1"}]}},"expected":{"integerValue":"20"}},{"id":"reverse-string","expression":{"functionValue":{"name":"reverse","args":[{"stringValue":"abc"}]}},"expected":{"stringValue":"cba"}},{"id":"reverse-bytes","expression":{"functionValue":{"name":"reverse","args":[{"bytesValue":"YWJj"}]}},"expected":{"bytesValue":"Y2Jh"}},{"id":"reverse-array","expression":{"functionValue":{"name":"reverse","args":[{"arrayValue":{"values":[{"integerValue":"1"},{"integerValue":"2"}]}}]}},"expected":{"arrayValue":{"values":[{"integerValue":"2"},{"integerValue":"1"}]}}},{"id":"length-string","expression":{"functionValue":{"name":"length","args":[{"stringValue":"abc"}]}},"expected":{"integerValue":"3"}},{"id":"length-bytes","expression":{"functionValue":{"name":"length","args":[{"bytesValue":"YWJj"}]}},"expected":{"integerValue":"3"}},{"id":"length-array","expression":{"functionValue":{"name":"length","args":[{"arrayValue":{"values":[{"integerValue":"1"},{"integerValue":"2"}]}}]}},"expected":{"integerValue":"2"}},{"id":"length-map","expression":{"functionValue":{"name":"length","args":[{"mapValue":{"fields":{"answer":{"integerValue":"7"}}}}]}},"expected":{"integerValue":"1"}},{"id":"length-vector","expression":{"functionValue":{"name":"length","args":[{"mapValue":{"fields":{"__type__":{"stringValue":"__vector__"},"value":{"arrayValue":{"values":[{"doubleValue":1},{"doubleValue":2}]}}}}}]}},"expected":{"integerValue":"2"}},{"id":"string-concat","expression":{"functionValue":{"name":"string_concat","args":[{"stringValue":"ab"},{"stringValue":"cd"}]}},"expected":{"stringValue":"abcd"}}]"###).unwrap();
+        let database = "projects/fireemu-oracle-query/databases/entpipe2-20261031";
+        let wire = |input: &serde_json::Value| {
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"select","args":[input]}]}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            structured_pipeline(&request).unwrap().stages[0].args[0].clone()
+        };
+        let row = Row::derived(std::collections::BTreeMap::default());
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let mut ids = Vec::new();
+            let runtime = RuntimeContext {
+                expr_rng: Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    fireemu_core_types::determinism::SplitMix64::new(42),
+                ))),
+                ..RuntimeContext::default()
+            };
+            for case in cases.as_array().unwrap() {
+                let id = case["id"].as_str().unwrap();
+                let expression = decode_operand_tree(&wire(&case["expression"]), mode)
+                    .unwrap_or_else(|error| panic!("{id}: {error:?}"));
+                let actual = expression.eval_in_with_runtime(&row, mode, runtime.clone());
+                if id == "autogen-document-id" {
+                    for result in [
+                        actual,
+                        expression.eval_in_with_runtime(&row, mode, runtime.clone()),
+                    ] {
+                        let Eval::Value(Value::String(value)) = result else {
+                            panic!("{id}: {result:?}")
+                        };
+                        assert_eq!(value.len(), 20);
+                        assert!(value.bytes().all(|b| b.is_ascii_alphanumeric()));
+                        ids.push(value);
+                    }
+                } else {
+                    let expected = crate::decode::decode_value(&wire(&case["expected"])).unwrap();
+                    assert_eq!(actual, Eval::Value(expected), "{id}");
+                }
+            }
+            assert_ne!(ids[0], ids[1]);
+        }
+    }
+
+    #[test]
+    fn coalesce_skips_failing_constant_but_validates_static_errors() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let int = |number| value(V::IntegerValue(number));
+        let call = |name: &str, args| {
+            value(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let expression = decode_operand_tree(
+                &call(
+                    "coalesce",
+                    vec![int(7), call("divide", vec![int(1), int(0)])],
+                ),
+                mode,
+            )
+            .unwrap();
+            assert_eq!(
+                expression.eval_in_with_runtime(
+                    &Row::derived(std::collections::BTreeMap::default()),
+                    mode,
+                    RuntimeContext::default()
+                ),
+                Eval::Value(Value::Integer(7))
+            );
+            assert!(decode_operand_tree(
+                &call("coalesce", vec![int(7), call("unknown_function", vec![])]),
+                mode
+            )
+            .is_err());
+            assert!(decode_operand_tree(
+                &call("coalesce", vec![int(7), call("divide", vec![int(1)])]),
+                mode
+            )
+            .is_err());
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

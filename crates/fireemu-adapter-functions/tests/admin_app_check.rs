@@ -520,9 +520,9 @@ async fn a_runner_that_stops_reading_is_retired_when_a_verdict_cannot_be_written
                 .await
         })
     };
-    // The runner closed its stdin and lives on for a few seconds: the failed verdict write is
-    // what retires it, well before it exits by itself.
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(2000);
+    // The runner closes stdin before requesting a verdict and remains alive for 30 seconds.
+    // A failed verdict write must retire it before its natural exit.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while runner.is_alive() && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

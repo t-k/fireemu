@@ -72,14 +72,17 @@ while True:
     if frame.get("type") != "invoke":
         continue
     event = frame.get("event", {})
+    if event.get("closeStdin"):
+        # Close before sending: every verdict write must encounter a closed pipe.
+        os.close(0)
+        time.sleep(event.get("closeDelaySeconds", 0))
     for request in event.get("requests", []):
         send({"type": "appCheck:verify", **request})
     for raw in event.get("raw", []):
         send(raw)
     if event.get("closeStdin"):
-        # Stop reading but stay alive: the daemon's verdict write must fail and retire us.
-        os.close(0)
-        time.sleep(4)
+        # Stay alive long enough to distinguish retirement from natural exit.
+        time.sleep(30)
         break
     expect = event.get("expect", len(event.get("requests", [])))
     wait = event.get("waitSeconds", 10)

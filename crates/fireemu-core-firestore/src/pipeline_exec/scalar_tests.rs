@@ -2536,7 +2536,8 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             )],
         },
     ] {
-        let mut buffered = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime);
+        let mut buffered =
+            Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime.clone());
         assert!(buffered
             .push(Row::derived(BTreeMap::new()))
             .unwrap()

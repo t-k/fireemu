@@ -68,6 +68,7 @@ const {
   diffRecordings,
   isTransient,
   normalizeStep,
+  resolveValue,
   sameRecording,
   validateCorpus,
 } = HARNESSES[LANE.harness];
@@ -960,6 +961,75 @@ export function classifyPipelineFraming({
   return framingTools.classifyCompactFraming(production, alternative, fireemu);
 }
 
+const SAMPLE_CONTRACT_STEPS = new Set([
+  "sample-documents-2",
+  "sample-documents-10",
+  "sample-percent-50",
+  "sample-after-where",
+  "sample-then-limit",
+]);
+
+/** Only admit the five recorded sample requests after raw and normalized evidence agree. */
+export function classifySampleContract({
+  status,
+  lane,
+  profile,
+  program,
+  step,
+  saved,
+  production,
+  alternative,
+  fireemu,
+  raw,
+  ctx,
+  sampleTools,
+}) {
+  const fallback = { status };
+  if (
+    status !== "MISMATCH" ||
+    lane !== "fs-ent-pipeline" ||
+    profile !== "strict" ||
+    program?.id !== "fs-ent-pipeline/o8d/stages-main" ||
+    !SAMPLE_CONTRACT_STEPS.has(step?.id) ||
+    !sampleTools ||
+    !ctx ||
+    raw?.transport !== "rest" ||
+    raw.response?.status !== 200 ||
+    raw.response?.transportError !== undefined ||
+    typeof raw.response?.text !== "string"
+  )
+    return fallback;
+  try {
+    if (
+      !sameRecording(raw.request, resolveValue(step.body, ctx, new Map())) ||
+      !sameRecording(normalizeStep(raw, ctx, new Map()), fireemu)
+    )
+      return fallback;
+    const companionRequest = program.steps.find((item) => item.id === "sample-percent-100");
+    const companion = saved?.steps?.["sample-percent-100"];
+    const input = {
+      id: `${program.id}#${step.id}`,
+      profile,
+      request: step,
+      seed: program.seed,
+      companionRequest,
+      companion,
+      unorderedInput: true,
+    };
+    const valid = (response, role) => sampleTools.evaluateSample({ ...input, response, role });
+    if (
+      !valid(production, "fixture") ||
+      (alternative !== undefined && !valid(alternative, "fixture")) ||
+      !valid({ status: 200, body: JSON.parse(raw.response.text) }, "live") ||
+      !valid(fireemu, "fixture")
+    )
+      return fallback;
+    return { status: "MATCH_NONDETERMINISTIC", diagnostic: "finite-sample-contract" };
+  } catch {
+    return fallback;
+  }
+}
+
 async function check() {
   const fixture = existsSync(FIXTURE)
     ? (await loadCommittedFixture(FIXTURE)).fixture
@@ -971,6 +1041,18 @@ async function check() {
       : undefined;
   const harness = await harnessDigest();
   const local = await runLocal(selected);
+  const sampleTools =
+    LANE.id === "fs-ent-pipeline" && LANE.localConfig === "fs-ent-pipeline.fireemu.json"
+      ? await import("../fs-ent-pipeline/sample-contract.mjs")
+      : undefined;
+  const sampleContext =
+    sampleTools &&
+    createContext({
+      database: DATABASE_ID,
+      run: local.context.run,
+      startedMs: local.context.startedMs,
+      target: { kind: "local", origin: "http://127.0.0.1:1", grpcHost: "127.0.0.1", grpcPort: 1 },
+    });
   const rows = [];
   for (const program of selected) {
     const saved = fixture.programs[program.id];
@@ -995,7 +1077,21 @@ async function check() {
         fireemu,
         framingTools,
       });
-      let status = framingResult.status;
+      const sampleResult = classifySampleContract({
+        status: framingResult.status,
+        lane: LANE.id,
+        profile: sampleTools ? "strict" : "other",
+        program,
+        step,
+        saved,
+        production,
+        alternative,
+        fireemu,
+        raw: local.results[program.id]?.raw?.[step.id],
+        ctx: sampleContext,
+        sampleTools,
+      });
+      let status = sampleResult.status;
       const decision =
         status === "MISMATCH" && !framingProgram
           ? approvedDivergence(row, production, fireemu)
@@ -1013,6 +1109,7 @@ async function check() {
         row,
         status,
         ...(decision ? { decision } : {}),
+        ...(sampleResult.diagnostic ? { contractDiagnostic: sampleResult.diagnostic } : {}),
         ...(framingResult?.diagnostic ? { framingDiagnostic: framingResult.diagnostic } : {}),
         ...(framingResult?.framing ? { framing: framingResult.framing } : {}),
         production,

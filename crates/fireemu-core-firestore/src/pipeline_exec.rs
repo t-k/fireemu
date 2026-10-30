@@ -1117,13 +1117,14 @@ fn eval_control(
     };
     match name {
         "coalesce" => {
+            let mut last = Eval::Value(Value::Null);
             for arg in args {
-                match evaluate(arg) {
-                    Eval::Absent | Eval::Value(Value::Null) => {}
-                    value => return value,
+                last = evaluate(arg);
+                if !matches!(last, Eval::Absent | Eval::Value(Value::Null)) {
+                    return last;
                 }
             }
-            Eval::Value(Value::Null)
+            last
         }
         "if_absent" | "if_null" | "if_error" => {
             let first = evaluate(&args[0]);

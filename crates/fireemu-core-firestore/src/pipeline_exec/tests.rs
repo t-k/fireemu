@@ -1878,3 +1878,14 @@ fn array_filter_nested_scope_and_empty_shadow() {
         );
     }
 }
+
+#[test]
+fn array_scalar_recorded_arity_messages() {
+    for (name, args, expected) in [
+        ("rand", vec![Expr::Constant(Value::Null)], "The function 'rand(): float64' takes [0..0] argument(s), but 1 was provided."),
+        ("array_filter", vec![], "The function 'array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]' takes [3..3] argument(s), but 0 were provided."),
+        ("like", vec![], "The function 'like[T: string | regex](search_space: string, pattern: T): boolean' takes [2..2] argument(s), but 0 were provided."),
+    ] {
+        assert_eq!(Expr::call(name, args, Placement::Value).unwrap_err(), ExprError::Arity(expected.to_owned()));
+    }
+}

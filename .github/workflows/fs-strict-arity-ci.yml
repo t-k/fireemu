@@ -1,7 +1,7 @@
 name: fs-strict-arity-ci
 on:
   push:
-    branches: [work/fs-strict-arity-ci]
+    branches: [work/fs-strict-arity-post-ci]
 permissions:
   contents: read
 jobs:
@@ -17,8 +17,8 @@ jobs:
           cp tools/tmp-preflight/portctl.py /tmp/fs-strict-portctl.py
           cp tools/tmp-preflight/programs.mjs /tmp/fs-strict-programs.mjs
           cp tools/tmp-preflight/report.py /tmp/fs-strict-report.py
-          git checkout --detach c1247a1bdc63306e429574641108978059c30e53
-          test "$(git rev-parse HEAD)" = c1247a1bdc63306e429574641108978059c30e53
+          git checkout --detach f15259175aac7ce7235542eb7e2eb1d816dca298
+          test "$(git rev-parse HEAD)" = f15259175aac7ce7235542eb7e2eb1d816dca298
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: '10.32.1'
@@ -44,7 +44,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: fs-strict-arity-preflight
+          name: fs-strict-arity-postflight
           path: |
             /tmp/fs-strict-arity-programs.json
             /tmp/fs-strict-arity-fireemu.json

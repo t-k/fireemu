@@ -4790,6 +4790,47 @@ mod tests {
     }
 
     #[test]
+    fn recorded_infinite_vectors_and_documents_root_preserve_types() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, f64::NEG_INFINITY] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                false,
+            );
+            let Expr::Constant(Value::Vector(vector)) =
+                decode_operand_tree(&wire, Unrecorded::Refuse).unwrap()
+            else {
+                panic!("expected vector")
+            };
+            assert_eq!(vector, vec![number]);
+            assert_eq!(crate::encode::encode_value(&Value::Vector(vector)), wire);
+        }
+        let own = "projects/p/databases/db/documents";
+        let root = pb::Value {
+            value_type: Some(V::ReferenceValue(own.to_owned())),
+        };
+        assert!(reference_outside(&root, own).is_none());
+        let Expr::Constant(Value::Reference(reference)) =
+            decode_operand_tree(&root, Unrecorded::Refuse).unwrap()
+        else {
+            panic!("expected reference")
+        };
+        assert_eq!(reference, own);
+        let foreign = pb::Value {
+            value_type: Some(V::ReferenceValue(
+                "projects/p/databases/other/documents".to_owned(),
+            )),
+        };
+        assert!(reference_outside(&foreign, own).is_some());
+    }
+
+    #[test]
     fn vector_in_array_keeps_unobserved_components_refused() {
         use pb::value::ValueType as V;
         for number in [f64::INFINITY, -0.0] {

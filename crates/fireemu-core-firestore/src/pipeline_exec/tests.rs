@@ -49,6 +49,24 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+fn current_document_returns_fields_and_document_metadata() {
+    let created = Timestamp::new(10, 20).unwrap();
+    let updated = Timestamp::new(30, 40).unwrap();
+    let mut document = row("c/d", &[("i", Value::Integer(1))]);
+    document.times = Some(RowTimes { created, updated });
+    let expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(1)),
+        ("__name__".to_owned(), Value::Reference(path("c/d").resource_name())),
+        ("__create_time__".to_owned(), Value::Timestamp(created)),
+        ("__update_time__".to_owned(), Value::Timestamp(updated)),
+    ]));
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(call("current_document", vec![]).eval_in(&document, profile), Eval::Value(expected.clone()));
+    }
+    assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();

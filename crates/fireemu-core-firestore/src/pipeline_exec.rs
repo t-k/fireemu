@@ -19,6 +19,7 @@
 //! [`EvalError::Invalid`].
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::ids::DocumentId;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -351,6 +352,34 @@ const fn document_function(
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
+    array_access_function("namespace", Arity::Exact(1), "", eval_namespace),
+    array_access_function("has_ancestor", Arity::Exact(2), "", eval_has_ancestor),
+    array_access_function("reference_slice", Arity::Exact(3), "", eval_reference_slice),
+    array_access_function(
+        "replace_document_id",
+        Arity::Exact(2),
+        "",
+        eval_replace_document_id,
+    ),
+    array_access_function(
+        "autogen_document_id",
+        Arity::Exact(0),
+        "",
+        eval_autogen_document_id,
+    ),
+    array_access_function("coalesce", Arity::AtLeast(2), "", eval_control_fallback),
+    array_access_function("cmp", Arity::Exact(2), "", eval_generic_cmp),
+    array_access_function(
+        "storage_size",
+        Arity::Exact(1),
+        "",
+        eval_generic_storage_size,
+    ),
+    array_access_function("get_field", Arity::Exact(2), "", eval_generic_get_field),
+    array_access_function("offset", Arity::Exact(2), "", eval_generic_offset),
+    array_access_function("reverse", Arity::Exact(1), "", eval_generic_reverse),
+    array_access_function("length", Arity::Exact(1), "", eval_generic_length),
+    array_access_function("string_concat", Arity::AtLeast(2), "", eval_generic_concat),
     comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
         eval_comparison(Comparison::Equal, args, cx)
     }),
@@ -956,7 +985,7 @@ impl Expr {
                 }
                 if matches!(
                     function.name,
-                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on" | "coalesce"
                 ) {
                     return eval_control(function.name, args, row, unrecorded, runtime, bindings);
                 }
@@ -1088,6 +1117,16 @@ fn eval_control(
         })
     };
     match name {
+        "coalesce" => {
+            let mut last = Eval::Value(Value::Null);
+            for arg in args {
+                last = evaluate(arg);
+                if !matches!(last, Eval::Absent | Eval::Value(Value::Null)) {
+                    return last;
+                }
+            }
+            last
+        }
         "if_absent" | "if_null" | "if_error" => {
             let first = evaluate(&args[0]);
             let use_fallback = match (&first, name) {
@@ -1265,6 +1304,218 @@ fn array_access<'a>(
         Eval::Value(Value::Array(values)) => Ok(values),
         _ => unreachable!("missing and errors were handled above"),
     }
+}
+
+fn eval_namespace(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Reference(name))]
+            if DocumentPath::from_resource_name(name).is_some() =>
+        {
+            Eval::Value(Value::String(String::new()))
+        }
+        _ => generic_unobserved("namespace"),
+    }
+}
+
+fn eval_has_ancestor(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Reference(ancestor))] = args
+    else {
+        return generic_unobserved("has_ancestor");
+    };
+    let (Some(path), Some(parent)) = (
+        DocumentPath::from_resource_name(name),
+        DocumentPath::from_resource_name(ancestor),
+    ) else {
+        return generic_unobserved("has_ancestor");
+    };
+    Eval::Value(Value::Boolean(
+        path.project() == parent.project()
+            && path.database() == parent.database()
+            && path.pairs().len() > parent.pairs().len()
+            && path.pairs().starts_with(parent.pairs()),
+    ))
+}
+
+fn eval_reference_slice(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Integer(0)), Eval::Value(Value::Integer(end))] =
+        args
+    else {
+        return generic_unobserved("reference_slice");
+    };
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("reference_slice");
+    };
+    let Ok(end) = usize::try_from(*end) else {
+        return generic_unobserved("reference_slice");
+    };
+    if end == 0 || end > path.pairs().len() {
+        return generic_unobserved("reference_slice");
+    }
+    path.ancestor(end).map_or_else(
+        || generic_unobserved("reference_slice"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::String(id))] = args else {
+        return generic_unobserved("replace_document_id");
+    };
+    if DocumentId::try_new(id.clone()).is_err() {
+        return generic_unobserved("replace_document_id");
+    }
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("replace_document_id");
+    };
+    let mut pairs = path
+        .pairs()
+        .iter()
+        .map(|(collection, document)| format!("{}/{}", collection.as_str(), document.as_str()))
+        .collect::<Vec<_>>();
+    let Some(last) = pairs.last_mut() else {
+        return generic_unobserved("replace_document_id");
+    };
+    *last = format!("{}/{}", path.collection_id().as_str(), id);
+    DocumentPath::parse(path.project(), path.database(), &pairs.join("/")).map_or_else(
+        |_| generic_unobserved("replace_document_id"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_autogen_document_id(_args: &[Eval], cx: Context<'_>) -> Eval {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let Some(rng) = &cx.runtime.expr_rng else {
+        return generic_unobserved("autogen_document_id");
+    };
+    let mut rng = rng
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let id = (0..20)
+        .map(|_| ALPHABET[usize::try_from(rng.next_below(62)).unwrap_or(0)] as char)
+        .collect();
+    Eval::Value(Value::String(id))
+}
+
+fn generic_unobserved(name: &'static str) -> Eval {
+    Eval::Error(EvalError::Unobserved {
+        function: name,
+        reason: "unrecorded argument shape",
+    })
+}
+
+fn eval_generic_cmp(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Integer(a)), Eval::Value(Value::Integer(b))] => {
+            Eval::Value(Value::Integer(match a.cmp(b) {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }))
+        }
+        _ => generic_unobserved("cmp"),
+    }
+}
+
+fn eval_generic_storage_size(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => i64::try_from(s.len())
+            .ok()
+            .and_then(|n| n.checked_add(1))
+            .map_or_else(
+                || generic_unobserved("storage_size"),
+                |n| Eval::Value(Value::Integer(n)),
+            ),
+        _ => generic_unobserved("storage_size"),
+    }
+}
+
+fn eval_generic_get_field(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Map(map)), Eval::Value(Value::String(key))] => map
+            .get(key)
+            .cloned()
+            .map_or_else(|| generic_unobserved("get_field"), Eval::Value),
+        _ => generic_unobserved("get_field"),
+    }
+}
+
+fn eval_generic_offset(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Array(values)), Eval::Value(Value::Integer(i))] => usize::try_from(*i)
+            .ok()
+            .and_then(|i| values.get(i))
+            .cloned()
+            .map_or_else(|| generic_unobserved("offset"), Eval::Value),
+        _ => generic_unobserved("offset"),
+    }
+}
+
+fn eval_generic_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => Eval::Value(Value::String(s.chars().rev().collect())),
+        [Eval::Value(Value::Bytes(b))] => {
+            Eval::Value(Value::Bytes(b.iter().rev().copied().collect()))
+        }
+        [Eval::Value(Value::Array(a))] => {
+            Eval::Value(Value::Array(a.iter().rev().cloned().collect()))
+        }
+        _ => generic_unobserved("reverse"),
+    }
+}
+
+fn eval_generic_length(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let length = match args {
+        [Eval::Value(Value::String(s))] => s.chars().count(),
+        [Eval::Value(Value::Bytes(b))] => b.len(),
+        [Eval::Value(Value::Array(a))] => a.len(),
+        [Eval::Value(Value::Map(m))] => m.len(),
+        [Eval::Value(Value::Vector(v))] => v.len(),
+        _ => return generic_unobserved("length"),
+    };
+    i64::try_from(length).map_or_else(
+        |_| generic_unobserved("length"),
+        |n| Eval::Value(Value::Integer(n)),
+    )
+}
+
+fn eval_generic_concat(args: &[Eval], cx: Context<'_>) -> Eval {
+    if args
+        .iter()
+        .any(|arg| !matches!(arg, Eval::Value(Value::String(_))))
+    {
+        return first_error(args).unwrap_or_else(|| generic_unobserved("string_concat"));
+    }
+    (scalar::CONCAT.eval)(args, cx)
 }
 
 fn eval_array_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {

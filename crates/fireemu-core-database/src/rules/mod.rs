@@ -119,6 +119,30 @@ pub struct Requester<'a> {
 }
 
 impl Rules {
+    /// Collects independent expression diagnostics, bounded for rejected files.
+    /// The boolean reports that collection stopped before the whole tree was checked.
+    pub fn diagnostics(spec: &RuleSpec) -> Result<(Vec<RulesError>, bool), RulesError> {
+        std::thread::scope(|scope| {
+            Ok(std::thread::Builder::new()
+                .name("rules-diagnostics".to_owned())
+                .stack_size(COMPILE_STACK_BYTES)
+                .spawn_scoped(scope, || {
+                    let mut diagnostics = Vec::new();
+                    let mut checked = 0;
+                    let truncated =
+                        collect_diagnostics(spec, &BTreeSet::new(), &mut diagnostics, &mut checked);
+                    diagnostics.sort_by_key(|error| (error.line, error.column));
+                    (diagnostics, truncated)
+                })
+                .map_err(|error| RulesError {
+                    line: 1,
+                    column: 1,
+                    message: format!("Could not start checking the rules: {error}"),
+                })?
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+        })
+    }
     /// Checks and compiles a rules tree. Parsing and checking recurse once per level of
     /// nesting, which the bounds let reach a few thousand frames in a debug build, so they run
     /// on a thread of their own with room for that, whatever the caller's stack.
@@ -490,6 +514,41 @@ fn compile_node(spec: &RuleSpec, wildcards: &BTreeSet<String>) -> Result<RuleNod
         }
     }
     Ok(node)
+}
+
+fn collect_diagnostics(
+    spec: &RuleSpec,
+    wildcards: &BTreeSet<String>,
+    errors: &mut Vec<RulesError>,
+    checked: &mut usize,
+) -> bool {
+    const MAX_EXPRESSIONS: usize = 4096;
+    const MAX_ERRORS: usize = 64;
+    for (source, kind) in [
+        (&spec.read, RuleKind::Read),
+        (&spec.write, RuleKind::Write),
+        (&spec.validate, RuleKind::Validate),
+    ] {
+        if source.is_some() {
+            if *checked == MAX_EXPRESSIONS || errors.len() == MAX_ERRORS {
+                return true;
+            }
+            *checked += 1;
+            if let Err(error) = compile_rule(source.as_ref(), kind, wildcards) {
+                errors.push(error);
+            }
+        }
+    }
+    for (key, child) in &spec.children {
+        let mut inner = wildcards.clone();
+        if key.starts_with('$') {
+            inner.insert(key.clone());
+        }
+        if collect_diagnostics(child, &inner, errors, checked) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

@@ -16,6 +16,21 @@ const NOW: i64 = 1_792_464_733_000;
 const LATER: i64 = NOW + 1_234;
 
 #[test]
+fn rules_put_marks_truncated_diagnostics() {
+    let mut database = db();
+    let owner = [("Authorization", "Bearer owner")];
+    let nodes = (0..65)
+        .map(|i| format!(r#""n{i:02}":{{".read":"!data.val()"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let input = format!(r#"{{"rules":{{{nodes}}}}}"#);
+    let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", &owner, &input);
+    assert_eq!(status, 400);
+    assert_eq!(body.matches("only operates on booleans").count(), 64);
+    assert!(body.contains("Additional diagnostics were truncated."));
+}
+
+#[test]
 fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];

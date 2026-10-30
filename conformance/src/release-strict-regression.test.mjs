@@ -2738,6 +2738,31 @@ test("R21 v0.40 promotes only recorded empty constructors", () => {
     kind: current.kind,
     runIds: ["R21"],
   };
+  const valid = { ...structuredClone(current), artifactSha256: BINARY };
+  assert.throws(
+    () =>
+      judge(
+        comparison,
+        { R21: valid },
+        {
+          binarySha256: BINARY,
+          readJson: (path) => {
+            if (path === "conformance/fs-ent-pipeline-release-v040.json")
+              throw new Error("missing v040 snapshot");
+            return readJson(path);
+          },
+        },
+      ),
+    /missing v040 snapshot/,
+  );
+  for (const change of [
+    (x) => x.rows.push(x.rows[0]),
+    (x) => x.rows.push({ row: "unexpected", status: "MATCH" }),
+  ]) {
+    const broken = structuredClone(valid);
+    change(broken);
+    assert.notDeepEqual(judge(comparison, { R21: broken }, { binarySha256: BINARY, readJson }), []);
+  }
   const lines = readFileSync(new URL("./v040-r21.generated.tsv", import.meta.url), "utf8")
     .trim()
     .split(/\r?\n/)

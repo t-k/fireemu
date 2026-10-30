@@ -4931,6 +4931,13 @@ mod tests {
             error.contains(&format!("at index {}.", name.encode_utf16().count())),
             "{error}"
         );
+        let prefix = "projects/😀/databases/☃/";
+        let missing_keyword = format!("{prefix}documentX");
+        let error = reference_literal_error(&missing_keyword).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", prefix.encode_utf16().count())),
+            "{error}"
+        );
     }
 
     #[test]

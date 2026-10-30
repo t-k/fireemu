@@ -5,19 +5,31 @@ on:
 permissions:
   contents: read
 jobs:
-  test:
+  mutation:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
+          fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: .ci-helper
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - run: |
+      - name: Verify exact source and run mutations
+        run: |
           test "$(git rev-parse HEAD)" = 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
-      - name: Clippy changed crates
+          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .ci-helper/.github/temporary/array_mutations.py
+      - name: Preserve mutation logs
         if: always()
-        run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: array-scalar-mutation-results
+          path: /tmp/array-scalar-mutants/
+          if-no-files-found: warn

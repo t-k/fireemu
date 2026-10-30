@@ -69,6 +69,22 @@ fn current_document_returns_fields_and_document_metadata() {
             Eval::Value(expected.clone())
         );
     }
+    for incomplete in [
+        Row {
+            path: None,
+            times: document.times,
+            fields: document.fields.clone(),
+        },
+        Row {
+            path: document.path.clone(),
+            times: None,
+            fields: document.fields.clone(),
+        },
+    ] {
+        assert!(unobserved(
+            &call("current_document", vec![]).eval_in(&incomplete, Unrecorded::Refuse)
+        ));
+    }
     for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
         assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
         let derived = Row::derived(BTreeMap::new());

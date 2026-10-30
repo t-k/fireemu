@@ -96,8 +96,8 @@ jobs:
       - name: Select immutable candidate source
         run: |
           set -euo pipefail
-          git checkout --detach 6438b879df42387704266a4cb809fda7bec2f8fd
-          test "$(git rev-parse HEAD)" = 6438b879df42387704266a4cb809fda7bec2f8fd
+          git checkout --detach 178e30b96b92e6149f58374713114b752e5b48b5
+          test "$(git rev-parse HEAD)" = 178e30b96b92e6149f58374713114b752e5b48b5
           test -z "$(git status --porcelain)"
       - name: Verify retirement ordering and integration
         run: |

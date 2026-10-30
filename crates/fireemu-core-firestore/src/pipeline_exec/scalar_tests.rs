@@ -4172,6 +4172,7 @@ fn observed_reference_forms_and_autogen_id() {
         condition: false,
         runtime: &runtime,
     };
+    let mut ids = Vec::new();
     for _ in 0..2 {
         let Eval::Value(Value::String(id)) =
             (function("autogen_document_id").unwrap().eval)(&[], cx)
@@ -4180,7 +4181,9 @@ fn observed_reference_forms_and_autogen_id() {
         };
         assert_eq!(id.len(), 20);
         assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+        ids.push(id);
     }
+    assert_ne!(ids[0], ids[1]);
 }
 
 #[test]
@@ -4272,4 +4275,51 @@ fn observed_generic_sequence_pict_rows() {
             "{name} {kind} {profile}"
         );
     }
+}
+
+#[test]
+fn observed_generic_unrecorded_boundaries_and_arity_are_bounded() {
+    assert!(is_unobserved(&strict(
+        "get_field",
+        &[Eval::Value(Value::Map(BTreeMap::new())), text("missing")]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(-1)]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(1)]
+    )));
+    assert!(is_unobserved(&strict("reverse", &[int(1)])));
+    for (name, count) in [
+        ("cmp", 2),
+        ("storage_size", 1),
+        ("get_field", 2),
+        ("offset", 2),
+        ("reverse", 1),
+        ("length", 1),
+        ("string_concat", 2),
+        ("coalesce", 2),
+        ("namespace", 1),
+        ("has_ancestor", 2),
+        ("reference_slice", 3),
+        ("replace_document_id", 2),
+    ] {
+        assert!(
+            Expr::call(
+                name,
+                vec![Expr::Constant(Value::Null); count - 1],
+                Placement::Value
+            )
+            .is_err(),
+            "{name}"
+        );
+    }
+    assert!(Expr::call(
+        "autogen_document_id",
+        vec![Expr::Constant(Value::Null)],
+        Placement::Value
+    )
+    .is_err());
 }

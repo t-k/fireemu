@@ -2722,25 +2722,45 @@ test("R21 v0.40 promotes only recorded empty constructors", () => {
   assert.equal(after.size, 1951);
   assert.equal(current.fixtureSha256, previous.fixtureSha256);
   assert.deepEqual([...after.keys()].toSorted(), [...before.keys()].toSorted());
-  assert.deepEqual([...after.keys()].filter((id) => JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id))).toSorted(), ids.toSorted());
+  assert.deepEqual(
+    [...after.keys()]
+      .filter((id) => JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id)))
+      .toSorted(),
+    ids.toSorted(),
+  );
   for (const id of ids) {
     assert.equal(before.get(id).status, "MISMATCH");
     assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
   }
   assert.deepEqual(current.summary, { MATCH: 1776, MISMATCH: 161, INDETERMINATE: 12, UNKNOWN: 2 });
-  const comparison = { path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json", kind: current.kind, runIds: ["R21"] };
-  const lines = readFileSync(new URL("./v040-r21.generated.tsv", import.meta.url), "utf8").trim().split(/\r?\n/).slice(1);
+  const comparison = {
+    path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
+    kind: current.kind,
+    runIds: ["R21"],
+  };
+  const lines = readFileSync(new URL("./v040-r21.generated.tsv", import.meta.url), "utf8")
+    .trim()
+    .split(/\r?\n/)
+    .slice(1);
   for (const line of lines) {
     const [row, status, mutation] = line.split("\t");
     const observed = { ...structuredClone(current), artifactSha256: BINARY };
-    const id = row === "other" ? observed.rows.find((x) => !ids.includes(x.row)).row : `fs-ent-pipeline/o5/function-names#fn-${row}`;
-    if (status === "unchanged") observed.rows[observed.rows.findIndex((x) => x.row === id)] = structuredClone(before.get(id));
+    const id =
+      row === "other"
+        ? observed.rows.find((x) => !ids.includes(x.row)).row
+        : `fs-ent-pipeline/o5/function-names#fn-${row}`;
+    if (status === "unchanged")
+      observed.rows[observed.rows.findIndex((x) => x.row === id)] = structuredClone(before.get(id));
     if (mutation === "summary") observed.summary.MATCH--;
     if (mutation === "rows") observed.rows.pop();
     if (mutation === "fixture") observed.fixtureSha256 = "0".repeat(64);
     if (mutation === "artifact") observed.artifactSha256 = "0".repeat(64);
     const errors = judge(comparison, { R21: observed }, { binarySha256: BINARY, readJson });
-    assert.equal(errors.length === 0, mutation === "none" && (status === "promoted" || row === "other"), line);
+    assert.equal(
+      errors.length === 0,
+      mutation === "none" && (status === "promoted" || row === "other"),
+      line,
+    );
   }
 });
 
@@ -2770,7 +2790,15 @@ test("R21 v0.39 preserves the baseline except for three recorded missing aliases
     kind: current.kind,
     runIds: ["R21"],
   };
-  const context = { binarySha256: BINARY, readJson };
+  const context = {
+    binarySha256: BINARY,
+    readJson: (path) =>
+      readJson(
+        path === "conformance/fs-ent-pipeline-release-v040.json"
+          ? "conformance/fs-ent-pipeline-release-v039.json"
+          : path,
+      ),
+  };
   const observed = { ...structuredClone(current), artifactSha256: BINARY };
   assert.deepEqual(judge(comparison, { R21: observed }, context), []);
   assert.throws(
@@ -2781,7 +2809,7 @@ test("R21 v0.39 preserves the baseline except for three recorded missing aliases
         {
           ...context,
           readJson: (path) => {
-            if (path === "conformance/fs-ent-pipeline-release-v039.json")
+            if (path === "conformance/fs-ent-pipeline-release-v040.json")
               throw new Error("missing v039 snapshot");
             return readJson(path);
           },

@@ -1,0 +1,21 @@
+name: fs-o5-recorded-validation-ci
+on:
+  push:
+    branches: [work/fs-o5-recorded-validation-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 9a7d04d5d794fea71ac4673479b0aa3b59fbf903
+          fetch-depth: 0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = 9a7d04d5d794fea71ac4673479b0aa3b59fbf903
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_registered_function_arities_match_both_transports)'

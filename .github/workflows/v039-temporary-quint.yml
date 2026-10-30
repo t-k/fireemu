@@ -1,41 +1,57 @@
-name: v040 source-bound transaction binary
+name: v040 R21 binary replay
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
-  txn_binary:
+  r21:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    env:
-      CARGO_INCREMENTAL: '0'
-      CARGO_BUILD_JOBS: '2'
-      RUSTC_WRAPPER: ''
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
-      - name: Select immutable candidate source
-        run: |
-          set -euo pipefail
-          git checkout --detach 7b0f7ea1adc03614496ade793eb2bcae8fa27986
-          test "$(git rev-parse HEAD)" = 7b0f7ea1adc03614496ade793eb2bcae8fa27986
-          test -z "$(git status --porcelain)"
-          test ! -e target
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-      - name: Build isolated candidate with explicit manifest
-        run: |
-          set -euo pipefail
-          cargo build --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --locked -p fireemu --bin fireemu 2>&1 | tee "$RUNNER_TEMP/build.log"
-          test -z "$(git status --porcelain)"
-          mkdir "$RUNNER_TEMP/v040-txn-binary"
-          cp target/debug/fireemu target/debug/fireemu.d "$RUNNER_TEMP/v040-txn-binary/"
-          cp "$RUNNER_TEMP/build.log" "$RUNNER_TEMP/v040-txn-binary/"
-          git rev-parse HEAD > "$RUNNER_TEMP/v040-txn-binary/source-commit.txt"
-          printf '%s\n' 'cargo' 'build' '--manifest-path' "$GITHUB_WORKSPACE/Cargo.toml" '--locked' '-p' 'fireemu' '--bin' 'fireemu' > "$RUNNER_TEMP/v040-txn-binary/actual-command.txt"
-          (cd "$RUNNER_TEMP/v040-txn-binary" && sha256sum fireemu fireemu.d build.log source-commit.txt actual-command.txt > SHA256SUMS)
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          ref: 7b0f7ea1adc03614496ade793eb2bcae8fa27986
+      - run: test "$(git rev-parse HEAD)" = 7b0f7ea1adc03614496ade793eb2bcae8fa27986 && test -z "$(git status --porcelain)"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          name: v040-txn-linux-arm64
-          path: ${{ runner.temp }}/v040-txn-binary
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: pnpm -C conformance install --frozen-lockfile
+      - name: Fetch source-bound binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 41084444270 --name v040-txn-linux-arm64 --dir "$RUNNER_TEMP/v040-binary"
+          cd "$RUNNER_TEMP/v040-binary"
+          sha256sum -c SHA256SUMS
+          test "$(cat source-commit.txt)" = 7b0f7ea1adc03614496ade793eb2bcae8fa27986
+          test "$(sha256sum fireemu | cut -d ' ' -f 1)" = 0c630eab985ea156ab81fa620a166378856ecbddf70f39f301b3b84aba5babe8
+          chmod +x fireemu
+          sha256sum fireemu > "$RUNNER_TEMP/r21-binary.sha256"
+      - name: Replay R21 with loopback only
+        run: |
+          set -euo pipefail
+          set +e
+          # shellcheck disable=SC2024
+          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$RUNNER_TEMP/v040-binary/fireemu" FIREEMU_SANDBOX_LANE=fs-ent-pipeline \
+            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --init-groups -- node conformance/src/fs-query-index/run.mjs check' \
+            sh "$(id -u)" "$(id -g)" > "$RUNNER_TEMP/r21-check.log" 2>&1
+          rc=$?
+          set -e
+          test "$rc" = 1
+          FIREEMU_SANDBOX_LANE=fs-ent-pipeline node conformance/src/fs-query-index/run.mjs export-comparison "$RUNNER_TEMP/r21-actual.json"
+          node --input-type=module -e 'import fs from "node:fs";import {isDeepStrictEqual} from "node:util";const a=JSON.parse(fs.readFileSync(process.argv[1])),b=JSON.parse(fs.readFileSync(process.argv[2]));for(const k of ["kind","fixtureSha256","summary","rows"])if(!isDeepStrictEqual(a[k],b[k]))throw Error("mismatch "+k)' conformance/fs-ent-pipeline-release-v040.json "$RUNNER_TEMP/r21-actual.json"
+          sha256sum "$RUNNER_TEMP/r21-actual.json" "$RUNNER_TEMP/r21-check.log" > "$RUNNER_TEMP/r21-output.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v040-r21-validation
+          path: |
+            ${{ runner.temp }}/r21-binary.sha256
+            ${{ runner.temp }}/r21-actual.json
+            ${{ runner.temp }}/r21-check.log
+            ${{ runner.temp }}/r21-output.sha256
           if-no-files-found: error

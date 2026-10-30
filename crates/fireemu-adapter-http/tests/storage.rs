@@ -9709,3 +9709,18 @@ proptest::proptest! {
         proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, None, Some("Bearer owner")).status, 200);
     }
 }
+
+#[test]
+fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
+    let s = state(None);
+    let path = format!("/{BUCKET}/dir%2Fimage.png?X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range");
+    let headers = [("content-type", "image/png"), ("x-goog-content-length-range", "0,4")];
+    let response = handle(&s, req("PUT", &path, &headers, &[137, 80, 78, 71]));
+    assert_eq!(response.status, 200);
+    let read = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(read.body, [137, 80, 78, 71]);
+    let refused = handle(&s, req("PUT", &path, &headers, &[1, 2, 3, 4, 5]));
+    assert_eq!(refused.status, 400);
+    let read = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(read.body, [137, 80, 78, 71]);
+}

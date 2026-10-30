@@ -1,0 +1,21 @@
+name: fs-observed-generic-adapter-ci
+on:
+  push:
+    branches: [work/fs-observed-generic-adapter-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 2aadfcba35903e2b05afa0a2b56116d95e4a0514
+          fetch-depth: 0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = 2aadfcba35903e2b05afa0a2b56116d95e4a0514
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(captured_generic_expressions_preserve_typed_results) | test(coalesce_skips_failing_constant_but_validates_static_errors)'

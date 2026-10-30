@@ -4871,6 +4871,60 @@ mod tests {
     }
     use super::*;
 
+    #[test]
+    fn literal_refusal_preserves_precedence_gate_and_utf16_index() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let invalid = tagged_literal(
+            val(V::StringValue("__vector__".to_owned())),
+            vec![val(V::IntegerValue(1))],
+            false,
+        );
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for name in ["equal", "unknown_function"] {
+                let call = val(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![invalid.clone()],
+                    ..Default::default()
+                }));
+                let error = decode_operand_tree(&call, mode).unwrap_err();
+                if name == "equal" {
+                    assert!(error.message().contains("argument(s)"), "{error:?}");
+                } else {
+                    assert_eq!(error.code(), tonic::Code::Unimplemented);
+                }
+            }
+        }
+        let gate = crate::pipeline_shape::RefusalGate::Recorded(
+            None,
+            "projects/p/databases/db".to_owned(),
+        );
+        assert_eq!(
+            gate.answer(Status::invalid_argument(
+                "Vector must only contain values of type 'double'"
+            ))
+            .code(),
+            tonic::Code::Unimplemented
+        );
+        let foreign = val(V::ReferenceValue(
+            "projects/q/databases/db/documents/c/d".to_owned(),
+        ));
+        assert_eq!(
+            reference_outside(&foreign, "projects/p/databases/db/documents")
+                .unwrap()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let name = "projects/😀/databases/☃/documents/c";
+        let error = reference_literal_error(name).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", name.encode_utf16().count())),
+            "{error}"
+        );
+    }
+
     fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
         use pb::value::ValueType as V;
         let map = pb::Value {

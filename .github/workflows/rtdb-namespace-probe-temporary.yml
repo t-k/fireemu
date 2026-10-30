@@ -1,0 +1,40 @@
+name: RTDB namespace probe (temporary)
+on:
+  push:
+    branches: [work/rtdb-namespace-ci]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 0a42adf59b2932b73ca59803f6751292e68ac1d1
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.14.0
+      - name: Bind the exact source and probe
+        run: |
+          mkdir probe-evidence
+          git rev-parse HEAD | tee probe-evidence/source-head.txt
+          test "$(git rev-parse HEAD)" = 0a42adf59b2932b73ca59803f6751292e68ac1d1
+          sha256sum conformance/src/rtdb-namespace-probe.mjs | tee probe-evidence/probe-sha256.txt
+          echo 'b0b25eefb91b14b0d0cdcb6202900620e56ba629847296166294c57b387fcfaf  conformance/src/rtdb-namespace-probe.mjs' | sha256sum -c -
+      - name: Install locked conformance dependencies
+        run: pnpm -C conformance install --frozen-lockfile
+      - name: Exercise PID namespace and detached timeout
+        run: |
+          set -o pipefail
+          sudo env PATH="$PATH" HOME="$HOME" node conformance/src/rtdb-namespace-probe.mjs --out probe-evidence/namespace 2>&1 | tee probe-evidence/probe.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rtdb-namespace-probe-evidence
+          path: probe-evidence
+          if-no-files-found: error

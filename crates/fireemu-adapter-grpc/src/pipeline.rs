@@ -4764,6 +4764,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn generated_comparison_arity_and_precedence_cases() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("equal", "where", 0, "valid", "strict"),
+            ("equal", "where", 1, "unknown", "strict"),
+            ("equal", "select", 1, "valid", "strict"),
+            ("less_than", "select", 0, "valid", "strict"),
+            ("equal", "where", 2, "valid", "emulator"),
+            ("equal", "select", 3, "unknown", "emulator"),
+            ("less_than", "where", 0, "unknown", "emulator"),
+            ("less_than", "select", 2, "unknown", "strict"),
+            ("less_than", "where", 3, "valid", "strict"),
+            ("less_than", "select", 1, "unknown", "emulator"),
+        ];
+        for (name, position, count, operand, profile) in cases {
+            let valid = || pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            let mut args = vec![valid(); count];
+            if let Some(first) = args.first_mut() {
+                *first = if operand == "unknown" {
+                    pb::Value {
+                        value_type: Some(V::FunctionValue(pb::Function {
+                            name: "not_a_registered_function".to_owned(),
+                            ..Default::default()
+                        })),
+                    }
+                } else {
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    }
+                };
+            }
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = if position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![wire],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .map(|_| ())
+            } else {
+                decode_operand_tree(&wire, mode).map(|_| ())
+            };
+            if count != 2 {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    tonic::Code::InvalidArgument,
+                    "{name} {position} {count} {profile}"
+                );
+                assert_eq!(error.message(), format!("The function '{name}(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" }));
+            } else if operand == "unknown" {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

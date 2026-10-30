@@ -4100,3 +4100,249 @@ fn arity_review_pict_rows() {
         }
     }
 }
+
+#[test]
+fn observed_generic_sequence_and_map_forms() {
+    let map = Value::Map(
+        [("answer".to_owned(), Value::Integer(7))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(both("cmp", &[int(2), int(7)]), int(-1));
+    assert_eq!(both("storage_size", &[text("abc")]), int(4));
+    assert_eq!(
+        both("get_field", &[Eval::Value(map.clone()), text("answer")]),
+        int(7)
+    );
+    assert_eq!(
+        both(
+            "offset",
+            &[array(vec![Value::Integer(10), Value::Integer(20)]), int(1)]
+        ),
+        int(20)
+    );
+    assert_eq!(both("reverse", &[text("abc")]), text("cba"));
+    assert_eq!(both("reverse", &[bytes(b"abc")]), bytes(b"cba"));
+    assert_eq!(
+        both(
+            "reverse",
+            &[array(vec![Value::Integer(1), Value::Integer(2)])]
+        ),
+        array(vec![Value::Integer(2), Value::Integer(1)])
+    );
+    for (value, expected) in [
+        (text("abc"), 3),
+        (bytes(b"abc"), 3),
+        (array(vec![Value::Integer(1), Value::Integer(2)]), 2),
+        (Eval::Value(map), 1),
+        (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2),
+    ] {
+        assert_eq!(both("length", &[value]), int(expected));
+    }
+    assert_eq!(
+        both("string_concat", &[text("ab"), text("cd")]),
+        text("abcd")
+    );
+}
+
+#[test]
+fn observed_reference_forms_and_autogen_id() {
+    let parent = "projects/p/databases/(default)/documents/positive/d1";
+    let child = format!("{parent}/children/c1");
+    let reference = |s: &str| Eval::Value(Value::Reference(s.to_owned()));
+    assert_eq!(both("namespace", &[reference(parent)]), text(""));
+    assert_eq!(
+        both("has_ancestor", &[reference(&child), reference(parent)]),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert_eq!(
+        both("reference_slice", &[reference(&child), int(0), int(1)]),
+        reference(parent)
+    );
+    assert_eq!(
+        both("replace_document_id", &[reference(parent), text("d2")]),
+        reference("projects/p/databases/(default)/documents/positive/d2")
+    );
+    let runtime = RuntimeContext {
+        expr_rng: Some(Arc::new(Mutex::new(SplitMix64::new(7)))),
+        ..RuntimeContext::default()
+    };
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: &runtime,
+    };
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let Eval::Value(Value::String(id)) =
+            (function("autogen_document_id").unwrap().eval)(&[], cx)
+        else {
+            panic!("expected ID")
+        };
+        assert_eq!(id.len(), 20);
+        assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+        ids.push(id);
+    }
+    assert_ne!(ids[0], ids[1]);
+}
+
+#[test]
+fn observed_replace_document_id_refuses_descendant_paths() {
+    for path in [
+        "projects/p/databases/(default)/documents/positive/d1",
+        "projects/p/databases/(default)/documents/positive/d1/children/c1",
+    ] {
+        let result = both(
+            "replace_document_id",
+            &[
+                Eval::Value(Value::Reference(path.to_owned())),
+                text("d2/children/c1"),
+            ],
+        );
+        assert!(matches!(
+            result,
+            Eval::Error(EvalError::Unobserved {
+                function: "replace_document_id",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
+    let row = Row::derived(BTreeMap::new());
+    let constant = |value| Expr::Constant(value);
+    let call = |args| Expr::call("coalesce", args, Placement::Value).unwrap();
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(vec![
+                constant(Value::Null),
+                constant(Value::String("fallback".into()))
+            ])
+            .eval_in(&row, mode),
+            text("fallback")
+        );
+        let absent = Expr::Field(FieldPath::parse("missing").unwrap());
+        assert_eq!(
+            call(vec![constant(Value::Null), absent.clone()]).eval_in(&row, mode),
+            Eval::Absent
+        );
+        assert_eq!(
+            call(vec![absent, constant(Value::Integer(7))]).eval_in(&row, mode),
+            int(7)
+        );
+        let error = Expr::call(
+            "divide",
+            vec![constant(Value::Integer(1)), constant(Value::Integer(0))],
+            Placement::Value,
+        )
+        .unwrap();
+        assert_eq!(
+            call(vec![constant(Value::Integer(7)), error]).eval_in(&row, mode),
+            int(7)
+        );
+    }
+}
+
+#[test]
+fn observed_generic_sequence_pict_rows() {
+    let rows = [
+        ("reverse", "string", "strict"),
+        ("reverse", "bytes", "strict"),
+        ("reverse", "array", "strict"),
+        ("length", "string", "strict"),
+        ("length", "bytes", "strict"),
+        ("length", "array", "strict"),
+        ("length", "map", "strict"),
+        ("length", "vector", "strict"),
+        ("reverse", "string", "emulator"),
+        ("length", "vector", "emulator"),
+        ("reverse", "array", "emulator"),
+        ("length", "bytes", "emulator"),
+        ("length", "map", "emulator"),
+    ];
+    for (name, kind, profile) in rows {
+        let (input, length, reversed) = match kind {
+            "string" => (text("abc"), 3, text("cba")),
+            "bytes" => (bytes(b"abc"), 3, bytes(b"cba")),
+            "array" => (
+                array(vec![Value::Integer(1), Value::Integer(2)]),
+                2,
+                array(vec![Value::Integer(2), Value::Integer(1)]),
+            ),
+            "map" => (
+                Eval::Value(Value::Map(
+                    [("answer".to_owned(), Value::Integer(7))]
+                        .into_iter()
+                        .collect(),
+                )),
+                1,
+                Eval::Absent,
+            ),
+            "vector" => (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2, Eval::Absent),
+            _ => unreachable!(),
+        };
+        let actual = if profile == "strict" {
+            strict(name, &[input])
+        } else {
+            emulator(name, &[input])
+        };
+        assert_eq!(
+            actual,
+            if name == "length" {
+                int(length)
+            } else {
+                reversed
+            },
+            "{name} {kind} {profile}"
+        );
+    }
+}
+
+#[test]
+fn observed_generic_unrecorded_boundaries_and_arity_are_bounded() {
+    assert!(is_unobserved(&strict(
+        "get_field",
+        &[Eval::Value(Value::Map(BTreeMap::new())), text("missing")]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(-1)]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(1)]
+    )));
+    assert!(is_unobserved(&strict("reverse", &[int(1)])));
+    for (name, count) in [
+        ("cmp", 2),
+        ("storage_size", 1),
+        ("get_field", 2),
+        ("offset", 2),
+        ("reverse", 1),
+        ("length", 1),
+        ("string_concat", 2),
+        ("coalesce", 2),
+        ("namespace", 1),
+        ("has_ancestor", 2),
+        ("reference_slice", 3),
+        ("replace_document_id", 2),
+    ] {
+        assert!(
+            Expr::call(
+                name,
+                vec![Expr::Constant(Value::Null); count - 1],
+                Placement::Value
+            )
+            .is_err(),
+            "{name}"
+        );
+    }
+    assert!(Expr::call(
+        "autogen_document_id",
+        vec![Expr::Constant(Value::Null)],
+        Placement::Value
+    )
+    .is_err());
+}

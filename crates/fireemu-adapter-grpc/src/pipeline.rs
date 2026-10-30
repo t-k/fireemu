@@ -4747,6 +4747,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn vector_in_array_keeps_unobserved_components_refused() {
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, -0.0] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                true,
+            );
+            assert!(decode_operand_tree(&wire, Unrecorded::Refuse).is_err());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::DoubleValue(f64::from(*n))) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue("__vector__".to_owned())) }, values, true);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn unknown_tag_preserves_ordered_integer_values(tag in "[a-z]{1,8}", numbers in proptest::collection::vec(-1000i64..1000, 0..8)) {

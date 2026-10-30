@@ -11,10 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: f15259175aac7ce7235542eb7e2eb1d816dca298
+          ref: 2dfed12434ced7a5d42ef3e000ca1696a43e8d99
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = f15259175aac7ce7235542eb7e2eb1d816dca298
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(strict_refuses_fireemus_own_texts_for_the_functions_it_runs) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules)'
+          test "$(git rev-parse HEAD)" = 2dfed12434ced7a5d42ef3e000ca1696a43e8d99
+          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(recorded_arity_metadata_formats_document_and_comparison_signatures) | test(generated_comparison_arity_and_precedence_cases) | test(comparison_arity_uses_supplied_count) | test(valid_where_equal_retains_field_filter_pushdown) | test(strict_answers_recorded_arity_and_refuses_unobserved_shapes) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(execute_pipeline_executes_nested_fields_and_document_functions) | test(call_refuses_unknown_misplaced_and_misarity_functions) | test(array_reverse_with_options_keeps_its_previous_refusal) | test(observed_internal_fixtures_and_pict_cases)'

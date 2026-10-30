@@ -1409,7 +1409,7 @@ pub(crate) fn execute_subcollection_array(
     compiled: &CompiledExecution,
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use prost::Message as _;
     let [Stage::Select {
@@ -1478,8 +1478,11 @@ pub(crate) fn execute_subcollection_array(
             .filter_map(|r| r.document.as_ref())
         {
             let row = document_row(child)?;
-            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime.clone())
-            {
+            match Expr::Field(field.clone()).eval_in_with_runtime(
+                &row,
+                unrecorded,
+                (*runtime).clone(),
+            ) {
                 pipeline_exec::Eval::Value(value) => values.push(value),
                 _ => {
                     return Err(Status::unimplemented(
@@ -1507,7 +1510,7 @@ pub(crate) fn execute_subcollection_array(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime.clone(),
+            (*runtime).clone(),
         );
         let mut rows = cursor
             .push(document_row(document)?)
@@ -1534,7 +1537,7 @@ pub(crate) fn execute_correlated_scalar(
     binding: &(String, FieldPath),
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use fireemu_core_firestore::value::Value;
     use prost::Message as _;
@@ -1635,7 +1638,7 @@ pub(crate) fn execute_correlated_scalar(
         let pipeline_exec::Eval::Value(Value::String(parent_value)) = Expr::Field(
             binding.1.clone(),
         )
-        .eval_in_with_runtime(&parent_row, unrecorded, runtime.clone()) else {
+        .eval_in_with_runtime(&parent_row, unrecorded, (*runtime).clone()) else {
             return Err(Status::unimplemented(
                 "correlated binding type is unobserved",
             ));
@@ -1644,7 +1647,7 @@ pub(crate) fn execute_correlated_scalar(
         for child in &children {
             let child_row = document_row(child)?;
             let pipeline_exec::Eval::Value(Value::String(key)) = Expr::Field(predicate.clone())
-                .eval_in_with_runtime(&child_row, unrecorded, runtime.clone())
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone())
             else {
                 return Err(Status::unimplemented(
                     "correlated predicate type is unobserved",
@@ -1657,7 +1660,7 @@ pub(crate) fn execute_correlated_scalar(
                 let pipeline_exec::Eval::Value(Value::String(actual)) = Expr::Field(
                     filter_field.clone(),
                 )
-                .eval_in_with_runtime(&child_row, unrecorded, runtime.clone()) else {
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone()) else {
                     return Err(Status::unimplemented(
                         "correlated filter type is unobserved",
                     ));
@@ -1673,7 +1676,7 @@ pub(crate) fn execute_correlated_scalar(
                 match Expr::Field(field.clone()).eval_in_with_runtime(
                     &child_row,
                     unrecorded,
-                    runtime.clone(),
+                    (*runtime).clone(),
                 ) {
                     pipeline_exec::Eval::Value(Value::String(value)) => Value::String(value),
                     _ => {
@@ -1704,7 +1707,7 @@ pub(crate) fn execute_correlated_scalar(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime.clone(),
+            (*runtime).clone(),
         );
         let mut rows = cursor.push(parent_row).map_err(|e| eval_status(&e))?;
         rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);
@@ -5163,6 +5166,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn captured_array_and_like_expressions_preserve_typed_results() {
         use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
         use fireemu_core_firestore::value::Value;

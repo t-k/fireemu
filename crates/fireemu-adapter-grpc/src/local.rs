@@ -2723,7 +2723,7 @@ impl LocalBackend {
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             sample_seeds: Mutex::new(SplitMix64::new(seed ^ 0x5341_4d50_4c45)),
-            expr_seeds: Mutex::new(SplitMix64::new(seed ^ 0x4558_5052_524e_47)),
+            expr_seeds: Mutex::new(SplitMix64::new(seed ^ 0x0045_5850_5252_4e47)),
             issued_transactions: Mutex::new(BTreeMap::new()),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),

@@ -737,7 +737,7 @@ impl Firestore for GatewayService {
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
                         crate::pipeline::execute_correlated_scalar(
-                            local, &database, &compiled, &binding, guard, unrecorded, runtime,
+                            local, &database, &compiled, &binding, guard, unrecorded, &runtime,
                         )
                     })
                     .await
@@ -777,7 +777,7 @@ impl Firestore for GatewayService {
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
                         crate::pipeline::execute_subcollection_array(
-                            local, &compiled, guard, unrecorded, runtime,
+                            local, &compiled, guard, unrecorded, &runtime,
                         )
                     })
                     .await

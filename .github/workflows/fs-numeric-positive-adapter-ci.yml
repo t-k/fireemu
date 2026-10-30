@@ -5,31 +5,21 @@ on:
 permissions:
   contents: read
 jobs:
-  mutation:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 3f7943fe257f103cae3acf8982eb130097375db5
           fetch-depth: 0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          path: .ci-helper
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - name: Verify exact source and run mutations
+      - name: Run affected crates
         run: |
           test "$(git rev-parse HEAD)" = 3f7943fe257f103cae3acf8982eb130097375db5
-          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .ci-helper/.github/temporary/numeric_mutations.py
-      - name: Preserve mutation evidence
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast
+      - name: Clippy affected crates
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: numeric-positive-mutations
-          path: /tmp/numeric-mutants/
-          if-no-files-found: warn
+        run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings

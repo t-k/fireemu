@@ -236,6 +236,7 @@ const FORWARDED_HEADERS: &[&str] = &[
     "content-type",
     fireemu_core_app_check::header::APP_CHECK_HEADER,
     "content-range",
+    "x-goog-content-length-range",
     "range",
     "x-goog-hash",
     "content-md5",

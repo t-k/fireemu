@@ -9722,10 +9722,14 @@ fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
     assert_eq!(response.status, 200);
     let read = handle(&s, req("GET", &path, &[], &[]));
     assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
+    assert_eq!(header(&read, "content-type"), Some("image/png"));
+    assert_eq!(handle(&s, req("PUT", &path, &headers, b"new!")).status, 200);
+    let replaced = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(replaced.body.as_ref(), b"new!");
     let refused = handle(&s, req("PUT", &path, &headers, &[1, 2, 3, 4, 5]));
     assert_eq!(refused.status, 400);
     let read = handle(&s, req("GET", &path, &[], &[]));
-    assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
+    assert_eq!(read.body.as_ref(), b"new!");
 }
 
 #[test]
@@ -9750,4 +9754,20 @@ fn signed_xml_put_refuses_invalid_requests_before_overwrite() {
         assert_eq!(handle(&s, req("PUT", &path, &request_headers, body)).status, status);
         assert_eq!(handle(&s, req("GET", &valid, &[], &[])).body.as_ref(), b"old!");
     }
+}
+
+#[test]
+fn signed_xml_put_preserves_a_trailing_slash_in_the_object_name() {
+    let s = state(None);
+    let query = "X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600";
+    let put = handle(
+        &s,
+        req("PUT", &format!("/{BUCKET}/dir/?{query}"), &[], b"slash"),
+    );
+    assert_eq!(put.status, 200);
+    let read = handle(
+        &s,
+        req("GET", &format!("/{BUCKET}/dir%2F?{query}"), &[], &[]),
+    );
+    assert_eq!(read.body.as_ref(), b"slash");
 }

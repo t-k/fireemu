@@ -2728,7 +2728,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
                     name: d(n)?,
                 });
             }
-            _ => return fallthrough(method, &segments),
+            _ => return fallback_route(method, path, &segments),
         }
     }
     match (method, segments.as_slice()) {
@@ -2776,7 +2776,16 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
         ("POST" | "PUT" | "DELETE", ["upload", "storage", "v1", "b", b, "o"]) => {
             Ok(Route::GcsUpload { bucket: d(b)? })
         }
-        _ => fallthrough(method, &segments),
+        _ => fallback_route(method, path, &segments),
+    }
+}
+
+fn fallback_route(method: &str, path: &str, segments: &[&str]) -> Result<Route, String> {
+    if method == "PUT" {
+        let original: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        fallthrough(method, &original)
+    } else {
+        fallthrough(method, segments)
     }
 }
 

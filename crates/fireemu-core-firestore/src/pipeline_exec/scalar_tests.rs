@@ -3948,10 +3948,6 @@ fn numeric_scalar_recorded_integer_forms() {
 
 #[test]
 fn numeric_scalar_unobserved_inputs_are_refused() {
-    for name in ["minimum", "maximum", "sum"] {
-        assert!(is_unobserved(&strict(name, &[array(vec![])])));
-        assert!(is_unobserved(&strict(name, &[array(vec![Value::Null])])));
-    }
     assert!(is_unobserved(&strict(
         "sum",
         &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])]
@@ -3998,13 +3994,17 @@ fn numeric_scalar_pict_rows() {
             _ => unreachable!(),
         };
         let actual = strict(name, &args);
-        if input == "empty"
-            || input == "wrong_type"
+        if (input == "wrong_type" && name == "negate")
             || (input == "overflow" && (name == "sum" || name == "negate"))
         {
             assert!(is_unobserved(&actual), "{name} {shape} {input}: {actual:?}");
         } else {
+            if input == "empty" {
+                assert_eq!(actual, null(), "{name} {shape} {input}");
+                continue;
+            }
             let expected = match (name, input) {
+                (_, "wrong_type") => 2,
                 ("minimum", "integers") => 2,
                 ("maximum", "integers") => 7,
                 ("minimum", "overflow") => 1,
@@ -4345,4 +4345,199 @@ fn observed_generic_unrecorded_boundaries_and_arity_are_bounded() {
         Placement::Value
     )
     .is_err());
+}
+
+#[test]
+fn numeric_scalar_domain_pict_rows() {
+    let cases = [
+        ("minimum", "array", "doubles", "strict"),
+        ("maximum", "array", "doubles", "strict"),
+        ("minimum", "variadic", "mixed", "strict"),
+        ("maximum", "variadic", "mixed", "strict"),
+        ("sum", "array", "mixed", "strict"),
+        ("negate", "scalar", "doubles", "strict"),
+        ("minimum", "array", "null", "strict"),
+        ("maximum", "array", "null", "strict"),
+        ("minimum", "variadic", "absent", "strict"),
+        ("maximum", "variadic", "absent", "strict"),
+        ("sum", "array", "nonnumeric", "strict"),
+        ("sum", "array", "empty", "strict"),
+        ("sum", "array", "integers", "strict"),
+        ("sum", "array", "overflow", "strict"),
+        ("maximum", "array", "empty", "emulator"),
+        ("minimum", "array", "empty", "emulator"),
+        ("minimum", "variadic", "overflow", "emulator"),
+        ("negate", "scalar", "overflow", "emulator"),
+        ("sum", "array", "null", "emulator"),
+        ("maximum", "variadic", "nonnumeric", "emulator"),
+        ("maximum", "variadic", "integers", "emulator"),
+        ("negate", "scalar", "integers", "strict"),
+        ("sum", "array", "doubles", "emulator"),
+        ("minimum", "array", "nonnumeric", "emulator"),
+        ("minimum", "variadic", "doubles", "emulator"),
+        ("minimum", "variadic", "integers", "emulator"),
+        ("minimum", "variadic", "mixed", "emulator"),
+        ("maximum", "variadic", "null", "emulator"),
+        ("minimum", "variadic", "absent", "emulator"),
+        ("maximum", "array", "overflow", "strict"),
+    ];
+    for (name, shape, input, profile) in cases {
+        let values = match input {
+            "integers" => vec![int(7), int(2)],
+            "doubles" => vec![dbl(7.5), dbl(2.0)],
+            "mixed" => vec![int(7), dbl(2.5)],
+            "null" => vec![null(), int(2)],
+            "absent" => vec![Eval::Absent, int(7), int(2)],
+            "empty" => vec![],
+            "nonnumeric" => vec![null(), int(2), text("x")],
+            "overflow" => vec![int(i64::MAX), int(1)],
+            _ => unreachable!(),
+        };
+        let args = match shape {
+            "array" => vec![array(
+                values
+                    .into_iter()
+                    .map(|v| match v {
+                        Eval::Value(value) => value,
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+            )],
+            "variadic" => values,
+            "scalar" if input == "overflow" => vec![int(i64::MIN)],
+            "scalar" => vec![values[0].clone()],
+            _ => unreachable!(),
+        };
+        let actual = call_in(
+            name,
+            &args,
+            if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            },
+            false,
+        );
+        if (input == "overflow" && (name == "sum" || name == "negate"))
+            || (input == "nonnumeric" && (name == "minimum" || name == "maximum"))
+        {
+            assert!(
+                is_unobserved(&actual),
+                "{name} {shape} {input} {profile}: {actual:?}"
+            );
+            continue;
+        }
+        let expected = match (name, input) {
+            (_, "empty") => null(),
+            ("minimum", "doubles") => dbl(2.0),
+            ("maximum", "doubles") => dbl(7.5),
+            ("sum", "doubles") => dbl(9.5),
+            ("negate", "doubles") => dbl(-7.5),
+            ("minimum", "mixed") => dbl(2.5),
+            ("maximum", "mixed") => int(7),
+            ("sum", "mixed") => dbl(9.5),
+            ("minimum", "overflow") => int(1),
+            ("maximum", "overflow") => int(i64::MAX),
+            ("minimum" | "sum", "null" | "nonnumeric") => int(2),
+            ("maximum", "null") => int(2),
+            ("minimum", _) => int(2),
+            ("maximum", _) => int(7),
+            ("sum", "integers") => int(9),
+            ("negate", "integers") => int(-7),
+            _ => unreachable!("{name} {input}"),
+        };
+        assert_eq!(actual, expected, "{name} {shape} {input} {profile}");
+    }
+}
+
+#[test]
+fn numeric_scalar_native_domain_and_boundaries() {
+    for (name, args, expected) in [
+        (
+            "minimum",
+            vec![array(vec![Value::Double(7.5), Value::Double(2.0)])],
+            dbl(2.0),
+        ),
+        (
+            "maximum",
+            vec![array(vec![Value::Double(7.5), Value::Double(2.0)])],
+            dbl(7.5),
+        ),
+        ("minimum", vec![int(7), dbl(2.5)], dbl(2.5)),
+        ("maximum", vec![int(7), dbl(2.5)], int(7)),
+        (
+            "sum",
+            vec![array(vec![Value::Integer(10), Value::Double(20.5)])],
+            dbl(30.5),
+        ),
+        ("negate", vec![dbl(2.5)], dbl(-2.5)),
+        (
+            "minimum",
+            vec![array(vec![Value::Null, Value::Integer(2)])],
+            int(2),
+        ),
+        (
+            "maximum",
+            vec![array(vec![Value::Null, Value::Integer(7)])],
+            int(7),
+        ),
+        ("minimum", vec![Eval::Absent, int(2)], int(2)),
+        ("maximum", vec![Eval::Absent, int(7)], int(7)),
+        (
+            "sum",
+            vec![array(vec![
+                Value::Null,
+                Value::Integer(2),
+                Value::String("x".into()),
+            ])],
+            int(2),
+        ),
+        ("sum", vec![array(vec![])], null()),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for name in ["minimum", "maximum"] {
+        assert_eq!(both(name, &[null(), Eval::Absent]), null());
+        assert_eq!(both(name, &[array(vec![Value::Null])]), null());
+        assert_eq!(both(name, &[array(vec![])]), null());
+    }
+    let exact = 9_007_199_254_740_993;
+    assert_eq!(
+        both("maximum", &[int(exact), dbl(9_007_199_254_740_992.0)]),
+        int(exact)
+    );
+    assert_eq!(
+        both("minimum", &[int(exact), dbl(9_007_199_254_740_992.0)]),
+        dbl(9_007_199_254_740_992.0)
+    );
+    assert_eq!(
+        both(
+            "sum",
+            &[array(vec![Value::Null, Value::String("x".into())])]
+        ),
+        null()
+    );
+    assert_eq!(
+        both(
+            "sum",
+            &[array(vec![
+                Value::Double(0.0),
+                Value::Integer(i64::MAX),
+                Value::Integer(1)
+            ])]
+        ),
+        dbl(9_223_372_036_854_775_808.0)
+    );
+    assert!(is_unobserved(&both(
+        "sum",
+        &[array(vec![
+            Value::Integer(i64::MAX),
+            Value::Integer(1),
+            Value::Double(0.0)
+        ])]
+    )));
+    for name in ["minimum", "maximum", "sum", "negate"] {
+        let error = Eval::Error(EvalError::Invalid("upstream".into()));
+        assert_eq!(both(name, std::slice::from_ref(&error)), error);
+    }
 }

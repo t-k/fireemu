@@ -1857,7 +1857,39 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                             ordered,
                         )
                 };
-                let matches = if row == "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok" {
+                let matches = if row == "fs-ent-pipeline/o5/function-names#fn-current_document"
+                    && status == 200
+                {
+                    let (document_status, document) =
+                        call(&s, "GET", &format!("{DOCS}/fx5/d"), &json!({}));
+                    let mut actual = body.clone();
+                    let mut recorded_body = expected["body"].clone();
+                    let mut metadata_matches = document_status == 200;
+                    for (key, document_key) in [
+                        ("__create_time__", "createTime"),
+                        ("__update_time__", "updateTime"),
+                    ] {
+                        let pointer =
+                            format!("/0/results/0/fields/v/mapValue/fields/{key}/timestampValue");
+                        let actual_time = actual.pointer(&pointer).and_then(Value::as_str);
+                        let document_time = document[document_key].as_str();
+                        metadata_matches &= actual_time.is_some() && actual_time == document_time;
+                        metadata_matches &=
+                            recorded_body.pointer(&pointer).and_then(Value::as_str) == Some("<t2>");
+                        if let (Some(a), Some(b)) = (
+                            actual.pointer_mut(&pointer),
+                            recorded_body.pointer_mut(&pointer),
+                        ) {
+                            *a = json!("<document-time>");
+                            *b = json!("<document-time>");
+                        } else {
+                            metadata_matches = false;
+                        }
+                    }
+                    metadata_matches
+                        && answer_in(status, &actual, ordered)
+                            == answer_in(200, &recorded_body, ordered)
+                } else if row == "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok" {
                     current_timestamp_matches(
                         status,
                         &body,

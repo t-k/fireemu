@@ -397,13 +397,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"get_field\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"get_field\" takes 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -424,7 +424,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"get_field\" is unsupported locally",
+            "message": "function \"get_field\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -438,13 +438,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"offset\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"offset\" takes 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -465,7 +465,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"offset\" is unsupported locally",
+            "message": "function \"offset\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -1873,13 +1873,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"cmp\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"cmp\" takes 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -1900,7 +1900,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"cmp\" is unsupported locally",
+            "message": "function \"cmp\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -1996,13 +1996,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"reverse\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"reverse\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2023,7 +2023,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"reverse\" is unsupported locally",
+            "message": "function \"reverse\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2037,13 +2037,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"length\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"length\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2064,7 +2064,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"length\" is unsupported locally",
+            "message": "function \"length\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2078,13 +2078,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"storage_size\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"storage_size\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2105,7 +2105,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"storage_size\" is unsupported locally",
+            "message": "function \"storage_size\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2324,13 +2324,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"coalesce\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"coalesce\" takes at least 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2351,7 +2351,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"coalesce\" is unsupported locally",
+            "message": "function \"coalesce\" takes at least 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2406,13 +2406,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"namespace\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"namespace\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2433,7 +2433,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"namespace\" is unsupported locally",
+            "message": "function \"namespace\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2447,13 +2447,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"has_ancestor\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"has_ancestor\" takes 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2474,7 +2474,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"has_ancestor\" is unsupported locally",
+            "message": "function \"has_ancestor\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2529,13 +2529,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"reference_slice\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"reference_slice\" takes 3 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2556,7 +2556,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"reference_slice\" is unsupported locally",
+            "message": "function \"reference_slice\" takes 3 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2570,13 +2570,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"autogen_document_id\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"autogen_document_id\" takes 0 argument(s), got 1 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2597,7 +2597,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"autogen_document_id\" is unsupported locally",
+            "message": "function \"autogen_document_id\" takes 0 argument(s), got 1 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2611,13 +2611,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"replace_document_id\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"replace_document_id\" takes 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2638,7 +2638,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"replace_document_id\" is unsupported locally",
+            "message": "function \"replace_document_id\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2939,13 +2939,13 @@
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"string_concat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"string_concat\" takes at least 2 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     },
     "production": {
       "body": [
@@ -2966,7 +2966,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"string_concat\" is unsupported locally",
+            "message": "function \"string_concat\" takes at least 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }

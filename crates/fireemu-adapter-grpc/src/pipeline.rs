@@ -5897,6 +5897,47 @@ vector	grpc	emulator	function	foreign";
         }
     }
 
+    #[test]
+    fn captured_numeric_scalar_expressions_preserve_integer_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let integer = |number| value(V::IntegerValue(number));
+        let array = || {
+            value(V::ArrayValue(pb::ArrayValue {
+                values: vec![integer(7), integer(2), integer(5)],
+            }))
+        };
+        let call = |name: &str, args| {
+            value(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let cases = [
+            (call("minimum", vec![array()]), 2),
+            (call("minimum", vec![integer(7), integer(2)]), 2),
+            (call("maximum", vec![array()]), 7),
+            (call("maximum", vec![integer(7), integer(2)]), 7),
+            (call("sum", vec![array()]), 14),
+            (call("negate", vec![integer(7)]), -7),
+        ];
+        let row = Row::derived(Default::default());
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (wire, expected) in &cases {
+                let expression = decode_operand_tree(wire, mode).unwrap();
+                assert_eq!(
+                    expression.eval_in_with_runtime(&row, mode, RuntimeContext::default()),
+                    Eval::Value(Value::Integer(*expected))
+                );
+            }
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

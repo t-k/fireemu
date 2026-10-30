@@ -1,21 +1,41 @@
-name: v040 temporary validation
+name: v040 source-bound transaction binary
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  r21-test:
-    runs-on: ubuntu-latest
+  txn_binary:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: e16aa5644c9e409f3e6976811a4745bca41f40e3
-      - run: test "$(git rev-parse HEAD)" = e16aa5644c9e409f3e6976811a4745bca41f40e3
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+          fetch-depth: 0
+      - name: Select immutable candidate source
+        run: |
+          set -euo pipefail
+          git checkout --detach 7b0f7ea1adc03614496ade793eb2bcae8fa27986
+          test "$(git rev-parse HEAD)" = 7b0f7ea1adc03614496ade793eb2bcae8fa27986
+          test -z "$(git status --porcelain)"
+          test ! -e target
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Build isolated candidate with explicit manifest
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --locked -p fireemu --bin fireemu 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test -z "$(git status --porcelain)"
+          mkdir "$RUNNER_TEMP/v040-txn-binary"
+          cp target/debug/fireemu target/debug/fireemu.d "$RUNNER_TEMP/v040-txn-binary/"
+          cp "$RUNNER_TEMP/build.log" "$RUNNER_TEMP/v040-txn-binary/"
+          git rev-parse HEAD > "$RUNNER_TEMP/v040-txn-binary/source-commit.txt"
+          printf '%s\n' 'cargo' 'build' '--manifest-path' "$GITHUB_WORKSPACE/Cargo.toml" '--locked' '-p' 'fireemu' '--bin' 'fireemu' > "$RUNNER_TEMP/v040-txn-binary/actual-command.txt"
+          (cd "$RUNNER_TEMP/v040-txn-binary" && sha256sum fireemu fireemu.d build.log source-commit.txt actual-command.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          version: 10.32.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24
-      - run: pnpm -C conformance install --frozen-lockfile
-      - run: node --test --test-name-pattern='R21 v0.3[89]|R21 v0.40' conformance/src/release-strict-regression.test.mjs
+          name: v040-txn-linux-arm64
+          path: ${{ runner.temp }}/v040-txn-binary
+          if-no-files-found: error

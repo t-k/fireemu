@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ce7e5939dfa6807e1673261e03d0beb8aef83126
+          ref: 3f7943fe257f103cae3acf8982eb130097375db5
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = ce7e5939dfa6807e1673261e03d0beb8aef83126
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(captured_numeric_scalar_expressions_preserve_integer_results)'
+          test "$(git rev-parse HEAD)" = 3f7943fe257f103cae3acf8982eb130097375db5
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(captured_numeric_scalar_expressions_preserve_integer_results) | test(numeric_scalar_unobserved_arity_keeps_profile_boundary)'

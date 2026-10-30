@@ -401,7 +401,7 @@ fn eval_array_contains_all(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_all", &args[0], false, cx) {
+    let values = match array_argument("array_contains_all", &args[0], false, cx.clone()) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -419,7 +419,7 @@ fn eval_array_contains_any(args: &[Eval], cx: Context) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_any", &args[0], false, cx) {
+    let values = match array_argument("array_contains_any", &args[0], false, cx.clone()) {
         Ok(values) => values,
         Err(answer) => return answer,
     };

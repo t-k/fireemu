@@ -1189,7 +1189,7 @@ fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOp
         name,
         args,
         &[Param::Str("String"), Param::Str("String or Regex")],
-        cx,
+        cx.clone(),
     ) {
         Ok(values) => values,
         Err(error) => return error,
@@ -1229,7 +1229,7 @@ fn eval_like(args: &[Eval], cx: Context) -> Eval {
         "like",
         args,
         &[Param::Str("String"), Param::Str("String")],
-        cx,
+        cx.clone(),
     ) {
         Ok(values) => values,
         Err(error) => return error,
@@ -1525,7 +1525,7 @@ fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
     let values = match recorded_string_args(
         "string_index_of",
         args,
-        cx,
+        cx.clone(),
         &[Param::Str("String"), Param::Str("String")],
     ) {
         Ok(v) => v,

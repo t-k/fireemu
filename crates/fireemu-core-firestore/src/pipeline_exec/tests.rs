@@ -1804,3 +1804,34 @@ fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
         rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control)
     );
 }
+
+#[test]
+fn array_filter_keeps_true_values_and_skips_false_and_null() {
+    let values = Expr::Constant(Value::Array(vec![Value::Integer(0), Value::Integer(2)]));
+    let variable = Expr::Variable("item".to_owned());
+    let alias = Expr::Constant(s("item"));
+    let predicate = call(
+        "greater_than",
+        vec![variable, Expr::Constant(Value::Integer(1))],
+    );
+    let expression = call("array_filter", vec![values, alias.clone(), predicate]);
+    let empty = call(
+        "array_filter",
+        vec![
+            Expr::Constant(Value::Array(vec![])),
+            alias,
+            Expr::Constant(Value::Null),
+        ],
+    );
+    let doc = row("c/d", &[]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            expression.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(2)]))
+        );
+        assert_eq!(
+            empty.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+    }
+}

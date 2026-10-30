@@ -1650,6 +1650,25 @@ mod tests {
         assert_eq!(sampled.auto_id(), control.auto_id());
     }
 
+    #[test]
+    fn expression_requests_do_not_advance_sample_seed_stream() {
+        let with_expressions = admission_backend();
+        let control = admission_backend();
+        assert_ne!(
+            with_expressions.next_expr_seed(),
+            with_expressions.next_expr_seed()
+        );
+        assert_eq!(
+            with_expressions.next_sample_seed(),
+            control.next_sample_seed()
+        );
+        assert_eq!(
+            with_expressions.next_sample_seed(),
+            control.next_sample_seed()
+        );
+        assert_eq!(with_expressions.auto_id(), control.auto_id());
+    }
+
     fn parent(database: &str) -> Parent {
         parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
     }

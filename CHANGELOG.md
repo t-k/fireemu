@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-10-30
+
 ### Changed
 
 - Firestore Enterprise pipelines apply an additional supported string-equality filter in correlated scalar subqueries before checking result cardinality. The recorded single-result request returns its selected value; the recorded multiple-result request returns `INVALID_ARGUMENT` with the production diagnostic. Other scalar subquery forms and zero-result behavior remain unverified.
@@ -1069,7 +1071,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.38.1...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/t-k/fireemu/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/t-k/fireemu/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/t-k/fireemu/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/t-k/fireemu/compare/v0.36.0...v0.37.0

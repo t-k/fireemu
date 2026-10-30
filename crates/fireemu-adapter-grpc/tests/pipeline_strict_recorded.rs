@@ -1517,19 +1517,19 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "select {v: ref c}",
             stages: vec![select(reference("c"))],
-            strict: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
         },
         Case {
             label: "select {v: ref c//d}",
             stages: vec![select(reference("c//d"))],
-            strict: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."),
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."),
         },
         Case {
             label: "select {v: ref garbage}",
             stages: vec![select(json!({ "referenceValue": "garbage" }))],
-            strict: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
+            strict: Some((400, "Document parent name \"garbage\" lacks \"projects\" at index 0.")),
             emulator: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
         },
         Case {

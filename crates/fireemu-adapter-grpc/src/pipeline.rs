@@ -6082,11 +6082,13 @@ vector	grpc	emulator	function	foreign";
                 (Unrecorded::Refuse, tonic::Code::Unimplemented),
                 (Unrecorded::OfficialEmulator, tonic::Code::InvalidArgument),
             ] {
-                assert_eq!(
-                    decode_operand_tree(&wire, mode).unwrap_err().code(),
-                    code,
-                    "{name}"
-                );
+                let error = decode_operand_tree(&wire, mode).unwrap_err();
+                let answer = if mode == Unrecorded::Refuse {
+                    crate::pipeline_shape::RefusalGate::Recorded(None, String::new()).answer(error)
+                } else {
+                    error
+                };
+                assert_eq!(answer.code(), code, "{name}");
             }
         }
     }

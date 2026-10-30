@@ -4953,7 +4953,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn generated_literal_refusal_boundary_cases() {
         use pb::value::ValueType as V;
-        const ROWS: &str = r#"Family	Transport	Profile	Position	Conflict
+        const ROWS: &str = r"Family	Transport	Profile	Position	Conflict
 vector	rest	strict	direct	none
 vector	grpc	strict	where	none
 type_tag	rest	strict	nested	none
@@ -4972,7 +4972,7 @@ vector	rest	strict	nested	unknown
 type_tag	grpc	strict	where	foreign
 type_tag	rest	emulator	where	arity
 reference	rest	emulator	function	none
-vector	grpc	emulator	function	foreign"#;
+vector	grpc	emulator	function	foreign";
         let value = |kind| pb::Value {
             value_type: Some(kind),
         };

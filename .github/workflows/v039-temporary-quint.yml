@@ -4,60 +4,13 @@ on:
 permissions:
   contents: read
 jobs:
-  docs-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: e52085f050a1aac12087596c648fe75028b5c699
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
-          toolchain: stable
-      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
-  docs-linux-musl:
+  npm-remaining:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: e52085f050a1aac12087596c648fe75028b5c699
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
-          toolchain: stable
-          targets: aarch64-unknown-linux-musl
-      - run: rustup target add aarch64-unknown-linux-musl
-      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --target aarch64-unknown-linux-musl
-  windows-release:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: e52085f050a1aac12087596c648fe75028b5c699
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
-          toolchain: stable
-          targets: x86_64-pc-windows-gnu
-      - run: rustup target add x86_64-pc-windows-gnu
-      - run: cargo check --release -p fireemu --target x86_64-pc-windows-gnu
-        env:
-          RUSTFLAGS: -D warnings
-  docs-site-and-package:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: e52085f050a1aac12087596c648fe75028b5c699
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: 10.32.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - run: pnpm -C site install --frozen-lockfile
-      - run: pnpm -C site test
-      - run: node npm/scripts/prepare-launcher.mjs
-      - run: npm pack ./npm/fireemu --pack-destination "$RUNNER_TEMP"
-      - run: |
-          mkdir "$RUNNER_TEMP/packed"
-          tar -xzf "$RUNNER_TEMP"/fireemu-*.tgz -C "$RUNNER_TEMP/packed"
-          diff -u npm/fireemu/README.md "$RUNNER_TEMP/packed/package/README.md"
-          cat "$RUNNER_TEMP/packed/package/README.md"
+      - run: node --test npm/scripts/launcher.test.mjs npm/scripts/recover-v0381.test.mjs npm/scripts/verify-install.test.mjs

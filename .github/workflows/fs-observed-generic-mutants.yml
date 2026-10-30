@@ -1,0 +1,57 @@
+name: fs-observed-generic-mutants
+on:
+  push:
+    branches: [work/fs-observed-generic-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mutant: [noop, cmp, size, reverse, length, concat, namespace, ancestor, slice, replace, id, coalesce, getfield, offset]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 6c33a4e5cfc40a45eda36adf71a6947c2624a90f
+          fetch-depth: 0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - env:
+          MUTANT: ${{ matrix.mutant }}
+        run: |
+          test "$(git rev-parse HEAD)" = 6c33a4e5cfc40a45eda36adf71a6947c2624a90f
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path('crates/fireemu-core-firestore/src/pipeline_exec.rs')
+          s = p.read_text()
+          changes = {
+            'cmp': ('match a.cmp(b) {', 'match b.cmp(a) {'),
+            'size': ('n.checked_add(1)', 'n.checked_add(2)'),
+            'reverse': ('s.chars().rev().collect()', 's.chars().collect()'),
+            'length': ('s.chars().count(),', 's.chars().count() + 1,'),
+            'concat': ('(scalar::CONCAT.eval)(args, cx)', '(scalar::STRING_REVERSE.eval)(&args[..1], cx)'),
+            'namespace': ('Eval::Value(Value::String(String::new()))', 'Eval::Value(Value::String("x".to_owned()))'),
+            'ancestor': ('path.pairs().starts_with(parent.pairs())', '!path.pairs().starts_with(parent.pairs())'),
+            'slice': ('path.ancestor(end).map_or_else(', 'path.ancestor(end + 1).map_or_else('),
+            'replace': ('path.collection_id().as_str(), id', 'path.collection_id().as_str(), "other"'),
+            'id': ('let id = (0..20)', 'let id = (0..19)'),
+            'coalesce': ('return last;', 'return Eval::Value(Value::Null);'),
+            'getfield': ('map.get(key).cloned().map_or_else(', 'map.get("missing").cloned().map_or_else('),
+            'offset': ('.and_then(|i| values.get(i))\n            .cloned()', '.and_then(|i| values.get(i.saturating_add(1)))\n            .cloned()'),
+          }
+          if os.environ['MUTANT'] != 'noop':
+              old, new = changes[os.environ['MUTANT']]
+              assert s.count(old) == 1, (os.environ['MUTANT'], s.count(old))
+              p.write_text(s.replace(old, new))
+          PY
+          set +e
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(observed_generic_) | test(observed_reference_forms_and_autogen_id) | test(observed_coalesce_is_lazy_and_skips_null_and_absent)'
+          status=$?
+          set -e
+          if [ "$MUTANT" = noop ]; then test "$status" = 0; else test "$status" = 100; fi

@@ -9718,9 +9718,9 @@ fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
     let response = handle(&s, req("PUT", &path, &headers, &[137, 80, 78, 71]));
     assert_eq!(response.status, 200);
     let read = handle(&s, req("GET", &path, &[], &[]));
-    assert_eq!(read.body, [137, 80, 78, 71]);
+    assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
     let refused = handle(&s, req("PUT", &path, &headers, &[1, 2, 3, 4, 5]));
     assert_eq!(refused.status, 400);
     let read = handle(&s, req("GET", &path, &[], &[]));
-    assert_eq!(read.body, [137, 80, 78, 71]);
+    assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
 }

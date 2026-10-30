@@ -4766,6 +4766,39 @@ fn with_code(mut status: Status, code: &str) -> Status {
 mod tests {
 
     #[test]
+    fn recorded_map_add_fields_refusal_precedes_empty_select() {
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let (p, program) = programs
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p["id"] == "fs-ent-pipeline/o5/appendix")
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s["id"] == "proposed-n76-map-add-then-empty")
+            .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let request =
+            crate::rest::pipeline_json::request_from_json(database, &step["body"]).unwrap();
+        let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+        let error =
+            compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "map key must be of type STRING, given type is DOUBLE"
+        );
+    }
+
+    #[test]
     fn recorded_map_constructor_refusals() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         use fireemu_core_firestore::value::Value;

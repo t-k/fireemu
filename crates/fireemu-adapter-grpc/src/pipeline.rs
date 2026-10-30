@@ -4923,6 +4923,68 @@ mod tests {
     }
 
     #[test]
+    fn infinity_vector_admission_depends_on_expression_position() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (kind, number) in [
+                ("positive", f64::INFINITY),
+                ("negative", f64::NEG_INFINITY),
+                ("finite", 1.0),
+                ("unknown", 1.0),
+            ] {
+                let tag = if kind == "unknown" { "x" } else { "__vector__" };
+                let literal = tagged_literal(
+                    val(V::StringValue(tag.to_owned())),
+                    vec![val(V::DoubleValue(number))],
+                    false,
+                );
+                for position in ["direct", "constructor", "equal", "literal_nested"] {
+                    let operand = match position {
+                        "direct" => literal.clone(),
+                        "literal_nested" => val(V::ArrayValue(pb::ArrayValue {
+                            values: vec![literal.clone()],
+                        })),
+                        name => {
+                            let (name, args) = if name == "constructor" {
+                                ("array", vec![literal.clone()])
+                            } else {
+                                (
+                                    "equal",
+                                    vec![
+                                        val(V::FieldReferenceValue("i".to_owned())),
+                                        literal.clone(),
+                                    ],
+                                )
+                            };
+                            val(V::FunctionValue(pb::Function {
+                                name: name.to_owned(),
+                                args,
+                                ..Default::default()
+                            }))
+                        }
+                    };
+                    let result = decode_operand_tree(&operand, profile);
+                    let refused = profile == Unrecorded::Refuse
+                        && number.is_infinite()
+                        && position != "direct";
+                    if refused {
+                        assert_eq!(
+                            result.unwrap_err().code(),
+                            tonic::Code::Unimplemented,
+                            "{kind} {position} {profile:?}"
+                        );
+                    } else {
+                        assert!(result.is_ok(), "{kind} {position} {profile:?}: {result:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vector_in_array_keeps_unobserved_components_refused() {
         use pb::value::ValueType as V;
         for number in [f64::INFINITY, -0.0] {

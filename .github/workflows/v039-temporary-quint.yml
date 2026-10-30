@@ -21,6 +21,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -111,4 +113,60 @@ jobs:
         with:
           name: v039-seven-model-evidence
           path: ${{ runner.temp }}/v039-quint
+          if-no-files-found: error
+  r21:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Select immutable candidate source
+        run: |
+          set -euo pipefail
+          git checkout --detach c31f5eb8c861d0ea3f909bfdbf4168b8d4cae861
+          test "$(git rev-parse HEAD)" = c31f5eb8c861d0ea3f909bfdbf4168b8d4cae861
+          test -z "$(git status --porcelain)"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: '10.32.1'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Install locked conformance dependencies
+        run: pnpm -C conformance install --frozen-lockfile
+      - name: Build source-bound binary
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --locked -p fireemu --bin fireemu
+          test -z "$(git status --porcelain)"
+          sha256sum target/debug/fireemu > "$RUNNER_TEMP/r21-binary.sha256"
+      - name: Replay R21 with loopback-only networking
+        run: |
+          set -euo pipefail
+          set +e
+          # shellcheck disable=SC2024
+          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$GITHUB_WORKSPACE/target/debug/fireemu" FIREEMU_SANDBOX_LANE=fs-ent-pipeline \
+            sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --init-groups -- node conformance/src/fs-query-index/run.mjs check' \
+            sh "$(id -u)" "$(id -g)" > "$RUNNER_TEMP/r21-check.log" 2>&1
+          rc=$?
+          set -e
+          test "$rc" = 1
+          FIREEMU_SANDBOX_LANE=fs-ent-pipeline node conformance/src/fs-query-index/run.mjs export-comparison "$RUNNER_TEMP/r21-actual.json"
+          node --input-type=module -e 'import fs from "node:fs";import {isDeepStrictEqual} from "node:util";const a=JSON.parse(fs.readFileSync(process.argv[1])),b=JSON.parse(fs.readFileSync(process.argv[2]));for(const k of ["kind","fixtureSha256","summary","rows"])if(!isDeepStrictEqual(a[k],b[k]))throw Error("mismatch "+k)' conformance/fs-ent-pipeline-release-v039.json "$RUNNER_TEMP/r21-actual.json"
+          sha256sum "$RUNNER_TEMP/r21-actual.json" "$RUNNER_TEMP/r21-check.log" > "$RUNNER_TEMP/r21-output.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v039-r21-validation
+          path: |
+            ${{ runner.temp }}/r21-binary.sha256
+            ${{ runner.temp }}/r21-actual.json
+            ${{ runner.temp }}/r21-check.log
+            ${{ runner.temp }}/r21-output.sha256
           if-no-files-found: error

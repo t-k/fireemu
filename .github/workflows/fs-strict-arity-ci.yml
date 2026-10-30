@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7e042eb6a7aa2e014f2d3c63f98f2d1f85717040
+          ref: f15259175aac7ce7235542eb7e2eb1d816dca298
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 7e042eb6a7aa2e014f2d3c63f98f2d1f85717040
+          test "$(git rev-parse HEAD)" = f15259175aac7ce7235542eb7e2eb1d816dca298
           cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_arity_metadata_formats_document_and_comparison_signatures) | test(generated_comparison_arity_and_precedence_cases)'

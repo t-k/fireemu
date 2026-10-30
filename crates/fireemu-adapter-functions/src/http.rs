@@ -2202,7 +2202,7 @@ mod streaming_tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "BrokenPipe")]
     fn teardown_read_still_panics_on_other_errors() {
         teardown_read_result(Err(std::io::ErrorKind::BrokenPipe.into()));
     }

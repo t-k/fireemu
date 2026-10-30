@@ -118,6 +118,8 @@ In v0.38.0, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`,
 
 On main, pending v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
 
+On main, pending v0.39.0, a supported correlated scalar subquery may apply an additional string-equality filter before checking cardinality. The recorded single-result request returns the selected value, and the recorded multiple-result request receives the production `INVALID_ARGUMENT` diagnostic. These observations cover only those recorded request shapes; zero-result behavior and other scalar forms remain unverified.
+
 ## Composite indexes
 
 Production refuses a query whose composite index is not defined. The official emulator assumes every index exists, so a missing index is usually found only after deploying. Fireemu checks each query against the indexes declared in `firestore.indexes.json` (referenced from `firebase.json`), as production does.

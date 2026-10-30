@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Firestore Enterprise pipelines apply an additional supported string-equality filter in correlated scalar subqueries before checking result cardinality. The recorded single-result request returns its selected value; the recorded multiple-result request returns `INVALID_ARGUMENT` with the production diagnostic. Other scalar subquery forms and zero-result behavior remain unverified.
+
 ## [0.38.1] - 2026-10-30
 
 ### Fixed

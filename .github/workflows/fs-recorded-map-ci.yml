@@ -1,0 +1,21 @@
+name: fs-recorded-map-ci
+on:
+  push:
+    branches: [work/fs-recorded-map-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: e4a2e805d5390cc53c280f76deafe4e618c37d5e
+          fetch-depth: 0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = e4a2e805d5390cc53c280f76deafe4e618c37d5e
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_map_constructor_refusals)'

@@ -4187,6 +4187,29 @@ fn observed_reference_forms_and_autogen_id() {
 }
 
 #[test]
+fn observed_replace_document_id_refuses_descendant_paths() {
+    for path in [
+        "projects/p/databases/(default)/documents/positive/d1",
+        "projects/p/databases/(default)/documents/positive/d1/children/c1",
+    ] {
+        let result = both(
+            "replace_document_id",
+            &[
+                Eval::Value(Value::Reference(path.to_owned())),
+                text("d2/children/c1"),
+            ],
+        );
+        assert!(matches!(
+            result,
+            Eval::Error(EvalError::Unobserved {
+                function: "replace_document_id",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
     let row = Row::derived(BTreeMap::new());
     let constant = |value| Expr::Constant(value);

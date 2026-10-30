@@ -4740,6 +4740,92 @@ fn with_code(mut status: Status, code: &str) -> Status {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recorded_literal_refusal_gate_matrix() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use tonic::Code;
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let docs = format!("{database}/documents");
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json")
+            .replace("{docs}", &docs);
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let parent = crate::decode::parse_parent(&docs).unwrap();
+        let targets = [
+            ("stage-order", "where-vector-of-integer", true),
+            ("value-shapes", "vector-of-integer", true),
+            ("value-shapes", "vector-of-double-and-integer", true),
+            ("value-shapes", "vector-without-value", false),
+            ("value-shapes", "vector-with-extra-key", true),
+            ("value-shapes", "vector-value-not-array", true),
+            ("appendix", "proposed-type-tag-integer", false),
+            ("appendix", "proposed-type-tag-boolean", false),
+            ("appendix", "proposed-type-tag-null", false),
+            ("appendix", "proposed-type-tag-double", false),
+            ("appendix", "proposed-type-tag-map", false),
+            ("appendix", "proposed-type-tag-array", false),
+            ("appendix", "proposed-type-tag-nested", false),
+            ("appendix", "proposed-type-tag-where", false),
+            ("appendix", "proposed-type-tag-function-argument", false),
+            ("appendix", "proposed-reference-collection", false),
+            ("appendix", "proposed-reference-empty-segment", false),
+            ("appendix", "proposed-reference-garbage", false),
+        ];
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id, unordered) in targets {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                Code::InvalidArgument,
+                "{full}#{id}: {computed:?}"
+            );
+            assert_eq!(computed.message(), expected, "{full}#{id}");
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(
+                rest.code(),
+                Code::InvalidArgument,
+                "REST {full}#{id}: {rest:?}"
+            );
+            assert_eq!(rest.message(), expected, "REST {full}#{id}");
+            let grpc_shape = shape_of_request(&request);
+            if unordered {
+                assert!(grpc_shape.is_none(), "gRPC shape {full}#{id}");
+            }
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            if unordered {
+                assert_eq!(grpc.code(), Code::Unimplemented, "gRPC {full}#{id}");
+            }
+        }
+    }
     use super::*;
 
     fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {

@@ -1,46 +1,41 @@
-name: FS missing alias mutation verification
+name: FS missing alias source-bound binary
 on:
   push:
     branches: [work/fs-missing-quint-ci]
 permissions:
   contents: read
 jobs:
-  mutation:
-    runs-on: ubuntu-latest
+  binary:
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-      - name: Apply exact candidate
-        run: |
-          set -euo pipefail
-          echo "4a83e51d77c4982904a90dbb6828b745389fe5bd06bd00d8a03f05ccdcc92607  .ci-missing-alias.patch" | sha256sum -c -
-          git apply .ci-missing-alias.patch
-          sha256sum crates/fireemu-core-firestore/src/pipeline_exec.rs crates/fireemu-core-firestore/src/pipeline_exec/tests.rs
-      - name: Run existing unit regression
-        run: cargo test --locked -p fireemu-core-firestore --lib a_nested_alias_of_a_missing_value_keeps_its_parents_in_both_profiles
-      - name: Verify parent-map mutation is detected
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('crates/fireemu-core-firestore/src/pipeline_exec.rs')
-          s=p.read_text()
-          old='                                set_parents(&mut fields, alias);'
-          assert s.count(old)==1
-          p.write_text(s.replace(old,'                                let _ = alias;',1))
-          PY
-          set +e
-          cargo test --locked -p fireemu-core-firestore --test pipeline_missing_alias > mutation.log 2>&1
-          code=$?
-          set -e
-          cat mutation.log
-          test "$code" -ne 0
-          grep -q 'missing_alias_parents_follow_recorded_projection_in_both_profiles ... FAILED' mutation.log
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
         with:
-          name: fs-missing-alias-mutation
-          path: mutation.log
-          if-no-files-found: warn
+          fetch-depth: 0
+      - name: Select exact candidate source
+        run: |
+          set -euo pipefail
+          git checkout --detach e5eac5ae35520fd163c112118d3b33c3448937d9
+          test "$(git rev-parse HEAD)" = e5eac5ae35520fd163c112118d3b33c3448937d9
+          test -z "$(git status --porcelain)"
+          test ! -e target
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Build source-bound debug binary
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --locked -p fireemu --bin fireemu 2>&1 | tee "$RUNNER_TEMP/build.log"
+          test -z "$(git status --porcelain)"
+          mkdir "$RUNNER_TEMP/fs-binary"
+          cp target/debug/fireemu target/debug/fireemu.d "$RUNNER_TEMP/fs-binary/"
+          cp "$RUNNER_TEMP/build.log" "$RUNNER_TEMP/fs-binary/"
+          git rev-parse HEAD > "$RUNNER_TEMP/fs-binary/source-commit.txt"
+          (cd "$RUNNER_TEMP/fs-binary" && sha256sum fireemu fireemu.d build.log source-commit.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fs-missing-alias-linux-arm64
+          path: ${{ runner.temp }}/fs-binary
+          if-no-files-found: error

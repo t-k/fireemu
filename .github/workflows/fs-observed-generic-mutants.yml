@@ -1,6 +1,7 @@
 name: fs-observed-generic-mutants
 on:
-  workflow_dispatch:
+  push:
+    branches: [work/fs-observed-generic-ci]
 permissions:
   contents: read
 jobs:
@@ -11,11 +12,11 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mutant: [noop, guard]
+        mutant: [noop, minimum, maximum, null, absent, promotion, nonnumeric, negate]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: dd49b0f73a72d2334444132765c6ee6f2c416936
+          ref: 7515bc287d55c5b16e46b2d86f1fcd8153b4f3b5
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
@@ -23,35 +24,36 @@ jobs:
       - env:
           MUTANT: ${{ matrix.mutant }}
         run: |
-          test "$(git rev-parse HEAD)" = dd49b0f73a72d2334444132765c6ee6f2c416936
+          test "$(git rev-parse HEAD)" = 7515bc287d55c5b16e46b2d86f1fcd8153b4f3b5
           python3 - <<'PY'
           import os
           from pathlib import Path
-          p = Path('crates/fireemu-core-firestore/src/pipeline_exec.rs')
+          p = Path('crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs')
           s = p.read_text()
+          start = s.index('fn extrema(')
+          end = s.index('fn eval_abs(', start)
+          part = s[start:end]
           changes = {
-            'guard': ('if DocumentId::try_new(id.clone()).is_err() {', 'if false && DocumentId::try_new(id.clone()).is_err() {'),
-            'cmp': ('match a.cmp(b) {', 'match b.cmp(a) {'),
-            'size': ('n.checked_add(1)', 'n.checked_add(2)'),
-            'reverse': ('s.chars().rev().collect()', 's.chars().collect()'),
-            'length': ('s.chars().count(),', 's.chars().count() + 1,'),
-            'concat': ('(scalar::CONCAT.eval)(args, cx)', '(scalar::STRING_REVERSE.eval)(&args[..1], cx)'),
-            'namespace': ('Eval::Value(Value::String(String::new()))', 'Eval::Value(Value::String("x".to_owned()))'),
-            'ancestor': ('path.pairs().starts_with(parent.pairs())', '!path.pairs().starts_with(parent.pairs())'),
-            'slice': ('path.ancestor(end).map_or_else(', 'path.ancestor(end + 1).map_or_else('),
-            'replace': ('path.collection_id().as_str(), id', 'path.collection_id().as_str(), "other"'),
-            'id': ('let id = (0..20)', 'let id = (0..19)'),
-            'coalesce': ('return last;', 'return Eval::Value(Value::Null);'),
-            'getfield': ('.get(key)\n            .cloned()\n            .map_or_else(|| generic_unobserved("get_field")', '.get("missing")\n            .cloned()\n            .map_or_else(|| generic_unobserved("get_field")'),
-            'offset': ('.and_then(|i| values.get(i))\n            .cloned()', '.and_then(|i| values.get(i.saturating_add(1)))\n            .cloned()'),
+            'minimum': ('min_by(|a, b| a.canonical_cmp(b))', 'max_by(|a, b| a.canonical_cmp(b))'),
+            'maximum': ('max_by(|a, b| a.canonical_cmp(b))', 'min_by(|a, b| a.canonical_cmp(b))'),
+            'null': ('!matches!(value, Value::Null)', 'true'),
+            'absent': ('if let Some(error) = first_error(args) {', 'if args.iter().any(|arg| matches!(arg, Eval::Absent)) { return unobserved(name, "mutant"); }\n    if let Some(error) = first_error(args) {'),
+            'promotion': ('NumberSum::Double(value) => double(value)', 'NumberSum::Double(_value) => integer(0)'),
+            'nonnumeric': ('let Ok(sum) = total.add(value) else {', 'if matches!(value, Value::String(_)) { return unobserved("sum", "mutant"); }\n        let Ok(sum) = total.add(value) else {'),
+            'negate': ('double(-value)', 'double(*value)'),
           }
           if os.environ['MUTANT'] != 'noop':
               old, new = changes[os.environ['MUTANT']]
-              assert s.count(old) == 1, (os.environ['MUTANT'], s.count(old))
-              p.write_text(s.replace(old, new))
+              if os.environ['MUTANT'] == 'absent':
+                  assert part.count(old) == 3
+                  part = part.replace(old, new, 1)
+              else:
+                  assert part.count(old) == 1, (os.environ['MUTANT'], part.count(old))
+                  part = part.replace(old, new)
+              p.write_text(s[:start] + part + s[end:])
           PY
           set +e
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(observed_generic_) | test(observed_reference_forms_and_autogen_id) | test(observed_coalesce_is_lazy_and_skips_null_and_absent) | test(observed_replace_document_id_refuses_descendant_paths)'
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(numeric_scalar_)'
           status=$?
           set -e
           if [ "$MUTANT" = noop ]; then test "$status" = 0; else test "$status" = 100; fi

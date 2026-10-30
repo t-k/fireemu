@@ -79,6 +79,9 @@ jobs:
           echo "$GITHUB_WORKSPACE/verification/quint/bin" >> "$GITHUB_PATH"
       - name: fetch locked workspace dependencies for offline authority checks
         run: cargo fetch --locked
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
       - name: adapter clippy
         run: cargo clippy -p fireemu-adapter-http --all-targets --all-features -- -D warnings
       - name: baseline, no-op and scoped mutations

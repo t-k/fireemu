@@ -14,7 +14,6 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
       - run: cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)'
-      - run: cargo nextest run -p fireemu-adapter-http --profile pr
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 10.32.1
@@ -24,3 +23,4 @@ jobs:
       - run: pnpm -C conformance install --frozen-lockfile
       - run: cargo build -p fireemu --locked
       - run: target/debug/fireemu exec --project demo-signed-put --only storage --storage-port 0 --hub-port 0 -- node conformance/src/storage-signed-put-smoke.mjs
+      - run: cargo nextest run -p fireemu-adapter-http --profile pr --no-fail-fast

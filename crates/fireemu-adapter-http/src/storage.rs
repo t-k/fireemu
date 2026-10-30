@@ -2783,6 +2783,9 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
 fn fallback_route(method: &str, path: &str, segments: &[&str]) -> Result<Route, String> {
     if method == "PUT" {
         let original: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        if original.first() == Some(&"internal") {
+            return Ok(Route::NotImplemented);
+        }
         fallthrough(method, &original)
     } else {
         fallthrough(method, segments)

@@ -132,6 +132,7 @@ fn rules_put_bounds_empty_node_traversal() {
 
 #[test]
 fn rules_put_reports_four_recorded_type_error_positions() {
+    use std::fmt::Write as _;
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];
     let mut input = String::from("{\"rules\":{");
@@ -139,7 +140,7 @@ fn rules_put_reports_four_recorded_type_error_positions() {
         if i != 0 {
             input.push(',');
         }
-        input.push_str(&format!("\"r{i}\":{{\".read\":\""));
+        write!(input, "\"r{i}\":{{\".read\":\"").unwrap();
         while input.len() + 1 < column {
             input.push(' ');
         }

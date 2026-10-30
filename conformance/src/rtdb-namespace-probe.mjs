@@ -37,6 +37,18 @@ const pidIdentity = (pid) => {
     return undefined;
   }
 };
+export function sameOwnedIdentity(a, b) {
+  return Boolean(
+    a &&
+    b &&
+    ["pid", "birth", "comm", "args", "exe"].every(
+      (key) => a[key] !== undefined && a[key] === b[key],
+    ),
+  );
+}
+export function sameInheritedPipe(a, b) {
+  return typeof a === "string" && /^pipe:\[\d+\]$/.test(a) && a === b;
+}
 const directChildren = (pid) => {
   try {
     return readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
@@ -52,26 +64,46 @@ function findOwned(root) {
   const queue = [root],
     seen = new Set(queue);
   while (queue.length) {
-    for (const pid of directChildren(queue.shift())) {
+    const parent = queue.shift();
+    for (const pid of directChildren(parent)) {
       if (seen.has(pid)) continue;
       seen.add(pid);
       const identity = pidIdentity(pid);
-      if (identity?.args.includes(marker)) return identity;
+      if (identity?.args.includes(marker)) {
+        try {
+          const childPipe = readlinkSync(`/proc/${pid}/fd/2`);
+          const parentPipe = readlinkSync(`/proc/${parent}/fd/2`);
+          const status = readFileSync(`/proc/${pid}/status`, "utf8");
+          const nsPids = /^NSpid:\s+(.+)$/m.exec(status)?.[1].trim().split(/\s+/).map(Number);
+          if (sameInheritedPipe(childPipe, parentPipe) && nsPids?.length >= 2)
+            return { ...identity, parent: pidIdentity(parent), childPipe, parentPipe, nsPids };
+        } catch {
+          /* A disappearing or unverifiable child is not a witness. */
+        }
+      }
       queue.push(pid);
     }
   }
   return undefined;
 }
-async function inner(out) {
-  const error = rtdbNamespaceError(process.platform, process.pid, realpathSync("/proc/self"));
-  if (error) throw Error(error);
-  mkdirSync(join(out, "logs"));
-  const binary = join(out, "node");
+export function createProbeExecutable(binary) {
   writeFileSync(
     binary,
     `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nconst fs = require('node:fs');\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '${marker}'], { detached: true, stdio: ['ignore', 'ignore', 'inherit'] });\nfs.writeFileSync(process.env.PROBE_PID, String(child.pid));\nfs.writeFileSync(process.argv[process.argv.indexOf('--export') + 1], '{');\nsetInterval(() => {}, 1000);\n`,
   );
-  chmodSync(binary, 0o700);
+  chmodSync(binary, 0o755);
+}
+async function inner(out) {
+  const namespace = {
+    platform: process.platform,
+    pid: process.pid,
+    procSelf: realpathSync("/proc/self"),
+  };
+  const error = rtdbNamespaceError(namespace.platform, namespace.pid, namespace.procSelf);
+  if (error) throw Error(error);
+  mkdirSync(join(out, "logs"));
+  const binary = join(out, "node");
+  createProbeExecutable(binary);
   const run = structuredClone(RUNS.find((entry) => entry.id === "R22"));
   run.commands[0].timeoutMs = 5000;
   let result;
@@ -93,7 +125,13 @@ async function inner(out) {
     observed = true;
     return JSON.parse(readFileSync(result.values.export, "utf8"));
   });
-  await writeReleaseSummary(out, { result: "FAIL", fatal, observed, runs: [result.record] });
+  await writeReleaseSummary(out, {
+    result: "FAIL",
+    fatal,
+    observed,
+    namespace,
+    runs: [result.record],
+  });
   if (!fatal || result.record.commands[0].exitCode !== "timeout")
     throw Error("timeout was not fatal");
   process.exit(1); // PID 1 exit causes the kernel to terminate the detached child.
@@ -125,8 +163,14 @@ async function outer(out) {
     child.once("error", (error) => done({ error: error.message }));
     child.once("close", (code, signal) => done({ code, signal }));
   });
-  let identity;
+  let identity, launcherIdentity;
   for (let i = 0; i < 160 && !identity; i++) {
+    const launcher = pidIdentity(child.pid);
+    if (
+      launcher?.exe === "/usr/bin/unshare" &&
+      launcher.args.includes(fileURLToPath(import.meta.url))
+    )
+      launcherIdentity ??= launcher;
     identity = findOwned(child.pid);
     if (!identity) await delay(25);
   }
@@ -136,11 +180,18 @@ async function outer(out) {
   });
   const outcome = await Promise.race([finished, timeout]);
   clearTimeout(timeoutId);
+  let cleanupUnverified = false;
   if (outcome.timeout) {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {}
-    await finished;
+    if (sameOwnedIdentity(launcherIdentity, pidIdentity(child.pid))) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+      await finished;
+    } else {
+      cleanupUnverified = true;
+      child.stderr.destroy();
+      child.unref();
+    }
   }
   const originalStillPresent = () => {
     try {
@@ -174,8 +225,19 @@ async function outer(out) {
       return false;
     }
   })();
+  let innerPid;
+  try {
+    innerPid = Number(readFileSync(join(out, "inner-pid"), "utf8"));
+  } catch {}
   const ok =
     outcome.code === 1 &&
+    !cleanupUnverified &&
+    launcherIdentity &&
+    identity?.nsPids?.at(-1) === innerPid &&
+    sameInheritedPipe(identity?.childPipe, identity?.parentPipe) &&
+    summary?.namespace?.platform === "linux" &&
+    summary?.namespace?.pid === 1 &&
+    summary?.namespace?.procSelf === "/proc/1" &&
     identity &&
     !remaining &&
     summary?.result === "FAIL" &&
@@ -186,10 +248,12 @@ async function outer(out) {
     !later;
   writeFileSync(
     join(out, "receipt.json"),
-    `${JSON.stringify({ ok: Boolean(ok), identity, remaining, outcome, summary, later, stderr }, null, 2)}\n`,
+    `${JSON.stringify({ ok: Boolean(ok), launcherIdentity, identity, innerPid, remaining, outcome, summary, later, cleanupUnverified, stderr }, null, 2)}\n`,
   );
   if (!ok) throw Error("PID namespace timeout probe failed; see receipt.json");
 }
-const [mode, output] = process.argv.slice(2);
-if (!output || !["--inside", "--out"].includes(mode)) throw Error("usage: --out <new directory>");
-await (mode === "--inside" ? inner(resolve(output)) : outer(resolve(output)));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const [mode, output] = process.argv.slice(2);
+  if (!output || !["--inside", "--out"].includes(mode)) throw Error("usage: --out <new directory>");
+  await (mode === "--inside" ? inner(resolve(output)) : outer(resolve(output)));
+}

@@ -370,3 +370,44 @@ test("REST exports reject altered local bytes and a substituted historical fixtu
   assert.notDeepEqual(judgeExport("rest-old", observed, hash, wrongFixture), []);
   assert.notDeepEqual(judgeExport("rest-v033", observed, hash, expected), []);
 });
+
+test("the CI probe executable is readable by the artifact uploader", async () => {
+  const { mkdtempSync, rmSync, statSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { createProbeExecutable } = await import("./rtdb-namespace-probe.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "rtdb-probe-mode-"));
+  try {
+    const binary = join(dir, "node");
+    createProbeExecutable(binary);
+    assert.equal(statSync(binary).mode & 0o777, 0o755);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the namespace probe refuses signals without the full owned process identity", async () => {
+  const { sameOwnedIdentity } = await import("./rtdb-namespace-probe.mjs");
+  const original = {
+    pid: 23,
+    birth: "45",
+    comm: "unshare",
+    args: "unshare --pid probe",
+    exe: "/usr/bin/unshare",
+  };
+  assert.equal(sameOwnedIdentity(original, structuredClone(original)), true);
+  for (const key of Object.keys(original))
+    assert.equal(sameOwnedIdentity(original, { ...original, [key]: "different" }), false, key);
+  assert.equal(sameOwnedIdentity(original, undefined), false);
+});
+
+test("the probe requires matching inherited pipe identities", async () => {
+  const { sameInheritedPipe } = await import("./rtdb-namespace-probe.mjs");
+  assert.equal(sameInheritedPipe("pipe:[123]", "pipe:[123]"), true);
+  for (const [a, b] of [
+    ["pipe:[123]", "pipe:[456]"],
+    ["/dev/null", "/dev/null"],
+    [undefined, undefined],
+  ])
+    assert.equal(sameInheritedPipe(a, b), false);
+});

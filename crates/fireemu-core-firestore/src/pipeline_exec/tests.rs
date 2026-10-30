@@ -1942,3 +1942,22 @@ fn array_scalar_recorded_arity_messages() {
         assert_eq!(Expr::call(name, args, Placement::Value).unwrap_err(), ExprError::Arity(expected.to_owned()));
     }
 }
+
+proptest! {
+    #[test]
+    fn array_callbacks_preserve_order_and_transform_length(input in proptest::collection::vec(-20_i64..20, 0..16)) {
+        let values: Vec<_> = input.iter().copied().map(Value::Integer).collect();
+        let source = Expr::Constant(Value::Array(values.clone()));
+        let alias = Expr::Constant(s("item"));
+        let variable = Expr::Variable("item".to_owned());
+        let transform = call("array_transform", vec![source.clone(), alias.clone(), variable.clone()]);
+        let predicate = call("greater_than", vec![variable, Expr::Constant(Value::Integer(0))]);
+        let filter = call("array_filter", vec![source, alias, predicate]);
+        let expected: Vec<_> = input.iter().copied().filter(|value| *value > 0).map(Value::Integer).collect();
+        let doc = row("c/d", &[]);
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            prop_assert_eq!(transform.eval_in(&doc, profile), Eval::Value(Value::Array(values.clone())));
+            prop_assert_eq!(filter.eval_in(&doc, profile), Eval::Value(Value::Array(expected.clone())));
+        }
+    }
+}

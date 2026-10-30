@@ -1468,7 +1468,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
             label: "equal(vector of integers): the argument count first",
             stages: vec![select(func("equal", vec![vec_int()]))],
             strict: None,
-            emulator: (400, "function \"equal\" takes 2 argument(s), got 1 argument(s)"),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."),
         },
         Case {
             label: "{__x__: field, a: vector of integers}: the reserved key first",

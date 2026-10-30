@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 59f52773c94053c7faf4ff350d7397f43747692c
+          ref: 89556735c779a9e35dfcaee7ae232ad693273bfb
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 59f52773c94053c7faf4ff350d7397f43747692c
+          test "$(git rev-parse HEAD)" = 89556735c779a9e35dfcaee7ae232ad693273bfb
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo clippy -p fireemu-core-firestore --all-targets --all-features --locked -- -D warnings

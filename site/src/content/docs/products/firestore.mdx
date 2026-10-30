@@ -116,7 +116,9 @@ Finite `replace_with` supports full replacement and the implemented overwrite an
 
 In v0.38.0, finite recorded forms of `array_agg`, `array_agg_distinct`, `first`, `last` and `count_if` are supported. Bounded subcollection and correlated scalar subquery forms share a source snapshot; unsupported inputs, stages and bindings are refused, and local resource limits apply. Aggregate ordering and unrecorded forms are not claimed as production parity.
 
-On main, pending v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
+In v0.38.1, ordinary REST reports the recorded depth diagnostic for deeply nested pipeline JSON, and strict gRPC admits the recorded 65-field `select` refusal. gRPC function expressions over 32 levels are refused in both profiles; strict gRPC also maps protobuf recursion failures to the recorded invalid-argument diagnostic. The gRPC limits and diagnostics generalize beyond the observed chains; error precedence and other unrecorded cases remain unverified.
+
+On main, pending v0.39.0, selecting a missing nested alias preserves its empty parent maps. Production recorded three dotted-alias cases; other missing-expression shapes are generalized from those observations.
 
 On main, pending v0.39.0, a supported correlated scalar subquery may apply an additional string-equality filter before checking cardinality. The recorded single-result request returns the selected value, and the recorded multiple-result request receives the production `INVALID_ARGUMENT` diagnostic. These observations cover only those recorded request shapes; zero-result behavior and other scalar forms remain unverified.
 

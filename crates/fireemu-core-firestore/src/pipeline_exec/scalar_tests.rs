@@ -3911,15 +3911,33 @@ fn vector_scalars_finite_cancellation_nan_and_underflow_are_bounded() {
 
 #[test]
 fn map_odd_argument_count_is_an_arity_error() {
-    let result = Expr::call("map", vec![Expr::Constant(Value::String("k".into()))], Placement::Value);
-    assert!(matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments"));
+    let result = Expr::call(
+        "map",
+        vec![Expr::Constant(Value::String("k".into()))],
+        Placement::Value,
+    );
+    assert!(
+        matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments")
+    );
     assert!(Expr::call("map", vec![], Placement::Value).is_ok());
-    assert!(Expr::call("map", vec![Expr::Constant(Value::String("k".into())), Expr::Constant(Value::Integer(1))], Placement::Value).is_ok());
+    assert!(Expr::call(
+        "map",
+        vec![
+            Expr::Constant(Value::String("k".into())),
+            Expr::Constant(Value::Integer(1))
+        ],
+        Placement::Value
+    )
+    .is_ok());
 }
 
 #[test]
 fn numeric_scalar_recorded_integer_forms() {
-    let values = array(vec![Value::Integer(7), Value::Integer(2), Value::Integer(5)]);
+    let values = array(vec![
+        Value::Integer(7),
+        Value::Integer(2),
+        Value::Integer(5),
+    ]);
     for (name, expected) in [("minimum", 2), ("maximum", 7)] {
         assert_eq!(both(name, &[values.clone()]), int(expected));
         assert_eq!(both(name, &[int(7), int(2)]), int(expected));
@@ -3934,7 +3952,10 @@ fn numeric_scalar_unobserved_inputs_are_refused() {
         assert!(is_unobserved(&strict(name, &[array(vec![])])));
         assert!(is_unobserved(&strict(name, &[array(vec![Value::Null])])));
     }
-    assert!(is_unobserved(&strict("sum", &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])])));
+    assert!(is_unobserved(&strict(
+        "sum",
+        &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])]
+    )));
     assert!(is_unobserved(&strict("negate", &[int(i64::MIN)])));
     assert!(is_unobserved(&strict("negate", &[text("x")])));
 }

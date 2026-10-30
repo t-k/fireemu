@@ -141,6 +141,14 @@
    "decidedBy": "coordinator",
    "decidedOn": "2026-10-29",
    "decisionRef": "docs.local/instructions/owner-decisions.md (1936); Coordinator adjudication 1936 under the applicable owner delegations 1858, 1866 and 1899."
+  },
+  {
+   "id": "R8",
+   "decision": "The HTTP/1.1 transfer-framing difference of the recorded strict SSE responses is an owner-approved development divergence: production is close-delimited and fireemu is chunked. Event contents, cancellation and EOF remain covered by their existing recorded evidence; unrecorded stream shapes and all other RTDB claims retain their existing evidence bounds and statuses. This decision does not close the RTDB parent.",
+   "status": "FROZEN",
+   "decidedBy": "owner",
+   "decidedOn": "2026-10-31",
+   "decisionRef": "docs.local/instructions/owner-decisions.md (2076)"
   }
  ],
  "conditions": [
@@ -1029,7 +1037,7 @@
    "statement": "After user A is deleted, the admin write's acknowledgement and the listener's value event race in both production and fireemu; the comparison judges the events of that step (and only that step) unordered; every other step, including the multi-event steps signin-a, signout, resignin-a and refresh-after-delete, is judged in recorded order. Transport request counts (long-polling HTTP requests per profile) and millisecond timings are not compared."
   },
   "sseFraming": {
-   "statement": "Production sends close-delimited event streams and closes after the cancel event. Under strict, fireemu closes after cancellation but uses native HTTP/1.1 chunked framing; the recorded event bytes agree. The emulator profile retains its existing transport behavior."
+   "statement": "Production sends close-delimited event streams and closes after the cancel event. Under strict, fireemu closes after cancellation but uses native HTTP/1.1 chunked framing; the recorded event bytes agree. The emulator profile retains its existing transport behavior. The owner accepted this transfer-framing difference on 2026-10-31 (scope decision R8); this does not relax event, cancellation or EOF checks or establish whole-parent parity."
   },
   "googleSignedTokens": {
    "statement": "Local RTDB accepts only ID tokens issued by fireemu's Auth (or the owner credential); production Google-signed tokens are not accepted locally, and strict refuses a non-owner gauth credential with production's permission_denied."

@@ -6010,6 +6010,42 @@ vector	grpc	emulator	function	foreign";
     }
 
     #[test]
+    fn autogen_document_id_uses_request_runtime() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let wire = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "autogen_document_id".to_owned(),
+                args: vec![],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let expression = decode_operand_tree(&wire, mode).unwrap();
+            let runtime = RuntimeContext {
+                expr_rng: Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    fireemu_core_types::determinism::SplitMix64::new(42),
+                ))),
+                ..RuntimeContext::default()
+            };
+            let row = Row::derived(std::collections::BTreeMap::default());
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let Eval::Value(Value::String(id)) =
+                    expression.eval_in_with_runtime(&row, mode, runtime.clone())
+                else {
+                    panic!("expected ID")
+                };
+                assert_eq!(id.len(), 20);
+                assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+                ids.push(id);
+            }
+            assert_ne!(ids[0], ids[1]);
+        }
+    }
+
+    #[test]
     fn coalesce_skips_failing_constant_but_validates_static_errors() {
         use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
         use fireemu_core_firestore::value::Value;

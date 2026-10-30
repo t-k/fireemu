@@ -2383,9 +2383,7 @@ fn decode_operand_tree_in(
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        // A literal of literals: the official emulator checks its vectors and `__type__` keys
-        // before its other keys; production recorded well-formed vectors and a string
-        // `__type__` only, so strict refuses the rest.
+        // The official emulator checks vectors and `__type__` keys before other literal keys.
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
@@ -2953,12 +2951,10 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// keys are handled by the ordered refusal checks after this shape check.
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
-    // `in_array`: production read vectors alone and as a map value, never inside an array
-    // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, in_array: bool) -> bool {
+    // O-5 appendix also records a well-formed vector within an array.
+    fn walk(value: &pb::Value) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
-            Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
+            Some(V::ArrayValue(array)) => array.values.iter().all(walk),
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
                     && matches!(
@@ -2972,17 +2968,15 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                // Production answered a string `__type__` alone in its map only (O-4
-                // `literals#key-type`).
-                let typed = key != "__type__"
-                    || (matches!(inner.value_type, Some(V::StringValue(_)))
-                        && map.fields.len() == 1);
-                typed && walk(inner, false)
+                // A non-vector tag remains an ordinary map (O-5 appendix n41 and r11).
+                let typed =
+                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
+                typed && walk(inner)
             }),
             _ => true,
         }
     }
-    walk(value, false)
+    walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.

@@ -767,12 +767,16 @@ impl Expr {
     }
 
     /// Adds every field path the expression reads.
-    fn collect_fields(&self, out: &mut Vec<FieldPath>) {
+    fn collect_fields(&self, out: &mut Vec<FieldPath>, all_fields: &mut bool) {
         match self {
             Self::Field(path) => out.push(path.clone()),
             Self::Constant(_) | Self::SubcollectionArray { .. } | Self::CorrelatedScalar { .. } => {
             }
-            Self::Call { args, .. } => args.iter().for_each(|arg| arg.collect_fields(out)),
+            Self::Call { function, args } => {
+                *all_fields |= function.name == "current_document";
+                args.iter()
+                    .for_each(|arg| arg.collect_fields(out, all_fields));
+            }
         }
     }
 
@@ -3197,32 +3201,35 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
         )
     })?;
     let mut paths = Vec::new();
+    let mut all_fields = false;
     for stage in &stages[..=narrowing] {
         match stage {
-            Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Where(condition) => condition.collect_fields(&mut paths, &mut all_fields),
             Stage::Unnest { expression, .. }
             | Stage::ReplaceWith { expression, .. }
-            | Stage::FindNearest { expression, .. } => expression.collect_fields(&mut paths),
+            | Stage::FindNearest { expression, .. } => {
+                expression.collect_fields(&mut paths, &mut all_fields)
+            }
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Sort(keys) => keys
                 .iter()
-                .for_each(|key| key.expr.collect_fields(&mut paths)),
+                .for_each(|key| key.expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Distinct(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Aggregate {
                 accumulators,
                 groups,
             } => {
                 for (_, accumulator) in accumulators {
                     if let Some(argument) = &accumulator.argument {
-                        argument.collect_fields(&mut paths);
+                        argument.collect_fields(&mut paths, &mut all_fields);
                     }
                 }
                 for (_, expr) in groups {
-                    expr.collect_fields(&mut paths);
+                    expr.collect_fields(&mut paths, &mut all_fields);
                 }
             }
             Stage::Union { .. }
@@ -3231,6 +3238,9 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
             | Stage::Limit(_)
             | Stage::Sample(_) => {}
         }
+    }
+    if all_fields {
+        return None;
     }
     paths.sort();
     paths.dedup();

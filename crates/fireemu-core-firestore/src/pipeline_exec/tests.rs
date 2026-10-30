@@ -69,6 +69,11 @@ fn current_document_returns_fields_and_document_metadata() {
             Eval::Value(expected.clone())
         );
     }
+    let nested = call("array", vec![call("current_document", vec![])]);
+    assert_eq!(
+        referenced_fields(&[Stage::select(vec![(alias("v"), nested)])]),
+        None
+    );
     let mut other = row("c/other", &[("i", Value::Integer(2))]);
     other.times = Some(RowTimes {
         created: updated,

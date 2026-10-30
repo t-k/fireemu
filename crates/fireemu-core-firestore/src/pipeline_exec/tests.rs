@@ -99,6 +99,20 @@ fn recorded_arity_metadata_formats_document_and_comparison_signatures() {
     }
 }
 
+proptest! {
+    #[test]
+    fn comparison_arity_uses_supplied_count(count in 0usize..12) {
+        let args = vec![Expr::Constant(Value::Null); count];
+        let result = Expr::call("equal", args, Placement::Value);
+        if count == 2 {
+            prop_assert!(result.is_ok());
+        } else {
+            let expected = format!("The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" });
+            prop_assert_eq!(result.unwrap_err(), ExprError::Arity(expected));
+        }
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {

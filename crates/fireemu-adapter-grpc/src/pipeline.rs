@@ -4836,6 +4836,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn valid_where_equal_retains_field_filter_pushdown() {
+        use pb::value::ValueType as V;
+        let condition = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    },
+                    pb::Value {
+                        value_type: Some(V::IntegerValue(1)),
+                    },
+                ],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stage = pb::pipeline::Stage {
+                name: "where".to_owned(),
+                args: vec![condition.clone()],
+                ..Default::default()
+            };
+            assert!(decode_condition(&stage, mode).unwrap().1.is_some());
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

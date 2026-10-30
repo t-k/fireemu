@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ae8e5ec6a9a3717f73b0e445c59f16e11e207ba7
+          ref: 1d5438a50f31f082604bddba3df48d8d639345ad
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = ae8e5ec6a9a3717f73b0e445c59f16e11e207ba7
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(map_odd_argument_count_is_an_arity_error)'
+          test "$(git rev-parse HEAD)" = 1d5438a50f31f082604bddba3df48d8d639345ad
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(numeric_scalar_recorded_integer_forms)'

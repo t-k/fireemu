@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const SHA = '24122ce3e375323da91290de11d01b45d14aa9a5';
 const PRIOR_RECOVERY_SHA = '34f100efc528b734b171dc88f87a1c4502e2c925';
+const SECOND_RECOVERY_SHA = '4bbd2dcc5926d28f8e38da43df0fcc5f0201c9ec';
 const REPO = 't-k/fireemu';
 const RUN = '40986239359';
 const VERSION = '0.38.1';
@@ -96,7 +97,7 @@ async function verifyPresent(name, expected, metadata, dir, allowedShas) {
   const audit = join(dir, `audit-${name.replace(/[^a-z0-9]/g, '-')}`);
   mkdirSync(audit);
   writeFileSync(join(audit, 'package.json'), JSON.stringify({ name: 'recovery-audit', version: '1.0.0', private: true }));
-  invoke('npm', ['install', '--prefix', audit, '--ignore-scripts', '--no-audit', '--no-fund', '--force', `${name}@${VERSION}`]);
+  await installForAudit(name, (timeout, attempt) => invoke('npm', ['install', '--prefix', audit, '--ignore-scripts', '--no-audit', '--no-fund', '--force', '--prefer-online', '--cache', join(audit, `cache-${attempt}`), '--json', `${name}@${VERSION}`], { timeout }));
   const result = json('npx', ['--yes', 'npm@12.2.1', 'audit', 'signatures', '--prefix', audit, '--json', '--include-attestations']);
   const entry = result.verified?.find(x => x.name === name && x.version === VERSION);
   const provenance = entry?.attestationBundles?.find(x => x.predicateType === 'https://slsa.dev/provenance/v1');
@@ -111,9 +112,34 @@ export function validateProvenance(statement, name, integrity, expectedSha) {
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const deps = statement.predicate?.buildDefinition?.resolvedDependencies;
   const invocation = statement.predicate?.runDetails?.metadata?.invocationId;
-  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : expectedSha === PRIOR_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41001331458\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
+  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : expectedSha === PRIOR_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41001331458\/attempts\/1$/ : expectedSha === SECOND_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41007719982\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
   if (expectedSha === PRIOR_RECOVERY_SHA && name !== '@fireemu/darwin-x64') return false;
+  if (expectedSha === SECOND_RECOVERY_SHA && name !== '@fireemu/linux-arm64') return false;
   return Boolean(typeof invocation === 'string' && pattern.test(invocation) && statement.subject?.some(x => x.name === `pkg:npm/${name.replace('@', '%40')}@${VERSION}` && x.digest?.sha512 === digest) && workflow?.ref === (expectedSha === SHA ? `refs/tags/v${VERSION}` : 'refs/heads/main') && workflow?.repository === `https://github.com/${REPO}` && workflow?.path === '.github/workflows/release.yml' && deps?.some(x => x.digest?.gitCommit === expectedSha));
+}
+
+export async function installForAudit(name, install, { sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => performance.now(), attempts = 61 } = {}) {
+  const deadline = now() + 300_000;
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    try {
+      await install(Math.max(1, Math.min(60_000, Math.floor(remaining))), attempt);
+      return;
+    } catch (error) {
+      let detail;
+      try { detail = JSON.parse(error.stdout?.toString() ?? '').error; } catch { throw error; }
+      if (detail?.code !== 'ETARGET' || detail?.summary !== `No matching version found for ${name}@${VERSION}.`) throw error;
+      lastError = error;
+      if (attempt + 1 < attempts && now() < deadline) await sleep(Math.min(5_000, deadline - now()));
+    }
+  }
+  throw lastError ?? new Error(`audit installation timed out: ${name}`);
+}
+
+export function lookupPhase(name) {
+  return ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64'].includes(name) ? 'known' : 'new';
 }
 
 export async function lookupForPhase(name, phase, { lookup = registry, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => performance.now(), attempts = 61 } = {}) {
@@ -176,8 +202,8 @@ async function main() {
     tarballs.set('fireemu', pack(join(source, 'npm/fireemu'), dir));
     const preflight = process.argv.includes('--preflight');
     await publishAll(tarballs, {
-      lookup: name => lookupForPhase(name, ['@fireemu/darwin-arm64', '@fireemu/darwin-x64'].includes(name) ? 'known' : 'new'),
-      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, PRIOR_RECOVERY_SHA, process.env.GITHUB_SHA]),
+      lookup: name => lookupForPhase(name, lookupPhase(name)),
+      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, PRIOR_RECOVERY_SHA, SECOND_RECOVERY_SHA, process.env.GITHUB_SHA]),
       publish: async (name, expected) => { invoke('npm', ['publish', expected.path, '--provenance', '--access', 'public']); },
       verifyPublished: async (name, expected) => {
         const metadata = await lookupForPhase(name, 'postpublish');

@@ -203,3 +203,98 @@ test('post-publication lookup tolerates over two minutes of 404 responses', asyn
   assert.equal(elapsed, 125_000);
   assert.equal(calls, 26);
 });
+
+const auditCases = [
+  ['known', 'success', 'first'], ['known', 'etarget', 'last'], ['known', 'other', 'first'],
+  ['postpublish', 'success', 'last'], ['postpublish', 'etarget', 'last'], ['postpublish', 'other', 'first'],
+  ['known', 'etarget', 'first'], ['known', 'other', 'last'],
+];
+for (const [phase, outcome, attempt] of auditCases) {
+  test(`audit ${phase} ${outcome} ${attempt}`, async () => {
+    const { installForAudit, publishAll } = await import('./recover-v0381.mjs');
+    let calls = 0; let sleeps = 0; let publishes = 0;
+    const etarget = () => Object.assign(new Error('npm failed'), { stdout: Buffer.from(JSON.stringify({ error: { code: 'ETARGET', summary: 'No matching version found for @fireemu/linux-arm64@0.38.1.' } })) });
+    const install = async () => {
+      calls++;
+      if (attempt === 'last' && calls === 1) throw etarget();
+      if (outcome === 'etarget') throw etarget();
+      if (outcome === 'other') throw new Error('E401');
+    };
+    const audit = () => installForAudit('@fireemu/linux-arm64', install, { sleep: async () => { sleeps++; }, attempts: 2 });
+    const operation = () => publishAll(new Map([['@fireemu/linux-arm64', 1]]), {
+      lookup: async () => phase === 'known' ? {} : null, verify: audit,
+      publish: async () => { publishes++; }, verifyPublished: audit,
+    });
+    if (outcome === 'other' || (outcome === 'etarget' && attempt === 'last')) await assert.rejects(operation());
+    else if (outcome === 'etarget') await assert.rejects(operation());
+    else await operation();
+    const expectedCalls = outcome === 'etarget' ? 2 : attempt === 'last' ? 2 : 1;
+    assert.equal(calls, expectedCalls); assert.equal(sleeps, expectedCalls - 1);
+    assert.equal(publishes, phase === 'postpublish' ? 1 : 0);
+  });
+}
+
+test('audit retries only ETARGET naming the exact package and version', async () => {
+  const { installForAudit } = await import('./recover-v0381.mjs');
+  for (const error of [
+    { code: 'ETARGET', summary: 'No matching version found for other@0.38.1.' },
+    { code: 'E401', summary: 'No matching version found for @fireemu/linux-arm64@0.38.1.' },
+  ]) {
+    let calls = 0;
+    await assert.rejects(installForAudit('@fireemu/linux-arm64', async () => { calls++; throw Object.assign(new Error('failed'), { stdout: Buffer.from(JSON.stringify({ error })) }); }, { sleep: async () => {}, attempts: 2 }));
+    assert.equal(calls, 1);
+  }
+});
+
+test('only linux-arm64 from the exact second recovery run and SHA is accepted', () => {
+  const sha = '4bbd2dcc5926d28f8e38da43df0fcc5f0201c9ec';
+  const digest = '00'.repeat(64);
+  const integrity = `sha512-${Buffer.from(digest, 'hex').toString('base64')}`;
+  const statement = { subject: [{ name: 'pkg:npm/%40fireemu/linux-arm64@0.38.1', digest: { sha512: digest } }], predicate: { buildDefinition: { externalParameters: { workflow: { repository: 'https://github.com/t-k/fireemu', path: '.github/workflows/release.yml', ref: 'refs/heads/main' } }, resolvedDependencies: [{ digest: { gitCommit: sha } }] }, runDetails: { metadata: { invocationId: 'https://github.com/t-k/fireemu/actions/runs/41007719982/attempts/1' } } } };
+  assert.equal(validateProvenance(statement, '@fireemu/linux-arm64', integrity, sha), true);
+  const wrongRun = structuredClone(statement); wrongRun.predicate.runDetails.metadata.invocationId = 'https://github.com/t-k/fireemu/actions/runs/41007719983/attempts/1';
+  assert.equal(validateProvenance(wrongRun, '@fireemu/linux-arm64', integrity, sha), false);
+  const wrongPackage = structuredClone(statement); wrongPackage.subject[0].name = 'pkg:npm/%40fireemu/linux-x64@0.38.1';
+  assert.equal(validateProvenance(wrongPackage, '@fireemu/linux-x64', integrity, sha), false);
+});
+
+test('audit ETARGET retries are bounded at five minutes', async () => {
+  const { installForAudit } = await import('./recover-v0381.mjs');
+  let elapsed = 0; let calls = 0;
+  await assert.rejects(installForAudit('@fireemu/linux-arm64', async () => {
+    calls++;
+    throw Object.assign(new Error('ETARGET'), { stdout: Buffer.from(JSON.stringify({ error: { code: 'ETARGET', summary: 'No matching version found for @fireemu/linux-arm64@0.38.1.' } })) });
+  }, { now: () => elapsed, sleep: async ms => { elapsed += ms; } }));
+  assert.equal(elapsed, 300_000); assert.equal(calls, 60);
+});
+
+test('failed audit verification stops before publishing anything', async () => {
+  const { publishAll } = await import('./recover-v0381.mjs');
+  let publishes = 0;
+  await assert.rejects(publishAll(new Map([['@fireemu/linux-arm64', 1], ['fireemu', 2]]), {
+    lookup: async () => ({}), verify: async () => { throw new Error('ETARGET'); },
+    publish: async () => { publishes++; }, verifyPublished: async () => assert.fail(),
+  }));
+  assert.equal(publishes, 0);
+});
+
+test('every package already published by these runs is treated as known', async () => {
+  const { lookupPhase } = await import('./recover-v0381.mjs');
+  for (const name of ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64']) assert.equal(lookupPhase(name), 'known');
+  assert.equal(lookupPhase('@fireemu/linux-x64'), 'new');
+  assert.equal(lookupPhase('fireemu'), 'new');
+});
+
+test('audit tolerates ETARGET for over two minutes without republishing', async () => {
+  const { installForAudit, publishAll } = await import('./recover-v0381.mjs');
+  let elapsed = 0; let calls = 0; let publishes = 0;
+  await publishAll(new Map([['@fireemu/linux-arm64', 1]]), {
+    lookup: async () => null, verify: async () => assert.fail(),
+    publish: async () => { publishes++; },
+    verifyPublished: () => installForAudit('@fireemu/linux-arm64', async () => {
+      calls++;
+      if (elapsed < 125_000) throw Object.assign(new Error('ETARGET'), { stdout: Buffer.from(JSON.stringify({ error: { code: 'ETARGET', summary: 'No matching version found for @fireemu/linux-arm64@0.38.1.' } })) });
+    }, { now: () => elapsed, sleep: async ms => { elapsed += ms; } }),
+  });
+  assert.equal(publishes, 1); assert.equal(elapsed, 125_000); assert.equal(calls, 26);
+});

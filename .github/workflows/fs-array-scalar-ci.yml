@@ -5,17 +5,33 @@ on:
 permissions:
   contents: read
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 8d9163e72115ca71138091e17c431bd88c4262f1
           fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: .ci-helper
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - run: |
+      - name: Verify exact source and affected crates
+        run: |
           test "$(git rev-parse HEAD)" = 8d9163e72115ca71138091e17c431bd88c4262f1
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(infinity_vector_admission_depends_on_expression_position) | test(recorded_infinite_vectors_and_documents_root_preserve_types) | test(vector_in_array_keeps_unobserved_components_refused) | test(recorded_tagged_literals_preserve_wire_shapes) | test(strict_refuses_document_functions_of_a_root)'
+          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
+          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings
+          python3 .ci-helper/.github/temporary/nested_infinity_mutation.py
+      - name: Preserve mutation logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nested-infinity-mutation-results
+          path: /tmp/nested-infinity-mutant/
+          if-no-files-found: warn

@@ -586,7 +586,13 @@ impl Database {
                                 let mut text = if errors.is_empty() {
                                     format!("{error}\n")
                                 } else {
-                                    errors.iter().map(|e| format!("{e}\n")).collect::<String>()
+                                    use std::fmt::Write as _;
+                                    let mut text = String::new();
+                                    for diagnostic in &errors {
+                                        writeln!(text, "{diagnostic}")
+                                            .expect("writing to a string cannot fail");
+                                    }
+                                    text
                                 };
                                 if truncated {
                                     text.push_str("Additional diagnostics were truncated.\n");

@@ -1,4 +1,4 @@
-name: FS strict arity Quint generation
+name: FS strict arity Quint generation after freeze
 
 on:
   push:

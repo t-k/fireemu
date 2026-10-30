@@ -4864,6 +4864,11 @@ mod tests {
                 assert!(grpc_shape.is_none(), "gRPC shape {full}#{id}");
             }
             let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            println!(
+                "literal-matrix {full}#{id} rest={:?} grpc={:?} unordered={unordered}",
+                rest.code(),
+                grpc.code()
+            );
             if unordered {
                 assert_eq!(grpc.code(), Code::Unimplemented, "gRPC {full}#{id}");
             }

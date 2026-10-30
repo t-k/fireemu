@@ -10,15 +10,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7d52a57e61c15dc7633274a68e04b537d0db92ba
+          ref: 12a11f876527b07a4e99306e51624cc21473fea6
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 7d52a57e61c15dc7633274a68e04b537d0db92ba
+          test "$(git rev-parse HEAD)" = 12a11f876527b07a4e99306e51624cc21473fea6
           cargo fmt --all -- --check
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
           cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
       - name: adapter mutation check
         shell: bash
         run: |
@@ -33,3 +33,21 @@ jobs:
           test "$rc" = 101
           grep -q 'the_differential_corpus_holds_both_profiles_to_their_rules ... FAILED' adapter-mutation.log
           git checkout -- crates/fireemu-adapter-grpc/src/pipeline.rs
+
+      - name: mutation checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked
+          for mutation in fields name created updated guard allfields; do
+            git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs
+            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-core-firestore/src/pipeline_exec.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"fields":("let mut fields = row.fields.clone();", "let mut fields = BTreeMap::new();"),"name":("Value::Reference(path.resource_name()),", "Value::Reference(path.resource_name().to_uppercase()),"),"created":("Value::Timestamp(times.created),", "Value::Timestamp(times.updated),"),"updated":("Value::Timestamp(times.updated),", "Value::Timestamp(times.created),"),"guard":("row.path.is_none() || row.times.is_none()", "row.path.is_none() && row.times.is_none()"),"allfields":("*all_fields |= function.name == \"current_document\";", "*all_fields |= function.name == \"unrelated\";")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
+            set +e
+            cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked > "mutation-$mutation.log" 2>&1
+            rc=$?
+            set -e
+            cat "mutation-$mutation.log"
+            test "$rc" = 101
+            grep -q 'current_document_returns_fields_and_document_metadata ... FAILED' "mutation-$mutation.log"
+          done
+          git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs

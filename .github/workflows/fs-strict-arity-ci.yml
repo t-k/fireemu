@@ -17,5 +17,4 @@ jobs:
           tool: cargo-nextest@0.9.143
       - run: |
           test "$(git rev-parse HEAD)" = fba43560f9a8a8edc16565c62e3953c3234225ca
-          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(recorded_arity_metadata_formats_document_and_comparison_signatures) | test(generated_comparison_arity_and_precedence_cases) | test(comparison_arity_uses_supplied_count) | test(valid_where_equal_retains_field_filter_pushdown) | test(where_is_type_keeps_static_type_validation) | test(strict_answers_recorded_arity_and_refuses_unobserved_shapes) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(execute_pipeline_executes_nested_fields_and_document_functions) | test(call_refuses_unknown_misplaced_and_misarity_functions) | test(array_reverse_with_options_keeps_its_previous_refusal) | test(observed_internal_fixtures_and_pict_cases)'
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked

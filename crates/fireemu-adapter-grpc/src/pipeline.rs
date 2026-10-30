@@ -2472,7 +2472,7 @@ fn decode_operand_tree_in(
 }
 
 /// Under strict, a reference constant that names no document of the request's own project and
-/// database (another database, the database root or the documents root), more than 100 key
+/// database (another database or the database root), more than 100 key
 /// path elements, or an id that matches production's
 /// documented reserved pattern `__.*__` (`____` included, which the official emulator accepts)
 /// is refused as unobserved before any row (ruling of 2026-10-21 for `PX1d` r8: production's
@@ -2481,10 +2481,11 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
-            // The documents root names no document, and production recorded none (review r9 M3).
-            let inside = name
-                .strip_prefix(own)
-                .is_some_and(|rest| rest.starts_with('/'));
+            // O-5 appendix also records the request database's documents root.
+            let inside = name == own
+                || name
+                    .strip_prefix(own)
+                    .is_some_and(|rest| rest.starts_with('/'));
             // A key path element is a collection id and a document id.
             let path = name
                 .strip_prefix(own)
@@ -3009,7 +3010,17 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             _ => true,
         }
     }
-    walk(value)
+    // O-5 appendix records these as direct projection literals. Nested nonfinite vectors and
+    // nested root references retain their existing unobserved guard.
+    let recorded_direct = match value.value_type.as_ref() {
+        Some(V::MapValue(map)) if is_vector_literal(value) && map.fields.len() == 2 => {
+            matches!(map.fields.get("value").and_then(|v| v.value_type.as_ref()),
+                Some(V::ArrayValue(array)) if matches!(array.values.as_slice(), [pb::Value { value_type: Some(V::DoubleValue(d)) }] if d.is_infinite()))
+        }
+        Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() == 5,
+        _ => false,
+    };
+    recorded_direct || walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
@@ -5647,7 +5658,7 @@ mod tests {
         };
         for (name, outside) in [
             (format!("{own}/c/d"), false),
-            (own.to_owned(), true),
+            (own.to_owned(), false),
             (format!("{own}/{}", deep(200)), false),
             (format!("{own}/{}", deep(201)), false),
             (format!("{own}/{}", deep(202)), true),

@@ -4931,6 +4931,15 @@ mod tests {
             error.contains(&format!("at index {}.", name.encode_utf16().count())),
             "{error}"
         );
+        let unicode_path = "projects/p/databases/db/documents/😀";
+        let error = reference_literal_error(unicode_path).unwrap();
+        assert!(
+            error.contains(&format!(
+                "at index {}.",
+                unicode_path.encode_utf16().count()
+            )),
+            "{error}"
+        );
         let prefix = "projects/😀/databases/☃/";
         let missing_keyword = format!("{prefix}documentX");
         let error = reference_literal_error(&missing_keyword).unwrap();

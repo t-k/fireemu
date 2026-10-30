@@ -128,7 +128,7 @@ fn the_table_lists_the_comparisons_and_literals() {
     ));
     assert!(matches!(
         Expr::call("map", vec![Expr::Constant(s("k"))], Placement::Value),
-        Err(ExprError::Invalid(_))
+        Err(ExprError::Arity(_))
     ));
     assert!(Expr::call("array", vec![], Placement::Value).is_ok());
     assert!(Expr::call("map", vec![], Placement::Value).is_ok());

@@ -682,7 +682,7 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
         Case {
             label: "vector without value",
             stages: vec![select(map(vec![("__type__", string("__vector__"))]))],
-            strict: None,
+            strict: Some((400, missing)),
             emulator: (400, missing),
         },
         Case {
@@ -1406,7 +1406,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
     let vec_int = || vector(vec![int(1)]);
     let doubles = "Vector must only contain values of type 'double'";
     let mut cases = Vec::new();
-    // A `__type__` that is no string (r3 review M1): the official text, 501 under strict.
+    // Recorded non-string type-tag shapes answer their computed error; other shapes remain unobserved.
     for (label, value, kind) in [
         ("{__type__: 1}", int(1), "LONG"),
         (
@@ -1428,7 +1428,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         cases.push(Case {
             label,
             stages: vec![select(typed(value))],
-            strict: None,
+            strict: matches!(kind, "LONG" | "BOOLEAN" | "NULL" | "DOUBLE").then_some((400, text)),
             emulator: (400, text),
         });
     }
@@ -1442,13 +1442,13 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "{a: {__type__: 1}}",
             stages: vec![select(map(vec![("a", typed(int(1)))]))],
-            strict: None,
+            strict: Some((400, "Field __type__ must be a string; founds LONG.")),
             emulator: (400, "Field __type__ must be a string; founds LONG."),
         },
         Case {
             label: "where({__type__: 1})",
             stages: vec![stage("where", vec![typed(int(1))])],
-            strict: None,
+            strict: Some((400, "Field __type__ must be a string; founds LONG.")),
             emulator: (400, "Field __type__ must be a string; founds LONG."),
         },
         Case {
@@ -1517,19 +1517,19 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "select {v: ref c}",
             stages: vec![select(reference("c"))],
-            strict: None,
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
         },
         Case {
             label: "select {v: ref c//d}",
             stages: vec![select(reference("c//d"))],
-            strict: None,
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."),
         },
         Case {
             label: "select {v: ref garbage}",
             stages: vec![select(json!({ "referenceValue": "garbage" }))],
-            strict: None,
+            strict: Some((400, "Document parent name \"garbage\" lacks \"projects\" at index 0.")),
             emulator: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
         },
         Case {

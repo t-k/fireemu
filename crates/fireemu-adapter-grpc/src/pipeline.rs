@@ -2443,6 +2443,9 @@ fn decode_operand_tree_in(
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
+                Unrecorded::Refuse if recorded_literal_error_class(&error) => {
+                    Err(Status::invalid_argument(error))
+                }
                 Unrecorded::Refuse => Err(Status::unimplemented(unobserved_literal(&error))),
                 Unrecorded::OfficialEmulator => Err(Status::invalid_argument(error)),
             }
@@ -2506,6 +2509,13 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
+            // A syntactically invalid non-resource name has a computed refusal; the caller's
+            // request-shape gate decides whether production recorded it.
+            if !name.starts_with("projects/") {
+                if let Some(error) = reference_literal_error(name) {
+                    return Some(Status::invalid_argument(error));
+                }
+            }
             // O-5 appendix also records the request database's documents root.
             let inside = name == own
                 || name
@@ -2694,6 +2704,20 @@ fn decode_official_literal(
             crate::decode::decode_value(value).map_err(|e| Status::invalid_argument(e.to_string()))
         }
     }
+}
+
+// These structural classes have recorded refusals. The request gate remains authoritative for
+// the exact request shape and computed message.
+fn recorded_literal_error_class(error: &str) -> bool {
+    error.starts_with("Field __type__ must be a string; founds ")
+        || error.starts_with("Document parent name ")
+        || matches!(
+            error,
+            "Vector map is missing key 'value'."
+                | "Vector value type must be an array."
+                | "Vector value map has extraneous entries."
+                | "Vector must only contain values of type 'double'"
+        )
 }
 
 /// Strict's answer for a literal the official emulator refuses (`error` is its text): it names
@@ -4740,7 +4764,316 @@ fn with_code(mut status: Status, code: &str) -> Status {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recorded_literal_refusal_gate_matrix() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use tonic::Code;
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let docs = format!("{database}/documents");
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json")
+            .replace("{docs}", &docs);
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let parent = crate::decode::parse_parent(&docs).unwrap();
+        let targets = [
+            ("stage-order", "where-vector-of-integer", true),
+            ("value-shapes", "vector-of-integer", true),
+            ("value-shapes", "vector-of-double-and-integer", true),
+            ("value-shapes", "vector-without-value", false),
+            ("value-shapes", "vector-with-extra-key", true),
+            ("value-shapes", "vector-value-not-array", true),
+            ("appendix", "proposed-type-tag-integer", false),
+            ("appendix", "proposed-type-tag-boolean", false),
+            ("appendix", "proposed-type-tag-null", false),
+            ("appendix", "proposed-type-tag-double", false),
+            ("appendix", "proposed-type-tag-map", false),
+            ("appendix", "proposed-type-tag-array", false),
+            ("appendix", "proposed-type-tag-nested", false),
+            ("appendix", "proposed-type-tag-where", false),
+            ("appendix", "proposed-type-tag-function-argument", false),
+            ("appendix", "proposed-reference-collection", false),
+            ("appendix", "proposed-reference-empty-segment", false),
+            ("appendix", "proposed-reference-garbage", false),
+        ];
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id, unordered) in targets {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                Code::InvalidArgument,
+                "{full}#{id}: {computed:?}"
+            );
+            if id == "proposed-reference-collection" || id == "proposed-reference-empty-segment" {
+                let suffix = if id == "proposed-reference-collection" {
+                    "/c"
+                } else {
+                    "/c/"
+                };
+                let index = format!("{docs}{suffix}").encode_utf16().count();
+                assert!(
+                    computed.message().contains(&format!(" at index {index}.")),
+                    "{full}#{id}: {computed:?}"
+                );
+                assert_eq!(
+                    crate::pipeline_shape::normalized_text(computed.message()),
+                    crate::pipeline_shape::normalized_text(expected),
+                    "{full}#{id}"
+                );
+            } else {
+                assert_eq!(computed.message(), expected, "{full}#{id}");
+            }
+            let computed_message = computed.message().to_owned();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(
+                rest.code(),
+                Code::InvalidArgument,
+                "REST {full}#{id}: {rest:?}"
+            );
+            assert_eq!(rest.message(), computed_message, "REST {full}#{id}");
+            let grpc_shape = shape_of_request(&request);
+            if unordered {
+                assert!(grpc_shape.is_none(), "gRPC shape {full}#{id}");
+            }
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            println!(
+                "literal-matrix {full}#{id} rest={:?} grpc={:?} unordered={unordered}",
+                rest.code(),
+                grpc.code()
+            );
+            if unordered {
+                assert_eq!(grpc.code(), Code::Unimplemented, "gRPC {full}#{id}");
+            } else {
+                assert_eq!(grpc.code(), Code::InvalidArgument, "gRPC {full}#{id}");
+                assert_eq!(grpc.message(), computed_message, "gRPC {full}#{id}");
+            }
+        }
+    }
     use super::*;
+
+    #[test]
+    fn literal_refusal_preserves_precedence_gate_and_utf16_index() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let invalid = tagged_literal(
+            val(V::StringValue("__vector__".to_owned())),
+            vec![val(V::IntegerValue(1))],
+            false,
+        );
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for name in ["equal", "unknown_function"] {
+                let call = val(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![invalid.clone()],
+                    ..Default::default()
+                }));
+                let error = decode_operand_tree(&call, mode).unwrap_err();
+                if name == "equal" {
+                    assert!(error.message().contains("argument(s)"), "{error:?}");
+                } else {
+                    assert_eq!(error.code(), tonic::Code::Unimplemented);
+                }
+            }
+        }
+        let gate = crate::pipeline_shape::RefusalGate::Recorded(
+            None,
+            "projects/p/databases/db".to_owned(),
+        );
+        assert_eq!(
+            gate.answer(Status::invalid_argument(
+                "Vector must only contain values of type 'double'"
+            ))
+            .code(),
+            tonic::Code::Unimplemented
+        );
+        let foreign = val(V::ReferenceValue(
+            "projects/q/databases/db/documents/c/d".to_owned(),
+        ));
+        assert_eq!(
+            reference_outside(&foreign, "projects/p/databases/db/documents")
+                .unwrap()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let name = "projects/😀/databases/☃/documents/c";
+        let error = reference_literal_error(name).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", name.encode_utf16().count())),
+            "{error}"
+        );
+        let unicode_path = "projects/p/databases/db/documents/😀";
+        let error = reference_literal_error(unicode_path).unwrap();
+        assert!(
+            error.contains(&format!(
+                "at index {}.",
+                unicode_path.encode_utf16().count()
+            )),
+            "{error}"
+        );
+        let prefix = "projects/😀/databases/☃/";
+        let missing_keyword = format!("{prefix}documentX");
+        let error = reference_literal_error(&missing_keyword).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", prefix.encode_utf16().count())),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_literal_refusal_boundary_cases() {
+        use pb::value::ValueType as V;
+        const ROWS: &str = r"Family	Transport	Profile	Position	Conflict
+vector	rest	strict	direct	none
+vector	grpc	strict	where	none
+type_tag	rest	strict	nested	none
+type_tag	grpc	strict	function	none
+reference	rest	strict	direct	none
+reference	grpc	strict	direct	foreign
+vector	rest	emulator	function	arity
+type_tag	grpc	strict	function	unknown
+vector	grpc	emulator	nested	foreign
+reference	grpc	strict	nested	arity
+type_tag	rest	emulator	direct	unknown
+reference	rest	emulator	where	foreign
+type_tag	grpc	strict	direct	arity
+reference	rest	strict	where	unknown
+vector	rest	strict	nested	unknown
+type_tag	grpc	strict	where	foreign
+type_tag	rest	emulator	where	arity
+reference	rest	emulator	function	none
+vector	grpc	emulator	function	foreign";
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [family, transport, profile, position, conflict] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let policy = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let literal = match *family {
+                "vector" => tagged_literal(
+                    value(V::StringValue("__vector__".to_owned())),
+                    vec![value(V::IntegerValue(1))],
+                    false,
+                ),
+                "type_tag" => tagged_literal(
+                    value(V::IntegerValue(7)),
+                    vec![value(V::DoubleValue(1.0))],
+                    false,
+                ),
+                "reference" => value(V::ReferenceValue("garbage".to_owned())),
+                _ => unreachable!(),
+            };
+            let mut operand = match *position {
+                "nested" => value(V::ArrayValue(pb::ArrayValue {
+                    values: vec![literal],
+                })),
+                "function" => value(V::FunctionValue(pb::Function {
+                    name: "equal".to_owned(),
+                    args: vec![value(V::FieldReferenceValue("i".to_owned())), literal],
+                    ..Default::default()
+                })),
+                _ => literal,
+            };
+            if *conflict == "arity" || *conflict == "unknown" {
+                let name = if *conflict == "arity" {
+                    "equal"
+                } else {
+                    "unknown_function"
+                };
+                operand = value(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![operand],
+                    ..Default::default()
+                }));
+            }
+            if *conflict == "foreign" {
+                let foreign = value(V::ReferenceValue(
+                    "projects/q/databases/db/documents/c/d".to_owned(),
+                ));
+                assert_eq!(
+                    reference_outside(&foreign, "projects/p/databases/db/documents")
+                        .unwrap()
+                        .code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+            let error = if *position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![operand],
+                        ..Default::default()
+                    },
+                    policy,
+                )
+                .unwrap_err()
+            } else {
+                decode_operand_tree(&operand, policy).unwrap_err()
+            };
+            if *conflict == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            }
+            if *conflict == "arity" {
+                assert!(error.message().contains("argument(s)"), "{line}: {error:?}");
+            }
+            let gate = if *profile == "strict" {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    None,
+                    "projects/p/databases/db".to_owned(),
+                )
+            } else {
+                crate::pipeline_shape::RefusalGate::Open
+            };
+            let gated = gate.answer(error.clone());
+            if *profile == "strict" {
+                assert_eq!(
+                    gated.code(),
+                    tonic::Code::Unimplemented,
+                    "{transport}: {line}"
+                );
+            } else {
+                assert_eq!(gated.code(), error.code(), "{transport}: {line}");
+            }
+        }
+    }
 
     fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
         use pb::value::ValueType as V;

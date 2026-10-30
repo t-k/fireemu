@@ -61,6 +61,8 @@ jobs:
           shellcheck tools/ci/heavy-run.sh tools/ci/heavy-run.test.sh scripts/heavy-verification-plan.test.sh tools/ci/nextest-private-tmpdir.sh
           tools/ci/heavy-run.test.sh
           scripts/heavy-verification-plan.test.sh
+      - name: App Check fixture close ordering
+        run: python3 crates/fireemu-adapter-functions/tests/test_fake_admin_runner_close.py
       - name: fmt
         run: cargo fmt --all --check
       - name: clippy

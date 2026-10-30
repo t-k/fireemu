@@ -10,11 +10,28 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 71ebc4158a916f351a8876ea3ed4b3006fc335fe
+          ref: 2492c872ed37d2f6bdf157f10f2caf8959053eff
       - run: |
-          test "$(git rev-parse HEAD)" = 71ebc4158a916f351a8876ea3ed4b3006fc335fe
+          test "$(git rev-parse HEAD)" = 2492c872ed37d2f6bdf157f10f2caf8959053eff
           cargo fmt --all -- --check
           cargo test -p fireemu-core-firestore --locked
           cargo test -p fireemu-adapter-grpc --test pipeline_differential --locked
           cargo test -p fireemu-adapter-grpc --test pipeline_replay --locked
           cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+      - name: mutation checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked
+          for mutation in fields name created updated guard; do
+            git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs
+            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-core-firestore/src/pipeline_exec.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"fields":("let mut fields = row.fields.clone();", "let mut fields = BTreeMap::new();"),"name":("Value::Reference(path.resource_name()),", "Value::Reference(String::new()),"),"created":("Value::Timestamp(times.created),", "Value::Timestamp(times.updated),"),"updated":("Value::Timestamp(times.updated),", "Value::Timestamp(times.created),"),"guard":("row.path.is_none() || row.times.is_none()", "row.path.is_none() && row.times.is_none()")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
+            set +e
+            cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked > "mutation-$mutation.log" 2>&1
+            rc=$?
+            set -e
+            cat "mutation-$mutation.log"
+            test "$rc" = 101
+            grep -q 'current_document_returns_fields_and_document_metadata ... FAILED' "mutation-$mutation.log"
+          done
+          git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs

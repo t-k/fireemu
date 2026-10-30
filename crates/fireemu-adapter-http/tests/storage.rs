@@ -9841,3 +9841,19 @@ fn signed_xml_put_pict_cases() {
         }
     }
 }
+
+#[test]
+fn signed_xml_put_does_not_capture_unknown_api_routes() {
+    let s = state(None);
+    for path in [
+        "/v0/unknown/path",
+        "/storage/v1/unknown/path",
+        "/upload/storage/v1/unknown/path",
+    ] {
+        assert_eq!(
+            handle(&s, req("PUT", path, &[], b"data")).status,
+            501,
+            "{path}"
+        );
+    }
+}

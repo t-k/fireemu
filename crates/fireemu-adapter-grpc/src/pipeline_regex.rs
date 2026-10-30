@@ -478,4 +478,10 @@ mod tests {
             }
         }
     }
+    proptest! {
+        #[test]
+        fn like_without_wildcards_matches_literal_equality(subject in "[a-z]{0,12}", pattern in "[a-z]{0,12}") {
+            prop_assert_eq!(both("like", &[text(&subject), text(&pattern)]), Eval::Value(Value::Boolean(subject == pattern)));
+        }
+    }
 }

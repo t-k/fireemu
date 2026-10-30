@@ -65,6 +65,8 @@ The entries of one multi-path write (a REST `PATCH`, an SDK `update()`, and the 
 
 ## Security Rules
 
+On main, pending v0.40.0, loading invalid Rules can report multiple expression diagnostics, subject to bounded collection; the recorded cases do not establish every malformed input.
+
 ### Load rules
 
 Name the rules file in `firebase.json`, as for the Firebase CLI. The single form loads one file into the default instance, `<project>-default-rtdb`:

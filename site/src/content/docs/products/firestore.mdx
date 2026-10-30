@@ -42,6 +42,8 @@ apiMode = "native"
 
 ## Enterprise pipelines
 
+On main, pending v0.40.0, the recorded empty `array()` and `map()` constructors return empty values. Other constructor shapes remain outside these observations.
+
 The FS-PIPELINE production compatibility assessment is in progress. Recorded cases retain their individual evidence, but mismatches and unobserved behavior remain; the parent is not verified.
 
 On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group`, `documents` or finite `database` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset`, `limit` and `unnest` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.

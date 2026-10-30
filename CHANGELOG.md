@@ -8,6 +8,20 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-10-31
+
+### Added
+
+- Cloud Storage accepts local V4 signed XML object uploads with the supported headers and content length range. Signatures are not verified, and these responses have not been compared with production.
+
+### Changed
+
+- Realtime Database Rules loading reports multiple bounded expression diagnostics for invalid rule files.
+
+### Fixed
+
+- Firestore Enterprise pipelines accept the recorded empty `array()` and `map()` constructors. Other constructor shapes remain outside these observations.
+
 ## [0.39.0] - 2026-10-30
 
 ### Changed
@@ -1075,7 +1089,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/t-k/fireemu/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/t-k/fireemu/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/t-k/fireemu/compare/v0.38.0...v0.38.1
 [0.38.0]: https://github.com/t-k/fireemu/compare/v0.37.0...v0.38.0

@@ -1736,6 +1736,14 @@ fn array_variables_shadow_and_index_without_changing_row_fields() {
         "array_transform",
         vec![values.clone(), literal(s("x")), var("x")],
     );
+    let empty_outer = call(
+        "array_transform",
+        vec![
+            literal(Value::Array(vec![])),
+            literal(s("x")),
+            inner.clone(),
+        ],
+    );
     let outer = call(
         "array_transform",
         vec![values.clone(), literal(s("x")), inner],
@@ -1752,6 +1760,10 @@ fn array_variables_shadow_and_index_without_changing_row_fields() {
                 Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
                 Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
             ]))
+        );
+        assert_eq!(
+            empty_outer.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
         );
         assert_eq!(
             indexed.eval_in(&doc, profile),

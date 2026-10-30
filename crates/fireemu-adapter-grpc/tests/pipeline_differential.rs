@@ -139,6 +139,12 @@ fn answer(status: u16, body: &Value) -> Value {
                     if matches!(key.as_str(), "name" | "createTime" | "updateTime") {
                         continue;
                     }
+                    // Document metadata times differ between the independently seeded stores.
+                    if matches!(key.as_str(), "__create_time__" | "__update_time__") {
+                        assert!(inner["timestampValue"].as_str().is_some(), "{inner}");
+                        out.insert(key.clone(), json!({"timestampValue": "<document-time>"}));
+                        continue;
+                    }
                     // A double written as `1` (the recorder's JSON) or `1.0`.
                     if key == "doubleValue" && inner.is_number() {
                         out.insert(key.clone(), json!(inner.as_f64()));

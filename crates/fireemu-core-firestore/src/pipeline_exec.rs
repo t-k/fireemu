@@ -881,10 +881,6 @@ impl Expr {
         self.eval_scoped(row, unrecorded, condition, runtime, &[])
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Expression dispatch keeps lazy evaluation in one place"
-    )]
     fn eval_scoped(
         &self,
         row: &Row,
@@ -918,19 +914,7 @@ impl Expr {
             }),
             Self::Call { function, args } => {
                 if function.name == "rand" {
-                    let Some(rng) = &runtime.expr_rng else {
-                        return Eval::Error(EvalError::Unobserved {
-                            function: "rand",
-                            reason: "request random stream is unavailable",
-                        });
-                    };
-                    let word = rng
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .next_u64();
-                    #[allow(clippy::cast_precision_loss)]
-                    let value = ((word >> 11) as f64) / 9_007_199_254_740_992.0;
-                    return Eval::Value(Value::Double(value));
+                    return eval_rand(runtime);
                 }
                 if function.name == "current_document" {
                     if unrecorded == Unrecorded::Refuse
@@ -1000,6 +984,22 @@ impl Expr {
             }
         }
     }
+}
+
+fn eval_rand(runtime: &RuntimeContext) -> Eval {
+    let Some(rng) = &runtime.expr_rng else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "rand",
+            reason: "request random stream is unavailable",
+        });
+    };
+    let word = rng
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .next_u64();
+    #[allow(clippy::cast_precision_loss)]
+    let value = ((word >> 11) as f64) / 9_007_199_254_740_992.0;
+    Eval::Value(Value::Double(value))
 }
 
 fn eval_array_binding(

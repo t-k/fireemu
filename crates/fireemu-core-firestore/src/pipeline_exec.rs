@@ -1391,13 +1391,13 @@ fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
 }
 
 fn eval_autogen_document_id(_args: &[Eval], cx: Context<'_>) -> Eval {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let Some(rng) = &cx.runtime.expr_rng else {
         return generic_unobserved("autogen_document_id");
     };
     let mut rng = rng
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let id = (0..20)
         .map(|_| ALPHABET[usize::try_from(rng.next_below(62)).unwrap_or(0)] as char)
         .collect();

@@ -2451,9 +2451,11 @@ fn decode_operand_tree_in(
             // Production read literals of every kind, maps keyed by any name but an empty or a
             // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
             // it recorded (see `literal_shape_recorded`).
-            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
-                Status::unimplemented("a literal of this shape is not observed locally"),
-            ),
+            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value, direct) => {
+                Err(Status::unimplemented(
+                    "a literal of this shape is not observed locally",
+                ))
+            }
             // A literal of more than 20 levels, in the official emulator's words (1.22.0: 20
             // levels are accepted); production has not answered it, so strict gives 501 through
             // the shape gate.
@@ -3005,7 +3007,7 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// than negative zero (O-3 and O-4); O-5 additionally records direct single-component infinity
 /// vectors and the documents-root reference. Reserved keys are handled by the ordered refusal
 /// checks after this shape check.
-fn literal_shape_recorded(value: &pb::Value) -> bool {
+fn literal_shape_recorded(value: &pb::Value, direct: bool) -> bool {
     use pb::value::ValueType as V;
     // O-5 appendix also records a well-formed vector within an array.
     fn walk(value: &pb::Value) -> bool {
@@ -3042,7 +3044,7 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
         Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() == 5,
         _ => false,
     };
-    recorded_direct || walk(value)
+    (direct && recorded_direct) || walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
@@ -3052,7 +3054,7 @@ fn literal_expression_shape_safe(value: &pb::Value) -> bool {
         return false;
     }
     if expression_kind(value).is_none() {
-        return literal_value_error(value).is_none() && literal_shape_recorded(value);
+        return literal_value_error(value).is_none() && literal_shape_recorded(value, false);
     }
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().all(literal_expression_shape_safe),

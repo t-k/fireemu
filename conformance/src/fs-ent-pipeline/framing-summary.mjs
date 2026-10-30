@@ -152,7 +152,7 @@ function validCompactStep(step) {
   );
 }
 
-/** Compare semantic content and status first; unseen unit boundaries never become a match. */
+/** Compare normalized successful responses; a variable batch partition is not wire equality. */
 export function classifyCompactFraming(expected, alternative, row) {
   if (
     !validCompactStep(expected) ||
@@ -188,6 +188,28 @@ export function classifyCompactFraming(expected, alternative, row) {
     items.map(({ results, metadataDigest }) => ({ results, metadataDigest }));
   if (content.some((item) => isDeepStrictEqual(profile(item.profile), profile(actual.profile))))
     return { status: alternative ? "MATCH_NONDETERMINISTIC" : "MATCH", framing: actual.profile };
+  // Firestore defines result batches as variable-sized; it does not promise identical cuts.
+  // Restrict this equivalence to uniform execution-time-only metadata, since transaction and
+  // explain metadata have position-dependent semantics. This does not compare raw wire bytes.
+  // https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/executePipeline
+  const units = row.transport === "grpc" ? row.messages : row.body;
+  const metadata = actual.profile[0].metadataDigest;
+  const uniform = (item) => item.profile.every((unit) => unit.metadataDigest === metadata);
+  if (
+    content.some(uniform) &&
+    uniform(actual) &&
+    units.every(
+      (unit) =>
+        Object.keys(unit).filter((key) => key !== "results").length === 1 &&
+        Object.hasOwn(unit, "executionTime"),
+    )
+  ) {
+    return {
+      status: "MATCH_NONDETERMINISTIC",
+      diagnostic: "variable-framing",
+      framing: actual.profile,
+    };
+  }
   return { status: "INDETERMINATE", diagnostic: "unobserved-framing", framing: actual.profile };
 }
 

@@ -780,8 +780,8 @@ test("compact framing preserves values, metadata, status and observed unit profi
     "MATCH_NONDETERMINISTIC",
   );
   const unseen = check(rest([responseUnit([{ n: 1 }]), responseUnit([{ n: 2 }])]));
-  assert.equal(unseen.status, "INDETERMINATE");
-  assert.equal(unseen.diagnostic, "unobserved-framing");
+  assert.equal(unseen.status, "MATCH_NONDETERMINISTIC");
+  assert.equal(unseen.diagnostic, "variable-framing");
   for (const local of [
     rest([responseUnit([{ n: 2 }, { n: 1 }])]),
     rest([responseUnit([{ n: 1 }, { n: "2" }])]),
@@ -864,7 +864,7 @@ test("compact framing exercises generated PICT combinations", async () => {
       status === "failure" || content === "different"
         ? "MISMATCH"
         : frame === "unseen"
-          ? "INDETERMINATE"
+          ? "MATCH_NONDETERMINISTIC"
           : "MATCH",
       rows.join(),
     );

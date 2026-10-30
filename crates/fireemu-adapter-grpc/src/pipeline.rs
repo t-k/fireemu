@@ -4871,6 +4871,9 @@ mod tests {
             );
             if unordered {
                 assert_eq!(grpc.code(), Code::Unimplemented, "gRPC {full}#{id}");
+            } else {
+                assert_eq!(grpc.code(), Code::InvalidArgument, "gRPC {full}#{id}");
+                assert_eq!(grpc.message(), computed_message, "gRPC {full}#{id}");
             }
         }
     }

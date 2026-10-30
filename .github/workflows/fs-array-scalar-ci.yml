@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: c7f8ebce7e406cca18ce3511945e971510c12d87
+          ref: 8d9163e72115ca71138091e17c431bd88c4262f1
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = c7f8ebce7e406cca18ce3511945e971510c12d87
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(infinity_vector_admission_depends_on_expression_position)'
+          test "$(git rev-parse HEAD)" = 8d9163e72115ca71138091e17c431bd88c4262f1
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(infinity_vector_admission_depends_on_expression_position) | test(recorded_infinite_vectors_and_documents_root_preserve_types) | test(vector_in_array_keeps_unobserved_components_refused) | test(recorded_tagged_literals_preserve_wire_shapes) | test(strict_refuses_document_functions_of_a_root)'

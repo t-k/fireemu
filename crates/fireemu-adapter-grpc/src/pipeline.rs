@@ -2078,7 +2078,7 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
 }
 
 fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
-    decode_operand_tree_in(value, unrecorded, false, &[])
+    decode_operand_tree_in(value, unrecorded, false, &[], true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2253,6 +2253,7 @@ fn decode_operand_tree_in(
     unrecorded: Unrecorded,
     defer_constant: bool,
     bindings: &[String],
+    direct: bool,
 ) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -2260,6 +2261,13 @@ fn decode_operand_tree_in(
             "expression argument is missing".to_owned(),
             unrecorded,
         )),
+        Some(V::ReferenceValue(name))
+            if !direct && unrecorded == Unrecorded::Refuse && name.split('/').count() == 5 =>
+        {
+            Err(Status::unimplemented(
+                "a root reference inside an expression is not observed locally",
+            ))
+        }
         Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
             FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
@@ -2341,8 +2349,14 @@ fn decode_operand_tree_in(
             let mut body_bindings = bindings.to_vec();
             let binder = matches!(function.name.as_str(), "array_filter" | "array_transform");
             if binder {
-                for arg in &function.args[1..function.args.len() - 1] {
+                for (index, arg) in function.args[1..function.args.len() - 1].iter().enumerate() {
                     let Some(V::StringValue(alias)) = &arg.value_type else {
+                        if function.name == "array_transform"
+                            && index == 0
+                            && matches!(arg.value_type, Some(V::FieldReferenceValue(_)))
+                        {
+                            return Err(Status::invalid_argument("The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference"));
+                        }
                         return Err(Status::unimplemented(
                             "array callback aliases must be literal strings",
                         ));
@@ -2360,6 +2374,11 @@ fn decode_operand_tree_in(
                     Some(V::ReferenceValue(name))
                         if document_function && unrecorded == Unrecorded::Refuse =>
                     {
+                        if name.split('/').count() == 5 {
+                            return Err(Status::unimplemented(
+                                "a root reference inside an expression is not observed locally",
+                            ));
+                        }
                         match reference_literal_error(name) {
                             Some(text) => Err(Status::invalid_argument(text)),
                             None => Ok(Expr::Constant(
@@ -2381,6 +2400,7 @@ fn decode_operand_tree_in(
                         } else {
                             bindings
                         },
+                        false,
                     ),
                 })
                 .collect::<Result<Vec<_>, _>>()?;

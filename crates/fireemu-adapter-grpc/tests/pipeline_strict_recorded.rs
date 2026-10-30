@@ -1497,7 +1497,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "vector of Infinity",
             stages: vec![select(vector(vec![json!({ "doubleValue": "Infinity" })]))],
-            strict: None,
+            strict: Some((200, "")),
             emulator: (200, ""),
         },
         // An alias error beside a value strict refuses (r3 review M2).
@@ -1622,7 +1622,7 @@ fn the_round_four_checks_hold_in_every_position() {
         Case { label: "[[vector of integers, i]]", stages: vec![select(list(vec![list(vec![vec_int(), field("i")])]))], strict: None, emulator: (400, doubles) },
         Case { label: "{a: [vector of integers, i]}", stages: vec![select(map(vec![("a", list(vec![vec_int(), field("i")]))]))], strict: None, emulator: (400, doubles) },
         // References.
-        Case { label: "ref to the documents root", stages: vec![select(json!({ "referenceValue": DOCS }))], strict: None, emulator: (200, "") },
+        Case { label: "ref to the documents root", stages: vec![select(json!({ "referenceValue": DOCS }))], strict: Some((200, "")), emulator: (200, "") },
         Case { label: "ref to a non-ASCII document", stages: vec![select(reference("あ/d"))], strict: None, emulator: (200, "") },
         Case {
             label: "document_id(ref garbage)",
@@ -1955,8 +1955,8 @@ fn later_checks_answer_before_an_empty_key_a_reserved_alias_or_a_map_key_type() 
     }
 }
 
-/// The documents root and the database root name no document and no production row holds
-/// them, so strict refuses every function of them (review r9 M3); the emulator profile answers
+/// The documents root is recorded as a literal; its use inside functions remains unobserved,
+/// as does the database root, so strict refuses those function calls; the emulator profile answers
 /// what the official emulator 1.22.0 does.
 #[test]
 fn strict_refuses_document_functions_of_a_root() {

@@ -2184,6 +2184,29 @@ mod streaming_tests {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, Instant};
 
+    fn teardown_read_result(result: std::io::Result<usize>) -> usize {
+        match result {
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => 0,
+            other => other.unwrap(),
+        }
+    }
+
+    #[test]
+    fn teardown_read_allows_connection_reset_but_preserves_success() {
+        assert_eq!(teardown_read_result(Ok(0)), 0);
+        assert_eq!(teardown_read_result(Ok(7)), 7);
+        assert_eq!(
+            teardown_read_result(Err(std::io::ErrorKind::ConnectionReset.into())),
+            0
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn teardown_read_still_panics_on_other_errors() {
+        teardown_read_result(Err(std::io::ErrorKind::BrokenPipe.into()));
+    }
+
     async fn upstream(
         chunk: &'static [u8],
         finish: bool,
@@ -2218,7 +2241,7 @@ mod streaming_tests {
                 stream.flush().await.unwrap();
             }
             let mut discarded = Vec::new();
-            stream.read_to_end(&mut discarded).await.unwrap()
+            teardown_read_result(stream.read_to_end(&mut discarded).await)
         });
         (address, task)
     }

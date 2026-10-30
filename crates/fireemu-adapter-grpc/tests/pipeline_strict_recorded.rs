@@ -1310,7 +1310,7 @@ fn strict_answers_a_refusal_only_when_no_other_part_is_unobserved() {
 }
 
 #[test]
-fn strict_refuses_the_stage_registry_texts_and_unrecorded_empty_constructions() {
+fn strict_refuses_the_stage_registry_texts_and_unrecorded_values() {
     let with_options = json!({
         "name": "select",
         "args": [map(vec![("v", field("i"))])],
@@ -1348,18 +1348,6 @@ fn strict_refuses_the_stage_registry_texts_and_unrecorded_empty_constructions() 
             emulator: (400, "stage \"select\": option \"x\": no such option"),
         },
         Case {
-            label: "array()",
-            stages: vec![select(func("array", vec![]))],
-            strict: None,
-            emulator: (200, ""),
-        },
-        Case {
-            label: "map()",
-            stages: vec![select(func("map", vec![]))],
-            strict: None,
-            emulator: (200, ""),
-        },
-        Case {
             label: "array(i)",
             stages: vec![select(func("array", vec![field("i")]))],
             strict: Some((200, "")),
@@ -1372,6 +1360,50 @@ fn strict_refuses_the_stage_registry_texts_and_unrecorded_empty_constructions() 
             emulator: (200, ""),
         },
     ]);
+}
+
+#[test]
+fn recorded_empty_constructors_and_unobserved_options() {
+    // PICT rows: array/strict/empty, map/strict/empty, array/ordinary/empty,
+    // map/ordinary/empty, map/strict/nonempty, array/ordinary/nonempty.
+    for (name, strict, options) in [
+        ("array", true, false),
+        ("map", true, false),
+        ("array", false, false),
+        ("map", false, false),
+        ("map", true, true),
+        ("array", false, true),
+    ] {
+        let state = seeded(strict);
+        let mut expression = func(name, vec![]);
+        if options {
+            expression["functionValue"]["options"] = json!({ "x": int(1) });
+        }
+        let stages = vec![
+            stage("collection", vec![json!({"referenceValue": "/c"})]),
+            select(expression),
+        ];
+        let (status, body) = call(
+            &state,
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &json!({"structuredPipeline": {"pipeline": {"stages": stages}}}),
+        );
+        if strict && options {
+            assert_eq!(status, 501, "{name}: {body}");
+        } else {
+            assert_eq!(status, 200, "{name}: {body}");
+            let expected = if name == "array" {
+                json!({"arrayValue": {}})
+            } else {
+                json!({"mapValue": {}})
+            };
+            assert_eq!(
+                body[0]["results"][0]["fields"]["v"], expected,
+                "{name}: {body}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -2282,17 +2282,7 @@ fn decode_operand_tree_in(
                     function.name
                 )));
             }
-            // Production built arrays and maps of one element or more (FS-ENT-ORACLE O-1, O-3,
-            // O-4); an empty `array()` or `map()` is unrecorded.
-            if matches!(function.name.as_str(), "array" | "map")
-                && function.args.is_empty()
-                && unrecorded == Unrecorded::Refuse
-            {
-                return Err(Status::unimplemented(format!(
-                    "{}() without arguments is not observed locally",
-                    function.name
-                )));
-            }
+            // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
             // own checks.
             let placeholders = vec![

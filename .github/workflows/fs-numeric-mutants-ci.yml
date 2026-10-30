@@ -11,11 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mutant: [noop, extrema, sum, negate]
+        mutant: [noop, guard]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 8fb0d44f7fd7d58474dc4b2bb6aa22deae413ca3
+          ref: 2961ceca09ae0f6cbba5acac85211da4deec4d52
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
@@ -23,20 +23,20 @@ jobs:
       - env:
           MUTANT: ${{ matrix.mutant }}
         run: |
-          test "$(git rev-parse HEAD)" = 8fb0d44f7fd7d58474dc4b2bb6aa22deae413ca3
+          test "$(git rev-parse HEAD)" = 2961ceca09ae0f6cbba5acac85211da4deec4d52
           python3 - <<'PY'
           import os
           from pathlib import Path
-          path = Path('crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs')
+          path = Path('crates/fireemu-core-firestore/src/pipeline_exec.rs')
           source = path.read_text()
-          changes = {'extrema': ('let selected = if maximum {', 'let selected = if !maximum {'), 'sum': ('let mut total = 0_i64;', 'let mut total = 1_i64;'), 'negate': ('.checked_neg()\n            .map_or_else(|| unobserved("negate"', '.checked_abs()\n            .map_or_else(|| unobserved("negate"')}
-          if os.environ['MUTANT'] != 'noop':
-              old, new = changes[os.environ['MUTANT']]
+          if os.environ['MUTANT'] == 'guard':
+              old = 'if let Arity::AtLeast(minimum) = function.arity {'
+              new = 'if let Arity::AtLeast(minimum) = Arity::Any {'
               assert source.count(old) == 1
               path.write_text(source.replace(old, new))
           PY
           set +e
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(numeric_scalar_)'
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(empty_signature_at_least_arity_is_bounded) | test(arity_review_pict_rows)'
           status=$?
           set -e
           if [ "$MUTANT" = noop ]; then test "$status" = 0; else test "$status" = 100; fi

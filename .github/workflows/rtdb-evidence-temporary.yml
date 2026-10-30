@@ -1,7 +1,7 @@
 name: Temporary RTDB evidence refresh
 
 on:
-  workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read

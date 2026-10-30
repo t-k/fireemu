@@ -1820,7 +1820,7 @@ fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
         vec![
             Expr::Constant(Value::Array(vec![Value::Integer(0), Value::Integer(1)])),
             Expr::Constant(s("item")),
-            rand,
+            rand.clone(),
         ],
     );
     let Eval::Value(Value::Double(first_value)) = first else {
@@ -1835,6 +1835,15 @@ fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
             Value::Double(first_value),
             Value::Double(second_value)
         ]))
+    );
+    let emulator = make_runtime();
+    assert_eq!(
+        rand.eval_in_with_runtime(&doc, Unrecorded::OfficialEmulator, emulator.clone()),
+        Eval::Value(Value::Double(first_value))
+    );
+    assert_eq!(
+        rand.eval_in_with_runtime(&doc, Unrecorded::OfficialEmulator, emulator),
+        Eval::Value(Value::Double(second_value))
     );
 }
 

@@ -4,13 +4,33 @@ on:
 permissions:
   contents: read
 jobs:
-  npm-remaining:
+  conformance-diagnostic:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: e52085f050a1aac12087596c648fe75028b5c699
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - run: node --test npm/scripts/launcher.test.mjs npm/scripts/recover-v0381.test.mjs npm/scripts/verify-install.test.mjs
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: pnpm -C conformance install --frozen-lockfile
+      - run: |
+          sh npm/scripts/install-federation-openssl.sh "$RUNNER_TEMP/fireemu-federation-openssl"
+          echo "$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_PATH"
+          echo "FIREEMU_FEDERATION_OPENSSL_DIR=$RUNNER_TEMP/fireemu-federation-openssl/bin" >> "$GITHUB_ENV"
+      - name: selftest with spec reporter
+        working-directory: conformance
+        run: node src/selftest-tmpdir.mjs node --test --test-reporter=spec src/*.test.mjs src/firestore-probe/*.test.mjs scheduled-functions/*.test.mjs scheduled-delivery/*.test.mjs scheduled-delivery/record/*.test.mjs scheduled-delivery/local/*.test.mjs scheduled-delivery-004/*.test.mjs scheduled-delivery-004/record/*.test.mjs src/shared/*.test.mjs src/rtdb-functions/*.test.mjs

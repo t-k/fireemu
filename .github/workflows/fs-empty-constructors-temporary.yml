@@ -1,7 +1,7 @@
 name: FS empty constructors targeted
 on:
   push:
-    branches: [work/fs-empty-constructors-ci]
+    branches: [work/fs-empty-mutation-ci]
 permissions:
   contents: read
 jobs:
@@ -14,5 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-      - name: Targeted test
-        run: cargo test --locked -p fireemu-adapter-grpc --test pipeline_strict_recorded -- --nocapture
+      - name: Mutate and verify failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "3d60cef236078bbc6d1df108fd1baa10c01fa1502a989bb68701db754302c617  crates/fireemu-adapter-grpc/src/pipeline.rs" | sha256sum -c -
+          python3 -c 'from pathlib import Path; p=Path("crates/fireemu-adapter-grpc/src/pipeline.rs"); s=p.read_text(); old="            // Production also records empty array() and map() (O-5 `function-names`)."; new="            if matches!(function.name.as_str(), \"array\" | \"map\") && function.args.is_empty() && unrecorded == Unrecorded::Refuse { return Err(Status::unimplemented(format!(\"{}() without arguments is not observed locally\", function.name))); }"; assert s.count(old)==1; p.write_text(s.replace(old,new))'
+          set +e
+          cargo test --locked -p fireemu-adapter-grpc --test pipeline_strict_recorded recorded_empty_constructors_and_unobserved_options -- --nocapture > "$RUNNER_TEMP/mutation.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/mutation.log"
+          test "$result" -ne 0
+          grep -F 'array() without arguments is not observed locally' "$RUNNER_TEMP/mutation.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fs-empty-constructors-mutation
+          path: ${{ runner.temp }}/mutation.log
+          if-no-files-found: error

@@ -10,13 +10,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2492c872ed37d2f6bdf157f10f2caf8959053eff
+          ref: 3de5881a5c47dafe47516c38a37f1f31e0db1442
       - run: |
-          test "$(git rev-parse HEAD)" = 2492c872ed37d2f6bdf157f10f2caf8959053eff
+          test "$(git rev-parse HEAD)" = 3de5881a5c47dafe47516c38a37f1f31e0db1442
           cargo fmt --all -- --check
           cargo test -p fireemu-core-firestore --locked
-          cargo test -p fireemu-adapter-grpc --test pipeline_differential --locked
-          cargo test -p fireemu-adapter-grpc --test pipeline_replay --locked
+          cargo test -p fireemu-adapter-grpc --locked
           cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
       - name: mutation checks
         shell: bash

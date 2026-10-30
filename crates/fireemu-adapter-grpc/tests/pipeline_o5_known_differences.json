@@ -1790,47 +1790,6 @@
         {
           "error": {
             "code": 501,
-            "message": "array callback aliases must be literal strings",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array_transform",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "array callback aliases must be literal strings",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"<\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }

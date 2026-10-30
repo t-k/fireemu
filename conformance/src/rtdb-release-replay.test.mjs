@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { campaignPlan, judgeExport } from "./rtdb-release-replay.mjs";
@@ -257,43 +257,55 @@ test("every RTDB campaign binds its recorded fixture and local producer sources"
   assert.throws(() => sourceResources("unknown"));
 });
 
-test("the real local entrypoint binds the executed binary and refuses producer failure or binary changes", async () => {
-  const { mkdtempSync, chmodSync, rmSync, writeFileSync, existsSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { spawnSync } = await import("node:child_process");
-  const dir = mkdtempSync(join(tmpdir(), "rtdb-exec-"));
-  const binary = join(dir, "binary");
-  const script = fileURLToPath(new URL("./rtdb-release-replay.mjs", import.meta.url));
-  try {
-    for (const [mode, body, expected] of [
-      ["ok", "", 0],
-      ["fail", "process.exit(7)", 2],
-      ["changed", "require('node:fs').appendFileSync(process.argv[1], ' ')", 2],
-    ]) {
-      writeFileSync(binary, `#!${process.execPath}\n${body}\n`);
-      chmodSync(binary, 0o700);
-      const output = join(dir, `${mode}.json`);
-      const result = spawnSync(
-        process.execPath,
-        [
-          script,
-          "local",
-          "smoke",
-          "--fireemu",
-          binary,
-          "--out",
-          join(dir, mode),
-          "--export",
-          output,
-        ],
-        { encoding: "utf8", timeout: 5000 },
-      );
-      assert.equal(result.status, expected, result.stderr);
-      assert.equal(existsSync(output), expected === 0, mode);
-      if (expected === 0) assert.equal(JSON.parse(readFileSync(output)).match, true);
+test(
+  "the real local entrypoint binds the executed binary and refuses producer failure or binary changes",
+  {
+    skip:
+      !existsSync(
+        new URL(
+          "../../tools/sdk-smoke-database/node_modules/firebase/package.json",
+          import.meta.url,
+        ),
+      ) && "the release job installs the locked SDK dependencies",
+  },
+  async () => {
+    const { mkdtempSync, chmodSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnSync } = await import("node:child_process");
+    const dir = mkdtempSync(join(tmpdir(), "rtdb-exec-"));
+    const binary = join(dir, "binary");
+    const script = fileURLToPath(new URL("./rtdb-release-replay.mjs", import.meta.url));
+    try {
+      for (const [mode, body, expected] of [
+        ["ok", "", 0],
+        ["fail", "process.exit(7)", 2],
+        ["changed", "require('node:fs').appendFileSync(process.argv[1], ' ')", 2],
+      ]) {
+        writeFileSync(binary, `#!${process.execPath}\n${body}\n`);
+        chmodSync(binary, 0o700);
+        const output = join(dir, `${mode}.json`);
+        const result = spawnSync(
+          process.execPath,
+          [
+            script,
+            "local",
+            "smoke",
+            "--fireemu",
+            binary,
+            "--out",
+            join(dir, mode),
+            "--export",
+            output,
+          ],
+          { encoding: "utf8", timeout: 5000 },
+        );
+        assert.equal(result.status, expected, result.stderr);
+        assert.equal(existsSync(output), expected === 0, mode);
+        if (expected === 0) assert.equal(JSON.parse(readFileSync(output)).match, true);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+  },
+);

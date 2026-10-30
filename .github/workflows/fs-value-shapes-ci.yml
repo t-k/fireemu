@@ -1,0 +1,19 @@
+name: fs-value-shapes-ci
+on:
+  push:
+    branches: [work/fs-value-shapes-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: bc98daec8fc06f8ee65493ffcccf5573b5545da1
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = bc98daec8fc06f8ee65493ffcccf5573b5545da1
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_tagged_literals_preserve_wire_shapes) | test(unknown_tag_preserves_ordered_integer_values)'

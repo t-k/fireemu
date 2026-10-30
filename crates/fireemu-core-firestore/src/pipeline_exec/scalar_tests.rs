@@ -4017,3 +4017,84 @@ fn numeric_scalar_pict_rows() {
         }
     }
 }
+
+#[test]
+fn empty_signature_at_least_arity_is_bounded() {
+    for name in ["minimum", "maximum"] {
+        assert!(
+            matches!(
+                Expr::call(name, vec![], Placement::Value),
+                Err(ExprError::Arity(_))
+            ),
+            "{name}"
+        );
+    }
+    for function in FUNCTIONS
+        .iter()
+        .filter(|f| matches!(f.arity, Arity::AtLeast(_)))
+    {
+        let Arity::AtLeast(minimum) = function.arity else {
+            unreachable!()
+        };
+        if minimum > 0 {
+            assert!(
+                Expr::call(
+                    function.name,
+                    vec![Expr::Constant(Value::Integer(1)); minimum - 1],
+                    Placement::Value
+                )
+                .is_err(),
+                "{}",
+                function.name
+            );
+        }
+    }
+}
+
+#[test]
+fn arity_review_pict_rows() {
+    let rows = [
+        ("minimum", 0, false),
+        ("maximum", 0, false),
+        ("minimum", 0, true),
+        ("maximum", 0, true),
+        ("map", 0, false),
+        ("concat", 2, false),
+        ("minimum", 1, true),
+        ("map", 1, false),
+        ("maximum", 2, true),
+        ("maximum", 1, true),
+        ("concat", 0, true),
+        ("minimum", 2, true),
+        ("concat", 1, false),
+        ("map", 2, true),
+    ];
+    for (name, count, condition) in rows {
+        let placement = if condition {
+            Placement::Condition
+        } else {
+            Placement::Value
+        };
+        let result = Expr::call(
+            name,
+            vec![Expr::Constant(Value::Integer(1)); count],
+            placement,
+        );
+        if condition {
+            assert!(
+                matches!(result, Err(ExprError::Unsupported(_))),
+                "{name} {count}"
+            );
+        } else if (name == "map" && count % 2 == 1)
+            || (name == "concat" && count < 2)
+            || ((name == "minimum" || name == "maximum") && count == 0)
+        {
+            assert!(
+                matches!(result, Err(ExprError::Arity(_))),
+                "{name} {count}: {result:?}"
+            );
+        } else {
+            assert!(result.is_ok(), "{name} {count}: {result:?}");
+        }
+    }
+}

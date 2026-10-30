@@ -1835,3 +1835,46 @@ fn array_filter_keeps_true_values_and_skips_false_and_null() {
         );
     }
 }
+
+#[test]
+fn array_filter_nested_scope_and_empty_shadow() {
+    let alias = Expr::Constant(s("item"));
+    let inner = call(
+        "array_transform",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(7)])),
+            alias.clone(),
+            Expr::Variable("item".to_owned()),
+        ],
+    );
+    let predicate = call(
+        "equal",
+        vec![
+            call("array_length", vec![inner]),
+            Expr::Constant(Value::Integer(1)),
+        ],
+    );
+    let populated = call(
+        "array_filter",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(2)])),
+            alias.clone(),
+            predicate.clone(),
+        ],
+    );
+    let empty = call(
+        "array_filter",
+        vec![Expr::Constant(Value::Array(vec![])), alias, predicate],
+    );
+    let doc = row("c/d", &[]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            populated.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(2)]))
+        );
+        assert_eq!(
+            empty.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+    }
+}

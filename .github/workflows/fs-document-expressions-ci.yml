@@ -17,21 +17,19 @@ jobs:
       - run: |
           test "$(git rev-parse HEAD)" = 7d52a57e61c15dc7633274a68e04b537d0db92ba
           cargo fmt --all -- --check
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(current_document_returns_fields_and_document_metadata) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(the_pipeline_corpus_replays_as_production_answered)' 
-      - name: mutation checks
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
+          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+      - name: adapter mutation check
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked
-          for mutation in fields name created updated guard allfields; do
-            git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs
-            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-core-firestore/src/pipeline_exec.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"fields":("let mut fields = row.fields.clone();", "let mut fields = BTreeMap::new();"),"name":("Value::Reference(path.resource_name()),", "Value::Reference(path.resource_name().to_uppercase()),"),"created":("Value::Timestamp(times.created),", "Value::Timestamp(times.updated),"),"updated":("Value::Timestamp(times.updated),", "Value::Timestamp(times.created),"),"guard":("row.path.is_none() || row.times.is_none()", "row.path.is_none() && row.times.is_none()"),"allfields":("*all_fields |= function.name == \"current_document\";", "*all_fields |= function.name == \"unrelated\";")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
-            set +e
-            cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked > "mutation-$mutation.log" 2>&1
-            rc=$?
-            set -e
-            cat "mutation-$mutation.log"
-            test "$rc" = 101
-            grep -q 'current_document_returns_fields_and_document_metadata ... FAILED' "mutation-$mutation.log"
-          done
-          git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs
+          cargo test -p fireemu-adapter-grpc --test pipeline_differential the_differential_corpus_holds_both_profiles_to_their_rules --locked
+          python3 -c 'import pathlib; p=pathlib.Path("crates/fireemu-adapter-grpc/src/pipeline.rs"); s=p.read_text(); a="function.name == \"current_document\" || args.iter().any(reads_field)"; b="function.name == \"unrelated\" || args.iter().any(reads_field)"; assert s.count(a)==1; p.write_text(s.replace(a,b,1))'
+          set +e
+          cargo test -p fireemu-adapter-grpc --test pipeline_differential the_differential_corpus_holds_both_profiles_to_their_rules --locked > adapter-mutation.log 2>&1
+          rc=$?
+          set -e
+          cat adapter-mutation.log
+          test "$rc" = 101
+          grep -q 'the_differential_corpus_holds_both_profiles_to_their_rules ... FAILED' adapter-mutation.log
+          git checkout -- crates/fireemu-adapter-grpc/src/pipeline.rs

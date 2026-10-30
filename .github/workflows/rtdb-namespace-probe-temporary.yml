@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 0f1bbd41b267a36f684569af4343d5600c354904
+          ref: 667365658c95501b744af3c164a2d491705c615d
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
@@ -23,11 +23,15 @@ jobs:
         run: |
           mkdir probe-evidence
           git rev-parse HEAD | tee probe-evidence/source-head.txt
-          test "$(git rev-parse HEAD)" = 0f1bbd41b267a36f684569af4343d5600c354904
+          test "$(git rev-parse HEAD)" = 667365658c95501b744af3c164a2d491705c615d
           sha256sum conformance/src/rtdb-namespace-probe.mjs | tee probe-evidence/probe-sha256.txt
-          echo '97194a5a5d30f31d3df8c8ca0c886cffb302c16f942ce3204f891dfa3f1628b6  conformance/src/rtdb-namespace-probe.mjs' | sha256sum -c -
+          echo '08a5529f6c91f1ad2b861c2a0f652138614465061add1a290bcae6563a89fd56  conformance/src/rtdb-namespace-probe.mjs' | sha256sum -c -
       - name: Install locked conformance dependencies
         run: pnpm -C conformance install --frozen-lockfile
+      - name: Check real Node inherited streams and negative controls
+        run: |
+          set -o pipefail
+          node --test --test-name-pattern='actual Node stderr inheritance|probe requires matching inherited|namespace probe refuses signals' conformance/src/rtdb-release-replay.test.mjs 2>&1 | tee probe-evidence/stream-tests.log
       - name: Exercise PID namespace and detached timeout
         run: |
           set +e
@@ -36,7 +40,7 @@ jobs:
           probe_status=${PIPESTATUS[0]}
           set -e
           if test -f probe-evidence/namespace/receipt.json; then
-            jq -c '{ok, launcherIdentity, identity, innerPid, remaining, outcome, namespace: .summary.namespace, fatal: .summary.fatal, observed: .summary.observed, commandCount: (.summary.runs[0].commands | length), commandExit: .summary.runs[0].commands[0].exitCode, later, cleanupUnverified}' probe-evidence/namespace/receipt.json
+            jq -c '{ok, launcherIdentity, identity, rejections, innerPid, remaining, outcome, namespace: .summary.namespace, witnessAck: .summary.witnessAck, fatal: .summary.fatal, observed: .summary.observed, commandCount: (.summary.runs[0].commands | length), commandExit: .summary.runs[0].commands[0].exitCode, later, cleanupUnverified}' probe-evidence/namespace/receipt.json
           fi
           exit "$probe_status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

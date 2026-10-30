@@ -5084,6 +5084,30 @@ mod tests {
     }
 
     #[test]
+    fn array_transform_unobserved_index_alias_remains_refused() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let call = value(V::FunctionValue(pb::Function {
+            name: "array_transform".to_owned(),
+            args: vec![
+                value(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                value(V::StringValue("item".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+            ],
+            ..Default::default()
+        }));
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert_eq!(
+                decode_operand_tree(&call, profile).unwrap_err().code(),
+                tonic::Code::Unimplemented
+            );
+        }
+    }
+
+    #[test]
     fn where_is_type_keeps_static_type_validation() {
         use pb::value::ValueType as V;
         let field = || pb::Value {

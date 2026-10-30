@@ -4837,6 +4837,35 @@ mod tests {
     }
 
     #[test]
+    fn where_is_type_keeps_static_type_validation() {
+        use pb::value::ValueType as V;
+        let condition = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "is_type".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    },
+                    pb::Value {
+                        value_type: Some(V::StringValue("bogus".to_owned())),
+                    },
+                ],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stage = pb::pipeline::Stage {
+                name: "where".to_owned(),
+                args: vec![condition.clone()],
+                ..Default::default()
+            };
+            let error = decode_condition(&stage, mode).unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert!(error.message().contains("argument 'type'"));
+        }
+    }
+
+    #[test]
     fn valid_where_equal_retains_field_filter_pushdown() {
         use pb::value::ValueType as V;
         let condition = pb::Value {

@@ -5,33 +5,17 @@ on:
 permissions:
   contents: read
 jobs:
-  mutation:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: d03e81e3257fdc75d43f6e7b18194e48c89c5500
+          ref: c7f8ebce7e406cca18ce3511945e971510c12d87
           fetch-depth: 0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          path: .ci-helper
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - name: Verify exact source and run mutations
-        run: |
-          test "$(git rev-parse HEAD)" = d03e81e3257fdc75d43f6e7b18194e48c89c5500
-          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(array_transform_unobserved_index_alias_remains_refused) | test(array_transform_element_alias_validation_and_priority)'
-          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings
-          python3 .ci-helper/.github/temporary/array_mutations.py
-      - name: Preserve mutation logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: array-scalar-mutation-results
-          path: /tmp/array-scalar-mutants/
-          if-no-files-found: warn
+      - run: |
+          test "$(git rev-parse HEAD)" = c7f8ebce7e406cca18ce3511945e971510c12d87
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(infinity_vector_admission_depends_on_expression_position)'

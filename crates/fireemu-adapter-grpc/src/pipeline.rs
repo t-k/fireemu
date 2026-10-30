@@ -3054,7 +3054,19 @@ fn decode_condition(
             "where expression is unsupported locally",
         ));
     };
-    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) {
+    if !def.returns_boolean
+        || !matches!(def.arity, Arity::Exact(2))
+        || (!def.signature.is_empty()
+            && !matches!(
+                def.name,
+                "equal"
+                    | "not_equal"
+                    | "less_than"
+                    | "less_than_or_equal"
+                    | "greater_than"
+                    | "greater_than_or_equal"
+            ))
+    {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.

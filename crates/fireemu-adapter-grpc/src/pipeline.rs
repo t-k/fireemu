@@ -5926,7 +5926,7 @@ vector	grpc	emulator	function	foreign";
             (call("sum", vec![array()]), 14),
             (call("negate", vec![integer(7)]), -7),
         ];
-        let row = Row::derived(Default::default());
+        let row = Row::derived(std::collections::BTreeMap::default());
         for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
             for (wire, expected) in &cases {
                 let expression = decode_operand_tree(wire, mode).unwrap();

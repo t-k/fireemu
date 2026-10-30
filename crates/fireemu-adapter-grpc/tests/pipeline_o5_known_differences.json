@@ -722,16 +722,16 @@
   {
     "category": "unsupported-subset",
     "emulator": {
+      "status": 400,
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"sum\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"sum\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
-      ],
-      "status": 501
+      ]
     },
     "production": {
       "body": [
@@ -745,19 +745,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "The strict profile refuses the unobserved zero-argument signature; the emulator profile returns its local argument-count text. Both remain different from the recorded production refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-sum",
     "strict": {
+      "status": 501,
       "body": [
         {
           "error": {
             "code": 501,
-            "message": "function \"sum\" is unsupported locally",
+            "message": "function \"sum\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
-      ],
-      "status": 501
+      ]
     }
   },
   {
@@ -804,16 +804,16 @@
   {
     "category": "unsupported-subset",
     "emulator": {
+      "status": 400,
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"minimum\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"minimum\" takes at least 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
-      ],
-      "status": 501
+      ]
     },
     "production": {
       "body": [
@@ -827,34 +827,34 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "The strict profile refuses the unobserved zero-argument signature; the emulator profile returns its local argument-count text. Both remain different from the recorded production refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-minimum",
     "strict": {
+      "status": 501,
       "body": [
         {
           "error": {
             "code": 501,
-            "message": "function \"minimum\" is unsupported locally",
+            "message": "function \"minimum\" takes at least 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
-      ],
-      "status": 501
+      ]
     }
   },
   {
     "category": "unsupported-subset",
     "emulator": {
+      "status": 400,
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"maximum\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"maximum\" takes at least 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
-      ],
-      "status": 501
+      ]
     },
     "production": {
       "body": [
@@ -868,19 +868,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "The strict profile refuses the unobserved zero-argument signature; the emulator profile returns its local argument-count text. Both remain different from the recorded production refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-maximum",
     "strict": {
+      "status": 501,
       "body": [
         {
           "error": {
             "code": 501,
-            "message": "function \"maximum\" is unsupported locally",
+            "message": "function \"maximum\" takes at least 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
-      ],
-      "status": 501
+      ]
     }
   },
   {
@@ -1091,16 +1091,16 @@
   {
     "category": "unsupported-subset",
     "emulator": {
+      "status": 400,
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"negate\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "function \"negate\" takes 1 argument(s), got 0 argument(s)",
+            "status": "INVALID_ARGUMENT"
           }
         }
-      ],
-      "status": 501
+      ]
     },
     "production": {
       "body": [
@@ -1114,19 +1114,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "The strict profile refuses the unobserved zero-argument signature; the emulator profile returns its local argument-count text. Both remain different from the recorded production refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-negate",
     "strict": {
+      "status": 501,
       "body": [
         {
           "error": {
             "code": 501,
-            "message": "function \"negate\" is unsupported locally",
+            "message": "function \"negate\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
-      ],
-      "status": 501
+      ]
     }
   },
   {

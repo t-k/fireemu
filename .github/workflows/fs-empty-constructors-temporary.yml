@@ -1,7 +1,7 @@
 name: FS empty constructors targeted
 on:
   push:
-    branches: [work/fs-empty-constructors-ci]
+    branches: [work/fs-empty-replay-ci]
 permissions:
   contents: read
 jobs:
@@ -15,4 +15,4 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
       - name: Targeted test
-        run: cargo test --locked -p fireemu-adapter-grpc --test pipeline_strict_recorded -- --nocapture
+        run: cargo test --locked -p fireemu-adapter-grpc --test pipeline_replay -- --nocapture

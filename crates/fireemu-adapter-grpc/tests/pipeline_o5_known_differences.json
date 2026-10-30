@@ -1908,29 +1908,6 @@
   },
   {
     "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"arrayValue\":{\"values\":[]}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "array() without arguments is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
     "emulator": {
       "body": [
         {
@@ -3064,29 +3041,6 @@
           "error": {
             "code": 501,
             "message": "function \"coalesce\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-map",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "map() without arguments is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }

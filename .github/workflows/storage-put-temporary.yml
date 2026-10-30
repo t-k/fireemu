@@ -29,7 +29,7 @@ jobs:
           mkdir -p mutation-logs
           cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)' > mutation-logs/baseline.txt 2>&1
           cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)' > mutation-logs/no-op.txt 2>&1
-          python3 -c "from pathlib import Path; p=Path('crates/fireemu-adapter-http/tests/storage.rs'); s=p.read_text(); a='1_788_004_860'; assert s.count(a)==1; p.write_text(s.replace(a, '1_788_006_660'))"
+          python3 -c "from pathlib import Path; p=Path('crates/fireemu-adapter-http/tests/storage.rs'); s=p.read_text(); a='from_unix_seconds(1_788_004_860)'; assert s.count(a)==1; p.write_text(s.replace(a, 'from_unix_seconds(1_788_006_660)'))"
           cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)' > mutation-logs/aged-no-op.txt 2>&1
           git restore crates/fireemu-adapter-http/tests/storage.rs
           python3 -c "from pathlib import Path; p=Path('crates/fireemu-adapter-http/src/storage.rs'); s=p.read_text(); i=s.index('fn xml_style_put('); a=s[:i]; b=s[i:]; x='SignedUrl::Expired => {'; y='SignedUrl::Invalid(details) => {'; assert b.count(x)==1 and b.count(y)==1; b=b.replace(x,'SignedUrl::Expired if false => {',1).replace(y,'SignedUrl::Expired => {}\n        '+y,1); p.write_text(a+b)"

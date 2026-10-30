@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6a2334681b05916c38c9b63a47be424257d23dc0
+          ref: b6a00e43cd08d7c6cc43071556abab152af4a137
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 6a2334681b05916c38c9b63a47be424257d23dc0
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(observed_generic_sequence_and_map_forms)'
+          test "$(git rev-parse HEAD)" = b6a00e43cd08d7c6cc43071556abab152af4a137
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(observed_reference_forms_and_autogen_id) | test(observed_coalesce_is_lazy_and_skips_null_and_absent)'

@@ -129,8 +129,14 @@ impl Rules {
                 .spawn_scoped(scope, || {
                     let mut diagnostics = Vec::new();
                     let mut checked = 0;
-                    let truncated =
-                        collect_diagnostics(spec, &BTreeSet::new(), &mut diagnostics, &mut checked);
+                    let mut visited = 0;
+                    let truncated = collect_diagnostics(
+                        spec,
+                        &mut BTreeSet::new(),
+                        &mut diagnostics,
+                        &mut checked,
+                        &mut visited,
+                    );
                     diagnostics.sort_by_key(|error| (error.line, error.column));
                     (diagnostics, truncated)
                 })
@@ -518,12 +524,18 @@ fn compile_node(spec: &RuleSpec, wildcards: &BTreeSet<String>) -> Result<RuleNod
 
 fn collect_diagnostics(
     spec: &RuleSpec,
-    wildcards: &BTreeSet<String>,
+    wildcards: &mut BTreeSet<String>,
     errors: &mut Vec<RulesError>,
     checked: &mut usize,
+    visited: &mut usize,
 ) -> bool {
     const MAX_EXPRESSIONS: usize = 4096;
     const MAX_ERRORS: usize = 64;
+    const MAX_NODES: usize = 4096;
+    if *visited == MAX_NODES {
+        return true;
+    }
+    *visited += 1;
     for (source, kind) in [
         (&spec.read, RuleKind::Read),
         (&spec.write, RuleKind::Write),
@@ -540,11 +552,12 @@ fn collect_diagnostics(
         }
     }
     for (key, child) in &spec.children {
-        let mut inner = wildcards.clone();
-        if key.starts_with('$') {
-            inner.insert(key.clone());
+        let inserted = key.starts_with('$') && wildcards.insert(key.clone());
+        let truncated = collect_diagnostics(child, wildcards, errors, checked, visited);
+        if inserted {
+            wildcards.remove(key);
         }
-        if collect_diagnostics(child, &inner, errors, checked) {
+        if truncated {
             return true;
         }
     }

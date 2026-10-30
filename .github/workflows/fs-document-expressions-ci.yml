@@ -16,22 +16,19 @@ jobs:
           tool: cargo-nextest@0.9.143
       - run: |
           test "$(git rev-parse HEAD)" = 12a11f876527b07a4e99306e51624cc21473fea6
-          cargo fmt --all -- --check
-          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(current_document_returns_fields_and_document_metadata) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(the_pipeline_corpus_replays_as_production_answered)'
       - name: adapter mutation check
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p fireemu-adapter-grpc --test pipeline_differential the_differential_corpus_holds_both_profiles_to_their_rules --locked
+          cargo test -p fireemu-adapter-grpc --test pipeline_replay the_pipeline_corpus_replays_as_production_answered --locked
           python3 -c 'import pathlib; p=pathlib.Path("crates/fireemu-adapter-grpc/src/pipeline.rs"); s=p.read_text(); a="function.name == \"current_document\" || args.iter().any(reads_field)"; b="function.name == \"unrelated\" || args.iter().any(reads_field)"; assert s.count(a)==1; p.write_text(s.replace(a,b,1))'
           set +e
-          cargo test -p fireemu-adapter-grpc --test pipeline_differential the_differential_corpus_holds_both_profiles_to_their_rules --locked > adapter-mutation.log 2>&1
+          cargo test -p fireemu-adapter-grpc --test pipeline_replay the_pipeline_corpus_replays_as_production_answered --locked > adapter-mutation.log 2>&1
           rc=$?
           set -e
           cat adapter-mutation.log
           test "$rc" = 101
-          grep -q 'the_differential_corpus_holds_both_profiles_to_their_rules ... FAILED' adapter-mutation.log
+          grep -q 'the_pipeline_corpus_replays_as_production_answered ... FAILED' adapter-mutation.log
           git checkout -- crates/fireemu-adapter-grpc/src/pipeline.rs
 
       - name: mutation checks

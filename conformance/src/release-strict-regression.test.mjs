@@ -2646,7 +2646,7 @@ test("the historical v0.36 release baseline preserves every reviewed strict row"
   }
 });
 
-test("R21 uses the v0.37 complete reviewed strict baseline", () => {
+test("the historical v0.37 release baseline preserves every reviewed strict row", () => {
   const previous = readJson("conformance/fs-ent-pipeline-release-v036.json");
   const current = readJson("conformance/fs-ent-pipeline-release-v037.json");
   const expectedIds = [
@@ -2685,6 +2685,31 @@ test("R21 uses the v0.37 complete reviewed strict baseline", () => {
     assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
   }
   assert.deepEqual(current.summary, { MATCH: 1768, MISMATCH: 169, INDETERMINATE: 12, UNKNOWN: 2 });
+});
+
+test("R21 uses the v0.38.1 complete reviewed strict baseline", () => {
+  const previous = readJson("conformance/fs-ent-pipeline-release-v037.json");
+  const current = readJson("conformance/fs-ent-pipeline-release-v0381.json");
+  const expectedIds = [
+    "fs-ent-pipeline/o2/select-width#select-65-grpc",
+    "fs-ent-pipeline/o8a/nesting-main#chain-33-grpc",
+    "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc",
+  ];
+  assert.equal(current.fixtureSha256, previous.fixtureSha256);
+  const before = new Map(previous.rows.map((row) => [row.row, row]));
+  const after = new Map(current.rows.map((row) => [row.row, row]));
+  assert.equal(before.size, 1951);
+  assert.equal(after.size, 1951);
+  assert.deepEqual([...after.keys()].toSorted(), [...before.keys()].toSorted());
+  const changed = [...after.keys()].filter(
+    (id) => JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id)),
+  );
+  assert.deepEqual(changed.toSorted(), expectedIds.toSorted());
+  for (const id of changed) {
+    assert.equal(before.get(id).status, "MISMATCH", id);
+    assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
+  }
+  assert.deepEqual(current.summary, { MATCH: 1771, MISMATCH: 166, INDETERMINATE: 12, UNKNOWN: 2 });
   const comparison = {
     path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
     kind: current.kind,
@@ -2701,13 +2726,13 @@ test("R21 uses the v0.37 complete reviewed strict baseline", () => {
         {
           ...context,
           readJson: (path) => {
-            if (path === "conformance/fs-ent-pipeline-release-v037.json")
-              throw new Error("missing v037 snapshot");
+            if (path === "conformance/fs-ent-pipeline-release-v0381.json")
+              throw new Error("missing v0381 snapshot");
             return readJson(path);
           },
         },
       ),
-    /missing v037 snapshot/,
+    /missing v0381 snapshot/,
   );
   for (const mutate of [
     (x) => {

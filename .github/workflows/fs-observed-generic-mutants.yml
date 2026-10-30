@@ -1,7 +1,6 @@
 name: fs-observed-generic-mutants
 on:
-  push:
-    branches: [work/fs-observed-generic-ci]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

@@ -1208,10 +1208,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 110, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 104, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            84,
+            81,
             "finite emulator debt inventory"
         );
     }

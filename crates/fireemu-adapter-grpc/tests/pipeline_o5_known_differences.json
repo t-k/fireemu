@@ -1790,48 +1790,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"rand\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'rand(): float64' takes [0..0] argument(s), but 1 was provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-rand",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"rand\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_transform\" is unsupported locally",
+            "message": "array callback aliases must be literal strings",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -1857,48 +1816,7 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"array_transform\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_filter\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]' takes [3..3] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array_filter",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_filter\" is unsupported locally",
+            "message": "array callback aliases must be literal strings",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -3307,47 +3225,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"like\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'like[T: string | regex](search_space: string, pattern: T): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-like",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"like\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"manhattan_distance\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -3938,52 +3815,6 @@
   {
     "category": "unsupported-subset",
     "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"__vector__\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0x7ff0000000000000\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-vector-positive-infinity",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"__vector__\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0xfff0000000000000\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-vector-negative-infinity",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
       "body": [
         {
           "error": {
@@ -4067,29 +3898,6 @@
     },
     "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
     "row": "fs-ent-pipeline/o5/appendix#proposed-reference-garbage",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a reference that names no document of the request's database, longer than 100 key path elements or with a reserved-looking id is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"referenceValue\":\"{docs}\"}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-reference-documents-root",
     "strict": {
       "body": [
         {

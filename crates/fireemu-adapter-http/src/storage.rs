@@ -2785,7 +2785,7 @@ fn fallback_route(method: &str, path: &str, segments: &[&str]) -> Result<Route, 
         let original: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         if matches!(
             original.as_slice(),
-            ["internal", ..] | ["v0", ..] | ["storage", "v1", ..] | ["upload", "storage", "v1", ..]
+            ["internal" | "v0", ..] | ["storage", "v1", ..] | ["upload", "storage", "v1", ..]
         ) {
             return Ok(Route::NotImplemented);
         }
@@ -6975,7 +6975,6 @@ fn xml_style_put(
 ) -> Outcome {
     use crate::storage_xml::{check_signed_url, SignedUrl};
     match check_signed_url(params, now_unix_seconds(state)) {
-        SignedUrl::Valid => {}
         SignedUrl::Expired => {
             return Err(xml_error(
                 400,
@@ -6995,7 +6994,7 @@ fn xml_style_put(
         SignedUrl::Absent if state.is_strict() => {
             return Err(xml_error(403, "AccessDenied", "Access denied.", None))
         }
-        SignedUrl::Absent => {}
+        SignedUrl::Valid | SignedUrl::Absent => {}
     }
     if let Some(headers) = params.get("X-Goog-SignedHeaders") {
         for header in headers.split(';') {

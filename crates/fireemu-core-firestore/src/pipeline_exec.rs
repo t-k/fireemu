@@ -351,6 +351,18 @@ const fn document_function(
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
+    array_access_function("cmp", Arity::Exact(2), "", eval_generic_cmp),
+    array_access_function(
+        "storage_size",
+        Arity::Exact(1),
+        "",
+        eval_generic_storage_size,
+    ),
+    array_access_function("get_field", Arity::Exact(2), "", eval_generic_get_field),
+    array_access_function("offset", Arity::Exact(2), "", eval_generic_offset),
+    array_access_function("reverse", Arity::Exact(1), "", eval_generic_reverse),
+    array_access_function("length", Arity::Exact(1), "", eval_generic_length),
+    array_access_function("string_concat", Arity::AtLeast(2), "", eval_generic_concat),
     comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
         eval_comparison(Comparison::Equal, args, cx)
     }),
@@ -1265,6 +1277,116 @@ fn array_access<'a>(
         Eval::Value(Value::Array(values)) => Ok(values),
         _ => unreachable!("missing and errors were handled above"),
     }
+}
+
+fn generic_unobserved(name: &'static str) -> Eval {
+    Eval::Error(EvalError::Unobserved {
+        function: name,
+        reason: "unrecorded argument shape",
+    })
+}
+
+fn eval_generic_cmp(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Integer(a)), Eval::Value(Value::Integer(b))] => {
+            Eval::Value(Value::Integer(match a.cmp(b) {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }))
+        }
+        _ => generic_unobserved("cmp"),
+    }
+}
+
+fn eval_generic_storage_size(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => i64::try_from(s.len())
+            .ok()
+            .and_then(|n| n.checked_add(1))
+            .map_or_else(
+                || generic_unobserved("storage_size"),
+                |n| Eval::Value(Value::Integer(n)),
+            ),
+        _ => generic_unobserved("storage_size"),
+    }
+}
+
+fn eval_generic_get_field(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Map(map)), Eval::Value(Value::String(key))] => map
+            .get(key)
+            .cloned()
+            .map_or_else(|| generic_unobserved("get_field"), Eval::Value),
+        _ => generic_unobserved("get_field"),
+    }
+}
+
+fn eval_generic_offset(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Array(values)), Eval::Value(Value::Integer(i))] => usize::try_from(*i)
+            .ok()
+            .and_then(|i| values.get(i))
+            .cloned()
+            .map_or_else(|| generic_unobserved("offset"), Eval::Value),
+        _ => generic_unobserved("offset"),
+    }
+}
+
+fn eval_generic_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => Eval::Value(Value::String(s.chars().rev().collect())),
+        [Eval::Value(Value::Bytes(b))] => {
+            Eval::Value(Value::Bytes(b.iter().rev().copied().collect()))
+        }
+        [Eval::Value(Value::Array(a))] => {
+            Eval::Value(Value::Array(a.iter().rev().cloned().collect()))
+        }
+        _ => generic_unobserved("reverse"),
+    }
+}
+
+fn eval_generic_length(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let length = match args {
+        [Eval::Value(Value::String(s))] => s.chars().count(),
+        [Eval::Value(Value::Bytes(b))] => b.len(),
+        [Eval::Value(Value::Array(a))] => a.len(),
+        [Eval::Value(Value::Map(m))] => m.len(),
+        [Eval::Value(Value::Vector(v))] => v.len(),
+        _ => return generic_unobserved("length"),
+    };
+    i64::try_from(length).map_or_else(
+        |_| generic_unobserved("length"),
+        |n| Eval::Value(Value::Integer(n)),
+    )
+}
+
+fn eval_generic_concat(args: &[Eval], cx: Context<'_>) -> Eval {
+    if args
+        .iter()
+        .any(|arg| !matches!(arg, Eval::Value(Value::String(_))))
+    {
+        return first_error(args).unwrap_or_else(|| generic_unobserved("string_concat"));
+    }
+    (scalar::CONCAT.eval)(args, cx)
 }
 
 fn eval_array_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {

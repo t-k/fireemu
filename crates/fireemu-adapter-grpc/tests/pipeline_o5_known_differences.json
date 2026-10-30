@@ -1105,7 +1105,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+\u221e) argument(s).",
+            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+∞) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -1146,7 +1146,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+\u221e) argument(s).",
+            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+∞) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -2563,41 +2563,6 @@
     }
   },
   {
-    "category": "unsupported-current-document",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__create_time__\":{\"timestampValue\":\"<t2>\"},\"__name__\":{\"referenceValue\":\"{docs}/fx5/d\"},\"__update_time__\":{\"timestampValue\":\"<t2>\"},\"i\":{\"integerValue\":\"1\"}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "Production returns the current document map, while the finite local subset refuses current_document under both profiles.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-current_document",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [
@@ -3026,7 +2991,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'coalesce(x: any?*): any?' takes [2..+\u221e) argument(s), but 0 were provided.",
+            "message": "The function 'coalesce(x: any?*): any?' takes [2..+∞) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -3764,7 +3729,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'string_concat(strings: string*): string' takes [2..+\u221e) argument(s), but 0 were provided.",
+            "message": "The function 'string_concat(strings: string*): string' takes [2..+∞) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }

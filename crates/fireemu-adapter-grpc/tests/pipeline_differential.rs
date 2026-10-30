@@ -26,12 +26,7 @@ use serde_json::{json, Value};
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
 /// Rows the emulator profile accepts or refuses unlike the official emulator, with why.
-const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "o5/function-names#fn-current_document",
-        "current_document is a function fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
-    ),
-];
+const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// A fixture with the key order of its objects as written.
 fn read_ordered(name: &str) -> (Value, KeyOrder) {
@@ -228,8 +223,17 @@ fn the_differential_corpus_holds_both_profiles_to_their_rules() {
                 &request,
                 &request_order,
             );
-            let got = answer(status, &body);
-            let want = official(row);
+            let mut got = answer(status, &body);
+            let mut want = official(row);
+            if id == "o5/function-names#fn-current_document" && status == 200 {
+                for result in [&mut got, &mut want] {
+                    let fields = &mut result["results"][0]["fields"]["v"]["mapValue"]["fields"];
+                    for key in ["__create_time__", "__update_time__"] {
+                        assert!(fields[key]["timestampValue"].as_str().is_some());
+                        fields[key] = json!({"timestampValue": "<document-time>"});
+                    }
+                }
+            }
             if strict {
                 match status {
                     501 => {}

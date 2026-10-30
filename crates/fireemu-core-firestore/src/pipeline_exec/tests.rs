@@ -49,6 +49,77 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+fn current_document_returns_fields_and_document_metadata() {
+    let created = Timestamp::new(10, 20).unwrap();
+    let updated = Timestamp::new(30, 40).unwrap();
+    let mut document = row("c/d", &[("i", Value::Integer(1))]);
+    document.times = Some(RowTimes { created, updated });
+    let expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(1)),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/d").resource_name()),
+        ),
+        ("__create_time__".to_owned(), Value::Timestamp(created)),
+        ("__update_time__".to_owned(), Value::Timestamp(updated)),
+    ]));
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call("current_document", vec![]).eval_in(&document, profile),
+            Eval::Value(expected.clone())
+        );
+    }
+    let nested = call("array", vec![call("current_document", vec![])]);
+    assert_eq!(
+        referenced_fields(&[Stage::select(vec![(alias("v"), nested)])]),
+        None
+    );
+    let mut other = row("c/other", &[("i", Value::Integer(2))]);
+    other.times = Some(RowTimes {
+        created: updated,
+        updated: created,
+    });
+    let other_expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(2)),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/other").resource_name()),
+        ),
+        ("__create_time__".to_owned(), Value::Timestamp(updated)),
+        ("__update_time__".to_owned(), Value::Timestamp(created)),
+    ]));
+    assert_eq!(
+        call("current_document", vec![]).eval(&other),
+        Eval::Value(other_expected)
+    );
+    for incomplete in [
+        Row {
+            path: None,
+            times: document.times,
+            fields: document.fields.clone(),
+        },
+        Row {
+            path: document.path.clone(),
+            times: None,
+            fields: document.fields.clone(),
+        },
+    ] {
+        assert!(unobserved(
+            &call("current_document", vec![]).eval_in(&incomplete, Unrecorded::Refuse)
+        ));
+    }
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
+        let derived = Row::derived(BTreeMap::new());
+        if profile == Unrecorded::Refuse {
+            assert!(unobserved(
+                &call("current_document", vec![]).eval_in(&derived, profile)
+            ));
+        }
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
@@ -89,6 +160,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "map_entries",
             "map_get",
             "map",
+            "current_document",
             "document_id",
             "collection_id",
             "parent",

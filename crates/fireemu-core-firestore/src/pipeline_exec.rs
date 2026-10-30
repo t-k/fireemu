@@ -540,6 +540,14 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_map,
     },
+    Function {
+        name: "current_document",
+        arity: Arity::Exact(0),
+        returns_boolean: false,
+        signature: "current_document(): map[string, any]",
+        overloads: &[],
+        eval: eval_control_fallback,
+    },
     document_function("document_id", eval_document_id),
     document_function("collection_id", eval_collection_id),
     document_function("parent", eval_parent),
@@ -759,12 +767,17 @@ impl Expr {
     }
 
     /// Adds every field path the expression reads.
-    fn collect_fields(&self, out: &mut Vec<FieldPath>) {
+    fn collect_fields(&self, out: &mut Vec<FieldPath>, all_fields: &mut bool) {
         match self {
             Self::Field(path) => out.push(path.clone()),
             Self::Constant(_) | Self::SubcollectionArray { .. } | Self::CorrelatedScalar { .. } => {
             }
-            Self::Call { args, .. } => args.iter().for_each(|arg| arg.collect_fields(out)),
+            Self::Call { function, args } => {
+                *all_fields |= function.name == "current_document";
+                for arg in args {
+                    arg.collect_fields(out, all_fields);
+                }
+            }
         }
     }
 
@@ -824,6 +837,34 @@ impl Expr {
                 reason: "subcollection input was not prepared",
             }),
             Self::Call { function, args } => {
+                if function.name == "current_document" {
+                    if unrecorded == Unrecorded::Refuse
+                        && (row.path.is_none() || row.times.is_none())
+                    {
+                        return Eval::Error(EvalError::Unobserved {
+                            function: "current_document",
+                            reason: "a row without document metadata is unobserved",
+                        });
+                    }
+                    let mut fields = row.fields.clone();
+                    if let Some(path) = &row.path {
+                        fields.insert(
+                            "__name__".to_owned(),
+                            Value::Reference(path.resource_name()),
+                        );
+                    }
+                    if let Some(times) = row.times {
+                        fields.insert(
+                            "__create_time__".to_owned(),
+                            Value::Timestamp(times.created),
+                        );
+                        fields.insert(
+                            "__update_time__".to_owned(),
+                            Value::Timestamp(times.updated),
+                        );
+                    }
+                    return Eval::Value(Value::Map(fields));
+                }
                 if matches!(
                     function.name,
                     "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
@@ -3161,32 +3202,35 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
         )
     })?;
     let mut paths = Vec::new();
+    let mut all_fields = false;
     for stage in &stages[..=narrowing] {
         match stage {
-            Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Where(condition) => condition.collect_fields(&mut paths, &mut all_fields),
             Stage::Unnest { expression, .. }
             | Stage::ReplaceWith { expression, .. }
-            | Stage::FindNearest { expression, .. } => expression.collect_fields(&mut paths),
+            | Stage::FindNearest { expression, .. } => {
+                expression.collect_fields(&mut paths, &mut all_fields);
+            }
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Sort(keys) => keys
                 .iter()
-                .for_each(|key| key.expr.collect_fields(&mut paths)),
+                .for_each(|key| key.expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Distinct(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Aggregate {
                 accumulators,
                 groups,
             } => {
                 for (_, accumulator) in accumulators {
                     if let Some(argument) = &accumulator.argument {
-                        argument.collect_fields(&mut paths);
+                        argument.collect_fields(&mut paths, &mut all_fields);
                     }
                 }
                 for (_, expr) in groups {
-                    expr.collect_fields(&mut paths);
+                    expr.collect_fields(&mut paths, &mut all_fields);
                 }
             }
             Stage::Union { .. }
@@ -3195,6 +3239,9 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
             | Stage::Limit(_)
             | Stage::Sample(_) => {}
         }
+    }
+    if all_fields {
+        return None;
     }
     paths.sort();
     paths.dedup();

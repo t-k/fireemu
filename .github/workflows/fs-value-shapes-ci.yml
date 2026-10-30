@@ -10,10 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: bc98daec8fc06f8ee65493ffcccf5573b5545da1
+          ref: 89e2edbf278bd52951e7af58c9d7e72d9ce114ba
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = bc98daec8fc06f8ee65493ffcccf5573b5545da1
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_tagged_literals_preserve_wire_shapes) | test(unknown_tag_preserves_ordered_integer_values)'
+          test "$(git rev-parse HEAD)" = 89e2edbf278bd52951e7af58c9d7e72d9ce114ba
+          cargo clippy -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_tagged_literals_preserve_wire_shapes) | test(unknown_tag_preserves_ordered_integer_values) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules)'

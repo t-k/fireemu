@@ -6974,10 +6974,8 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
         // Under strict, fireemu's own texts are refused as unobserved (production names the
         // function's signature).
         if label == "equal with one argument" {
-            assert_eq!(
-                err.message(),
-                "equal requires exactly two arguments; this text is not observed locally"
-            );
+            assert!(err.message().contains("The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."));
+            assert!(err.message().contains("not observed locally"));
         }
         assert_eq!(
             err.metadata()

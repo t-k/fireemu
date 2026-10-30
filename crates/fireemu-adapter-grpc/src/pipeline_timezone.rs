@@ -86,6 +86,9 @@ pub(crate) fn runtime(
         zone_resolver: Some(resolve),
         regex_resolver: Some(crate::pipeline_regex::resolve),
         sample_seed: None,
+        expr_rng: Some(std::sync::Arc::new(std::sync::Mutex::new(
+            fireemu_core_types::determinism::SplitMix64::new(local.next_expr_seed()),
+        ))),
     }
 }
 

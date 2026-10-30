@@ -1985,12 +1985,16 @@ fn expression_text(value: &pb::Value) -> Option<String> {
 fn constant_call_error(expr: &Expr) -> Option<Status> {
     fn reads_field(expr: &Expr) -> bool {
         match expr {
-            Expr::Field(_) | Expr::SubcollectionArray { .. } | Expr::CorrelatedScalar { .. } => {
-                true
-            }
+            Expr::Field(_)
+            | Expr::Variable(_)
+            | Expr::SubcollectionArray { .. }
+            | Expr::CorrelatedScalar { .. } => true,
             Expr::Constant(_) => false,
             Expr::Call { function, args } => {
-                function.name == "current_document" || args.iter().any(reads_field)
+                matches!(
+                    function.name,
+                    "current_document" | "array_filter" | "array_transform" | "rand"
+                ) || args.iter().any(reads_field)
             }
         }
     }
@@ -2070,7 +2074,7 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
 }
 
 fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
-    decode_operand_tree_in(value, unrecorded, false)
+    decode_operand_tree_in(value, unrecorded, false, &[])
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2244,6 +2248,7 @@ fn decode_operand_tree_in(
     value: &pb::Value,
     unrecorded: Unrecorded,
     defer_constant: bool,
+    bindings: &[String],
 ) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -2329,10 +2334,23 @@ fn decode_operand_tree_in(
                 function.name.as_str(),
                 "document_id" | "collection_id" | "parent"
             );
+            let mut body_bindings = bindings.to_vec();
+            let binder = matches!(function.name.as_str(), "array_filter" | "array_transform");
+            if binder {
+                for arg in &function.args[1..function.args.len() - 1] {
+                    let Some(V::StringValue(alias)) = &arg.value_type else {
+                        return Err(Status::unimplemented(
+                            "array callback aliases must be literal strings",
+                        ));
+                    };
+                    body_bindings.push(alias.clone());
+                }
+            }
             let args = function
                 .args
                 .iter()
-                .map(|arg| match &arg.value_type {
+                .enumerate()
+                .map(|(index, arg)| match &arg.value_type {
                     // Every reference constant passes the official checks first (r8 review
                     // M1): a malformed one is refused before any row, whatever it is passed to.
                     Some(V::ReferenceValue(name))
@@ -2352,7 +2370,13 @@ fn decode_operand_tree_in(
                             || matches!(
                                 function.name.as_str(),
                                 "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
-                            ),
+                            )
+                            || binder,
+                        if binder && index == function.args.len() - 1 {
+                            &body_bindings
+                        } else {
+                            bindings
+                        },
                     ),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -2381,6 +2405,9 @@ fn decode_operand_tree_in(
                 }
             }
             Ok(expr)
+        }
+        Some(V::VariableReferenceValue(name)) if bindings.contains(name) => {
+            Ok(Expr::Variable(name.clone()))
         }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",

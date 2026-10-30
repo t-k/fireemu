@@ -391,6 +391,7 @@ pub struct LocalBackend {
     transaction_ids: Mutex<SplitMix64>,
     /// Independent request seeds for pipeline sampling.
     sample_seeds: Mutex<SplitMix64>,
+    expr_seeds: Mutex<SplitMix64>,
     /// Exact identities of active transactions authenticated by this backend, bounded globally.
     issued_transactions: Mutex<BTreeMap<Vec<u8>, (String, String)>>,
     /// Identity source for logical query streams whose response is split into bounded pages.
@@ -2703,6 +2704,7 @@ impl LocalBackend {
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             sample_seeds: Mutex::new(SplitMix64::new(seed ^ 0x5341_4d50_4c45)),
+            expr_seeds: Mutex::new(SplitMix64::new(seed ^ 0x4558_5052_524e_47)),
             issued_transactions: Mutex::new(BTreeMap::new()),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -5266,6 +5268,13 @@ impl LocalBackend {
     /// Draws a request seed without consuming document or transaction identifiers.
     pub(crate) fn next_sample_seed(&self) -> u64 {
         self.sample_seeds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_u64()
+    }
+
+    pub(crate) fn next_expr_seed(&self) -> u64 {
+        self.expr_seeds
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .next_u64()

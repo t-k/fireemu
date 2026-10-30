@@ -26,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 54] = [
+pub const NAMES: [&str; 55] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -39,6 +39,7 @@ pub const NAMES: [&str; 54] = [
     "timestamp_to_unix_micros",
     "timestamp_to_unix_millis",
     "timestamp_to_unix_seconds",
+    "like",
     "regex_contains",
     "regex_match",
     "regex_find",
@@ -82,6 +83,15 @@ pub const NAMES: [&str; 54] = [
     "log10",
     "trunc",
 ];
+
+pub(super) const LIKE: Function = function(
+    "like",
+    Arity::Exact(2),
+    true,
+    "like(value: string, pattern: string): boolean",
+    &[],
+    eval_like,
+);
 
 pub(super) const CURRENT_TIMESTAMP: Function = function(
     "current_timestamp",
@@ -1209,6 +1219,55 @@ fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOp
                 .collect(),
         )),
         _ => unobserved(name, "the regex resolver returned an incompatible result"),
+    }
+}
+
+fn eval_like(args: &[Eval], cx: Context) -> Eval {
+    let values = match check(
+        "like",
+        args,
+        &[Param::Str("String"), Param::Str("String")],
+        cx,
+    ) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
+    let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
+        unreachable!()
+    };
+    let mut regex = String::from("(?s)");
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        let literal = match ch {
+            '%' => {
+                regex.push_str(".*");
+                continue;
+            }
+            '_' => {
+                regex.push('.');
+                continue;
+            }
+            '\\' => match chars.next() {
+                Some(escaped) => escaped,
+                None => return unobserved("like", "a trailing escape is unobserved"),
+            },
+            other => other,
+        };
+        if "\\.^$|?*+()[]{}".contains(literal) {
+            regex.push('\\');
+        }
+        regex.push(literal);
+    }
+    let Some(resolver) = cx.runtime.regex_resolver else {
+        return unobserved("like", "no regex resolver is available");
+    };
+    match resolver(subject, &regex, RegexOperation::Match) {
+        Ok(RegexResult::Boolean(value)) => Eval::Value(Value::Boolean(value)),
+        Err(RegexError::InvalidSyntax) => invalid("Unsupported regex syntax."),
+        Err(RegexError::ResourceLimit) => {
+            unobserved("like", "regex compilation exceeded local resources")
+        }
+        _ => unobserved("like", "the regex resolver returned an incompatible result"),
     }
 }
 

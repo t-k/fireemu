@@ -4144,3 +4144,73 @@ fn observed_generic_sequence_and_map_forms() {
         text("abcd")
     );
 }
+
+#[test]
+fn observed_reference_forms_and_autogen_id() {
+    let parent = "projects/p/databases/(default)/documents/positive/d1";
+    let child = format!("{parent}/children/c1");
+    let reference = |s: &str| Eval::Value(Value::Reference(s.to_owned()));
+    assert_eq!(both("namespace", &[reference(parent)]), text(""));
+    assert_eq!(
+        both("has_ancestor", &[reference(&child), reference(parent)]),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert_eq!(
+        both("reference_slice", &[reference(&child), int(0), int(1)]),
+        reference(parent)
+    );
+    assert_eq!(
+        both("replace_document_id", &[reference(parent), text("d2")]),
+        reference("projects/p/databases/(default)/documents/positive/d2")
+    );
+    let runtime = RuntimeContext {
+        expr_rng: Some(Arc::new(Mutex::new(SplitMix64::new(7)))),
+        ..RuntimeContext::default()
+    };
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: &runtime,
+    };
+    for _ in 0..2 {
+        let Eval::Value(Value::String(id)) =
+            (function("autogen_document_id").unwrap().eval)(&[], cx)
+        else {
+            panic!("expected ID")
+        };
+        assert_eq!(id.len(), 20);
+        assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+    }
+}
+
+#[test]
+fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
+    let row = Row::derived(BTreeMap::new());
+    let constant = |value| Expr::Constant(value);
+    let call = |args| Expr::call("coalesce", args, Placement::Value).unwrap();
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(vec![
+                constant(Value::Null),
+                constant(Value::String("fallback".into()))
+            ])
+            .eval_in(&row, mode),
+            text("fallback")
+        );
+        let absent = Expr::Field(FieldPath::parse("missing").unwrap());
+        assert_eq!(
+            call(vec![absent, constant(Value::Integer(7))]).eval_in(&row, mode),
+            int(7)
+        );
+        let error = Expr::call(
+            "divide",
+            vec![constant(Value::Integer(1)), constant(Value::Integer(0))],
+            Placement::Value,
+        )
+        .unwrap();
+        assert_eq!(
+            call(vec![constant(Value::Integer(7)), error]).eval_in(&row, mode),
+            int(7)
+        );
+    }
+}

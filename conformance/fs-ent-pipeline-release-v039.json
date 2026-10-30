@@ -1,6 +1,6 @@
 {
   "kind": "fs-ent-pipeline-comparison-v1",
-  "artifactSha256": "PENDING_SOURCE_BOUND_REPLAY",
+  "artifactSha256": "2f1cc6a65c89fc3543fdbd3c13f43d6f0c60015164b354d6f48a1731f36bc36b",
   "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
   "summary": {
     "MATCH": 1774,
@@ -1308,7 +1308,12 @@
     {
       "row": "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o4/stages#select-empty-then-limit-string",
@@ -1593,17 +1598,32 @@
     {
       "row": "fs-ent-pipeline/o5/function-order#select-unknown-function",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-empty-name",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-capitalized-name",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-arity",
@@ -1616,12 +1636,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-known-no-arguments",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#where-unknown-then-select-empty",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#select-arity-then-select-unknown",
@@ -1634,12 +1664,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-order#select-unknown-before-arity",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#unknown-as-first-argument",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-order#arity-around-unknown-argument",
@@ -1656,17 +1696,32 @@
     {
       "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-select-empty",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-limit-string",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-aggregate-one",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/stage-order#add-fields-array-of-field-then-select-empty",
@@ -1707,7 +1762,12 @@
     {
       "row": "fs-ent-pipeline/o5/stage-order#where-vector-of-integer",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-double",
@@ -1752,27 +1812,52 @@
     {
       "row": "fs-ent-pipeline/o5/value-shapes#vector-of-integer",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#vector-of-double-and-integer",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#vector-without-value",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#vector-with-extra-key",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#vector-value-not-array",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#keys-empty-and-reserved",
@@ -1797,112 +1882,222 @@
     {
       "row": "fs-ent-pipeline/o5/value-shapes#map-one-argument",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#equal-one-argument",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/value-shapes#document-id-with-options",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-get_field",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-offset",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-row",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-make_struct",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-struct_get",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-count",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-count_if",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-count_distinct",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-sum",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-average",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-minimum",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-maximum",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-first",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-last",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_agg",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_agg_distinct",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-logical_or",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-negate",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2d",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-add",
@@ -1911,7 +2106,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2b",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-subtract",
@@ -1924,7 +2124,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2a",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-divide",
@@ -1933,7 +2138,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u2f",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-mod",
@@ -1942,42 +2152,82 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u25",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-bit_not",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u7e",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-bit_left_shift",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3c-3c",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-bit_right_shift",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3e-3e",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-rand",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-abs",
@@ -2026,7 +2276,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_length",
@@ -2059,12 +2314,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_transform",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_filter",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-array_reverse",
@@ -2109,77 +2374,152 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-less_than",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3c",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-less_than_or_equal",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3c-3d",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-equal",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3d-3d",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-not_equal",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u21-3d",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-greater_than",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3e",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-greater_than_or_equal",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u3e-3d",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-orders_after",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-cmp",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-current_document",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-is_error",
@@ -2204,17 +2544,32 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-list_shredded_fields",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-error",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-reverse",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-concat",
@@ -2223,12 +2578,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-length",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-storage_size",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-and",
@@ -2237,7 +2602,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u41-4e-44",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-or",
@@ -2246,7 +2616,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u4f-52",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-xor",
@@ -2255,7 +2630,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u58-4f-52",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-nor",
@@ -2268,7 +2648,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-u4e-4f-54",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-conditional",
@@ -2281,7 +2666,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-switch",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-equal_any",
@@ -2298,12 +2688,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-coalesce",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-map",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-map_get",
@@ -2324,7 +2724,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-mask",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-map_keys",
@@ -2341,92 +2746,182 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-namespace",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-parent",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-collection_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-document_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-has_ancestor",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-opaque_document_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-reference_slice",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-autogen_document_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-replace_document_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-document_matches",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-matches",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-score",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-snippet",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-geo_distance",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-search_field",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-to_row_id",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-string_concat",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-like",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-regex_contains",
@@ -2499,12 +2994,22 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-ltrim",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-rtrim",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-split",
@@ -2581,7 +3086,12 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-manhattan_distance",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-dot_product",
@@ -2594,42 +3104,82 @@
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-between",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-eq_any",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-is_nan",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/function-names#fn-is_null",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n14-docid-where-then-empty",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n15-docid-add-then-empty",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n76-map-add-then-empty",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n78-docid-double-then-limit",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n79-map-where-then-empty",
@@ -2642,47 +3192,92 @@
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-integer",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-boolean",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-null",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-double",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-map",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-array",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-nested",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-where",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-type-tag-function-argument",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-empty-alias-unknown",
@@ -2703,32 +3298,62 @@
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-vector-positive-infinity",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-vector-negative-infinity",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reference-collection",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reference-empty-segment",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reference-garbage",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reference-documents-root",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-add-reserved-alias",
@@ -2833,12 +3458,22 @@
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n41-unknown-type-double",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n60-array-holding-vector",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-n69-distinct-then-limit",
@@ -2847,7 +3482,12 @@
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-r11-unknown-type-integer",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.executionTime", "body.0.results", "body.0.error"]
+      "differences": [
+        "status",
+        "body.0.executionTime",
+        "body.0.results",
+        "body.0.error"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o5/appendix#proposed-reversed-overlap",
@@ -3197,7 +3837,12 @@
     {
       "row": "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o6/sort-wire-errors#expression-string",
@@ -4551,7 +5196,12 @@
     {
       "row": "fs-ent-pipeline/o7/aggregate-args#accumulator-unknown",
       "status": "MISMATCH",
-      "differences": ["status", "body.0.error.code", "body.0.error.message", "body.0.error.status"]
+      "differences": [
+        "status",
+        "body.0.error.code",
+        "body.0.error.message",
+        "body.0.error.status"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o7/aggregate-args#count-two-args",
@@ -6787,7 +7437,9 @@
     {
       "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now",
       "status": "MISMATCH",
-      "differences": ["body.0.results.0.fields.v.integerValue"]
+      "differences": [
+        "body.0.results.0.fields.v.integerValue"
+      ]
     },
     {
       "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-unit-month",

@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 4f8d60a7bd085b21cf6ddec11a6acb583ada8fb0
+          ref: 2076670b793d72ca8720ff3657b16b99a30cebb7
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 4f8d60a7bd085b21cf6ddec11a6acb583ada8fb0
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(autogen_document_id_uses_request_runtime) | test(coalesce_skips_failing_constant_but_validates_static_errors)'
+          test "$(git rev-parse HEAD)" = 2076670b793d72ca8720ff3657b16b99a30cebb7
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(autogen_document_id_uses_request_runtime) | test(coalesce_skips_failing_constant_but_validates_static_errors) | test(captured_generic_expressions_preserve_typed_results)'

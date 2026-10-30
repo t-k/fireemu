@@ -131,6 +131,41 @@ fn rules_put_bounds_empty_node_traversal() {
 }
 
 #[test]
+fn rules_put_reports_four_recorded_type_error_positions() {
+    let mut database = db();
+    let owner = [("Authorization", "Bearer owner")];
+    let mut input = String::from("{\"rules\":{");
+    for (i, column) in [147, 188, 3584, 3625].into_iter().enumerate() {
+        if i != 0 {
+            input.push(',');
+        }
+        input.push_str(&format!("\"r{i}\":{{\".read\":\""));
+        while input.len() + 1 < column {
+            input.push(' ');
+        }
+        assert_eq!(input.len() + 1, column);
+        input.push_str("!data.val()\"}");
+    }
+    input.push_str("}}");
+    let (status, body) = call(
+        &mut database,
+        "PUT",
+        "/.settings/rules.json",
+        &owner,
+        &input,
+    );
+    assert_eq!(status, 400);
+    let positions: Vec<_> = [147, 188, 3584, 3625]
+        .map(|column| {
+            body.find(&format!("1:{column}: ! only operates on booleans."))
+                .expect("recorded diagnostic")
+        })
+        .into();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{body}");
+    assert_eq!(body.matches("only operates on booleans").count(), 4);
+}
+
+#[test]
 fn rules_diagnostics_keep_wildcard_scope_across_siblings() {
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];

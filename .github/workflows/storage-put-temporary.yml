@@ -14,6 +14,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
       - run: cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)'
+      - run: cargo nextest run -p fireemu-adapter-http --profile pr
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 10.32.1

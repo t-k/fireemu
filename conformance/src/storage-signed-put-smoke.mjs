@@ -23,8 +23,13 @@ try {
   const target = new URL(url);
   const host = process.env.STORAGE_EMULATOR_HOST || `http://${process.env.FIREBASE_STORAGE_EMULATOR_HOST}`;
   assert.equal(target.origin, new URL(host).origin);
+  const preflight = await fetch(url, { method: 'OPTIONS', headers: { Origin: 'http://localhost:3000', 'Access-Control-Request-Method': 'PUT', 'Access-Control-Request-Headers': 'content-type,x-goog-content-length-range' } });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+  assert.ok(preflight.headers.get('access-control-allow-methods').split(',').includes('PUT'));
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'content-type,x-goog-content-length-range');
   const bytes = Uint8Array.from([137, 80, 78, 71]);
-  const response = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'image/png', 'x-goog-content-length-range': '0,10485760' }, body: bytes });
+  const response = await fetch(url, { method: 'PUT', headers: { Origin: 'http://localhost:3000', 'Content-Type': 'image/png', 'x-goog-content-length-range': '0,10485760' }, body: bytes });
   assert.equal(response.status, 200, await response.text());
   assert.equal((await file.exists())[0], true);
   assert.deepEqual((await file.download())[0], Buffer.from(bytes));

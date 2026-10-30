@@ -106,7 +106,7 @@ jobs:
             cargo run --locked -p fireemu-verification-quint -- verify-evidence --model "$model" --evidence "$RUNNER_TEMP/v039-quint/$model.json"
           done
           git rev-parse HEAD > "$RUNNER_TEMP/v039-quint/source.txt"
-          (cd "$RUNNER_TEMP/v039-quint" && sha256sum *.json source.txt > SHA256SUMS)
+          (cd "$RUNNER_TEMP/v039-quint" && sha256sum ./*.json source.txt > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: v039-seven-model-evidence

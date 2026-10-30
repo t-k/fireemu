@@ -3054,20 +3054,17 @@ fn decode_condition(
             "where expression is unsupported locally",
         ));
     };
-    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) || !def.signature.is_empty() {
+    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.
         return Ok((decode_operand(condition, unrecorded)?, None));
     }
-    // Every boolean function of the table is a comparison of two arguments; the wording is
-    // the finite subset's.
-    if def.arity != Arity::Exact(function.args.len()) {
-        return Err(own_text(
-            format!("{} requires exactly two arguments", def.name),
-            unrecorded,
-        ));
-    }
+    // Check the outer call before decoding operands, using the same registry as value calls.
+    let placeholders =
+        vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); function.args.len()];
+    Expr::call(def.name, placeholders, Placement::Condition)
+        .map_err(|error| expr_status(error, unrecorded))?;
     // Options are ignored by the official emulator and unobserved in production, as above.
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
         return Err(Status::unimplemented(format!(

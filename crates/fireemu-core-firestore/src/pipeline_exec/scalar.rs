@@ -358,12 +358,29 @@ pub(super) const TRIM: Function = function(
     ],
     eval_trim,
 );
-// The argument-count refusals of `ltrim` and `rtrim` were not recorded: their signatures stay
-// unknown, so the count is refused in fireemu's own words (unobserved under strict).
-pub(super) const LTRIM: Function =
-    function("ltrim", Arity::Between(1, 2), false, "", &[], eval_ltrim);
-pub(super) const RTRIM: Function =
-    function("rtrim", Arity::Between(1, 2), false, "", &[], eval_rtrim);
+// Production records the two overloads when either function is called with no arguments.
+pub(super) const LTRIM: Function = function(
+    "ltrim",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("ltrim[T: string | bytes](value: T): T", 1, 1),
+        ("ltrim[T: string | bytes](value: T, to_trim: T): T", 2, 2),
+    ],
+    eval_ltrim,
+);
+pub(super) const RTRIM: Function = function(
+    "rtrim",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("rtrim[T: string | bytes](value: T): T", 1, 1),
+        ("rtrim[T: string | bytes](value: T, to_trim: T): T", 2, 2),
+    ],
+    eval_rtrim,
+);
 pub(super) const SPLIT: Function = function(
     "split",
     Arity::Between(1, 2),

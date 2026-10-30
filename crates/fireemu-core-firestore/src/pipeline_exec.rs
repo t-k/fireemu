@@ -315,24 +315,32 @@ impl PartialEq for Function {
 }
 
 /// A comparison of the table.
-const fn comparison(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+const fn comparison(
+    name: &'static str,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
     Function {
         name,
         arity: Arity::Exact(2),
         returns_boolean: true,
-        signature: "",
+        signature,
         overloads: &[],
         eval,
     }
 }
 
 /// A function of one document reference.
-const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+const fn document_function(
+    name: &'static str,
+    signature: &'static str,
+    eval: fn(&[Eval], Context) -> Eval,
+) -> Function {
     Function {
         name,
         arity: Arity::Exact(1),
         returns_boolean: false,
-        signature: "",
+        signature,
         overloads: &[],
         eval,
     }
@@ -340,24 +348,34 @@ const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eva
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
-    comparison("equal", |args, cx| {
+    comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
         eval_comparison(Comparison::Equal, args, cx)
     }),
-    comparison("not_equal", |args, cx| {
-        eval_comparison(Comparison::NotEqual, args, cx)
-    }),
-    comparison("less_than", |args, cx| {
-        eval_comparison(Comparison::Less, args, cx)
-    }),
-    comparison("less_than_or_equal", |args, cx| {
-        eval_comparison(Comparison::LessOrEqual, args, cx)
-    }),
-    comparison("greater_than", |args, cx| {
-        eval_comparison(Comparison::Greater, args, cx)
-    }),
-    comparison("greater_than_or_equal", |args, cx| {
-        eval_comparison(Comparison::GreaterOrEqual, args, cx)
-    }),
+    comparison(
+        "not_equal",
+        "not_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::NotEqual, args, cx),
+    ),
+    comparison(
+        "less_than",
+        "less_than(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::Less, args, cx),
+    ),
+    comparison(
+        "less_than_or_equal",
+        "less_than_or_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx),
+    ),
+    comparison(
+        "greater_than",
+        "greater_than(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::Greater, args, cx),
+    ),
+    comparison(
+        "greater_than_or_equal",
+        "greater_than_or_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx),
+    ),
     Function {
         name: "array",
         arity: Arity::Any,
@@ -540,9 +558,21 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_map,
     },
-    document_function("document_id", eval_document_id),
-    document_function("collection_id", eval_collection_id),
-    document_function("parent", eval_parent),
+    document_function(
+        "document_id",
+        "document_id(ref: document_reference): any",
+        eval_document_id,
+    ),
+    document_function(
+        "collection_id",
+        "collection_id(ref: document_reference): string",
+        eval_collection_id,
+    ),
+    document_function(
+        "parent",
+        "parent(ref: document_reference): document_reference?",
+        eval_parent,
+    ),
     logic::AND,
     logic::OR,
     logic::NOT,

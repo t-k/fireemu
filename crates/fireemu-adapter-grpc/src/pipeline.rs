@@ -2383,9 +2383,7 @@ fn decode_operand_tree_in(
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        // A literal of literals: the official emulator checks its vectors and `__type__` keys
-        // before its other keys; production recorded well-formed vectors and a string
-        // `__type__` only, so strict refuses the rest.
+        // The official emulator checks vectors and `__type__` keys before other literal keys.
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
@@ -2953,12 +2951,10 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
 /// keys are handled by the ordered refusal checks after this shape check.
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
-    // `in_array`: production read vectors alone and as a map value, never inside an array
-    // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, in_array: bool) -> bool {
+    // O-5 appendix also records a well-formed vector within an array.
+    fn walk(value: &pb::Value) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
-            Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
+            Some(V::ArrayValue(array)) => array.values.iter().all(walk),
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
                     && matches!(
@@ -2972,17 +2968,15 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                // Production answered a string `__type__` alone in its map only (O-4
-                // `literals#key-type`).
-                let typed = key != "__type__"
-                    || (matches!(inner.value_type, Some(V::StringValue(_)))
-                        && map.fields.len() == 1);
-                typed && walk(inner, false)
+                // A non-vector tag remains an ordinary map (O-5 appendix n41 and r11).
+                let typed =
+                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
+                typed && walk(inner)
             }),
             _ => true,
         }
     }
-    walk(value, false)
+    walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
@@ -4670,6 +4664,127 @@ fn with_code(mut status: Status, code: &str) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
+        use pb::value::ValueType as V;
+        let map = pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [
+                    ("__type__".to_owned(), tag),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        };
+        if in_array {
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![map] })),
+            }
+        } else {
+            map
+        }
+    }
+
+    #[test]
+    fn recorded_tagged_literals_preserve_wire_shapes() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("unknown", "double", "strict", "map", "valid"),
+            ("unknown", "integer", "strict", "map", "valid"),
+            ("vector", "double", "strict", "array", "valid"),
+            ("vector", "integer", "strict", "array", "invalid"),
+            ("unknown", "double", "emulator", "map", "valid"),
+            ("unknown", "integer", "emulator", "array", "invalid"),
+            ("vector", "double", "emulator", "map", "invalid"),
+        ];
+        for (kind, number, profile, context, validity) in cases {
+            let tag = if kind == "unknown" && validity == "invalid" {
+                V::IntegerValue(7)
+            } else {
+                V::StringValue(if kind == "vector" { "__vector__" } else { "x" }.to_owned())
+            };
+            let number = if number == "integer" {
+                V::IntegerValue(1)
+            } else {
+                V::DoubleValue(1.0)
+            };
+            let values =
+                if kind == "vector" && validity == "invalid" && matches!(number, V::DoubleValue(_))
+                {
+                    vec![]
+                } else {
+                    vec![pb::Value {
+                        value_type: Some(number),
+                    }]
+                };
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(tag),
+                },
+                values,
+                context == "array",
+            );
+            let profile = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&wire, profile);
+            if validity == "valid" {
+                let Expr::Constant(value) = result.unwrap() else {
+                    panic!("expected constant")
+                };
+                assert_eq!(crate::encode::encode_value(&value), wire);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn vector_in_array_keeps_unobserved_components_refused() {
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, -0.0] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                true,
+            );
+            assert!(decode_operand_tree(&wire, Unrecorded::Refuse).is_err());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::DoubleValue(f64::from(*n))) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue("__vector__".to_owned())) }, values, true);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unknown_tag_preserves_ordered_integer_values(tag in "[a-z]{1,8}", numbers in proptest::collection::vec(-1000i64..1000, 0..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::IntegerValue(*n)) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue(tag)) }, values, false);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
 
     proptest::proptest! {
         #[test]

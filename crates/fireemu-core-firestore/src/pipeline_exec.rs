@@ -774,8 +774,9 @@ impl Expr {
             }
             Self::Call { function, args } => {
                 *all_fields |= function.name == "current_document";
-                args.iter()
-                    .for_each(|arg| arg.collect_fields(out, all_fields));
+                for arg in args {
+                    arg.collect_fields(out, all_fields);
+                }
             }
         }
     }
@@ -3208,7 +3209,7 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
             Stage::Unnest { expression, .. }
             | Stage::ReplaceWith { expression, .. }
             | Stage::FindNearest { expression, .. } => {
-                expression.collect_fields(&mut paths, &mut all_fields)
+                expression.collect_fields(&mut paths, &mut all_fields);
             }
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()

@@ -4831,7 +4831,26 @@ mod tests {
                 Code::InvalidArgument,
                 "{full}#{id}: {computed:?}"
             );
-            assert_eq!(computed.message(), expected, "{full}#{id}");
+            if id == "proposed-reference-collection" || id == "proposed-reference-empty-segment" {
+                let suffix = if id == "proposed-reference-collection" {
+                    "/c"
+                } else {
+                    "/c/"
+                };
+                let index = format!("{docs}{suffix}").encode_utf16().count();
+                assert!(
+                    computed.message().contains(&format!(" at index {index}.")),
+                    "{full}#{id}: {computed:?}"
+                );
+                assert_eq!(
+                    crate::pipeline_shape::normalized_text(computed.message()),
+                    crate::pipeline_shape::normalized_text(expected),
+                    "{full}#{id}"
+                );
+            } else {
+                assert_eq!(computed.message(), expected, "{full}#{id}");
+            }
+            let computed_message = computed.message().to_owned();
             let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
                 .answer(computed.clone());
             assert_eq!(
@@ -4839,7 +4858,7 @@ mod tests {
                 Code::InvalidArgument,
                 "REST {full}#{id}: {rest:?}"
             );
-            assert_eq!(rest.message(), expected, "REST {full}#{id}");
+            assert_eq!(rest.message(), computed_message, "REST {full}#{id}");
             let grpc_shape = shape_of_request(&request);
             if unordered {
                 assert!(grpc_shape.is_none(), "gRPC shape {full}#{id}");

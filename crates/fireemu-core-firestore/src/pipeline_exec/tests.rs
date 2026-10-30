@@ -1726,3 +1726,81 @@ fn lazy_control_seeded_pict_rows_execute() {
         );
     }
 }
+
+#[test]
+fn array_variables_shadow_and_index_without_changing_row_fields() {
+    let literal = |value| Expr::Constant(value);
+    let var = |name: &str| Expr::Variable(name.to_owned());
+    let values = literal(Value::Array(vec![Value::Integer(5), Value::Integer(9)]));
+    let inner = call(
+        "array_transform",
+        vec![values.clone(), literal(s("x")), var("x")],
+    );
+    let outer = call(
+        "array_transform",
+        vec![values.clone(), literal(s("x")), inner],
+    );
+    let indexed = call(
+        "array_transform",
+        vec![values, literal(s("x")), literal(s("i")), var("i")],
+    );
+    let doc = row("c/d", &[("x", Value::Integer(42))]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            outer.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![
+                Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
+                Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
+            ]))
+        );
+        assert_eq!(
+            indexed.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(0), Value::Integer(1)]))
+        );
+        assert_eq!(
+            field("x").eval_in(&doc, profile),
+            Eval::Value(Value::Integer(42))
+        );
+    }
+}
+
+#[test]
+fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
+    let make_runtime = || RuntimeContext {
+        expr_rng: Some(Arc::new(Mutex::new(SplitMix64::new(73)))),
+        ..RuntimeContext::default()
+    };
+    let rand = call("rand", vec![]);
+    let doc = row("c/d", &[]);
+    let runtime = make_runtime();
+    let first = rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, runtime.clone());
+    let second = rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, runtime.clone());
+    assert_ne!(first, second);
+    for result in [&first, &second] {
+        let Eval::Value(Value::Double(value)) = result else {
+            panic!("rand must return a double")
+        };
+        assert!((0.0..1.0).contains(value));
+    }
+    let control = make_runtime();
+    assert_eq!(
+        first,
+        rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control.clone())
+    );
+    let skip = call(
+        "conditional",
+        vec![
+            Expr::Constant(Value::Boolean(false)),
+            rand.clone(),
+            Expr::Constant(Value::Integer(1)),
+        ],
+    );
+    assert_eq!(
+        skip.eval_in_with_runtime(&doc, Unrecorded::Refuse, control.clone()),
+        Eval::Value(Value::Integer(1))
+    );
+    assert_eq!(
+        second,
+        rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control)
+    );
+}

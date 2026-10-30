@@ -39,8 +39,8 @@ jobs:
           cp /tmp/literal-request-programs.json /tmp/literal-evidence/programs.json
           sudo unshare --net -- env PATH="$PATH" HOME="$HOME" sh -c '
             ip link set lo up
-            exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS FIREEMU_SANDBOX_LANE=fs-ent-pipeline FS_QUERY_INDEX_IN=/tmp/literal-request-programs.json FS_QUERY_INDEX_OUT=/tmp/literal-evidence/fireemu.json FS_QUERY_INDEX_RUN=literal-actual "$3" exec --config conformance/fs-ent-pipeline.fireemu.json --project fireemu-oracle-query --only firestore --firestore-port 0 --http-port 0 --storage-port 0 --ui-port 0 --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local
-          ' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" 2>&1 | tee /tmp/literal-evidence/replay.log
+            exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS FIREEMU_SANDBOX_LANE=fs-ent-pipeline FS_QUERY_INDEX_IN=/tmp/literal-request-programs.json FS_QUERY_INDEX_OUT=/tmp/literal-evidence/fireemu.json FS_QUERY_INDEX_RUN="$4" "$3" exec --config conformance/fs-ent-pipeline.fireemu.json --project fireemu-oracle-query --only firestore --firestore-port 0 --http-port 0 --storage-port 0 --ui-port 0 --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local
+          ' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" "$GITHUB_RUN_ID" 2>&1 | tee /tmp/literal-evidence/replay.log
       - name: Preserve local actual and binary binding
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

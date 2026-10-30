@@ -69,6 +69,24 @@ fn current_document_returns_fields_and_document_metadata() {
             Eval::Value(expected.clone())
         );
     }
+    let mut other = row("c/other", &[("i", Value::Integer(2))]);
+    other.times = Some(RowTimes {
+        created: updated,
+        updated: created,
+    });
+    let other_expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(2)),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/other").resource_name()),
+        ),
+        ("__create_time__".to_owned(), Value::Timestamp(updated)),
+        ("__update_time__".to_owned(), Value::Timestamp(created)),
+    ]));
+    assert_eq!(
+        call("current_document", vec![]).eval(&other),
+        Eval::Value(other_expected)
+    );
     for incomplete in [
         Row {
             path: None,

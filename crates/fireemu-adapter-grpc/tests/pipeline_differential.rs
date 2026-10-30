@@ -139,12 +139,6 @@ fn answer(status: u16, body: &Value) -> Value {
                     if matches!(key.as_str(), "name" | "createTime" | "updateTime") {
                         continue;
                     }
-                    // Document metadata times differ between the independently seeded stores.
-                    if matches!(key.as_str(), "__create_time__" | "__update_time__") {
-                        assert!(inner["timestampValue"].as_str().is_some(), "{inner}");
-                        out.insert(key.clone(), json!({"timestampValue": "<document-time>"}));
-                        continue;
-                    }
                     // A double written as `1` (the recorder's JSON) or `1.0`.
                     if key == "doubleValue" && inner.is_number() {
                         out.insert(key.clone(), json!(inner.as_f64()));
@@ -229,8 +223,17 @@ fn the_differential_corpus_holds_both_profiles_to_their_rules() {
                 &request,
                 &request_order,
             );
-            let got = answer(status, &body);
-            let want = official(row);
+            let mut got = answer(status, &body);
+            let mut want = official(row);
+            if id == "o5/function-names#fn-current_document" && status == 200 {
+                for result in [&mut got, &mut want] {
+                    let fields = &mut result["results"][0]["fields"]["v"]["mapValue"]["fields"];
+                    for key in ["__create_time__", "__update_time__"] {
+                        assert!(fields[key]["timestampValue"].as_str().is_some());
+                        fields[key] = json!({"timestampValue": "<document-time>"});
+                    }
+                }
+            }
             if strict {
                 match status {
                     501 => {}

@@ -9709,3 +9709,151 @@ proptest::proptest! {
         proptest::prop_assert_eq!(list_prefix_as(&s, &prefix, None, Some("Bearer owner")).status, 200);
     }
 }
+
+#[test]
+fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
+    let s = state(None);
+    let path = format!("/{BUCKET}/dir%2Fimage.png?X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range");
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,4"),
+    ];
+    let response = handle(&s, req("PUT", &path, &headers, &[137, 80, 78, 71]));
+    assert_eq!(response.status, 200);
+    let read = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
+    assert_eq!(header(&read, "content-type"), Some("image/png"));
+    assert_eq!(handle(&s, req("PUT", &path, &headers, b"new!")).status, 200);
+    let replaced = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(replaced.body.as_ref(), b"new!");
+    let refused = handle(&s, req("PUT", &path, &headers, &[1, 2, 3, 4, 5]));
+    assert_eq!(refused.status, 400);
+    let read = handle(&s, req("GET", &path, &[], &[]));
+    assert_eq!(read.body.as_ref(), b"new!");
+}
+
+#[test]
+fn signed_xml_put_refuses_invalid_requests_before_overwrite() {
+    let s = state(None);
+    let valid = format!("/{BUCKET}/existing?X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range");
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "4,4"),
+    ];
+    assert_eq!(
+        handle(&s, req("PUT", &valid, &headers, b"old!")).status,
+        200
+    );
+    for (path, request_headers, body, status) in [
+        (valid.clone(), vec![("content-type", "image/png"), ("x-goog-content-length-range", "5,4")], &b"new!"[..], 400),
+        (valid.clone(), vec![("content-type", "image/png"), ("x-goog-content-length-range", "4,4")], &b"large"[..], 400),
+        (valid.clone(), vec![("x-goog-content-length-range", "4,4")], &b"new!"[..], 400),
+        (format!("/{BUCKET}/existing?X-Goog-Signature=test&X-Goog-Date=20260829T100000Z&X-Goog-Expires=60"), vec![], &b"new!"[..], 400),
+        (format!("/{BUCKET}/existing"), vec![], &b"new!"[..], 403),
+    ] {
+        assert_eq!(handle(&s, req("PUT", &path, &request_headers, body)).status, status);
+        assert_eq!(handle(&s, req("GET", &valid, &[], &[])).body.as_ref(), b"old!");
+    }
+}
+
+#[test]
+fn signed_xml_put_preserves_a_trailing_slash_in_the_object_name() {
+    let s = state(None);
+    let query = "X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600";
+    let put = handle(
+        &s,
+        req("PUT", &format!("/{BUCKET}/dir/?{query}"), &[], b"slash"),
+    );
+    assert_eq!(put.status, 200);
+    let read = handle(
+        &s,
+        req("GET", &format!("/{BUCKET}/dir%2F?{query}"), &[], &[]),
+    );
+    assert_eq!(read.body.as_ref(), b"slash");
+}
+
+#[test]
+fn signed_xml_put_pict_cases() {
+    // Generated from the coverage ledger's four-factor PICT model and five required seeds.
+    let cases = [
+        ("valid", "boundary", false, true),
+        ("valid", "outside", true, false),
+        ("valid", "malformed", true, true),
+        ("expired", "boundary", true, false),
+        ("valid", "absent", false, false),
+        ("malformed", "boundary", true, false),
+        ("malformed", "absent", false, true),
+        ("absent", "absent", true, true),
+        ("absent", "outside", false, false),
+        ("malformed", "malformed", false, false),
+        ("expired", "absent", false, true),
+        ("expired", "malformed", true, false),
+        ("expired", "outside", true, true),
+        ("malformed", "outside", true, false),
+        ("absent", "malformed", false, true),
+        ("absent", "boundary", false, true),
+    ];
+    let valid = "X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600";
+    for (signature, range, existing, encoded) in cases {
+        let s = state(None);
+        let name = if encoded { "dir%2Fimage" } else { "image" };
+        let path = format!("/{BUCKET}/{name}");
+        if existing {
+            assert_eq!(
+                handle(&s, req("PUT", &format!("{path}?{valid}"), &[], b"old")).status,
+                200
+            );
+        }
+        let query = match signature {
+            "valid" => valid,
+            "expired" => "X-Goog-Signature=test&X-Goog-Date=20260829T100000Z&X-Goog-Expires=60",
+            "malformed" => "X-Goog-Signature=test&X-Goog-Date=bad&X-Goog-Expires=60",
+            _ => "",
+        };
+        let headers = match range {
+            "boundary" => vec![("x-goog-content-length-range", "4,4")],
+            "outside" => vec![("x-goog-content-length-range", "0,3")],
+            "malformed" => vec![("x-goog-content-length-range", "bad")],
+            _ => vec![],
+        };
+        let response = handle(
+            &s,
+            req("PUT", &format!("{path}?{query}"), &headers, b"data"),
+        );
+        let expected = if signature == "absent" {
+            403
+        } else if signature != "valid" || range == "outside" || range == "malformed" {
+            400
+        } else {
+            200
+        };
+        assert_eq!(
+            response.status, expected,
+            "{signature} {range} {existing} {encoded}"
+        );
+        let read = handle(&s, req("GET", &format!("{path}?{valid}"), &[], &[]));
+        if expected == 200 {
+            assert_eq!(read.body.as_ref(), b"data");
+        } else if existing {
+            assert_eq!(read.body.as_ref(), b"old");
+        } else {
+            assert_eq!(read.status, 404);
+        }
+    }
+}
+
+#[test]
+fn signed_xml_put_does_not_capture_unknown_api_routes() {
+    let s = state(None);
+    for path in [
+        "/v0/unknown/path",
+        "/storage/v1/unknown/path",
+        "/upload/storage/v1/unknown/path",
+    ] {
+        assert_eq!(
+            handle(&s, req("PUT", path, &[], b"data")).status,
+            501,
+            "{path}"
+        );
+    }
+}

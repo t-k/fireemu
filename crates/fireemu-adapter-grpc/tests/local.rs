@@ -6919,7 +6919,7 @@ async fn execute_pipeline_executes_nested_fields_and_document_functions() {
                 "id",
                 pipeline_function("document_id", vec![]),
             )])],
-            unsupported,
+            invalid,
         ),
         (
             "document_id with options",

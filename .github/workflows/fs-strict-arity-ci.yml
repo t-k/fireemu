@@ -17,8 +17,8 @@ jobs:
           cp tools/tmp-preflight/portctl.py /tmp/fs-strict-portctl.py
           cp tools/tmp-preflight/programs.mjs /tmp/fs-strict-programs.mjs
           cp tools/tmp-preflight/report.py /tmp/fs-strict-report.py
-          git checkout --detach f15259175aac7ce7235542eb7e2eb1d816dca298
-          test "$(git rev-parse HEAD)" = f15259175aac7ce7235542eb7e2eb1d816dca298
+          git checkout --detach fba43560f9a8a8edc16565c62e3953c3234225ca
+          test "$(git rev-parse HEAD)" = fba43560f9a8a8edc16565c62e3953c3234225ca
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: '10.32.1'

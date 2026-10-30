@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SHA = '24122ce3e375323da91290de11d01b45d14aa9a5';
+const PRIOR_RECOVERY_SHA = '34f100efc528b734b171dc88f87a1c4502e2c925';
 const REPO = 't-k/fireemu';
 const RUN = '40986239359';
 const VERSION = '0.38.1';
@@ -75,8 +76,8 @@ function pack(path, dir) {
   return { path: join(dir, result.filename), integrity: result.integrity };
 }
 
-export async function registry(name) {
-  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${VERSION}`, { redirect: 'error' });
+export async function registry(name, timeoutMs = 10_000) {
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${VERSION}`, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
   if (response.status === 404) return null;
   if (!response.ok) fail(`registry ${name}: HTTP ${response.status}`);
   const metadata = await response.json();
@@ -110,8 +111,26 @@ export function validateProvenance(statement, name, integrity, expectedSha) {
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const deps = statement.predicate?.buildDefinition?.resolvedDependencies;
   const invocation = statement.predicate?.runDetails?.metadata?.invocationId;
-  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
+  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : expectedSha === PRIOR_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41001331458\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
+  if (expectedSha === PRIOR_RECOVERY_SHA && name !== '@fireemu/darwin-x64') return false;
   return Boolean(typeof invocation === 'string' && pattern.test(invocation) && statement.subject?.some(x => x.name === `pkg:npm/${name.replace('@', '%40')}@${VERSION}` && x.digest?.sha512 === digest) && workflow?.ref === (expectedSha === SHA ? `refs/tags/v${VERSION}` : 'refs/heads/main') && workflow?.repository === `https://github.com/${REPO}` && workflow?.path === '.github/workflows/release.yml' && deps?.some(x => x.digest?.gitCommit === expectedSha));
+}
+
+export async function lookupForPhase(name, phase, { lookup = registry, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => performance.now(), attempts = 61 } = {}) {
+  if (!['known', 'new', 'postpublish'].includes(phase)) throw new Error(`unknown lookup phase: ${phase}`);
+  const limit = phase === 'new' ? 1 : attempts;
+  const deadline = now() + 300_000;
+  let checks = 0;
+  while (checks < limit) {
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    const metadata = await lookup(name, Math.max(1, Math.min(10_000, Math.floor(remaining))));
+    checks++;
+    if (metadata) return metadata;
+    if (checks < limit && now() < deadline) await sleep(Math.min(5_000, deadline - now()));
+  }
+  if (phase === 'new') return null;
+  throw new Error(`published package absent after ${checks} checks: ${name}`);
 }
 
 export async function publishAll(packages, operations, preflight = false) {
@@ -157,12 +176,11 @@ async function main() {
     tarballs.set('fireemu', pack(join(source, 'npm/fireemu'), dir));
     const preflight = process.argv.includes('--preflight');
     await publishAll(tarballs, {
-      lookup: registry,
-      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, process.env.GITHUB_SHA]),
+      lookup: name => lookupForPhase(name, ['@fireemu/darwin-arm64', '@fireemu/darwin-x64'].includes(name) ? 'known' : 'new'),
+      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, PRIOR_RECOVERY_SHA, process.env.GITHUB_SHA]),
       publish: async (name, expected) => { invoke('npm', ['publish', expected.path, '--provenance', '--access', 'public']); },
       verifyPublished: async (name, expected) => {
-        const metadata = await registry(name);
-        if (!metadata) fail(`published package absent: ${name}`);
+        const metadata = await lookupForPhase(name, 'postpublish');
         await verifyPresent(name, expected, metadata, dir, [process.env.GITHUB_SHA]);
       },
     }, preflight);

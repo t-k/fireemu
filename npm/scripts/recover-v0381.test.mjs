@@ -98,3 +98,94 @@ test('child processes receive only the credentials their operation requires', as
   assert.deepEqual(childEnvironment('npm', ['pack'], env), { PATH: '/bin' });
   assert.deepEqual(childEnvironment('npm', ['publish'], env), { ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc', ACTIONS_ID_TOKEN_REQUEST_URL: 'url', PATH: '/bin' });
 });
+
+const pollingCases = [
+  ['known', 'absent', 'last'], ['known', 'present', 'first'], ['new', 'absent', 'first'],
+  ['postpublish', 'absent', 'last'], ['postpublish', 'present', 'last'], ['postpublish', 'error', 'first'],
+  ['new', 'present', 'first'], ['new', 'error', 'first'], ['known', 'error', 'last'],
+];
+for (const [phase, outcome, attempt] of pollingCases) {
+  test(`polling ${phase} ${outcome} ${attempt}`, async () => {
+    const { lookupForPhase } = await import('./recover-v0381.mjs');
+    let calls = 0;
+    let sleeps = 0;
+    const lookup = async () => {
+      calls++;
+      if (attempt === 'last' && calls === 1) return null;
+      if (outcome === 'absent') return null;
+      if (outcome === 'error') throw Error('HTTP 503');
+      return { version: '0.38.1' };
+    };
+    const operation = () => lookupForPhase('fireemu', phase, { lookup, sleep: async () => { sleeps++; }, attempts: 2 });
+    if (outcome === 'error' || (outcome === 'absent' && phase !== 'new')) await assert.rejects(operation());
+    else assert.deepEqual(await operation(), outcome === 'present' ? { version: '0.38.1' } : null);
+    const expectedCalls = attempt === 'last' ? 2 : 1;
+    assert.equal(calls, expectedCalls);
+    assert.equal(sleeps, expectedCalls - 1);
+  });
+}
+
+test('post-publication polling does not repeat a publish', async () => {
+  const { lookupForPhase, publishAll } = await import('./recover-v0381.mjs');
+  let publishes = 0;
+  let lookups = 0;
+  await publishAll(new Map([['fireemu', 1]]), {
+    lookup: async () => null,
+    verify: async () => assert.fail(),
+    publish: async () => { publishes++; },
+    verifyPublished: async () => lookupForPhase('fireemu', 'postpublish', {
+      lookup: async () => ++lookups < 3 ? null : {}, sleep: async () => {}, attempts: 3,
+    }),
+  });
+  assert.equal(publishes, 1);
+  assert.equal(lookups, 3);
+});
+
+test('only darwin-x64 from the exact prior recovery run and SHA is accepted', () => {
+  const sha = '34f100efc528b734b171dc88f87a1c4502e2c925';
+  const digest = '00'.repeat(64);
+  const integrity = `sha512-${Buffer.from(digest, 'hex').toString('base64')}`;
+  const statement = { subject: [{ name: 'pkg:npm/%40fireemu/darwin-x64@0.38.1', digest: { sha512: digest } }], predicate: { buildDefinition: { externalParameters: { workflow: { repository: 'https://github.com/t-k/fireemu', path: '.github/workflows/release.yml', ref: 'refs/heads/main' } }, resolvedDependencies: [{ digest: { gitCommit: sha } }] }, runDetails: { metadata: { invocationId: 'https://github.com/t-k/fireemu/actions/runs/41001331458/attempts/1' } } } };
+  assert.equal(validateProvenance(statement, '@fireemu/darwin-x64', integrity, sha), true);
+  const wrongRun = structuredClone(statement); wrongRun.predicate.runDetails.metadata.invocationId = 'https://github.com/t-k/fireemu/actions/runs/41001331459/attempts/1';
+  assert.equal(validateProvenance(wrongRun, '@fireemu/darwin-x64', integrity, sha), false);
+  const wrongPackage = structuredClone(statement); wrongPackage.subject[0].name = 'pkg:npm/%40fireemu/linux-x64@0.38.1';
+  assert.equal(validateProvenance(wrongPackage, '@fireemu/linux-x64', integrity, sha), false);
+});
+
+test('polling stops at the five-minute deadline without another request', async () => {
+  const { lookupForPhase } = await import('./recover-v0381.mjs');
+  let elapsed = 0;
+  let calls = 0;
+  await assert.rejects(lookupForPhase('fireemu', 'postpublish', {
+    lookup: async () => { calls++; return null; },
+    sleep: async ms => { elapsed += ms; },
+    now: () => elapsed,
+  }), /absent/);
+  assert.equal(elapsed, 300_000);
+  assert.equal(calls, 60);
+});
+
+test('non-404 errors stop polling immediately', async () => {
+  const { lookupForPhase } = await import('./recover-v0381.mjs');
+  for (const message of ['HTTP 409', 'network error', 'integrity mismatch']) {
+    let calls = 0;
+    await assert.rejects(lookupForPhase('fireemu', 'postpublish', {
+      lookup: async () => { calls++; throw Error(message); },
+      sleep: async () => assert.fail('must not retry'),
+    }), new RegExp(message));
+    assert.equal(calls, 1);
+  }
+});
+
+test('known published versions are never published again when still invisible', async () => {
+  const { lookupForPhase, publishAll } = await import('./recover-v0381.mjs');
+  let publishes = 0;
+  await assert.rejects(publishAll(new Map([['@fireemu/darwin-x64', 1], ['fireemu', 2]]), {
+    lookup: name => lookupForPhase(name, 'known', { lookup: async () => null, sleep: async () => {}, attempts: 2 }),
+    verify: async () => assert.fail(),
+    publish: async () => { publishes++; },
+    verifyPublished: async () => assert.fail(),
+  }), /absent/);
+  assert.equal(publishes, 0);
+});

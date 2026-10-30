@@ -9771,3 +9771,73 @@ fn signed_xml_put_preserves_a_trailing_slash_in_the_object_name() {
     );
     assert_eq!(read.body.as_ref(), b"slash");
 }
+
+#[test]
+fn signed_xml_put_pict_cases() {
+    // Generated from the coverage ledger's four-factor PICT model and five required seeds.
+    let cases = [
+        ("valid", "boundary", false, true),
+        ("valid", "outside", true, false),
+        ("valid", "malformed", true, true),
+        ("expired", "boundary", true, false),
+        ("valid", "absent", false, false),
+        ("malformed", "boundary", true, false),
+        ("malformed", "absent", false, true),
+        ("absent", "absent", true, true),
+        ("absent", "outside", false, false),
+        ("malformed", "malformed", false, false),
+        ("expired", "absent", false, true),
+        ("expired", "malformed", true, false),
+        ("expired", "outside", true, true),
+        ("malformed", "outside", true, false),
+        ("absent", "malformed", false, true),
+        ("absent", "boundary", false, true),
+    ];
+    let valid = "X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600";
+    for (signature, range, existing, encoded) in cases {
+        let s = state(None);
+        let name = if encoded { "dir%2Fimage" } else { "image" };
+        let path = format!("/{BUCKET}/{name}");
+        if existing {
+            assert_eq!(
+                handle(&s, req("PUT", &format!("{path}?{valid}"), &[], b"old")).status,
+                200
+            );
+        }
+        let query = match signature {
+            "valid" => valid,
+            "expired" => "X-Goog-Signature=test&X-Goog-Date=20260829T100000Z&X-Goog-Expires=60",
+            "malformed" => "X-Goog-Signature=test&X-Goog-Date=bad&X-Goog-Expires=60",
+            _ => "",
+        };
+        let headers = match range {
+            "boundary" => vec![("x-goog-content-length-range", "4,4")],
+            "outside" => vec![("x-goog-content-length-range", "0,3")],
+            "malformed" => vec![("x-goog-content-length-range", "bad")],
+            _ => vec![],
+        };
+        let response = handle(
+            &s,
+            req("PUT", &format!("{path}?{query}"), &headers, b"data"),
+        );
+        let expected = if signature == "absent" {
+            403
+        } else if signature != "valid" || range == "outside" || range == "malformed" {
+            400
+        } else {
+            200
+        };
+        assert_eq!(
+            response.status, expected,
+            "{signature} {range} {existing} {encoded}"
+        );
+        let read = handle(&s, req("GET", &format!("{path}?{valid}"), &[], &[]));
+        if expected == 200 {
+            assert_eq!(read.body.as_ref(), b"data");
+        } else if existing {
+            assert_eq!(read.body.as_ref(), b"old");
+        } else {
+            assert_eq!(read.status, 404);
+        }
+    }
+}

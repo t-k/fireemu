@@ -1054,6 +1054,7 @@ struct O5Difference {
 }
 
 const O5_INTERNAL_ROW: &str = "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path";
+const O5_REFERENCE_ENV_ROW: &str = "fs-ent-pipeline/o5/appendix#proposed-reference-empty-segment";
 const O8A_INTERNAL_ROWS: &[&str] = &[
     "fs-ent-pipeline/o8a/dupquote-main#same-1",
     "fs-ent-pipeline/o8a/dupquote-main#same-2",
@@ -1071,6 +1072,11 @@ fn validate_o5_pin(row: &O5Difference) {
         assert_eq!(row.category, "unknown-production-outcome");
         assert_eq!(row.production, recorded_internal_answer());
         assert_eq!(row.strict, row.production);
+    } else if row.row == O5_REFERENCE_ENV_ROW {
+        assert_eq!(row.category, "environment-reference-comparison");
+        assert_eq!(row.strict["status"], 400);
+        assert_eq!(Some(&row.strict), row.emulator.as_ref());
+        assert_ne!(row.strict, row.production);
     } else {
         assert_ne!(
             row.category, "unknown-production-outcome",
@@ -1208,7 +1214,7 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 103, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 86, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
             80,
@@ -2210,6 +2216,13 @@ fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     assert!(std::panic::catch_unwind(|| validate_o5_pin(&stale)).is_err());
     assert!(o5_pinned_match_valid(O5_INTERNAL_ROW, true, true));
     assert!(!o5_pinned_match_valid(O5_INTERNAL_ROW, false, true));
+    let reference = rows
+        .iter()
+        .find(|row| row.row == O5_REFERENCE_ENV_ROW)
+        .unwrap();
+    validate_o5_pin(reference);
+    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, true, true));
+    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, false, true));
     assert!(!o5_pinned_match_valid(&ordinary.row, true, true));
     assert!(!o5_pinned_match_valid(&ordinary.row, false, true));
     for row in O8A_INTERNAL_ROWS {

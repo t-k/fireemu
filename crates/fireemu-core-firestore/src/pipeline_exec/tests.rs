@@ -56,14 +56,28 @@ fn current_document_returns_fields_and_document_metadata() {
     document.times = Some(RowTimes { created, updated });
     let expected = Value::Map(BTreeMap::from([
         ("i".to_owned(), Value::Integer(1)),
-        ("__name__".to_owned(), Value::Reference(path("c/d").resource_name())),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/d").resource_name()),
+        ),
         ("__create_time__".to_owned(), Value::Timestamp(created)),
         ("__update_time__".to_owned(), Value::Timestamp(updated)),
     ]));
     for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
-        assert_eq!(call("current_document", vec![]).eval_in(&document, profile), Eval::Value(expected.clone()));
+        assert_eq!(
+            call("current_document", vec![]).eval_in(&document, profile),
+            Eval::Value(expected.clone())
+        );
     }
-    assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
+        let derived = Row::derived(BTreeMap::new());
+        if profile == Unrecorded::Refuse {
+            assert!(unobserved(
+                &call("current_document", vec![]).eval_in(&derived, profile)
+            ));
+        }
+    }
 }
 
 #[test]
@@ -107,6 +121,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "map_entries",
             "map_get",
             "map",
+            "current_document",
             "document_id",
             "collection_id",
             "parent",

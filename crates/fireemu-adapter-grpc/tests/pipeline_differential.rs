@@ -26,12 +26,7 @@ use serde_json::{json, Value};
 const DOCS: &str = "projects/demo-app/databases/(default)/documents";
 
 /// Rows the emulator profile accepts or refuses unlike the official emulator, with why.
-const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "o5/function-names#fn-current_document",
-        "current_document is a function fireemu does not run; the local subset refuses it with UNIMPLEMENTED",
-    ),
-];
+const EMULATOR_STATUS_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// A fixture with the key order of its objects as written.
 fn read_ordered(name: &str) -> (Value, KeyOrder) {

@@ -540,6 +540,14 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_map,
     },
+    Function {
+        name: "current_document",
+        arity: Arity::Exact(0),
+        returns_boolean: false,
+        signature: "current_document(): map[string, any]",
+        overloads: &[],
+        eval: eval_control_fallback,
+    },
     document_function("document_id", eval_document_id),
     document_function("collection_id", eval_collection_id),
     document_function("parent", eval_parent),
@@ -824,6 +832,34 @@ impl Expr {
                 reason: "subcollection input was not prepared",
             }),
             Self::Call { function, args } => {
+                if function.name == "current_document" {
+                    if unrecorded == Unrecorded::Refuse
+                        && (row.path.is_none() || row.times.is_none())
+                    {
+                        return Eval::Error(EvalError::Unobserved {
+                            function: "current_document",
+                            reason: "a row without document metadata is unobserved",
+                        });
+                    }
+                    let mut fields = row.fields.clone();
+                    if let Some(path) = &row.path {
+                        fields.insert(
+                            "__name__".to_owned(),
+                            Value::Reference(path.resource_name()),
+                        );
+                    }
+                    if let Some(times) = row.times {
+                        fields.insert(
+                            "__create_time__".to_owned(),
+                            Value::Timestamp(times.created),
+                        );
+                        fields.insert(
+                            "__update_time__".to_owned(),
+                            Value::Timestamp(times.updated),
+                        );
+                    }
+                    return Eval::Value(Value::Map(fields));
+                }
                 if matches!(
                     function.name,
                     "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"

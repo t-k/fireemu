@@ -1932,7 +1932,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut cursor = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Documents(2))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in &rows {
         assert!(cursor.push(row.clone()).unwrap().is_empty());
@@ -1944,7 +1944,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut all = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(1.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     let mut observed = Vec::new();
     for row in &rows {
@@ -1955,7 +1955,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut none = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(0.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in rows {
         assert!(none.push(row).unwrap().is_empty());
@@ -2019,7 +2019,7 @@ fn sample_pict_rows_execute_with_seeded_contracts() {
             Unrecorded::OfficialEmulator
         };
         let execute = || {
-            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime);
+            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime.clone());
             let mut out = Vec::new();
             for row in &rows {
                 if cursor.is_exhausted() {
@@ -2076,7 +2076,7 @@ proptest! {
     fn sample_documents_preserve_occurrences_and_metadata(size in 0_u64..16, input in proptest::collection::vec(-3_i64..4, 0..12), seed in any::<u64>()) {
         let rows: Vec<Row> = input.iter().enumerate().map(|(i, n)| doc(&format!("d{i}"), &[("v", int(*n))])).collect();
         let runtime = RuntimeContext { sample_seed: Some(seed), ..RuntimeContext::default() };
-        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
+        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime.clone()); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
         let out = execute();
         prop_assert_eq!(out.len(), usize::try_from(size).unwrap().min(rows.len()));
         prop_assert!(out.iter().all(|row| rows.contains(row)));

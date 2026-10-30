@@ -88,7 +88,7 @@ pub(super) const LIKE: Function = function(
     "like",
     Arity::Exact(2),
     true,
-    "like(value: string, pattern: string): boolean",
+    "like[T: string | regex](search_space: string, pattern: T): boolean",
     &[],
     eval_like,
 );

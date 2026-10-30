@@ -387,8 +387,18 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
-    array_access_function("rand", Arity::Exact(0), "", eval_control_fallback),
-    array_access_function("array_filter", Arity::Exact(3), "", eval_control_fallback),
+    array_access_function(
+        "rand",
+        Arity::Exact(0),
+        "rand(): float64",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "array_filter",
+        Arity::Exact(3),
+        "array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]",
+        eval_control_fallback,
+    ),
     array_access_function(
         "array_transform",
         Arity::Between(3, 4),

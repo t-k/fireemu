@@ -2219,6 +2219,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     assert!(cursor
@@ -2246,6 +2247,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     second.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2274,6 +2276,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
                 zone_resolver: None,
                 regex_resolver: None,
                 sample_seed: None,
+                expr_rng: None,
             },
         );
         blocking.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2333,6 +2336,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         zone_resolver: Some(resolve),
         regex_resolver: None,
         sample_seed: None,
+        expr_rng: None,
     };
     let stages = vec![Stage::Select {
         aliases: vec![
@@ -2347,7 +2351,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         ],
         keeps_name: false,
     }];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     let out = cursor.push(row).unwrap();
     assert_eq!(
         out[0].fields["t"],
@@ -2471,7 +2475,7 @@ fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
             ..RuntimeContext::default()
         },
     };
-    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx);
+    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx.clone());
     assert_eq!(evaluate(&[null(), text("b")]), null());
     assert_eq!(
         evaluate(&[int(1), text("b")]),
@@ -2508,7 +2512,7 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             keeps_name: false,
         },
     ];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     assert!(cursor
         .push(Row::derived(BTreeMap::new()))
         .unwrap()

@@ -3908,3 +3908,11 @@ fn vector_scalars_finite_cancellation_nan_and_underflow_are_bounded() {
         &[tiny.clone(), tiny]
     )));
 }
+
+#[test]
+fn map_odd_argument_count_is_an_arity_error() {
+    let result = Expr::call("map", vec![Expr::Constant(Value::String("k".into()))], Placement::Value);
+    assert!(matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments"));
+    assert!(Expr::call("map", vec![], Placement::Value).is_ok());
+    assert!(Expr::call("map", vec![Expr::Constant(Value::String("k".into())), Expr::Constant(Value::Integer(1))], Placement::Value).is_ok());
+}

@@ -82,7 +82,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 54);
+    assert_eq!(NAMES.len(), 55);
+    assert!(function("like").is_some());
     for name in ["exp", "ln", "log", "log10", "trunc"] {
         assert!(function(name).is_some());
     }

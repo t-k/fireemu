@@ -10,11 +10,31 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 89e2edbf278bd52951e7af58c9d7e72d9ce114ba
+          ref: 8e1f2a37a9d3c1f5505ce394b3e1f274cf67bda8
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 89e2edbf278bd52951e7af58c9d7e72d9ce114ba
+          test "$(git rev-parse HEAD)" = 8e1f2a37a9d3c1f5505ce394b3e1f274cf67bda8
           cargo clippy -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_tagged_literals_preserve_wire_shapes) | test(unknown_tag_preserves_ordered_integer_values) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules)'
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_tagged_literals_preserve_wire_shapes) | test(unknown_tag_preserves_ordered_integer_values) | test(vector_in_array_keeps_unobserved_components_refused) | test(vector_in_array_preserves_dimension_order) | test(the_pipeline_corpus_replays_as_production_answered) | test(the_differential_corpus_holds_both_profiles_to_their_rules)'
+      - name: mutation checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          for testname in recorded_tagged_literals_preserve_wire_shapes vector_in_array_keeps_unobserved_components_refused; do
+            cargo test -p fireemu-adapter-grpc --lib "$testname" --locked
+          done
+          for mutation in tag array finite negative_zero; do
+            git checkout -- crates/fireemu-adapter-grpc/src/pipeline.rs
+            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-adapter-grpc/src/pipeline.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"tag":("typed && walk(inner)", "typed && (key != \"__type__\" || map.fields.len() == 1) && walk(inner)"),"array":("Some(V::ArrayValue(array)) => array.values.iter().all(walk),", "Some(V::ArrayValue(array)) => array.values.iter().all(|v| !is_vector_literal(v) && walk(v)),"),"finite":("d.is_finite() && !(d == 0.0 && d.is_sign_negative())", "!(d == 0.0 && d.is_sign_negative())"),"negative_zero":("d.is_finite() && !(d == 0.0 && d.is_sign_negative())", "d.is_finite()")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
+            if [[ "$mutation" == tag || "$mutation" == array ]]; then testname=recorded_tagged_literals_preserve_wire_shapes; else testname=vector_in_array_keeps_unobserved_components_refused; fi
+            set +e
+            cargo test -p fireemu-adapter-grpc --lib "$testname" --locked > "mutation-$mutation.log" 2>&1
+            rc=$?
+            set -e
+            cat "mutation-$mutation.log"
+            test "$rc" = 101
+            grep -q "$testname ... FAILED" "mutation-$mutation.log"
+          done
+          git checkout -- crates/fireemu-adapter-grpc/src/pipeline.rs

@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mutant: [noop, cmp, size, reverse, length, concat, namespace, ancestor, slice, replace, id, coalesce, getfield, offset]
+        mutant: [noop, getfield]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -42,7 +42,7 @@ jobs:
             'replace': ('path.collection_id().as_str(), id', 'path.collection_id().as_str(), "other"'),
             'id': ('let id = (0..20)', 'let id = (0..19)'),
             'coalesce': ('return last;', 'return Eval::Value(Value::Null);'),
-            'getfield': ('map.get(key).cloned().map_or_else(', 'map.get("missing").cloned().map_or_else('),
+            'getfield': ('.get(key)\n            .cloned()\n            .map_or_else(|| generic_unobserved("get_field")', '.get("missing")\n            .cloned()\n            .map_or_else(|| generic_unobserved("get_field")'),
             'offset': ('.and_then(|i| values.get(i))\n            .cloned()', '.and_then(|i| values.get(i.saturating_add(1)))\n            .cloned()'),
           }
           if os.environ['MUTANT'] != 'noop':

@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 99a714bd80a6d64e347a9a5f86deae5779721d9d
+          ref: c2a7997b81653bfd03dd1b6d3354f0c75fb0849b
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 99a714bd80a6d64e347a9a5f86deae5779721d9d
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_literal_refusal_gate_matrix)'
+          test "$(git rev-parse HEAD)" = c2a7997b81653bfd03dd1b6d3354f0c75fb0849b
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --success-output immediate -E 'test(recorded_literal_refusal_gate_matrix) | test(literal_refusal_preserves_precedence_gate_and_utf16_index)'

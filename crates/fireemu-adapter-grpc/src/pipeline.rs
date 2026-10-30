@@ -2978,11 +2978,10 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
     }
 }
 
-/// Whether production recorded a literal of this shape: every vector map is
-/// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
-/// none a negative zero (O-3, O-4
-/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`). Recorded reserved
-/// keys are handled by the ordered refusal checks after this shape check.
+/// Whether production recorded a literal of this shape. Vectors contain finite doubles other
+/// than negative zero (O-3 and O-4); O-5 additionally records direct single-component infinity
+/// vectors and the documents-root reference. Reserved keys are handled by the ordered refusal
+/// checks after this shape check.
 fn literal_shape_recorded(value: &pb::Value) -> bool {
     use pb::value::ValueType as V;
     // O-5 appendix also records a well-formed vector within an array.
@@ -4839,6 +4838,65 @@ mod tests {
             )),
         };
         assert!(reference_outside(&foreign, own).is_some());
+    }
+
+    #[test]
+    fn generated_infinity_reference_projection_cases() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let own = "projects/p/databases/db/documents";
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (number, allowed) in [
+                (f64::INFINITY, true),
+                (f64::NEG_INFINITY, true),
+                (1.0, true),
+                (f64::NAN, false),
+            ] {
+                let wire = tagged_literal(
+                    pb::Value {
+                        value_type: Some(V::StringValue("__vector__".to_owned())),
+                    },
+                    vec![pb::Value {
+                        value_type: Some(V::DoubleValue(number)),
+                    }],
+                    false,
+                );
+                let result = decode_operand_tree(&wire, profile);
+                if allowed {
+                    let Expr::Constant(Value::Vector(vector)) = result.unwrap() else {
+                        panic!("expected vector")
+                    };
+                    assert_eq!(vector, vec![number]);
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+            let too_long = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![
+                    pb::Value {
+                        value_type: Some(V::DoubleValue(1.0))
+                    };
+                    2049
+                ],
+                false,
+            );
+            assert!(decode_operand_tree(&too_long, profile).is_err());
+            for (name, own_database) in
+                [(own, true), ("projects/p/databases/other/documents", false)]
+            {
+                let wire = pb::Value {
+                    value_type: Some(V::ReferenceValue(name.to_owned())),
+                };
+                if profile == Unrecorded::Refuse && !own_database {
+                    assert!(reference_outside(&wire, own).is_some());
+                } else {
+                    assert!(decode_operand_tree(&wire, profile).is_ok());
+                }
+            }
+        }
     }
 
     #[test]

@@ -4893,3 +4893,34 @@ mod owned_commit_wait_properties {
         }
     }
 }
+
+#[test]
+fn stored_reference_requires_document_below_documents_root() {
+    let mut state = FirestoreState::new();
+    let root = "projects/demo-app/databases/(default)/documents";
+    assert!(state
+        .commit(
+            &[set(
+                "refs/bad",
+                &[("ref", Value::Reference(root.to_owned()))]
+            )],
+            None,
+            t(0)
+        )
+        .is_err());
+    let document = format!("{root}/c/d");
+    state
+        .commit(
+            &[set(
+                "refs/good",
+                &[("ref", Value::Reference(document.clone()))],
+            )],
+            None,
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(
+        state.get(&path("refs/good")).unwrap().fields.get("ref"),
+        Some(&Value::Reference(document))
+    );
+}

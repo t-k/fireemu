@@ -1,0 +1,290 @@
+{
+  "kind": "fs-ent-pipeline-scalar-subquery-observation-v1",
+  "profile": "strict",
+  "scope": "Only the two recorded request shapes, each observed twice; zero-result behavior, other subqueries and error precedence are not claimed. The historical raw comparison and parent status are unchanged.",
+  "productionJournalSha256": "4d4917accd2d90e27a01865d041aaca69af3abcba59f62f44bad39e61b566ce0",
+  "localReplaySha256": "b8131cabf5421591442e27a23c4fa944fa96536e91c546f5464159dd596a33bc",
+  "sourceCommit": "1bdc3cdd794de3166b65f72188e04bd0ea30a66a",
+  "binarySha256": "c33360d75467ebee4cf2857bcd6b314429f6405d34a3676952ce9231904ead2a",
+  "binaryProfile": "debug",
+  "seed": [
+    [
+      "scalar_probe_20261030/p1",
+      {
+        "key": {
+          "stringValue": "A"
+        }
+      }
+    ],
+    [
+      "scalar_probe_20261030/p1/scalar_child_20261030/c1",
+      {
+        "parentKey": {
+          "stringValue": "A"
+        },
+        "value": {
+          "stringValue": "child-a"
+        }
+      }
+    ],
+    [
+      "scalar_probe_20261030/p1/scalar_child_20261030/c2",
+      {
+        "parentKey": {
+          "stringValue": "A"
+        },
+        "value": {
+          "stringValue": "child-b"
+        }
+      }
+    ]
+  ],
+  "proofs": [
+    {
+      "id": "scalar-one",
+      "rounds": 2,
+      "stages": [
+        {
+          "name": "collection",
+          "args": [
+            {
+              "referenceValue": "/scalar_probe_20261030"
+            }
+          ],
+          "options": {}
+        },
+        {
+          "name": "let",
+          "args": [
+            {
+              "mapValue": {
+                "fields": {
+                  "parent_key": {
+                    "fieldReferenceValue": "key"
+                  }
+                }
+              }
+            }
+          ],
+          "options": {}
+        },
+        {
+          "name": "select",
+          "args": [
+            {
+              "mapValue": {
+                "fields": {
+                  "key": {
+                    "fieldReferenceValue": "key"
+                  },
+                  "child": {
+                    "functionValue": {
+                      "name": "scalar",
+                      "args": [
+                        {
+                          "pipelineValue": {
+                            "stages": [
+                              {
+                                "name": "collection_group",
+                                "args": [
+                                  {
+                                    "referenceValue": ""
+                                  },
+                                  {
+                                    "stringValue": "scalar_child_20261030"
+                                  }
+                                ],
+                                "options": {}
+                              },
+                              {
+                                "name": "where",
+                                "args": [
+                                  {
+                                    "functionValue": {
+                                      "name": "equal",
+                                      "args": [
+                                        {
+                                          "fieldReferenceValue": "parentKey"
+                                        },
+                                        {
+                                          "variableReferenceValue": "parent_key"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ],
+                                "options": {}
+                              },
+                              {
+                                "name": "where",
+                                "args": [
+                                  {
+                                    "functionValue": {
+                                      "name": "equal",
+                                      "args": [
+                                        {
+                                          "fieldReferenceValue": "value"
+                                        },
+                                        {
+                                          "stringValue": "child-a"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ],
+                                "options": {}
+                              },
+                              {
+                                "name": "select",
+                                "args": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "value": {
+                                          "fieldReferenceValue": "value"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "options": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "options": {}
+        }
+      ],
+      "productionRequestSha256": "412a9a79053e28007e92a7031bb638abb62cd884b7269740a057a8956de5e658",
+      "code": 0,
+      "message": "",
+      "frames": 1,
+      "documents": [
+        {
+          "child": {
+            "stringValue": "child-a"
+          },
+          "key": {
+            "stringValue": "A"
+          }
+        }
+      ]
+    },
+    {
+      "id": "scalar-many",
+      "rounds": 2,
+      "stages": [
+        {
+          "name": "collection",
+          "args": [
+            {
+              "referenceValue": "/scalar_probe_20261030"
+            }
+          ],
+          "options": {}
+        },
+        {
+          "name": "let",
+          "args": [
+            {
+              "mapValue": {
+                "fields": {
+                  "parent_key": {
+                    "fieldReferenceValue": "key"
+                  }
+                }
+              }
+            }
+          ],
+          "options": {}
+        },
+        {
+          "name": "select",
+          "args": [
+            {
+              "mapValue": {
+                "fields": {
+                  "key": {
+                    "fieldReferenceValue": "key"
+                  },
+                  "child": {
+                    "functionValue": {
+                      "name": "scalar",
+                      "args": [
+                        {
+                          "pipelineValue": {
+                            "stages": [
+                              {
+                                "name": "collection_group",
+                                "args": [
+                                  {
+                                    "referenceValue": ""
+                                  },
+                                  {
+                                    "stringValue": "scalar_child_20261030"
+                                  }
+                                ],
+                                "options": {}
+                              },
+                              {
+                                "name": "where",
+                                "args": [
+                                  {
+                                    "functionValue": {
+                                      "name": "equal",
+                                      "args": [
+                                        {
+                                          "fieldReferenceValue": "parentKey"
+                                        },
+                                        {
+                                          "variableReferenceValue": "parent_key"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ],
+                                "options": {}
+                              },
+                              {
+                                "name": "select",
+                                "args": [
+                                  {
+                                    "mapValue": {
+                                      "fields": {
+                                        "value": {
+                                          "fieldReferenceValue": "value"
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "options": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "options": {}
+        }
+      ],
+      "productionRequestSha256": "fbc9ef09ea6f5cb5d2b0a4ca32a4490e635d5f102bc618cef300ed0cefec0919",
+      "code": 3,
+      "message": "Subpipeline returned multiple results.",
+      "frames": 0,
+      "documents": []
+    }
+  ]
+}

@@ -659,6 +659,8 @@ pub enum Expr {
         collection: String,
         /// The child field compared to the lexical variable.
         predicate: FieldPath,
+        /// An optional child field and string value used as an additional equality filter.
+        filter: Option<(FieldPath, String)>,
         /// The lexical variable name.
         variable: String,
         /// The child field selected as a scalar.

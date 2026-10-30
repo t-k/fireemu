@@ -2785,6 +2785,12 @@
       "sha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f",
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1940)",
       "scope": "Twenty strict typed-result bags and three legal selections; all remain raw MISMATCH, and two aggregate error recipes and ordinary profile remain unclaimed."
+    },
+    {
+      "kind": "scalar-subquery",
+      "path": "conformance/fs-ent-pipeline-scalar-subquery-adjudication.json",
+      "sha256": "050ac6e5afd2cc4172cee4690c4a7e61d2a0a0b004b1a96758c0845a71b1155c",
+      "scope": "Two recorded strict scalar-subquery request shapes, each observed twice; separate from the historical raw comparison."
     }
   ]
 }

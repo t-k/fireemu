@@ -3137,3 +3137,508 @@ proptest! {
         let (rows,_)=runtime.block_on(executor_documents(&service,correlated_test_request(&case)));prop_assert_eq!(rows.len(),3);for row in rows {let Some(V::StringValue(key))=row.fields["f"].value_type.as_ref() else {panic!()};let i:usize=key.strip_prefix("key").unwrap().parse().unwrap();let expected=if present[i] {V::StringValue(format!("child{i}"))} else {V::NullValue(0)};prop_assert_eq!(row.fields["child"].value_type.clone(),Some(expected));}
     }
 }
+
+#[tokio::test]
+async fn correlated_scalar_cardinality_follows_the_recorded_multiple_result_refusal() {
+    use pb::value::ValueType as V;
+    for profile in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        for matches in 0..=2 {
+            for other in [false, true] {
+                let case = Case {
+                    docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+                    m_shapes: vec![],
+                    literal: None,
+                    select: None,
+                    offset: None,
+                    limit: None,
+                };
+                let backend = test_backend();
+                seed(&backend, &case);
+                let mut writes = Vec::new();
+                for i in 0..(matches + usize::from(other)) {
+                    let key = if i < matches { "A" } else { "B" };
+                    writes.push(pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{PARENT}/items/000/kids/{i}"),
+                            fields: [
+                                (
+                                    "parentKey".to_owned(),
+                                    value(V::StringValue(key.to_owned())),
+                                ),
+                                ("v".to_owned(), value(V::StringValue("child".to_owned()))),
+                            ]
+                            .into_iter()
+                            .collect(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    });
+                }
+                backend
+                    .commit(&pb::CommitRequest {
+                        database: "projects/demo-app/databases/(default)".to_owned(),
+                        writes,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                let mut gateway = test_gateway();
+                gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+                gateway.ctx.policy = profile;
+                let service = GatewayService::local(gateway, backend);
+                let response = Firestore::execute_pipeline(
+                    &service,
+                    Request::new(correlated_test_request(&case)),
+                )
+                .await;
+                if matches == 2 {
+                    let error = response.err().expect("multiple scalar results must fail");
+                    assert_eq!(
+                        error.code(),
+                        tonic::Code::InvalidArgument,
+                        "{profile:?} other={other}"
+                    );
+                    assert_eq!(error.message(), "Subpipeline returned multiple results.");
+                } else {
+                    let mut stream = response.unwrap().into_inner();
+                    let document = stream.next().await.unwrap().unwrap().results.remove(0);
+                    let expected = if matches == 0 {
+                        V::NullValue(0)
+                    } else {
+                        V::StringValue("child".to_owned())
+                    };
+                    assert_eq!(
+                        document.fields["child"].value_type,
+                        Some(expected),
+                        "{profile:?} matches={matches} other={other}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+    #[test]
+    fn correlated_scalar_rejects_multiple_matching_children(matches in 2_usize..8, other in 0_usize..4, strict in any::<bool>()) {
+        use pb::value::ValueType as V;
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let case = Case { docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)], m_shapes: vec![], literal: None, select: None, offset: None, limit: None };
+        let backend = test_backend();
+        seed(&backend, &case);
+        let writes = (0..matches + other).map(|i| pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{PARENT}/items/000/kids/{i}"),
+                fields: [("parentKey".to_owned(), value(V::StringValue(if i < matches { "A" } else { "B" }.to_owned()))), ("v".to_owned(), value(V::StringValue(format!("child{i}"))))].into_iter().collect(),
+                ..Default::default()
+            })), ..Default::default()
+        }).collect();
+        backend.commit(&pb::CommitRequest { database: "projects/demo-app/databases/(default)".to_owned(), writes, ..Default::default() }).unwrap();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = if strict { fireemu_core_firestore::index::IndexValidationPolicy::Production } else { fireemu_core_firestore::index::IndexValidationPolicy::Emulator };
+        let service = GatewayService::local(gateway, backend);
+        let result = runtime.block_on(Firestore::execute_pipeline(&service, Request::new(correlated_test_request(&case))));
+        let error = result.err().expect("multiple matches must fail");
+        prop_assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        prop_assert_eq!(error.message(), "Subpipeline returned multiple results.");
+    }
+}
+
+#[tokio::test]
+async fn correlated_scalar_filters_before_cardinality_for_recorded_four_stage_shape() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    for profile in [
+        fireemu_core_firestore::index::IndexValidationPolicy::Production,
+        fireemu_core_firestore::index::IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        seed(&backend, &case);
+        let writes = ["child-a", "child-b"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, child)| pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: format!("{PARENT}/items/000/kids/{i}"),
+                    fields: [
+                        (
+                            "parentKey".to_owned(),
+                            value(V::StringValue("A".to_owned())),
+                        ),
+                        ("v".to_owned(), value(V::StringValue(child.to_owned()))),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect();
+        backend
+            .commit(&pb::CommitRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                writes,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = profile;
+        let service = GatewayService::local(gateway, backend);
+        let mut request = correlated_test_request(&case);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+            ref mut structured,
+        )) = request.pipeline_type
+        else {
+            panic!()
+        };
+        let Some(V::MapValue(ref mut select)) =
+            structured.pipeline.as_mut().unwrap().stages[2].args[0].value_type
+        else {
+            panic!()
+        };
+        let Some(V::FunctionValue(ref mut scalar)) =
+            select.fields.get_mut("child").unwrap().value_type
+        else {
+            panic!()
+        };
+        let Some(V::PipelineValue(ref mut nested)) = scalar.args[0].value_type else {
+            panic!()
+        };
+        nested.stages.insert(
+            2,
+            stage(
+                "where",
+                value(V::FunctionValue(pb::Function {
+                    name: "equal".to_owned(),
+                    args: vec![field_ref("v"), value(V::StringValue("child-a".to_owned()))],
+                    ..Default::default()
+                })),
+            ),
+        );
+        let (rows, _) = executor_documents(&service, request).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].fields["child"].value_type,
+            Some(V::StringValue("child-a".to_owned()))
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn correlated_scalar_second_filter_generated_boundaries() {
+    use pb::value::ValueType as V;
+    for line in r"profile	matches	filter	shape
+production	two	first	valid
+emulator	two	first	valid
+production	two	all	valid
+production	zero	none	valid
+production	one	first	invalid
+emulator	zero	first	invalid
+emulator	two	none	invalid
+emulator	one	all	valid
+emulator	one	none	invalid
+emulator	zero	all	invalid
+"
+    .lines()
+    .skip(1)
+    {
+        let columns: Vec<_> = line.split('\t').collect();
+        let [profile, count, filter, shape] = columns.as_slice() else {
+            panic!("invalid generated row")
+        };
+        let count = match *count {
+            "zero" => 0,
+            "one" => 1,
+            "two" => 2,
+            _ => panic!(),
+        };
+        let case = Case {
+            docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+            m_shapes: vec![],
+            literal: None,
+            select: None,
+            offset: None,
+            limit: None,
+        };
+        let backend = test_backend();
+        seed(&backend, &case);
+        let writes = (0..count)
+            .map(|i| {
+                let matches = *filter == "all" || (*filter == "first" && i == 0);
+                pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{PARENT}/items/000/kids/{i}"),
+                        fields: [
+                            (
+                                "parentKey".to_owned(),
+                                value(V::StringValue("A".to_owned())),
+                            ),
+                            (
+                                "v".to_owned(),
+                                value(V::StringValue(
+                                    if matches { "child-a" } else { "child-b" }.to_owned(),
+                                )),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        backend
+            .commit(&pb::CommitRequest {
+                database: "projects/demo-app/databases/(default)".to_owned(),
+                writes,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = if *profile == "production" {
+            fireemu_core_firestore::index::IndexValidationPolicy::Production
+        } else {
+            fireemu_core_firestore::index::IndexValidationPolicy::Emulator
+        };
+        let service = GatewayService::local(gateway, backend);
+        let mut request = correlated_test_request(&case);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+            ref mut structured,
+        )) = request.pipeline_type
+        else {
+            panic!()
+        };
+        let Some(V::MapValue(ref mut select)) =
+            structured.pipeline.as_mut().unwrap().stages[2].args[0].value_type
+        else {
+            panic!()
+        };
+        let Some(V::FunctionValue(ref mut scalar)) =
+            select.fields.get_mut("child").unwrap().value_type
+        else {
+            panic!()
+        };
+        let Some(V::PipelineValue(ref mut nested)) = scalar.args[0].value_type else {
+            panic!()
+        };
+        nested.stages.insert(
+            2,
+            stage(
+                "where",
+                value(V::FunctionValue(pb::Function {
+                    name: if *shape == "valid" {
+                        "equal"
+                    } else {
+                        "less_than"
+                    }
+                    .to_owned(),
+                    args: vec![field_ref("v"), value(V::StringValue("child-a".to_owned()))],
+                    ..Default::default()
+                })),
+            ),
+        );
+        let response = Firestore::execute_pipeline(&service, Request::new(request)).await;
+        if *shape == "invalid" {
+            assert_eq!(
+                response.err().unwrap().code(),
+                tonic::Code::Unimplemented,
+                "{line}"
+            );
+            continue;
+        }
+        let matched = if *filter == "all" {
+            count
+        } else {
+            usize::from(*filter == "first" && count > 0)
+        };
+        if matched > 1 {
+            let error = response
+                .err()
+                .expect("multiple matching children must fail");
+            assert_eq!(error.code(), tonic::Code::InvalidArgument, "{line}");
+            assert_eq!(error.message(), "Subpipeline returned multiple results.");
+        } else {
+            let mut stream = response.unwrap().into_inner();
+            let doc = stream.next().await.unwrap().unwrap().results.remove(0);
+            let expected = if matched == 0 {
+                V::NullValue(0)
+            } else {
+                V::StringValue("child-a".to_owned())
+            };
+            assert_eq!(doc.fields["child"].value_type, Some(expected), "{line}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn correlated_scalar_second_filter_rejects_unobserved_shapes() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let backend = test_backend();
+    seed(&backend, &case);
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend);
+    for mutation in [
+        "wrong-function",
+        "reversed",
+        "non-string",
+        "function-option",
+        "stage-option",
+        "foreign-reference",
+        "extra-stage",
+    ] {
+        let mut request = correlated_test_request(&case);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+            ref mut structured,
+        )) = request.pipeline_type
+        else {
+            panic!()
+        };
+        let Some(V::MapValue(ref mut select)) =
+            structured.pipeline.as_mut().unwrap().stages[2].args[0].value_type
+        else {
+            panic!()
+        };
+        let Some(V::FunctionValue(ref mut scalar)) =
+            select.fields.get_mut("child").unwrap().value_type
+        else {
+            panic!()
+        };
+        let Some(V::PipelineValue(ref mut nested)) = scalar.args[0].value_type else {
+            panic!()
+        };
+        let mut equal = pb::Function {
+            name: "equal".to_owned(),
+            args: vec![field_ref("v"), value(V::StringValue("child-a".to_owned()))],
+            ..Default::default()
+        };
+        match mutation {
+            "wrong-function" => equal.name = "less_than".to_owned(),
+            "reversed" => equal.args.swap(0, 1),
+            "non-string" => equal.args[1] = value(V::IntegerValue(1)),
+            "function-option" => {
+                equal
+                    .options
+                    .insert("x".to_owned(), value(V::BooleanValue(true)));
+            }
+            "foreign-reference" => {
+                equal.args[1] = value(V::ReferenceValue(
+                    "projects/foreign/databases/(default)/documents/x/y".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        let mut extra = stage("where", value(V::FunctionValue(equal)));
+        if mutation == "stage-option" {
+            extra
+                .options
+                .insert("x".to_owned(), value(V::BooleanValue(true)));
+        }
+        nested.stages.insert(2, extra.clone());
+        if mutation == "extra-stage" {
+            nested.stages.insert(3, extra);
+        }
+        let error = Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .err()
+            .expect("unobserved shape must fail");
+        assert_eq!(error.code(), tonic::Code::Unimplemented, "{mutation}");
+    }
+}
+
+#[tokio::test]
+async fn correlated_scalar_second_filter_rejects_unobserved_child_value_type() {
+    use pb::value::ValueType as V;
+    let case = Case {
+        docs: vec![(Some(value(V::StringValue("A".to_owned()))), None)],
+        m_shapes: vec![],
+        literal: None,
+        select: None,
+        offset: None,
+        limit: None,
+    };
+    let backend = test_backend();
+    seed(&backend, &case);
+    backend
+        .commit(&pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: format!("{PARENT}/items/000/kids/c1"),
+                    fields: [
+                        (
+                            "parentKey".to_owned(),
+                            value(V::StringValue("A".to_owned())),
+                        ),
+                        ("v".to_owned(), value(V::IntegerValue(7))),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let mut gateway = test_gateway();
+    gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+    let service = GatewayService::local(gateway, backend);
+    let mut request = correlated_test_request(&case);
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(ref mut structured)) =
+        request.pipeline_type
+    else {
+        panic!()
+    };
+    let Some(V::MapValue(ref mut select)) =
+        structured.pipeline.as_mut().unwrap().stages[2].args[0].value_type
+    else {
+        panic!()
+    };
+    let Some(V::FunctionValue(ref mut scalar)) = select.fields.get_mut("child").unwrap().value_type
+    else {
+        panic!()
+    };
+    let Some(V::PipelineValue(ref mut nested)) = scalar.args[0].value_type else {
+        panic!()
+    };
+    nested.stages.insert(
+        2,
+        stage(
+            "where",
+            value(V::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![field_ref("v"), value(V::StringValue("child-a".to_owned()))],
+                ..Default::default()
+            })),
+        ),
+    );
+    let error = Firestore::execute_pipeline(&service, Request::new(request))
+        .await
+        .err()
+        .expect("unobserved type must fail closed");
+    assert_eq!(error.code(), tonic::Code::Unimplemented);
+}

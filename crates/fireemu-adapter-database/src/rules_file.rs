@@ -31,6 +31,23 @@ pub fn compile(text: &str) -> Result<Rules, RulesError> {
     })
 }
 
+/// Collects bounded expression diagnostics for a rejected rules file.
+pub fn diagnostics(text: &str) -> Result<(Vec<RulesError>, bool), RulesError> {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("rules-read-diagnostics".to_owned())
+            .stack_size(COMPILE_STACK_BYTES)
+            .spawn_scoped(scope, || Rules::diagnostics(&read(text)?))
+            .map_err(|error| RulesError {
+                line: 1,
+                column: 1,
+                message: format!("Could not start reading the rules: {error}"),
+            })?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
 /// The stack of the thread that reads and checks a rules file.
 const COMPILE_STACK_BYTES: usize = 256 * 1024 * 1024;
 

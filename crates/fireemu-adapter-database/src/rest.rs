@@ -579,7 +579,23 @@ impl Database {
                         },
                         events,
                     }),
-                    Err(error) => Err(Refusal::bad(format!("{error}\n"))),
+                    Err(error) => {
+                        let detail = crate::rules_file::diagnostics(&text).ok().map_or_else(
+                            || format!("{error}\n"),
+                            |(errors, truncated)| {
+                                let mut text = if errors.is_empty() {
+                                    format!("{error}\n")
+                                } else {
+                                    errors.iter().map(|e| format!("{e}\n")).collect::<String>()
+                                };
+                                if truncated {
+                                    text.push_str("Additional diagnostics were truncated.\n");
+                                }
+                                text
+                            },
+                        );
+                        Err(Refusal::bad(detail))
+                    }
                 }
             }
             _ => Err(Refusal::new(405, "Unsupported request type")),
@@ -1206,7 +1222,7 @@ impl Database {
     pub fn install_import(&mut self, import: PreparedImport, now: i64) -> Result<(), String> {
         let (root, limits) = match import.content {
             ImportContent::Deferred(text) => {
-                return self.import_text(&import.namespace, &text, now)
+                return self.import_text(&import.namespace, &text, now);
             }
             ImportContent::Built { root, limits } => (root, limits),
         };

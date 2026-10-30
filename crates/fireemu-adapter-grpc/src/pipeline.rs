@@ -4766,6 +4766,75 @@ fn with_code(mut status: Status, code: &str) -> Status {
 mod tests {
 
     #[test]
+    fn recorded_map_constructor_refusals() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use fireemu_core_firestore::value::Value;
+        let odd = Expr::call(
+            "map",
+            vec![Expr::Constant(Value::String("k".to_owned()))],
+            Placement::Value,
+        )
+        .unwrap_err();
+        assert_eq!(
+            odd,
+            ExprError::Arity("'map' function must have an even number of arguments".to_owned())
+        );
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id) in [
+            ("value-shapes", "map-one-argument"),
+            ("appendix", "proposed-n76-map-add-then-empty"),
+        ] {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                tonic::Code::InvalidArgument,
+                "{id}: {computed:?}"
+            );
+            assert_eq!(computed.message(), expected, "{id}");
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(rest.code(), tonic::Code::InvalidArgument, "REST {id}");
+            assert_eq!(rest.message(), expected, "REST {id}");
+            let grpc_shape = shape_of_request(&request);
+            assert!(grpc_shape.is_some(), "gRPC shape {id}");
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            assert_eq!(grpc.code(), tonic::Code::InvalidArgument, "gRPC {id}");
+            assert_eq!(grpc.message(), expected, "gRPC {id}");
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn recorded_literal_refusal_gate_matrix() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};

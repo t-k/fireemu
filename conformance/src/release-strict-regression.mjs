@@ -19,6 +19,7 @@
 //
 // The runs are sequential: several harnesses listen on fixed loopback ports (32291-32298,
 // 32320-32322).
+import { judgeExport as judgeRtdbExport } from "./rtdb-release-replay.mjs";
 import { validateEventarcSemantics } from "./eventarc-production/run.mjs";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
@@ -74,6 +75,7 @@ const MAX_ANNOTATIONS = 50;
 /** The only harness modes this script may invoke: all of them local. */
 export const ALLOWED_MODES = new Set([
   "check",
+  "local",
   "export-comparison",
   "local-child",
   "compare-local",
@@ -137,7 +139,65 @@ const laneRun = (
  * The comparisons the closures name, each rerun by one entry. `{bin}`, `{export}` and `{runDir}`
  * are filled in when the entry runs; `{functionsNode}` is FIREEMU_NODE.
  */
+const RTDB_EVIDENCE = "spec/compatibility/closure/evidence/";
+const rtdbRun = (id, campaign, files) => ({
+  id,
+  kind: "rtdb-production-comparison-v1",
+  comparisonPaths: files.map((file) => `${RTDB_EVIDENCE}${file}`),
+  clear: [],
+  commands: [
+    {
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/rtdb-release-replay.mjs",
+        "local",
+        campaign,
+        "--fireemu",
+        "{bin}",
+        "--out",
+        "{export}.run",
+        "--export",
+        "{export}",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 30 * 60 * 1000,
+    },
+  ],
+});
+
 export const RUNS = [
+  (() => {
+    const run = rtdbRun("R22", "rest-old", [
+      "RTDB-rest-comparison.json",
+      "RTDB-rest-v033-comparison.json",
+    ]);
+    run.commands.push({
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/rtdb-release-replay.mjs",
+        "local",
+        "smoke",
+        "--fireemu",
+        "{bin}",
+        "--out",
+        "{export}.smoke.run",
+        "--export",
+        "{export}.smoke.json",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 30 * 60 * 1000,
+    });
+    return run;
+  })(),
+  rtdbRun("R23", "ondisconnect", ["RTDB-sdk-ondisconnect-comparison.json"]),
+  rtdbRun("R24", "auth", ["RTDB-genuine-auth-comparison.json"]),
+  rtdbRun("R25", "residual", ["RTDB-residual-comparison.json"]),
+  rtdbRun("R26", "s5", ["RTDB-s5-comparison.json"]),
+  rtdbRun("R27", "functions", ["RTDB-functions-trigger-comparison.json"]),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -536,12 +596,6 @@ export const EXCLUDED_KINDS = [
       "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
     issue: "fs-listen-sdk-comparison-needs-private-recordings-and-a-long-browser-release-job.md",
   },
-  {
-    kind: "rtdb-production-comparison-v1",
-    reason:
-      "the six RTDB comparisons were run against their recorded release binaries with the committed replays and fixtures; they do not yet support an installed-binary release replay, and several SDK replays require headless Chromium and long idle-close waits",
-    issue: "rtdb-comparisons-need-release-replay.md",
-  },
 ];
 
 /**
@@ -552,6 +606,14 @@ export const EXCLUDED_KINDS = [
  */
 function runsForComparison(allRuns, kind, document, path, errors) {
   const ofKind = allRuns.filter((run) => run.kind === kind);
+  if (ofKind.some((run) => run.comparisonPaths !== undefined)) {
+    const covering = ofKind.filter((run) => run.comparisonPaths?.includes(path));
+    if (covering.length !== 1) {
+      errors.push(`${path}: expected exactly one comparison path run, found ${covering.length}`);
+      return undefined;
+    }
+    return covering;
+  }
   if (!ofKind.some((run) => run.rowPrefix !== undefined)) return ofKind;
   const ids = (document?.rows ?? []).map(rowKey);
   const covering =
@@ -605,6 +667,13 @@ export function forbiddenEnvironment(env) {
       (name) => FORBIDDEN_ENV_NAMES.has(name) || FORBIDDEN_ENV_PATTERNS.some((re) => re.test(name)),
     )
     .toSorted();
+}
+
+/** RTDB replay is safe only in the release job's dedicated PID namespace. */
+export function rtdbNamespaceError(platform, pid, procSelf) {
+  if (platform !== "linux" || pid !== 1 || procSelf !== "/proc/1")
+    return "RTDB release replay requires Linux PID 1 with its own proc mount";
+  return undefined;
 }
 
 /** Fails when any production endpoint answers: the run needs a network with loopback only. */
@@ -1244,7 +1313,14 @@ function killGroup(pid, signal) {
 }
 
 /** Runs one command in its own process group, with a deadline, logging to `logPath`. */
-async function runCommand(argv, env, cwd, logPath, timeoutMs = COMMAND_TIMEOUT_MS) {
+async function runCommand(
+  argv,
+  env,
+  cwd,
+  logPath,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+  boundedTimeout = false,
+) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error("positive safe command timeout required");
   const started = Date.now();
@@ -1264,6 +1340,10 @@ async function runCommand(argv, env, cwd, logPath, timeoutMs = COMMAND_TIMEOUT_M
   const timer = setTimeout(() => {
     timedOut = true;
     killGroup(child.pid, "SIGKILL");
+    if (boundedTimeout) {
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
   }, timeoutMs);
   const exitCode = await new Promise((done) => {
     child.once("error", (error) => {
@@ -1319,7 +1399,14 @@ export async function runEntry(run, context) {
       env.PATH = `${dirname(context.functionsNode)}:${env.PATH}`;
     }
     const logPath = join(context.out, "logs", `${run.id}-${index + 1}-${command.mode}.log`);
-    const result = await runCommand(argv, env, ROOT, logPath, command.timeoutMs);
+    const result = await runCommand(
+      argv,
+      env,
+      ROOT,
+      logPath,
+      command.timeoutMs,
+      run.kind === "rtdb-production-comparison-v1",
+    );
     outputs.push(result.output);
     record.commands.push({
       mode: command.mode,
@@ -1333,6 +1420,10 @@ export async function runEntry(run, context) {
         `${command.mode} exited ${result.exitCode}, expected ${command.expectedExitCodes.join(" or ")}`,
       );
     }
+    if (result.exitCode === "timeout" && run.kind === "rtdb-production-comparison-v1") {
+      record.fatalTimeout = true;
+      break;
+    }
     if (command.mode === "local-child") {
       const runDir = lastJsonLine(result.output)?.runDir;
       if (
@@ -1345,7 +1436,8 @@ export async function runEntry(run, context) {
       values.runDir = resolve(runDir);
     }
   }
-  const leftovers = leftoverProcesses(context.binary);
+  const leftovers =
+    run.kind === "rtdb-production-comparison-v1" ? [] : leftoverProcesses(context.binary);
   for (const pid of leftovers) {
     try {
       process.kill(pid, "SIGKILL");
@@ -1425,6 +1517,25 @@ export function judge(comparison, observations, context) {
       ? "conformance/fs-ent-pipeline-release-v040.json"
       : comparison.path;
   const expected = context.readJson(expectedPath);
+  if (comparison.kind === "rtdb-production-comparison-v1") {
+    const names = {
+      R22: "rest-old",
+      R23: "ondisconnect",
+      R24: "auth",
+      R25: "residual",
+      R26: "s5",
+      R27: "functions",
+    };
+    return judgeRtdbExport(
+      comparison.runIds[0] === "R22" &&
+        comparison.path === `${RTDB_EVIDENCE}RTDB-rest-v033-comparison.json`
+        ? "rest-v033"
+        : names[comparison.runIds[0]],
+      observations[comparison.runIds[0]],
+      context.binarySha256,
+      expected,
+    );
+  }
   if (comparison.kind === "fs-data-write-integrated-regression") {
     const lane = context.readJson(expected.current.laneComparisonPath);
     return [
@@ -1457,7 +1568,13 @@ export function judge(comparison, observations, context) {
 export function exportCopies(comparisons, runs) {
   const exporting = new Set(
     runs
-      .filter((run) => run.commands.some((command) => command.mode === "export-comparison"))
+      .filter((run) =>
+        run.commands.some(
+          (command) =>
+            command.mode === "export-comparison" ||
+            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local"),
+        ),
+      )
       .map((run) => run.id),
   );
   return comparisons
@@ -1469,6 +1586,26 @@ export function exportCopies(comparisons, runs) {
           ? "EVENTARC-comparison.json"
           : comparison.path.split("/").at(-1),
     }));
+}
+
+/** Persist the final outcome before the namespace process exits. */
+export async function writeReleaseSummary(out, summary) {
+  await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+/** A timed-out producer may have left a truncated export; preserve the failure instead. */
+export async function observeUnlessFatal(entry, observeEntry) {
+  if (entry.record.fatalTimeout) return undefined;
+  return observeEntry();
+}
+
+/** Run sequentially and stop immediately after an RTDB timeout. */
+export async function runUntilFatal(runs, execute) {
+  for (const run of runs) {
+    const entry = await execute(run);
+    if (entry.record.fatalTimeout) return true;
+  }
+  return false;
 }
 
 const annotate = (title, message) => {
@@ -1487,6 +1624,14 @@ async function main() {
   const binary = realpathSync(resolve(binaryPath));
   const notPackaged = packagedRunnerError(binary);
   if (notPackaged) throw new Error(notPackaged);
+  let procSelf;
+  try {
+    procSelf = realpathSync("/proc/self");
+  } catch {
+    /* No usable proc mount. */
+  }
+  const namespaceError = rtdbNamespaceError(process.platform, process.pid, procSelf);
+  if (namespaceError) throw new Error(namespaceError);
   await assertNoOutboundNetwork(fetch);
   const out = resolve(args.out);
   await rm(out, { recursive: true, force: true });
@@ -1522,32 +1667,39 @@ async function main() {
     comparisons: [],
   };
   const observations = {};
+  let fatalTimeout = false;
   if (plan.errors.length === 0) {
-    for (const run of RUNS) {
+    fatalTimeout = await runUntilFatal(RUNS, async (run) => {
       console.log(`== ${run.id} ${run.kind}${run.part ? ` (${run.part})` : ""}`);
       const entry = await runEntry(run, context);
-      observations[run.id] = await observe(run, entry, context);
+      observations[run.id] = await observeUnlessFatal(entry, () => observe(run, entry, context));
       if (run.id === "R10") entry.record.rawLocalResultDigests = observations.R10.raw;
       summary.runs.push(entry.record);
       console.log(
         `   ${entry.record.commands.map((c) => `${c.mode}=${c.exitCode} (${Math.round(c.ms / 1000)} s)`).join(", ")}`,
       );
-    }
-    for (const comparison of plan.comparisons) {
-      const differences = judge(comparison, observations, context);
-      summary.comparisons.push({ ...comparison, differences });
-    }
-    for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
-      if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
-    }
+      return entry;
+    });
+    if (!fatalTimeout)
+      for (const comparison of plan.comparisons) {
+        const differences = judge(comparison, observations, context);
+        summary.comparisons.push({ ...comparison, differences });
+      }
+    if (!fatalTimeout)
+      for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
+        if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
+      }
   }
-  const expectedRaw = context.readJson(
-    "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
-  ).current.rawLocalResultDigests.strict;
-  summary.reportOnly = {
-    fsDataWriteRawResultsEqualLane:
-      observations.R10 && isDeepStrictEqual(observations.R10.raw, expectedRaw.lane ?? expectedRaw),
-  };
+  if (!fatalTimeout) {
+    const expectedRaw = context.readJson(
+      "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
+    ).current.rawLocalResultDigests.strict;
+    summary.reportOnly = {
+      fsDataWriteRawResultsEqualLane:
+        observations.R10 &&
+        isDeepStrictEqual(observations.R10.raw, expectedRaw.lane ?? expectedRaw),
+    };
+  }
   const failures = [
     ...plan.errors.map((error) => ["coverage", error]),
     ...summary.runs.flatMap((run) => run.errors.map((error) => [run.id, error])),
@@ -1556,7 +1708,7 @@ async function main() {
     ),
   ];
   summary.result = failures.length === 0 ? "PASS" : "FAIL";
-  await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  await writeReleaseSummary(out, summary);
   for (const [title, message] of failures.slice(0, MAX_ANNOTATIONS)) annotate(title, message);
   for (const comparison of summary.comparisons) {
     console.log(
@@ -1568,5 +1720,5 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = await main();
+  process.exit(await main());
 }

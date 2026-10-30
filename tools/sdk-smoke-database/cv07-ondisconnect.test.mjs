@@ -86,3 +86,26 @@ test('fixtureFromRecording keeps sdk events only, projected, with fire delays fr
   assert.deepEqual(built.events, [{ type: 'sdk-step', step: 'writer-offline', prefix: 'a', transport: 'lp' }, { type: 'sdk-callback', value: { state: 'offline' }, prefix: 'a', transport: 'lp' }]);
   assert.deepEqual(built.onDisconnectFireSeconds, { a: 100.8 });
 });
+
+test('offline replay judges captured events and refuses missing events or timing', async () => {
+  const { judgeCaptured } = await import('./cv07-ondisconnect.mjs');
+  const events = fixture.events.map((event, index) => ({ ...event, ms: index * 1000 }));
+  const result = judgeCaptured(events, fixture);
+  assert.equal(result.matched, true);
+  assert.equal(result.timing.within, false);
+  assert.equal(judgeCaptured(events.slice(1), fixture).matched, false);
+  assert.throws(() => judgeCaptured(null, fixture), /events/);
+});
+
+test('offline compare exits nonzero for a missing journal', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync(process.execPath, [new URL('./cv07-ondisconnect.mjs', import.meta.url).pathname, 'compare', '/nonexistent/journal.json'], { encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /ENOENT/);
+});
+
+test('captured journal refuses secret-shaped page errors before writing', async () => {
+  const { journalText } = await import('./cv07-ondisconnect.mjs');
+  assert.throws(() => journalText([{ type: 'page-error', message: 'AIzaSyA-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' }]), /secret/);
+  assert.deepEqual(JSON.parse(journalText([{ type: 'sdk-step', ms: 12 }])), [{ type: 'sdk-step', ms: 12 }]);
+});

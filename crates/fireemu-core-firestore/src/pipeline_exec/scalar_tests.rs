@@ -3916,3 +3916,25 @@ fn map_odd_argument_count_is_an_arity_error() {
     assert!(Expr::call("map", vec![], Placement::Value).is_ok());
     assert!(Expr::call("map", vec![Expr::Constant(Value::String("k".into())), Expr::Constant(Value::Integer(1))], Placement::Value).is_ok());
 }
+
+#[test]
+fn numeric_scalar_recorded_integer_forms() {
+    let values = array(vec![Value::Integer(7), Value::Integer(2), Value::Integer(5)]);
+    for (name, expected) in [("minimum", 2), ("maximum", 7)] {
+        assert_eq!(both(name, &[values.clone()]), int(expected));
+        assert_eq!(both(name, &[int(7), int(2)]), int(expected));
+    }
+    assert_eq!(both("sum", &[values]), int(14));
+    assert_eq!(both("negate", &[int(7)]), int(-7));
+}
+
+#[test]
+fn numeric_scalar_unobserved_inputs_are_refused() {
+    for name in ["minimum", "maximum", "sum"] {
+        assert!(is_unobserved(&strict(name, &[array(vec![])])));
+        assert!(is_unobserved(&strict(name, &[array(vec![Value::Null])])));
+    }
+    assert!(is_unobserved(&strict("sum", &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])])));
+    assert!(is_unobserved(&strict("negate", &[int(i64::MIN)])));
+    assert!(is_unobserved(&strict("negate", &[text("x")])));
+}

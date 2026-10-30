@@ -4199,6 +4199,10 @@ fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
         );
         let absent = Expr::Field(FieldPath::parse("missing").unwrap());
         assert_eq!(
+            call(vec![constant(Value::Null), absent.clone()]).eval_in(&row, mode),
+            Eval::Absent
+        );
+        assert_eq!(
             call(vec![absent, constant(Value::Integer(7))]).eval_in(&row, mode),
             int(7)
         );

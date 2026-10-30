@@ -26,7 +26,7 @@ use super::{
 use crate::value::{Timestamp, Value};
 
 /// The function names this module defines, for callers that must tell them from the rest.
-pub const NAMES: [&str; 54] = [
+pub const NAMES: [&str; 55] = [
     "current_timestamp",
     "timestamp_trunc",
     "timestamp_extract",
@@ -39,6 +39,7 @@ pub const NAMES: [&str; 54] = [
     "timestamp_to_unix_micros",
     "timestamp_to_unix_millis",
     "timestamp_to_unix_seconds",
+    "like",
     "regex_contains",
     "regex_match",
     "regex_find",
@@ -82,6 +83,15 @@ pub const NAMES: [&str; 54] = [
     "log10",
     "trunc",
 ];
+
+pub(super) const LIKE: Function = function(
+    "like",
+    Arity::Exact(2),
+    true,
+    "like[T: string | regex](search_space: string, pattern: T): boolean",
+    &[],
+    eval_like,
+);
 
 pub(super) const CURRENT_TIMESTAMP: Function = function(
     "current_timestamp",
@@ -207,7 +217,7 @@ const fn function(
     returns_boolean: bool,
     signature: &'static str,
     overloads: &'static [(&'static str, usize, usize)],
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -358,12 +368,29 @@ pub(super) const TRIM: Function = function(
     ],
     eval_trim,
 );
-// The argument-count refusals of `ltrim` and `rtrim` were not recorded: their signatures stay
-// unknown, so the count is refused in fireemu's own words (unobserved under strict).
-pub(super) const LTRIM: Function =
-    function("ltrim", Arity::Between(1, 2), false, "", &[], eval_ltrim);
-pub(super) const RTRIM: Function =
-    function("rtrim", Arity::Between(1, 2), false, "", &[], eval_rtrim);
+// Production records the two overloads when either function is called with no arguments.
+pub(super) const LTRIM: Function = function(
+    "ltrim",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("ltrim[T: string | bytes](value: T): T", 1, 1),
+        ("ltrim[T: string | bytes](value: T, to_trim: T): T", 2, 2),
+    ],
+    eval_ltrim,
+);
+pub(super) const RTRIM: Function = function(
+    "rtrim",
+    Arity::Between(1, 2),
+    false,
+    "",
+    &[
+        ("rtrim[T: string | bytes](value: T): T", 1, 1),
+        ("rtrim[T: string | bytes](value: T, to_trim: T): T", 2, 2),
+    ],
+    eval_rtrim,
+);
 pub(super) const SPLIT: Function = function(
     "split",
     Arity::Between(1, 2),
@@ -523,7 +550,7 @@ pub(super) const COSINE_DISTANCE: Function = function(
     },
 );
 
-fn eval_vector_length(args: &[Eval], _cx: Context) -> Eval {
+fn eval_vector_length(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -623,7 +650,7 @@ fn null() -> Eval {
     Eval::Value(Value::Null)
 }
 
-fn strict(cx: Context) -> bool {
+fn strict(cx: Context<'_>) -> bool {
     cx.unrecorded == Unrecorded::Refuse
 }
 
@@ -681,7 +708,7 @@ fn check<'a>(
     function: &'static str,
     args: &'a [Eval],
     params: &[Param],
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<Vec<&'a Value>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
@@ -730,7 +757,7 @@ fn java_double(d: f64) -> Option<String> {
 
 /// An `int64` argument that production would have coerced from a double: it refuses a double
 /// with `Cannot coerce Float64 (x) to Int64`.
-pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context) -> Option<Eval> {
+pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context<'_>) -> Option<Eval> {
     let Eval::Value(Value::Double(d)) = arg else {
         return None;
     };
@@ -804,7 +831,7 @@ fn calendar_unit(name: &'static str, arg: &Eval, extract: bool) -> Result<String
 fn calendar_values(
     name: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     extract: bool,
 ) -> Result<(Timestamp, String, Option<String>), Eval> {
     if let Some(error) = first_error(args) {
@@ -837,7 +864,7 @@ fn resolve_zone(
     zone: &str,
     unit: &str,
     operation: ZoneOperation,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Eval {
     let Some(resolver) = cx.runtime.zone_resolver else {
         return unobserved(name, "named time zone resolver is unavailable");
@@ -868,7 +895,7 @@ pub(super) fn local_calendar_value(
     let cx = Context {
         unrecorded: Unrecorded::Refuse,
         condition: false,
-        runtime: super::RuntimeContext::default(),
+        runtime: &super::RuntimeContext::default(),
     };
     let result = match operation {
         ZoneOperation::Trunc => eval_timestamp_trunc(&args, cx),
@@ -903,7 +930,7 @@ fn week_day(unit: &str) -> Option<i64> {
     }
 }
 
-fn eval_timestamp_trunc(args: &[Eval], cx: Context) -> Eval {
+fn eval_timestamp_trunc(args: &[Eval], cx: Context<'_>) -> Eval {
     let (timestamp, unit, zone) = match calendar_values("timestamp_trunc", args, cx, false) {
         Ok(value) => value,
         Err(error) => return error,
@@ -955,7 +982,7 @@ fn eval_timestamp_trunc(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_timestamp_extract(args: &[Eval], cx: Context) -> Eval {
+fn eval_timestamp_extract(args: &[Eval], cx: Context<'_>) -> Eval {
     let (timestamp, unit, zone) = match calendar_values("timestamp_extract", args, cx, true) {
         Ok(value) => value,
         Err(error) => return error,
@@ -1028,7 +1055,7 @@ fn timestamp_unit(name: &'static str, unit: &Eval) -> Result<i64, Eval> {
     scale.ok_or_else(|| invalid(format!("The argument 'unit' for function '{name}' must be a literal of type string from the following list: {TIMESTAMP_UNITS}")))
 }
 
-fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: bool) -> Eval {
+fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context<'_>, subtract: bool) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1082,7 +1109,7 @@ fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: boo
     }
 }
 
-fn timestamp_diff(args: &[Eval], cx: Context) -> Eval {
+fn timestamp_diff(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1112,7 +1139,7 @@ fn timestamp_diff(args: &[Eval], cx: Context) -> Eval {
 }
 
 /// Convert signed Unix units without losing subsecond precision at negative epochs.
-fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
+fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context<'_>, scale: i64) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1135,7 +1162,7 @@ fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context, scale: i64)
 }
 
 /// Convert a bounded timestamp to Unix units, truncating fractional units toward the past.
-fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
+fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context<'_>, scale: i64) -> Eval {
     let values = match check(name, args, &[Param::Timestamp], cx) {
         Ok(values) => values,
         Err(value) => return value,
@@ -1155,7 +1182,12 @@ fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context, scale: i64)
 }
 
 /// Compile a bounded pattern and preserve the distinction between syntax and resource limits.
-fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOperation) -> Eval {
+fn regex_eval(
+    name: &'static str,
+    args: &[Eval],
+    cx: Context<'_>,
+    operation: RegexOperation,
+) -> Eval {
     let values = match check(
         name,
         args,
@@ -1195,25 +1227,74 @@ fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOp
     }
 }
 
-fn eval_regex_contains(args: &[Eval], cx: Context) -> Eval {
+fn eval_like(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match check(
+        "like",
+        args,
+        &[Param::Str("String"), Param::Str("String")],
+        cx,
+    ) {
+        Ok(values) => values,
+        Err(error) => return error,
+    };
+    let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
+        unreachable!()
+    };
+    let mut regex = String::from("(?s)");
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        let literal = match ch {
+            '%' => {
+                regex.push_str(".*");
+                continue;
+            }
+            '_' => {
+                regex.push('.');
+                continue;
+            }
+            '\\' => match chars.next() {
+                Some(escaped) => escaped,
+                None => return unobserved("like", "a trailing escape is unobserved"),
+            },
+            other => other,
+        };
+        if "\\.^$|?*+()[]{}".contains(literal) {
+            regex.push('\\');
+        }
+        regex.push(literal);
+    }
+    let Some(resolver) = cx.runtime.regex_resolver else {
+        return unobserved("like", "no regex resolver is available");
+    };
+    match resolver(subject, &regex, RegexOperation::Match) {
+        Ok(RegexResult::Boolean(value)) => Eval::Value(Value::Boolean(value)),
+        Err(RegexError::InvalidSyntax) => invalid("Unsupported regex syntax."),
+        Err(RegexError::ResourceLimit) => {
+            unobserved("like", "regex compilation exceeded local resources")
+        }
+        _ => unobserved("like", "the regex resolver returned an incompatible result"),
+    }
+}
+
+fn eval_regex_contains(args: &[Eval], cx: Context<'_>) -> Eval {
     regex_eval("regex_contains", args, cx, RegexOperation::Contains)
 }
 
-fn eval_regex_match(args: &[Eval], cx: Context) -> Eval {
+fn eval_regex_match(args: &[Eval], cx: Context<'_>) -> Eval {
     regex_eval("regex_match", args, cx, RegexOperation::Match)
 }
 
-fn eval_regex_find(args: &[Eval], cx: Context) -> Eval {
+fn eval_regex_find(args: &[Eval], cx: Context<'_>) -> Eval {
     regex_eval("regex_find", args, cx, RegexOperation::Find)
 }
 
-fn eval_regex_find_all(args: &[Eval], cx: Context) -> Eval {
+fn eval_regex_find_all(args: &[Eval], cx: Context<'_>) -> Eval {
     regex_eval("regex_find_all", args, cx, RegexOperation::FindAll)
 }
 
 /// `concat(a, b, ...)`: strings, bytes or arrays of one kind joined. The first argument sets the
 /// kind; production refused a string followed by bytes or an integer.
-fn eval_concat(args: &[Eval], cx: Context) -> Eval {
+fn eval_concat(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1301,7 +1382,7 @@ fn case_recorded(text: &str) -> bool {
     !text.contains(['\u{3a3}', '\u{3c2}'])
 }
 
-fn eval_to_lower(args: &[Eval], cx: Context) -> Eval {
+fn eval_to_lower(args: &[Eval], cx: Context<'_>) -> Eval {
     map_case(
         "to_lower",
         args,
@@ -1311,7 +1392,7 @@ fn eval_to_lower(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_to_upper(args: &[Eval], cx: Context) -> Eval {
+fn eval_to_upper(args: &[Eval], cx: Context<'_>) -> Eval {
     map_case(
         "to_upper",
         args,
@@ -1324,7 +1405,7 @@ fn eval_to_upper(args: &[Eval], cx: Context) -> Eval {
 fn map_case(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     text: fn(&str) -> String,
     byte: fn(&u8) -> u8,
 ) -> Eval {
@@ -1348,19 +1429,19 @@ fn map_case(
     }
 }
 
-fn eval_starts_with(args: &[Eval], cx: Context) -> Eval {
+fn eval_starts_with(args: &[Eval], cx: Context<'_>) -> Eval {
     two_strings("starts_with", args, cx, |value, prefix| {
         value.starts_with(prefix)
     })
 }
 
-fn eval_ends_with(args: &[Eval], cx: Context) -> Eval {
+fn eval_ends_with(args: &[Eval], cx: Context<'_>) -> Eval {
     two_strings("ends_with", args, cx, |value, suffix| {
         value.ends_with(suffix)
     })
 }
 
-fn eval_string_contains(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_contains(args: &[Eval], cx: Context<'_>) -> Eval {
     two_strings("string_contains", args, cx, |value, part| {
         value.contains(part)
     })
@@ -1371,7 +1452,7 @@ fn eval_string_contains(args: &[Eval], cx: Context) -> Eval {
 fn two_strings(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     test: fn(&str, &str) -> bool,
 ) -> Eval {
     if cx.condition && strict(cx) {
@@ -1392,7 +1473,7 @@ fn two_strings(
     }
 }
 
-fn eval_char_length(args: &[Eval], cx: Context) -> Eval {
+fn eval_char_length(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match check("char_length", args, &[Param::Str("String")], cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -1409,7 +1490,7 @@ fn eval_char_length(args: &[Eval], cx: Context) -> Eval {
 fn recorded_string_args<'a>(
     function: &'static str,
     args: &'a [Eval],
-    cx: Context,
+    cx: Context<'_>,
     params: &[Param],
 ) -> Result<Vec<&'a Value>, Eval> {
     if let Some(error) = first_error(args) {
@@ -1429,7 +1510,7 @@ fn recorded_string_args<'a>(
     check(function, args, params, cx)
 }
 
-fn eval_byte_length(args: &[Eval], cx: Context) -> Eval {
+fn eval_byte_length(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args("byte_length", args, cx, &[Param::Str("String")]) {
         Ok(v) => v,
         Err(e) => return e,
@@ -1442,7 +1523,7 @@ fn eval_byte_length(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_index_of(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args(
         "string_index_of",
         args,
@@ -1464,7 +1545,7 @@ fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Integer(index))
 }
 
-fn eval_string_repeat(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_repeat(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args(
         "string_repeat",
         args,
@@ -1497,7 +1578,7 @@ fn eval_string_repeat(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::String(value.repeat(count)))
 }
 
-fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context, all: bool) -> Eval {
+fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context<'_>, all: bool) -> Eval {
     let values = match recorded_string_args(
         function,
         args,
@@ -1546,7 +1627,7 @@ fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context, all: 
     }))
 }
 
-fn eval_string_reverse(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_reverse(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args("string_reverse", args, cx, &[Param::Str("String")]) {
         Ok(v) => v,
         Err(e) => return e,
@@ -1557,7 +1638,7 @@ fn eval_string_reverse(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::String(value.chars().rev().collect()))
 }
 
-fn eval_substring(args: &[Eval], cx: Context) -> Eval {
+fn eval_substring(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1645,7 +1726,7 @@ struct Ends {
     end: bool,
 }
 
-fn eval_trim(args: &[Eval], cx: Context) -> Eval {
+fn eval_trim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "trim",
         args,
@@ -1657,7 +1738,7 @@ fn eval_trim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_ltrim(args: &[Eval], cx: Context) -> Eval {
+fn eval_ltrim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "ltrim",
         args,
@@ -1669,7 +1750,7 @@ fn eval_ltrim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_rtrim(args: &[Eval], cx: Context) -> Eval {
+fn eval_rtrim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "rtrim",
         args,
@@ -1681,7 +1762,7 @@ fn eval_rtrim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn trim_call(function: &'static str, args: &[Eval], cx: Context, ends: Ends) -> Eval {
+fn trim_call(function: &'static str, args: &[Eval], cx: Context<'_>, ends: Ends) -> Eval {
     let params = [Param::StrOrBytes, Param::StrOrBytes];
     let values = match check(function, args, &params, cx) {
         Ok(values) => values,
@@ -1750,7 +1831,7 @@ fn trim_string(
     function: &'static str,
     text: &str,
     set: Option<&str>,
-    cx: Context,
+    cx: Context<'_>,
     ends: Ends,
 ) -> Eval {
     let chars: Vec<char> = text.chars().collect();
@@ -1773,7 +1854,7 @@ fn trim_string(
     Eval::Value(Value::String(chars[start..end].iter().collect()))
 }
 
-fn eval_split(args: &[Eval], cx: Context) -> Eval {
+fn eval_split(args: &[Eval], cx: Context<'_>) -> Eval {
     // Production named `String` for an integer input (O-8B `split-int`).
     let params = [Param::StrOrBytesAsString, Param::StrOrBytesAsString];
     let values = match check("split", args, &params, cx) {
@@ -1887,7 +1968,7 @@ fn numbers(
     function: &'static str,
     args: &[Eval],
     count: usize,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<Vec<Num>, Eval> {
     let params = vec![Param::Number; count];
     check(function, args, &params, cx).map(|values| values.into_iter().map(Num::of).collect())
@@ -1901,7 +1982,7 @@ fn integer(i: i64) -> Eval {
     Eval::Value(Value::Integer(i))
 }
 
-fn eval_add(args: &[Eval], cx: Context) -> Eval {
+fn eval_add(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "add",
         args,
@@ -1912,7 +1993,7 @@ fn eval_add(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_subtract(args: &[Eval], cx: Context) -> Eval {
+fn eval_subtract(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "subtract",
         args,
@@ -1923,7 +2004,7 @@ fn eval_subtract(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_multiply(args: &[Eval], cx: Context) -> Eval {
+fn eval_multiply(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "multiply",
         args,
@@ -1939,7 +2020,7 @@ fn eval_multiply(args: &[Eval], cx: Context) -> Eval {
 fn arithmetic(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     exact: fn(i64, i64) -> Option<i64>,
     float: fn(f64, f64) -> f64,
     overflow: &str,
@@ -1954,7 +2035,7 @@ fn arithmetic(
     }
 }
 
-fn eval_divide(args: &[Eval], cx: Context) -> Eval {
+fn eval_divide(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numbers("divide", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -1974,7 +2055,7 @@ fn eval_divide(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_mod(args: &[Eval], cx: Context) -> Eval {
+fn eval_mod(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numbers("mod", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -1992,7 +2073,7 @@ fn eval_mod(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_abs(args: &[Eval], cx: Context) -> Eval {
+fn eval_abs(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numbers("abs", args, 1, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -2006,16 +2087,16 @@ fn eval_abs(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_floor(args: &[Eval], cx: Context) -> Eval {
+fn eval_floor(args: &[Eval], cx: Context<'_>) -> Eval {
     rounding("floor", args, cx, f64::floor)
 }
 
-fn eval_ceil(args: &[Eval], cx: Context) -> Eval {
+fn eval_ceil(args: &[Eval], cx: Context<'_>) -> Eval {
     rounding("ceil", args, cx, f64::ceil)
 }
 
 /// An integer stays as it is; a double goes to a whole double. Infinity was not shown.
-fn rounding(function: &'static str, args: &[Eval], cx: Context, op: fn(f64) -> f64) -> Eval {
+fn rounding(function: &'static str, args: &[Eval], cx: Context<'_>, op: fn(f64) -> f64) -> Eval {
     let values = match numbers(function, args, 1, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -2029,7 +2110,7 @@ fn rounding(function: &'static str, args: &[Eval], cx: Context, op: fn(f64) -> f
     }
 }
 
-fn eval_round(args: &[Eval], cx: Context) -> Eval {
+fn eval_round(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -2068,7 +2149,7 @@ fn eval_round(args: &[Eval], cx: Context) -> Eval {
 
 /// A double rounded to `places` decimals, half away from zero. Places of 309 or more leave the
 /// number alone (O-8B `round-huge-places`); the places the rows do not show are unobserved.
-fn round_places(d: f64, places: i64, cx: Context) -> Eval {
+fn round_places(d: f64, places: i64, cx: Context<'_>) -> Eval {
     if places >= 309 {
         return double(d);
     }
@@ -2095,7 +2176,7 @@ fn round_places(d: f64, places: i64, cx: Context) -> Eval {
 }
 
 /// An integer rounded to a power of ten, half away from zero.
-fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
+fn round_integer(i: i64, places: i64, cx: Context<'_>) -> Eval {
     let overflow = || {
         if strict(cx) {
             unobserved("round", "an integer that rounds past the largest")
@@ -2125,7 +2206,7 @@ fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
     base.checked_add(step).map_or_else(overflow, integer)
 }
 
-fn eval_pow(args: &[Eval], cx: Context) -> Eval {
+fn eval_pow(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numbers("pow", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -2142,7 +2223,7 @@ fn eval_pow(args: &[Eval], cx: Context) -> Eval {
     double(base.powf(exponent))
 }
 
-fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
+fn eval_sqrt(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numeric_inputs("sqrt", args, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
@@ -2155,7 +2236,7 @@ fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<Num>, Eval> {
+fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context<'_>) -> Result<Vec<Num>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
     }
@@ -2209,7 +2290,7 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
     numbers(name, args, args.len(), cx)
 }
 
-fn eval_exp(args: &[Eval], cx: Context) -> Eval {
+fn eval_exp(args: &[Eval], cx: Context<'_>) -> Eval {
     match numeric_inputs("exp", args, cx) {
         Ok(v) => {
             let input = v[0].double();
@@ -2225,7 +2306,7 @@ fn eval_exp(args: &[Eval], cx: Context) -> Eval {
         Err(e) => e,
     }
 }
-fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
+fn logarithm(name: &'static str, args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match numeric_inputs(name, args, cx) {
         Ok(v) => v,
         Err(e) => return e,
@@ -2265,16 +2346,16 @@ fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
         None => x.ln(),
     })
 }
-fn eval_ln(args: &[Eval], cx: Context) -> Eval {
+fn eval_ln(args: &[Eval], cx: Context<'_>) -> Eval {
     logarithm("ln", args, cx)
 }
-fn eval_log(args: &[Eval], cx: Context) -> Eval {
+fn eval_log(args: &[Eval], cx: Context<'_>) -> Eval {
     logarithm("log", args, cx)
 }
-fn eval_log10(args: &[Eval], cx: Context) -> Eval {
+fn eval_log10(args: &[Eval], cx: Context<'_>) -> Eval {
     logarithm("log10", args, cx)
 }
-fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
+fn eval_trunc(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }

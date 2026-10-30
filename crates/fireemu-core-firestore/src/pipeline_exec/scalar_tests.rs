@@ -40,7 +40,7 @@ fn call_in(name: &str, args: &[Eval], unrecorded: Unrecorded, condition: bool) -
         Context {
             unrecorded,
             condition,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -82,7 +82,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 54);
+    assert_eq!(NAMES.len(), 55);
+    assert!(function("like").is_some());
     for name in ["exp", "ln", "log", "log10", "trunc"] {
         assert!(function(name).is_some());
     }
@@ -650,10 +651,10 @@ fn argument_counts_are_refused_in_the_words_production_used() {
         refusal("round", 3),
         arity("The function 'round' does not accept 3 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).")
     );
-    // `ltrim` and `rtrim` have no recorded signature: fireemu's own words.
+    // Production records both overload signatures for `ltrim` and `rtrim`.
     for name in ["ltrim", "rtrim"] {
-        assert!(matches!(refusal(name, 0), ExprError::Invalid(_)), "{name}");
-        assert!(matches!(refusal(name, 3), ExprError::Invalid(_)), "{name}");
+        assert!(matches!(refusal(name, 0), ExprError::Arity(_)), "{name}");
+        assert!(matches!(refusal(name, 3), ExprError::Arity(_)), "{name}");
         assert!(Expr::call(
             name,
             vec![Expr::Constant(Value::Integer(1))],
@@ -2219,6 +2220,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     assert!(cursor
@@ -2246,6 +2248,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     second.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2274,6 +2277,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
                 zone_resolver: None,
                 regex_resolver: None,
                 sample_seed: None,
+                expr_rng: None,
             },
         );
         blocking.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2333,6 +2337,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         zone_resolver: Some(resolve),
         regex_resolver: None,
         sample_seed: None,
+        expr_rng: None,
     };
     let stages = vec![Stage::Select {
         aliases: vec![
@@ -2347,7 +2352,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         ],
         keeps_name: false,
     }];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     let out = cursor.push(row).unwrap();
     assert_eq!(
         out[0].fields["t"],
@@ -2466,7 +2471,7 @@ fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
     let cx = Context {
         unrecorded: Unrecorded::Refuse,
         condition: false,
-        runtime: RuntimeContext {
+        runtime: &RuntimeContext {
             regex_resolver: Some(unexpected),
             ..RuntimeContext::default()
         },
@@ -2508,7 +2513,7 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             keeps_name: false,
         },
     ];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     assert!(cursor
         .push(Row::derived(BTreeMap::new()))
         .unwrap()
@@ -2532,7 +2537,8 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             )],
         },
     ] {
-        let mut buffered = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime);
+        let mut buffered =
+            Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime.clone());
         assert!(buffered
             .push(Row::derived(BTreeMap::new()))
             .unwrap()
@@ -2574,7 +2580,7 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         let cx = Context {
             unrecorded: mode,
             condition: false,
-            runtime: RuntimeContext {
+            runtime: &RuntimeContext {
                 regex_resolver: Some(resolver),
                 ..RuntimeContext::default()
             },

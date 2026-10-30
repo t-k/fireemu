@@ -609,7 +609,7 @@ fn eval_function(name: &str, args: Vec<Eval>) -> Eval {
         Context {
             unrecorded: Unrecorded::OfficialEmulator,
             condition: false,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -711,7 +711,7 @@ fn a_value_that_is_not_a_boolean_fails_the_logical_call() {
                 Context {
                     unrecorded,
                     condition: false,
-                    runtime: RuntimeContext::default(),
+                    runtime: &RuntimeContext::default(),
                 },
             )
         };
@@ -911,7 +911,7 @@ fn strict(function_name: &str, args: &[Eval]) -> Eval {
         Context {
             unrecorded: Unrecorded::Refuse,
             condition: false,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -1359,7 +1359,7 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
             Context {
                 unrecorded,
                 condition,
-                runtime: RuntimeContext::default(),
+                runtime: &RuntimeContext::default(),
             },
         )
     };
@@ -1375,12 +1375,7 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
         }
     }
 }
-/// The adapter's `where` decoder treats a function without a signature as a comparison of two
-/// operands only when it returns a boolean and takes exactly two arguments, and as a value of
-/// another kind otherwise. The table keeps those two conditions interchangeable: a function
-/// without a signature that takes exactly two arguments is a boolean comparison, and one that
-/// returns a boolean takes exactly two. So the first `||` of the adapter's test in
-/// `decode_condition` can be an `&&` without changing any answer (an equivalent mutant).
+/// Registry entries without recorded signatures still retain the legacy boolean/arity relation.
 #[test]
 fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_arguments() {
     for function in FUNCTIONS.iter().filter(|f| f.signature.is_empty()) {
@@ -1937,7 +1932,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut cursor = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Documents(2))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in &rows {
         assert!(cursor.push(row.clone()).unwrap().is_empty());
@@ -1949,7 +1944,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut all = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(1.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     let mut observed = Vec::new();
     for row in &rows {
@@ -1960,7 +1955,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut none = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(0.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in rows {
         assert!(none.push(row).unwrap().is_empty());
@@ -2024,7 +2019,7 @@ fn sample_pict_rows_execute_with_seeded_contracts() {
             Unrecorded::OfficialEmulator
         };
         let execute = || {
-            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime);
+            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime.clone());
             let mut out = Vec::new();
             for row in &rows {
                 if cursor.is_exhausted() {
@@ -2081,7 +2076,7 @@ proptest! {
     fn sample_documents_preserve_occurrences_and_metadata(size in 0_u64..16, input in proptest::collection::vec(-3_i64..4, 0..12), seed in any::<u64>()) {
         let rows: Vec<Row> = input.iter().enumerate().map(|(i, n)| doc(&format!("d{i}"), &[("v", int(*n))])).collect();
         let runtime = RuntimeContext { sample_seed: Some(seed), ..RuntimeContext::default() };
-        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
+        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime.clone()); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
         let out = execute();
         prop_assert_eq!(out.len(), usize::try_from(size).unwrap().min(rows.len()));
         prop_assert!(out.iter().all(|row| rows.contains(row)));

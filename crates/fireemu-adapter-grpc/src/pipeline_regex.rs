@@ -436,4 +436,52 @@ mod tests {
             Eval::Value(Value::Boolean(true))
         );
     }
+    #[test]
+    fn like_wildcards_escapes_and_dynamic_pattern() {
+        for (subject, pattern, expected) in [
+            ("apricot", "%ap%", true),
+            ("berry", "%ap%", false),
+            ("abc", "a_c", true),
+            ("ac", "a_c", false),
+            ("a%c", r"a\%c", true),
+            ("abc", r"a\%c", false),
+            ("a.c", "a.c", true),
+            ("abc", "a.c", false),
+        ] {
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let expression = Expr::call(
+                    "like",
+                    vec![
+                        Expr::Field(FieldPath::parse("subject").unwrap()),
+                        Expr::Field(FieldPath::parse("pattern").unwrap()),
+                    ],
+                    Placement::Value,
+                )
+                .unwrap();
+                let row = Row::derived(BTreeMap::from([
+                    ("subject".to_owned(), Value::String(subject.to_owned())),
+                    ("pattern".to_owned(), Value::String(pattern.to_owned())),
+                ]));
+                let actual = expression.eval_in_with_runtime(
+                    &row,
+                    mode,
+                    RuntimeContext {
+                        regex_resolver: Some(resolve),
+                        ..RuntimeContext::default()
+                    },
+                );
+                assert_eq!(
+                    actual,
+                    Eval::Value(Value::Boolean(expected)),
+                    "{subject:?} {pattern:?} {mode:?}"
+                );
+            }
+        }
+    }
+    proptest! {
+        #[test]
+        fn like_without_wildcards_matches_literal_equality(subject in "[a-z]{0,12}", pattern in "[a-z]{0,12}") {
+            prop_assert_eq!(both("like", &[text(&subject), text(&pattern)]), Eval::Value(Value::Boolean(subject == pattern)));
+        }
+    }
 }

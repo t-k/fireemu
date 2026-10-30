@@ -1409,7 +1409,7 @@ pub(crate) fn execute_subcollection_array(
     compiled: &CompiledExecution,
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use prost::Message as _;
     let [Stage::Select {
@@ -1478,7 +1478,11 @@ pub(crate) fn execute_subcollection_array(
             .filter_map(|r| r.document.as_ref())
         {
             let row = document_row(child)?;
-            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime) {
+            match Expr::Field(field.clone()).eval_in_with_runtime(
+                &row,
+                unrecorded,
+                (*runtime).clone(),
+            ) {
                 pipeline_exec::Eval::Value(value) => values.push(value),
                 _ => {
                     return Err(Status::unimplemented(
@@ -1506,7 +1510,7 @@ pub(crate) fn execute_subcollection_array(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            (*runtime).clone(),
         );
         let mut rows = cursor
             .push(document_row(document)?)
@@ -1533,7 +1537,7 @@ pub(crate) fn execute_correlated_scalar(
     binding: &(String, FieldPath),
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use fireemu_core_firestore::value::Value;
     use prost::Message as _;
@@ -1631,9 +1635,10 @@ pub(crate) fn execute_correlated_scalar(
     let mut output_bytes = 0usize;
     for document in parents {
         let parent_row = document_row(&document)?;
-        let pipeline_exec::Eval::Value(Value::String(parent_value)) =
-            Expr::Field(binding.1.clone()).eval_in_with_runtime(&parent_row, unrecorded, runtime)
-        else {
+        let pipeline_exec::Eval::Value(Value::String(parent_value)) = Expr::Field(
+            binding.1.clone(),
+        )
+        .eval_in_with_runtime(&parent_row, unrecorded, (*runtime).clone()) else {
             return Err(Status::unimplemented(
                 "correlated binding type is unobserved",
             ));
@@ -1642,7 +1647,7 @@ pub(crate) fn execute_correlated_scalar(
         for child in &children {
             let child_row = document_row(child)?;
             let pipeline_exec::Eval::Value(Value::String(key)) = Expr::Field(predicate.clone())
-                .eval_in_with_runtime(&child_row, unrecorded, runtime)
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone())
             else {
                 return Err(Status::unimplemented(
                     "correlated predicate type is unobserved",
@@ -1652,10 +1657,10 @@ pub(crate) fn execute_correlated_scalar(
                 continue;
             }
             if let Some((filter_field, expected)) = filter {
-                let pipeline_exec::Eval::Value(Value::String(actual)) =
-                    Expr::Field(filter_field.clone())
-                        .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                else {
+                let pipeline_exec::Eval::Value(Value::String(actual)) = Expr::Field(
+                    filter_field.clone(),
+                )
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone()) else {
                     return Err(Status::unimplemented(
                         "correlated filter type is unobserved",
                     ));
@@ -1668,9 +1673,11 @@ pub(crate) fn execute_correlated_scalar(
                 return Err(Status::invalid_argument(SCALAR_MULTIPLE_RESULTS));
             }
             matched = Some(
-                match Expr::Field(field.clone())
-                    .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                {
+                match Expr::Field(field.clone()).eval_in_with_runtime(
+                    &child_row,
+                    unrecorded,
+                    (*runtime).clone(),
+                ) {
                     pipeline_exec::Eval::Value(Value::String(value)) => Value::String(value),
                     _ => {
                         return Err(Status::unimplemented(
@@ -1700,7 +1707,7 @@ pub(crate) fn execute_correlated_scalar(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            (*runtime).clone(),
         );
         let mut rows = cursor.push(parent_row).map_err(|e| eval_status(&e))?;
         rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);
@@ -1985,11 +1992,17 @@ fn expression_text(value: &pb::Value) -> Option<String> {
 fn constant_call_error(expr: &Expr) -> Option<Status> {
     fn reads_field(expr: &Expr) -> bool {
         match expr {
-            Expr::Field(_) | Expr::SubcollectionArray { .. } | Expr::CorrelatedScalar { .. } => {
-                true
-            }
+            Expr::Field(_)
+            | Expr::Variable(_)
+            | Expr::SubcollectionArray { .. }
+            | Expr::CorrelatedScalar { .. } => true,
             Expr::Constant(_) => false,
-            Expr::Call { args, .. } => args.iter().any(reads_field),
+            Expr::Call { function, args } => {
+                matches!(
+                    function.name,
+                    "current_document" | "array_filter" | "array_transform" | "rand"
+                ) || args.iter().any(reads_field)
+            }
         }
     }
     // A call of a string or math function fails per row, like the logic functions below: its
@@ -2068,7 +2081,7 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
 }
 
 fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
-    decode_operand_tree_in(value, unrecorded, false)
+    decode_operand_tree_in(value, unrecorded, false, &[], true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2242,6 +2255,8 @@ fn decode_operand_tree_in(
     value: &pb::Value,
     unrecorded: Unrecorded,
     defer_constant: bool,
+    bindings: &[String],
+    direct: bool,
 ) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -2249,6 +2264,13 @@ fn decode_operand_tree_in(
             "expression argument is missing".to_owned(),
             unrecorded,
         )),
+        Some(V::ReferenceValue(name))
+            if !direct && unrecorded == Unrecorded::Refuse && name.split('/').count() == 5 =>
+        {
+            Err(Status::unimplemented(
+                "a root reference inside an expression is not observed locally",
+            ))
+        }
         Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
             FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
@@ -2327,15 +2349,39 @@ fn decode_operand_tree_in(
                 function.name.as_str(),
                 "document_id" | "collection_id" | "parent"
             );
+            let mut body_bindings = bindings.to_vec();
+            let binder = matches!(function.name.as_str(), "array_filter" | "array_transform");
+            if binder {
+                for (index, arg) in function.args[1..function.args.len() - 1].iter().enumerate() {
+                    let Some(V::StringValue(alias)) = &arg.value_type else {
+                        if function.name == "array_transform"
+                            && index == 0
+                            && matches!(arg.value_type, Some(V::FieldReferenceValue(_)))
+                        {
+                            return Err(Status::invalid_argument("The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference"));
+                        }
+                        return Err(Status::unimplemented(
+                            "array callback aliases must be literal strings",
+                        ));
+                    };
+                    body_bindings.push(alias.clone());
+                }
+            }
             let args = function
                 .args
                 .iter()
-                .map(|arg| match &arg.value_type {
+                .enumerate()
+                .map(|(index, arg)| match &arg.value_type {
                     // Every reference constant passes the official checks first (r8 review
                     // M1): a malformed one is refused before any row, whatever it is passed to.
                     Some(V::ReferenceValue(name))
                         if document_function && unrecorded == Unrecorded::Refuse =>
                     {
+                        if name.split('/').count() == 5 {
+                            return Err(Status::unimplemented(
+                                "a root reference inside an expression is not observed locally",
+                            ));
+                        }
                         match reference_literal_error(name) {
                             Some(text) => Err(Status::invalid_argument(text)),
                             None => Ok(Expr::Constant(
@@ -2350,7 +2396,14 @@ fn decode_operand_tree_in(
                             || matches!(
                                 function.name.as_str(),
                                 "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
-                            ),
+                            )
+                            || binder,
+                        if binder && index == function.args.len() - 1 {
+                            &body_bindings
+                        } else {
+                            bindings
+                        },
+                        false,
                     ),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -2380,12 +2433,13 @@ fn decode_operand_tree_in(
             }
             Ok(expr)
         }
+        Some(V::VariableReferenceValue(name)) if bindings.contains(name) => {
+            Ok(Expr::Variable(name.clone()))
+        }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        // A literal of literals: the official emulator checks its vectors and `__type__` keys
-        // before its other keys; production recorded well-formed vectors and a string
-        // `__type__` only, so strict refuses the rest.
+        // The official emulator checks vectors and `__type__` keys before other literal keys.
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
@@ -2397,9 +2451,11 @@ fn decode_operand_tree_in(
             // Production read literals of every kind, maps keyed by any name but an empty or a
             // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
             // it recorded (see `literal_shape_recorded`).
-            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
-                Status::unimplemented("a literal of this shape is not observed locally"),
-            ),
+            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value, direct) => {
+                Err(Status::unimplemented(
+                    "a literal of this shape is not observed locally",
+                ))
+            }
             // A literal of more than 20 levels, in the official emulator's words (1.22.0: 20
             // levels are accepted); production has not answered it, so strict gives 501 through
             // the shape gate.
@@ -2441,7 +2497,7 @@ fn decode_operand_tree_in(
 }
 
 /// Under strict, a reference constant that names no document of the request's own project and
-/// database (another database, the database root or the documents root), more than 100 key
+/// database (another database or the database root), more than 100 key
 /// path elements, or an id that matches production's
 /// documented reserved pattern `__.*__` (`____` included, which the official emulator accepts)
 /// is refused as unobserved before any row (ruling of 2026-10-21 for `PX1d` r8: production's
@@ -2450,10 +2506,11 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
-            // The documents root names no document, and production recorded none (review r9 M3).
-            let inside = name
-                .strip_prefix(own)
-                .is_some_and(|rest| rest.starts_with('/'));
+            // O-5 appendix also records the request database's documents root.
+            let inside = name == own
+                || name
+                    .strip_prefix(own)
+                    .is_some_and(|rest| rest.starts_with('/'));
             // A key path element is a collection id and a document id.
             let path = name
                 .strip_prefix(own)
@@ -2946,19 +3003,16 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
     }
 }
 
-/// Whether production recorded a literal of this shape: every vector map is
-/// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
-/// none a negative zero (O-3, O-4
-/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`). Recorded reserved
-/// keys are handled by the ordered refusal checks after this shape check.
-fn literal_shape_recorded(value: &pb::Value) -> bool {
+/// Whether production recorded a literal of this shape. Vectors contain finite doubles other
+/// than negative zero (O-3 and O-4); O-5 additionally records direct single-component infinity
+/// vectors and the documents-root reference. Reserved keys are handled by the ordered refusal
+/// checks after this shape check.
+fn literal_shape_recorded(value: &pb::Value, direct: bool) -> bool {
     use pb::value::ValueType as V;
-    // `in_array`: production read vectors alone and as a map value, never inside an array
-    // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, in_array: bool) -> bool {
+    // O-5 appendix also records a well-formed vector within an array.
+    fn walk(value: &pb::Value) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
-            Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
+            Some(V::ArrayValue(array)) => array.values.iter().all(walk),
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
                     && matches!(
@@ -2972,17 +3026,25 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                // Production answered a string `__type__` alone in its map only (O-4
-                // `literals#key-type`).
-                let typed = key != "__type__"
-                    || (matches!(inner.value_type, Some(V::StringValue(_)))
-                        && map.fields.len() == 1);
-                typed && walk(inner, false)
+                // A non-vector tag remains an ordinary map (O-5 appendix n41 and r11).
+                let typed =
+                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
+                typed && walk(inner)
             }),
             _ => true,
         }
     }
-    walk(value, false)
+    // O-5 appendix records these as direct projection literals. Nested nonfinite vectors and
+    // nested root references retain their existing unobserved guard.
+    let recorded_direct = match value.value_type.as_ref() {
+        Some(V::MapValue(map)) if is_vector_literal(value) && map.fields.len() == 2 => {
+            matches!(map.fields.get("value").and_then(|v| v.value_type.as_ref()),
+                Some(V::ArrayValue(array)) if matches!(array.values.as_slice(), [pb::Value { value_type: Some(V::DoubleValue(d)) }] if d.is_infinite()))
+        }
+        Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() == 5,
+        _ => false,
+    };
+    (direct && recorded_direct) || walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
@@ -2992,7 +3054,7 @@ fn literal_expression_shape_safe(value: &pb::Value) -> bool {
         return false;
     }
     if expression_kind(value).is_none() {
-        return literal_value_error(value).is_none() && literal_shape_recorded(value);
+        return literal_value_error(value).is_none() && literal_shape_recorded(value, false);
     }
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().all(literal_expression_shape_safe),
@@ -3060,20 +3122,29 @@ fn decode_condition(
             "where expression is unsupported locally",
         ));
     };
-    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) || !def.signature.is_empty() {
+    if !def.returns_boolean
+        || !matches!(def.arity, Arity::Exact(2))
+        || (!def.signature.is_empty()
+            && !matches!(
+                def.name,
+                "equal"
+                    | "not_equal"
+                    | "less_than"
+                    | "less_than_or_equal"
+                    | "greater_than"
+                    | "greater_than_or_equal"
+            ))
+    {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.
         return Ok((decode_operand(condition, unrecorded)?, None));
     }
-    // Every boolean function of the table is a comparison of two arguments; the wording is
-    // the finite subset's.
-    if def.arity != Arity::Exact(function.args.len()) {
-        return Err(own_text(
-            format!("{} requires exactly two arguments", def.name),
-            unrecorded,
-        ));
-    }
+    // Check the outer call before decoding operands, using the same registry as value calls.
+    let placeholders =
+        vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); function.args.len()];
+    Expr::call(def.name, placeholders, Placement::Condition)
+        .map_err(|error| expr_status(error, unrecorded))?;
     // Options are ignored by the official emulator and unobserved in production, as above.
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
         return Err(Status::unimplemented(format!(
@@ -4671,6 +4742,645 @@ fn with_code(mut status: Status, code: &str) -> Status {
 mod tests {
     use super::*;
 
+    fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
+        use pb::value::ValueType as V;
+        let map = pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [
+                    ("__type__".to_owned(), tag),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        };
+        if in_array {
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![map] })),
+            }
+        } else {
+            map
+        }
+    }
+
+    #[test]
+    fn recorded_tagged_literals_preserve_wire_shapes() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("unknown", "double", "strict", "map", "valid"),
+            ("unknown", "integer", "strict", "map", "valid"),
+            ("vector", "double", "strict", "array", "valid"),
+            ("vector", "integer", "strict", "array", "invalid"),
+            ("unknown", "double", "emulator", "map", "valid"),
+            ("unknown", "integer", "emulator", "array", "invalid"),
+            ("vector", "double", "emulator", "map", "invalid"),
+        ];
+        for (kind, number, profile, context, validity) in cases {
+            let tag = if kind == "unknown" && validity == "invalid" {
+                V::IntegerValue(7)
+            } else {
+                V::StringValue(if kind == "vector" { "__vector__" } else { "x" }.to_owned())
+            };
+            let number = if number == "integer" {
+                V::IntegerValue(1)
+            } else {
+                V::DoubleValue(1.0)
+            };
+            let values =
+                if kind == "vector" && validity == "invalid" && matches!(number, V::DoubleValue(_))
+                {
+                    vec![]
+                } else {
+                    vec![pb::Value {
+                        value_type: Some(number),
+                    }]
+                };
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(tag),
+                },
+                values,
+                context == "array",
+            );
+            let profile = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&wire, profile);
+            if validity == "valid" {
+                let Expr::Constant(value) = result.unwrap() else {
+                    panic!("expected constant")
+                };
+                assert_eq!(crate::encode::encode_value(&value), wire);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_infinite_vectors_and_documents_root_preserve_types() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, f64::NEG_INFINITY] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                false,
+            );
+            let Expr::Constant(Value::Vector(vector)) =
+                decode_operand_tree(&wire, Unrecorded::Refuse).unwrap()
+            else {
+                panic!("expected vector")
+            };
+            assert_eq!(vector, vec![number]);
+            assert_eq!(crate::encode::encode_value(&Value::Vector(vector)), wire);
+        }
+        let own = "projects/p/databases/db/documents";
+        let root = pb::Value {
+            value_type: Some(V::ReferenceValue(own.to_owned())),
+        };
+        assert!(reference_outside(&root, own).is_none());
+        let Expr::Constant(Value::Reference(reference)) =
+            decode_operand_tree(&root, Unrecorded::Refuse).unwrap()
+        else {
+            panic!("expected reference")
+        };
+        assert_eq!(reference, own);
+        let foreign = pb::Value {
+            value_type: Some(V::ReferenceValue(
+                "projects/p/databases/other/documents".to_owned(),
+            )),
+        };
+        assert!(reference_outside(&foreign, own).is_some());
+    }
+
+    #[test]
+    fn generated_infinity_reference_projection_cases() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let own = "projects/p/databases/db/documents";
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (number, allowed) in [
+                (f64::INFINITY, true),
+                (f64::NEG_INFINITY, true),
+                (1.0, true),
+                (f64::NAN, false),
+            ] {
+                let wire = tagged_literal(
+                    pb::Value {
+                        value_type: Some(V::StringValue("__vector__".to_owned())),
+                    },
+                    vec![pb::Value {
+                        value_type: Some(V::DoubleValue(number)),
+                    }],
+                    false,
+                );
+                let result = decode_operand_tree(&wire, profile);
+                if allowed {
+                    let Expr::Constant(Value::Vector(vector)) = result.unwrap() else {
+                        panic!("expected vector")
+                    };
+                    assert_eq!(vector, vec![number]);
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+            let too_long = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![
+                    pb::Value {
+                        value_type: Some(V::DoubleValue(1.0))
+                    };
+                    2049
+                ],
+                false,
+            );
+            assert!(decode_operand_tree(&too_long, profile).is_err());
+            for (name, own_database) in
+                [(own, true), ("projects/p/databases/other/documents", false)]
+            {
+                let wire = pb::Value {
+                    value_type: Some(V::ReferenceValue(name.to_owned())),
+                };
+                if profile == Unrecorded::Refuse && !own_database {
+                    assert!(reference_outside(&wire, own).is_some());
+                } else {
+                    assert!(decode_operand_tree(&wire, profile).is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn infinity_vector_admission_depends_on_expression_position() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (kind, number) in [
+                ("positive", f64::INFINITY),
+                ("negative", f64::NEG_INFINITY),
+                ("finite", 1.0),
+                ("unknown", 1.0),
+            ] {
+                let tag = if kind == "unknown" { "x" } else { "__vector__" };
+                let literal = tagged_literal(
+                    val(V::StringValue(tag.to_owned())),
+                    vec![val(V::DoubleValue(number))],
+                    false,
+                );
+                for position in ["direct", "constructor", "equal", "literal_nested"] {
+                    let operand = match position {
+                        "direct" => literal.clone(),
+                        "literal_nested" => val(V::ArrayValue(pb::ArrayValue {
+                            values: vec![literal.clone()],
+                        })),
+                        name => {
+                            let (name, args) = if name == "constructor" {
+                                ("array", vec![literal.clone()])
+                            } else {
+                                (
+                                    "equal",
+                                    vec![
+                                        val(V::FieldReferenceValue("i".to_owned())),
+                                        literal.clone(),
+                                    ],
+                                )
+                            };
+                            val(V::FunctionValue(pb::Function {
+                                name: name.to_owned(),
+                                args,
+                                ..Default::default()
+                            }))
+                        }
+                    };
+                    let result = decode_operand_tree(&operand, profile);
+                    let refused = profile == Unrecorded::Refuse
+                        && number.is_infinite()
+                        && position != "direct";
+                    if refused {
+                        assert_eq!(
+                            result.unwrap_err().code(),
+                            tonic::Code::Unimplemented,
+                            "{kind} {position} {profile:?}"
+                        );
+                    } else {
+                        assert!(result.is_ok(), "{kind} {position} {profile:?}: {result:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vector_in_array_keeps_unobserved_components_refused() {
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, -0.0] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                true,
+            );
+            assert!(decode_operand_tree(&wire, Unrecorded::Refuse).is_err());
+        }
+    }
+
+    #[test]
+    fn generated_comparison_arity_and_precedence_cases() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("equal", "where", 0, "valid", "strict"),
+            ("equal", "where", 1, "unknown", "strict"),
+            ("equal", "select", 1, "valid", "strict"),
+            ("less_than", "select", 0, "valid", "strict"),
+            ("equal", "where", 2, "valid", "emulator"),
+            ("equal", "select", 3, "unknown", "emulator"),
+            ("less_than", "where", 0, "unknown", "emulator"),
+            ("less_than", "select", 2, "unknown", "strict"),
+            ("less_than", "where", 3, "valid", "strict"),
+            ("less_than", "select", 1, "unknown", "emulator"),
+        ];
+        for (name, position, count, operand, profile) in cases {
+            let valid = || pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            let mut args = vec![valid(); count];
+            if let Some(first) = args.first_mut() {
+                *first = if operand == "unknown" {
+                    pb::Value {
+                        value_type: Some(V::FunctionValue(pb::Function {
+                            name: "not_a_registered_function".to_owned(),
+                            ..Default::default()
+                        })),
+                    }
+                } else {
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    }
+                };
+            }
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = if position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![wire],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .map(|_| ())
+            } else {
+                decode_operand_tree(&wire, mode).map(|_| ())
+            };
+            if count != 2 {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    tonic::Code::InvalidArgument,
+                    "{name} {position} {count} {profile}"
+                );
+                assert_eq!(error.message(), format!("The function '{name}(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" }));
+            } else if operand == "unknown" {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn array_transform_element_alias_validation_and_priority() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("exact", "field", "field", Unrecorded::Refuse),
+            ("exact", "field", "empty", Unrecorded::Refuse),
+            ("short", "field", "field", Unrecorded::Refuse),
+            ("exact", "string", "empty", Unrecorded::Refuse),
+            ("exact", "integer", "field", Unrecorded::Refuse),
+            ("exact", "variable", "field", Unrecorded::Refuse),
+            ("exact", "field", "field", Unrecorded::OfficialEmulator),
+            ("short", "variable", "empty", Unrecorded::OfficialEmulator),
+            ("short", "integer", "empty", Unrecorded::OfficialEmulator),
+            ("short", "string", "field", Unrecorded::OfficialEmulator),
+        ];
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        for (arity, alias, input, profile) in cases {
+            let input = if input == "empty" {
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                }
+            } else {
+                field()
+            };
+            let alias = pb::Value {
+                value_type: Some(match alias {
+                    "field" => V::FieldReferenceValue("i".to_owned()),
+                    "string" => V::StringValue("item".to_owned()),
+                    "integer" => V::IntegerValue(1),
+                    _ => V::VariableReferenceValue("item".to_owned()),
+                }),
+            };
+            let mut args = vec![input, alias];
+            if arity == "exact" {
+                args.extend([
+                    pb::Value {
+                        value_type: Some(V::StringValue("index".to_owned())),
+                    },
+                    field(),
+                ]);
+            }
+            let operand = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "array_transform".to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let result = decode_operand_tree(&operand, profile);
+            if arity == "short" {
+                assert!(!result.unwrap_err().message().contains("element_alias"));
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::FieldReferenceValue(_))))
+            {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(error.message(), "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference");
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, String::new());
+                assert_eq!(gate.answer(error).code(), tonic::Code::Unimplemented);
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::StringValue(_))))
+            {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            }
+        }
+    }
+
+    #[test]
+    fn array_transform_unobserved_index_alias_remains_refused() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let call = value(V::FunctionValue(pb::Function {
+            name: "array_transform".to_owned(),
+            args: vec![
+                value(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                value(V::StringValue("item".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+            ],
+            ..Default::default()
+        }));
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert_eq!(
+                decode_operand_tree(&call, profile).unwrap_err().code(),
+                tonic::Code::Unimplemented
+            );
+        }
+    }
+
+    #[test]
+    fn where_is_type_keeps_static_type_validation() {
+        use pb::value::ValueType as V;
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        let bogus = || pb::Value {
+            value_type: Some(V::StringValue("bogus".to_owned())),
+        };
+        let variable = || pb::Value {
+            value_type: Some(V::VariableReferenceValue("v".to_owned())),
+        };
+        let unknown = || pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "not_a_registered_function".to_owned(),
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (args, code, text) in [
+                (
+                    vec![field(), bogus()],
+                    tonic::Code::InvalidArgument,
+                    "argument 'type'",
+                ),
+                (
+                    vec![field(), variable()],
+                    tonic::Code::Unimplemented,
+                    "variable and pipeline",
+                ),
+                (
+                    vec![unknown(), bogus()],
+                    tonic::Code::Unimplemented,
+                    "not_a_registered_function",
+                ),
+            ] {
+                let condition = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "is_type".to_owned(),
+                        args,
+                        ..Default::default()
+                    })),
+                };
+                let stage = pb::pipeline::Stage {
+                    name: "where".to_owned(),
+                    args: vec![condition],
+                    ..Default::default()
+                };
+                let error = decode_condition(&stage, mode).unwrap_err();
+                assert_eq!(error.code(), code);
+                assert!(error.message().contains(text), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn valid_where_equal_retains_field_filter_pushdown() {
+        use pb::value::ValueType as V;
+        let condition = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    },
+                    pb::Value {
+                        value_type: Some(V::IntegerValue(1)),
+                    },
+                ],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stage = pb::pipeline::Stage {
+                name: "where".to_owned(),
+                args: vec![condition.clone()],
+                ..Default::default()
+            };
+            assert!(decode_condition(&stage, mode).unwrap().1.is_some());
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn captured_array_and_like_expressions_preserve_typed_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let field = |name: &str| val(V::FieldReferenceValue(name.to_owned()));
+        let variable = |name: &str| val(V::VariableReferenceValue(name.to_owned()));
+        let string = |text: &str| val(V::StringValue(text.to_owned()));
+        let integer = |number| val(V::IntegerValue(number));
+        let call = |name: &str, args| {
+            val(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let row = Row::derived(
+            [
+                (
+                    "itemsPop".to_owned(),
+                    Value::Array(vec![Value::Integer(0), Value::Integer(2)]),
+                ),
+                ("itemsEmpty".to_owned(), Value::Array(vec![])),
+                (
+                    "textPositive".to_owned(),
+                    Value::String("apricot".to_owned()),
+                ),
+                ("textNegative".to_owned(), Value::String("berry".to_owned())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let cases = [
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(2)]),
+            ),
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(0), Value::Integer(4)]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call("like", vec![field("textPositive"), string("%ap%")]),
+                Value::Boolean(true),
+            ),
+            (
+                call("like", vec![field("textNegative"), string("%ap%")]),
+                Value::Boolean(false),
+            ),
+        ];
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (wire, expected) in &cases {
+                let expression = decode_operand_tree(wire, mode).unwrap();
+                let runtime = RuntimeContext {
+                    regex_resolver: Some(crate::pipeline_regex::resolve),
+                    ..RuntimeContext::default()
+                };
+                assert_eq!(
+                    expression.eval_in_with_runtime(&row, mode, runtime),
+                    Eval::Value(expected.clone())
+                );
+            }
+            assert!(decode_operand_tree(&call("rand", vec![]), mode).is_ok());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::DoubleValue(f64::from(*n))) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue("__vector__".to_owned())) }, values, true);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unknown_tag_preserves_ordered_integer_values(tag in "[a-z]{1,8}", numbers in proptest::collection::vec(-1000i64..1000, 0..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::IntegerValue(*n)) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue(tag)) }, values, false);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn function_depth_tracks_each_branch(depth in 0_usize..45, width in 1_usize..5) {
@@ -5187,7 +5897,7 @@ mod tests {
         };
         for (name, outside) in [
             (format!("{own}/c/d"), false),
-            (own.to_owned(), true),
+            (own.to_owned(), false),
             (format!("{own}/{}", deep(200)), false),
             (format!("{own}/{}", deep(201)), false),
             (format!("{own}/{}", deep(202)), true),

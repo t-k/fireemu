@@ -49,6 +49,142 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+fn current_document_returns_fields_and_document_metadata() {
+    let created = Timestamp::new(10, 20).unwrap();
+    let updated = Timestamp::new(30, 40).unwrap();
+    let mut document = row("c/d", &[("i", Value::Integer(1))]);
+    document.times = Some(RowTimes { created, updated });
+    let expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(1)),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/d").resource_name()),
+        ),
+        ("__create_time__".to_owned(), Value::Timestamp(created)),
+        ("__update_time__".to_owned(), Value::Timestamp(updated)),
+    ]));
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call("current_document", vec![]).eval_in(&document, profile),
+            Eval::Value(expected.clone())
+        );
+    }
+    let nested = call("array", vec![call("current_document", vec![])]);
+    assert_eq!(
+        referenced_fields(&[Stage::select(vec![(alias("v"), nested)])]),
+        None
+    );
+    let mut other = row("c/other", &[("i", Value::Integer(2))]);
+    other.times = Some(RowTimes {
+        created: updated,
+        updated: created,
+    });
+    let other_expected = Value::Map(BTreeMap::from([
+        ("i".to_owned(), Value::Integer(2)),
+        (
+            "__name__".to_owned(),
+            Value::Reference(path("c/other").resource_name()),
+        ),
+        ("__create_time__".to_owned(), Value::Timestamp(updated)),
+        ("__update_time__".to_owned(), Value::Timestamp(created)),
+    ]));
+    assert_eq!(
+        call("current_document", vec![]).eval(&other),
+        Eval::Value(other_expected)
+    );
+    for incomplete in [
+        Row {
+            path: None,
+            times: document.times,
+            fields: document.fields.clone(),
+        },
+        Row {
+            path: document.path.clone(),
+            times: None,
+            fields: document.fields.clone(),
+        },
+    ] {
+        assert!(unobserved(
+            &call("current_document", vec![]).eval_in(&incomplete, Unrecorded::Refuse)
+        ));
+    }
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert!(Expr::call("current_document", vec![field("i")], Placement::Value).is_err());
+        let derived = Row::derived(BTreeMap::new());
+        if profile == Unrecorded::Refuse {
+            assert!(unobserved(
+                &call("current_document", vec![]).eval_in(&derived, profile)
+            ));
+        }
+    }
+}
+
+#[test]
+fn recorded_arity_metadata_formats_document_and_comparison_signatures() {
+    let cases = [
+        ("equal", "equal(x: any, y: any): boolean", 2),
+        ("not_equal", "not_equal(x: any, y: any): boolean", 2),
+        ("less_than", "less_than(x: any, y: any): boolean", 2),
+        (
+            "less_than_or_equal",
+            "less_than_or_equal(x: any, y: any): boolean",
+            2,
+        ),
+        ("greater_than", "greater_than(x: any, y: any): boolean", 2),
+        (
+            "greater_than_or_equal",
+            "greater_than_or_equal(x: any, y: any): boolean",
+            2,
+        ),
+        (
+            "document_id",
+            "document_id(ref: document_reference): any",
+            1,
+        ),
+        (
+            "collection_id",
+            "collection_id(ref: document_reference): string",
+            1,
+        ),
+        (
+            "parent",
+            "parent(ref: document_reference): document_reference?",
+            1,
+        ),
+    ];
+    for (name, signature, count) in cases {
+        let expected = format!(
+            "The function '{signature}' takes [{count}..{count}] argument(s), but 0 were provided."
+        );
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err(),
+            ExprError::Arity(expected)
+        );
+    }
+    for name in ["ltrim", "rtrim"] {
+        let expected = format!("The function '{name}' does not accept 0 argument(s). Valid options are:\n- {name}[T: string | bytes](value: T): T with [1..1] argument(s).\n- {name}[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).");
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err(),
+            ExprError::Arity(expected)
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn comparison_arity_uses_supplied_count(count in 0usize..12) {
+        let args = vec![Expr::Constant(Value::Null); count];
+        let result = Expr::call("equal", args, Placement::Value);
+        if count == 2 {
+            prop_assert!(result.is_ok());
+        } else {
+            let expected = format!("The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" });
+            prop_assert_eq!(result.unwrap_err(), ExprError::Arity(expected));
+        }
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
@@ -62,6 +198,9 @@ fn table_lists_exactly_the_recorded_functions() {
             "greater_than",
             "greater_than_or_equal",
             "array",
+            "rand",
+            "array_filter",
+            "array_transform",
             "if_absent",
             "if_null",
             "if_error",
@@ -89,6 +228,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "map_entries",
             "map_get",
             "map",
+            "current_document",
             "document_id",
             "collection_id",
             "parent",
@@ -119,6 +259,7 @@ fn table_lists_exactly_the_recorded_functions() {
             "timestamp_to_unix_micros",
             "timestamp_to_unix_millis",
             "timestamp_to_unix_seconds",
+            "like",
             "regex_contains",
             "regex_match",
             "regex_find",
@@ -212,7 +353,7 @@ fn call_refuses_unknown_misplaced_and_misarity_functions() {
         ("parent", vec![field("a"), field("b")]),
     ] {
         assert!(
-            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Invalid(m)) if m.contains(name)),
+            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Arity(m)) if m.contains(name)),
             "{name}/{}",
             args.len()
         );
@@ -1583,5 +1724,240 @@ fn lazy_control_seeded_pict_rows_execute() {
             Eval::Value(s(if selected { "first" } else { "fallback" })),
             "{line}"
         );
+    }
+}
+
+#[test]
+fn array_variables_shadow_and_index_without_changing_row_fields() {
+    let literal = |value| Expr::Constant(value);
+    let var = |name: &str| Expr::Variable(name.to_owned());
+    let values = literal(Value::Array(vec![Value::Integer(5), Value::Integer(9)]));
+    let inner = call(
+        "array_transform",
+        vec![values.clone(), literal(s("x")), var("x")],
+    );
+    let empty_outer = call(
+        "array_transform",
+        vec![
+            literal(Value::Array(vec![])),
+            literal(s("x")),
+            inner.clone(),
+        ],
+    );
+    let outer = call(
+        "array_transform",
+        vec![values.clone(), literal(s("x")), inner],
+    );
+    let indexed = call(
+        "array_transform",
+        vec![values, literal(s("x")), literal(s("i")), var("i")],
+    );
+    let doc = row("c/d", &[("x", Value::Integer(42))]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            outer.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![
+                Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
+                Value::Array(vec![Value::Integer(5), Value::Integer(9)]),
+            ]))
+        );
+        assert_eq!(
+            empty_outer.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+        assert_eq!(
+            indexed.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(0), Value::Integer(1)]))
+        );
+        assert_eq!(
+            field("x").eval_in(&doc, profile),
+            Eval::Value(Value::Integer(42))
+        );
+    }
+}
+
+#[test]
+fn rand_advances_per_request_and_skipped_lazy_branch_does_not_draw() {
+    let make_runtime = || RuntimeContext {
+        expr_rng: Some(Arc::new(Mutex::new(SplitMix64::new(73)))),
+        ..RuntimeContext::default()
+    };
+    let rand = call("rand", vec![]);
+    let doc = row("c/d", &[]);
+    let runtime = make_runtime();
+    let first = rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, runtime.clone());
+    let second = rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, runtime.clone());
+    assert_ne!(first, second);
+    for result in [&first, &second] {
+        let Eval::Value(Value::Double(value)) = result else {
+            panic!("rand must return a double")
+        };
+        assert!((0.0..1.0).contains(value));
+    }
+    let control = make_runtime();
+    assert_eq!(
+        first,
+        rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control.clone())
+    );
+    let skip = call(
+        "conditional",
+        vec![
+            Expr::Constant(Value::Boolean(false)),
+            rand.clone(),
+            Expr::Constant(Value::Integer(1)),
+        ],
+    );
+    assert_eq!(
+        skip.eval_in_with_runtime(&doc, Unrecorded::Refuse, control.clone()),
+        Eval::Value(Value::Integer(1))
+    );
+    assert_eq!(
+        second,
+        rand.eval_in_with_runtime(&doc, Unrecorded::Refuse, control)
+    );
+    let nested = call(
+        "array_transform",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(0), Value::Integer(1)])),
+            Expr::Constant(s("item")),
+            rand.clone(),
+        ],
+    );
+    let Eval::Value(Value::Double(first_value)) = first else {
+        unreachable!()
+    };
+    let Eval::Value(Value::Double(second_value)) = second else {
+        unreachable!()
+    };
+    assert_eq!(
+        nested.eval_in_with_runtime(&doc, Unrecorded::Refuse, make_runtime()),
+        Eval::Value(Value::Array(vec![
+            Value::Double(first_value),
+            Value::Double(second_value)
+        ]))
+    );
+    let emulator = make_runtime();
+    assert_eq!(
+        rand.eval_in_with_runtime(&doc, Unrecorded::OfficialEmulator, emulator.clone()),
+        Eval::Value(Value::Double(first_value))
+    );
+    assert_eq!(
+        rand.eval_in_with_runtime(&doc, Unrecorded::OfficialEmulator, emulator),
+        Eval::Value(Value::Double(second_value))
+    );
+}
+
+#[test]
+fn array_filter_keeps_true_values_and_skips_false_and_null() {
+    let values = Expr::Constant(Value::Array(vec![Value::Integer(0), Value::Integer(2)]));
+    let variable = Expr::Variable("item".to_owned());
+    let alias = Expr::Constant(s("item"));
+    let predicate = call(
+        "greater_than",
+        vec![variable, Expr::Constant(Value::Integer(1))],
+    );
+    let expression = call(
+        "array_filter",
+        vec![values.clone(), alias.clone(), predicate],
+    );
+    let null_predicate = call(
+        "array_filter",
+        vec![values, alias.clone(), Expr::Constant(Value::Null)],
+    );
+    let empty = call(
+        "array_filter",
+        vec![
+            Expr::Constant(Value::Array(vec![])),
+            alias,
+            Expr::Constant(Value::Null),
+        ],
+    );
+    let doc = row("c/d", &[]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            expression.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(2)]))
+        );
+        assert_eq!(
+            empty.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+        assert_eq!(
+            null_predicate.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+    }
+}
+
+#[test]
+fn array_filter_nested_scope_and_empty_shadow() {
+    let alias = Expr::Constant(s("item"));
+    let inner = call(
+        "array_transform",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(7)])),
+            alias.clone(),
+            Expr::Variable("item".to_owned()),
+        ],
+    );
+    let predicate = call(
+        "equal",
+        vec![
+            call("array_length", vec![inner]),
+            Expr::Constant(Value::Integer(1)),
+        ],
+    );
+    let populated = call(
+        "array_filter",
+        vec![
+            Expr::Constant(Value::Array(vec![Value::Integer(2)])),
+            alias.clone(),
+            predicate.clone(),
+        ],
+    );
+    let empty = call(
+        "array_filter",
+        vec![Expr::Constant(Value::Array(vec![])), alias, predicate],
+    );
+    let doc = row("c/d", &[]);
+    for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            populated.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![Value::Integer(2)]))
+        );
+        assert_eq!(
+            empty.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+    }
+}
+
+#[test]
+fn array_scalar_recorded_arity_messages() {
+    for (name, args, expected) in [
+        ("rand", vec![Expr::Constant(Value::Null)], "The function 'rand(): float64' takes [0..0] argument(s), but 1 was provided."),
+        ("array_filter", vec![], "The function 'array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]' takes [3..3] argument(s), but 0 were provided."),
+        ("like", vec![], "The function 'like[T: string | regex](search_space: string, pattern: T): boolean' takes [2..2] argument(s), but 0 were provided."),
+    ] {
+        assert_eq!(Expr::call(name, args, Placement::Value).unwrap_err(), ExprError::Arity(expected.to_owned()));
+    }
+}
+
+proptest! {
+    #[test]
+    fn array_callbacks_preserve_order_and_transform_length(input in proptest::collection::vec(-20_i64..20, 0..16)) {
+        let values: Vec<_> = input.iter().copied().map(Value::Integer).collect();
+        let source = Expr::Constant(Value::Array(values.clone()));
+        let alias = Expr::Constant(s("item"));
+        let variable = Expr::Variable("item".to_owned());
+        let transform = call("array_transform", vec![source.clone(), alias.clone(), variable.clone()]);
+        let predicate = call("greater_than", vec![variable, Expr::Constant(Value::Integer(0))]);
+        let filter = call("array_filter", vec![source, alias, predicate]);
+        let expected: Vec<_> = input.iter().copied().filter(|value| *value > 0).map(Value::Integer).collect();
+        let doc = row("c/d", &[]);
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            prop_assert_eq!(transform.eval_in(&doc, profile), Eval::Value(Value::Array(values.clone())));
+            prop_assert_eq!(filter.eval_in(&doc, profile), Eval::Value(Value::Array(expected.clone())));
+        }
     }
 }

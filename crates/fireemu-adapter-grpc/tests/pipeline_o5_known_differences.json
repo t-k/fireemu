@@ -123,47 +123,6 @@
     }
   },
   {
-    "category": "validation-order-or-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'select(...)' stage requires at least one field.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
-    "row": "fs-ent-pipeline/o5/function-order#select-empty-then-where-known-no-arguments",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "equal requires exactly two arguments; this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [
@@ -605,47 +564,6 @@
           "error": {
             "code": 501,
             "message": "'map' function must have an even number of arguments; this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"equal\" takes 2 argument(s), got 1 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/value-shapes#equal-one-argument",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"equal\" takes 2 argument(s), got 1 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -1105,7 +1023,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+\u221e) argument(s).",
+            "message": "The function 'minimum' does not accept 0 argument(s). Valid options are:\n- minimum(input: array[any?]): any? with [1..1] argument(s).\n- minimum(x: any?*): any? with [2..+∞) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -1146,7 +1064,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+\u221e) argument(s).",
+            "message": "The function 'maximum' does not accept 0 argument(s). Valid options are:\n- maximum(input: array[any?]): any? with [1..1] argument(s).\n- maximum(x: any?*): any? with [2..+∞) argument(s).",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -1872,170 +1790,6 @@
         {
           "error": {
             "code": 501,
-            "message": "function \"rand\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'rand(): float64' takes [0..0] argument(s), but 1 was provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-rand",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"rand\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_transform\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array_transform",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_transform\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_filter\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]' takes [3..3] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-array_filter",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"array_filter\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"less_than\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'less_than(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-less_than",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"less_than\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
             "message": "function \"<\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
@@ -2063,47 +1817,6 @@
           "error": {
             "code": 501,
             "message": "function \"<\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"less_than_or_equal\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'less_than_or_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-less_than_or_equal",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"less_than_or_equal\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2153,47 +1866,6 @@
     }
   },
   {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"equal\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-equal",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"equal\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [
@@ -2227,47 +1899,6 @@
           "error": {
             "code": 501,
             "message": "function \"==\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"not_equal\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'not_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-not_equal",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"not_equal\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2317,47 +1948,6 @@
     }
   },
   {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"greater_than\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'greater_than(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-greater_than",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"greater_than\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [
@@ -2391,47 +1981,6 @@
           "error": {
             "code": 501,
             "message": "function \">\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"greater_than_or_equal\" takes 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'greater_than_or_equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-greater_than_or_equal",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"greater_than_or_equal\" takes 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -2555,41 +2104,6 @@
           "error": {
             "code": 501,
             "message": "function \"cmp\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-current-document",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__create_time__\":{\"timestampValue\":\"<t2>\"},\"__name__\":{\"referenceValue\":\"{docs}/fx5/d\"},\"__update_time__\":{\"timestampValue\":\"<t2>\"},\"i\":{\"integerValue\":\"1\"}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "Production returns the current document map, while the finite local subset refuses current_document under both profiles.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-current_document",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -3026,7 +2540,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'coalesce(x: any?*): any?' takes [2..+\u221e) argument(s), but 0 were provided.",
+            "message": "The function 'coalesce(x: any?*): any?' takes [2..+∞) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -3123,129 +2637,6 @@
           "error": {
             "code": 501,
             "message": "function \"namespace\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"parent\" takes 1 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'parent(ref: document_reference): document_reference?' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-parent",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"parent\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"collection_id\" takes 1 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'collection_id(ref: document_reference): string' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-collection_id",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"collection_id\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "arity-wording",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"document_id\" takes 1 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite local arity text differs from the production signature/range text; exact error bodies remain pinned.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-document_id",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"document_id\" takes 1 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -3764,7 +3155,7 @@
         {
           "error": {
             "code": 400,
-            "message": "The function 'string_concat(strings: string*): string' takes [2..+\u221e) argument(s), but 0 were provided.",
+            "message": "The function 'string_concat(strings: string*): string' takes [2..+∞) argument(s), but 0 were provided.",
             "status": "INVALID_ARGUMENT"
           }
         }
@@ -3779,129 +3170,6 @@
           "error": {
             "code": 501,
             "message": "function \"string_concat\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"like\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'like[T: string | regex](search_space: string, pattern: T): boolean' takes [2..2] argument(s), but 0 were provided.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-like",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"like\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"ltrim\" takes 1 to 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'ltrim' does not accept 0 argument(s). Valid options are:\n- ltrim[T: string | bytes](value: T): T with [1..1] argument(s).\n- ltrim[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-ltrim",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"ltrim\" takes 1 to 2 argument(s), got 0 argument(s); this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "function \"rtrim\" takes 1 to 2 argument(s), got 0 argument(s)",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The function 'rtrim' does not accept 0 argument(s). Valid options are:\n- rtrim[T: string | bytes](value: T): T with [1..1] argument(s).\n- rtrim[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-rtrim",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"rtrim\" takes 1 to 2 argument(s), got 0 argument(s); this text is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }
@@ -4506,52 +3774,6 @@
   {
     "category": "unsupported-subset",
     "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"__vector__\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0x7ff0000000000000\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-vector-positive-infinity",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"__vector__\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0xfff0000000000000\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-vector-negative-infinity",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
       "body": [
         {
           "error": {
@@ -4649,29 +3871,6 @@
     }
   },
   {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"referenceValue\":\"{docs}\"}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-reference-documents-root",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a reference that names no document of the request's database, longer than 100 key path elements or with a reserved-looking id is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unknown-production-outcome",
     "emulator": {
       "body": [
@@ -4710,75 +3909,6 @@
         }
       ],
       "status": 500
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"x\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0x3ff0000000000000\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-n41-unknown-type-double",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"arrayValue\":{\"values\":[{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"__vector__\"},\"value\":{\"arrayValue\":{\"values\":[{\"doubleValue\":\"0x3ff0000000000000\"}]}}}}}]}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-n60-array-holding-vector",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__type__\":{\"stringValue\":\"x\"},\"value\":{\"arrayValue\":{\"values\":[{\"integerValue\":\"1\"}]}}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-r11-unknown-type-integer",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "a literal of this shape is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
     }
   },
   {

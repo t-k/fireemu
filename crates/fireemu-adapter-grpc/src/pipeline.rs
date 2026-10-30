@@ -2009,7 +2009,11 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
             Expr::Call { function, args } => {
                 matches!(
                     function.name,
-                    "current_document" | "array_filter" | "array_transform" | "rand"
+                    "current_document"
+                        | "array_filter"
+                        | "array_transform"
+                        | "rand"
+                        | "autogen_document_id"
                 ) || args.iter().any(reads_field)
             }
         }
@@ -2404,7 +2408,12 @@ fn decode_operand_tree_in(
                         defer_constant
                             || matches!(
                                 function.name.as_str(),
-                                "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                                "if_absent"
+                                    | "if_null"
+                                    | "if_error"
+                                    | "conditional"
+                                    | "switch_on"
+                                    | "coalesce"
                             )
                             || binder,
                         if binder && index == function.args.len() - 1 {

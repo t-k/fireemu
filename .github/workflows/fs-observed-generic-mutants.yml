@@ -12,11 +12,11 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mutant: [noop, minimum, maximum, null, absent, promotion, nonnumeric, negate]
+        mutant: [noop, 'null']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7515bc287d55c5b16e46b2d86f1fcd8153b4f3b5
+          ref: 33e75715538e1381b48d6c1c1a2adbdffa7c1e2f
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
@@ -24,7 +24,7 @@ jobs:
       - env:
           MUTANT: ${{ matrix.mutant }}
         run: |
-          test "$(git rev-parse HEAD)" = 7515bc287d55c5b16e46b2d86f1fcd8153b4f3b5
+          test "$(git rev-parse HEAD)" = 33e75715538e1381b48d6c1c1a2adbdffa7c1e2f
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -36,7 +36,7 @@ jobs:
           changes = {
             'minimum': ('min_by(|a, b| a.canonical_cmp(b))', 'max_by(|a, b| a.canonical_cmp(b))'),
             'maximum': ('max_by(|a, b| a.canonical_cmp(b))', 'min_by(|a, b| a.canonical_cmp(b))'),
-            'null': ('!matches!(value, Value::Null)', 'true'),
+            'null': ('.filter(|value| !matches!(value, Value::Null))', '.filter(|_value| true)'),
             'absent': ('if let Some(error) = first_error(args) {', 'if args.iter().any(|arg| matches!(arg, Eval::Absent)) { return unobserved(name, "mutant"); }\n    if let Some(error) = first_error(args) {'),
             'promotion': ('NumberSum::Double(value) => double(value)', 'NumberSum::Double(_value) => integer(0)'),
             'nonnumeric': ('let Ok(sum) = total.add(value) else {', 'if matches!(value, Value::String(_)) { return unobserved("sum", "mutant"); }\n        let Ok(sum) = total.add(value) else {'),

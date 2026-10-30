@@ -1,7 +1,7 @@
 name: fs-numeric-mutants-ci
 on:
   push:
-    branches: [work/fs-numeric-core-ci]
+    branches: [never-run-numeric-mutants]
 permissions:
   contents: read
 jobs:

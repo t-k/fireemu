@@ -4084,12 +4084,10 @@ fn arity_review_pict_rows() {
                 matches!(result, Err(ExprError::Unsupported(_))),
                 "{name} {count}"
             );
-        } else if (name == "minimum" || name == "maximum") && count == 0 {
-            assert!(
-                matches!(result, Err(ExprError::Arity(_))),
-                "{name} {count}: {result:?}"
-            );
-        } else if (name == "map" && count % 2 == 1) || (name == "concat" && count < 2) {
+        } else if ((name == "minimum" || name == "maximum") && count == 0)
+            || (name == "map" && count % 2 == 1)
+            || (name == "concat" && count < 2)
+        {
             assert!(
                 matches!(result, Err(ExprError::Arity(_))),
                 "{name} {count}: {result:?}"

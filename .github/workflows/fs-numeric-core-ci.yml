@@ -18,4 +18,5 @@ jobs:
           tool: cargo-nextest@0.9.143
       - run: |
           test "$(git rev-parse HEAD)" = 59f52773c94053c7faf4ff350d7397f43747692c
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(numeric_scalar_)'
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo clippy -p fireemu-core-firestore --all-targets --all-features --locked -- -D warnings

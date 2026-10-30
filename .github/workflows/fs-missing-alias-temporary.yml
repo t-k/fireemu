@@ -1,7 +1,8 @@
 name: FS missing alias temporary verification
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [work/fs-missing-quint-ci]
 
 permissions:
   contents: read

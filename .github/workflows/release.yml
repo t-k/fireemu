@@ -413,10 +413,13 @@ jobs:
           "$FIREEMU_NODE" --version
           pnpm -C conformance install --frozen-lockfile
           pnpm -C conformance exec playwright install --with-deps chromium
+          npm ci --prefix tools/sdk-smoke-database --ignore-scripts --no-audit --no-fund
+          npm ci --prefix conformance/src/rtdb-functions/fixtures --ignore-scripts --no-audit --no-fund
+          node -e 'if (require("./tools/sdk-smoke-database/node_modules/playwright/package.json").version !== require("./conformance/node_modules/playwright/package.json").version) process.exit(1)'
           npm ci --prefix conformance/functions-http/fixtures --ignore-scripts --no-audit --no-fund
           # The AUTH-TENANT-BLOCKING blocking fixture's Functions dependencies, served by the daemon.
           npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund
-          node --test conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs conformance/src/release-openssl.test.mjs
+          node --test conformance/src/rtdb-release-replay.test.mjs conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs conformance/src/release-openssl.test.mjs
       - name: pinned OpenSSL for the frozen federation certificate fixtures
         run: |
           sh npm/scripts/install-federation-openssl.sh "$RUNNER_TEMP/fireemu-federation-openssl"

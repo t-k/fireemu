@@ -19,6 +19,7 @@
 //
 // The runs are sequential: several harnesses listen on fixed loopback ports (32291-32298,
 // 32320-32322).
+import { judgeExport as judgeRtdbExport } from "./rtdb-release-replay.mjs";
 import { validateEventarcSemantics } from "./eventarc-production/run.mjs";
 import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
@@ -74,6 +75,7 @@ const MAX_ANNOTATIONS = 50;
 /** The only harness modes this script may invoke: all of them local. */
 export const ALLOWED_MODES = new Set([
   "check",
+  "local",
   "export-comparison",
   "local-child",
   "compare-local",
@@ -137,7 +139,65 @@ const laneRun = (
  * The comparisons the closures name, each rerun by one entry. `{bin}`, `{export}` and `{runDir}`
  * are filled in when the entry runs; `{functionsNode}` is FIREEMU_NODE.
  */
+const RTDB_EVIDENCE = "spec/compatibility/closure/evidence/";
+const rtdbRun = (id, campaign, files) => ({
+  id,
+  kind: "rtdb-production-comparison-v1",
+  comparisonPaths: files.map((file) => `${RTDB_EVIDENCE}${file}`),
+  clear: [],
+  commands: [
+    {
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/rtdb-release-replay.mjs",
+        "local",
+        campaign,
+        "--fireemu",
+        "{bin}",
+        "--out",
+        "{export}.run",
+        "--export",
+        "{export}",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 30 * 60 * 1000,
+    },
+  ],
+});
+
 export const RUNS = [
+  (() => {
+    const run = rtdbRun("R22", "rest-old", [
+      "RTDB-rest-comparison.json",
+      "RTDB-rest-v033-comparison.json",
+    ]);
+    run.commands.push({
+      mode: "local",
+      argv: [
+        "node",
+        "conformance/src/rtdb-release-replay.mjs",
+        "local",
+        "smoke",
+        "--fireemu",
+        "{bin}",
+        "--out",
+        "{export}.smoke.run",
+        "--export",
+        "{export}.smoke.json",
+      ],
+      env: {},
+      expectedExitCodes: [0],
+      timeoutMs: 30 * 60 * 1000,
+    });
+    return run;
+  })(),
+  rtdbRun("R23", "ondisconnect", ["RTDB-sdk-ondisconnect-comparison.json"]),
+  rtdbRun("R24", "auth", ["RTDB-genuine-auth-comparison.json"]),
+  rtdbRun("R25", "residual", ["RTDB-residual-comparison.json"]),
+  rtdbRun("R26", "s5", ["RTDB-s5-comparison.json"]),
+  rtdbRun("R27", "functions", ["RTDB-functions-trigger-comparison.json"]),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -536,12 +596,6 @@ export const EXCLUDED_KINDS = [
       "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
     issue: "fs-listen-sdk-comparison-needs-private-recordings-and-a-long-browser-release-job.md",
   },
-  {
-    kind: "rtdb-production-comparison-v1",
-    reason:
-      "the six RTDB comparisons were run against their recorded release binaries with the committed replays and fixtures; they do not yet support an installed-binary release replay, and several SDK replays require headless Chromium and long idle-close waits",
-    issue: "rtdb-comparisons-need-release-replay.md",
-  },
 ];
 
 /**
@@ -552,6 +606,14 @@ export const EXCLUDED_KINDS = [
  */
 function runsForComparison(allRuns, kind, document, path, errors) {
   const ofKind = allRuns.filter((run) => run.kind === kind);
+  if (ofKind.some((run) => run.comparisonPaths !== undefined)) {
+    const covering = ofKind.filter((run) => run.comparisonPaths?.includes(path));
+    if (covering.length !== 1) {
+      errors.push(`${path}: expected exactly one comparison path run, found ${covering.length}`);
+      return undefined;
+    }
+    return covering;
+  }
   if (!ofKind.some((run) => run.rowPrefix !== undefined)) return ofKind;
   const ids = (document?.rows ?? []).map(rowKey);
   const covering =
@@ -1425,6 +1487,21 @@ export function judge(comparison, observations, context) {
       ? "conformance/fs-ent-pipeline-release-v040.json"
       : comparison.path;
   const expected = context.readJson(expectedPath);
+  if (comparison.kind === "rtdb-production-comparison-v1") {
+    const names = {
+      R22: "rest-old",
+      R23: "ondisconnect",
+      R24: "auth",
+      R25: "residual",
+      R26: "s5",
+      R27: "functions",
+    };
+    return judgeRtdbExport(
+      names[comparison.runIds[0]],
+      observations[comparison.runIds[0]],
+      context.binarySha256,
+    );
+  }
   if (comparison.kind === "fs-data-write-integrated-regression") {
     const lane = context.readJson(expected.current.laneComparisonPath);
     return [
@@ -1457,7 +1534,13 @@ export function judge(comparison, observations, context) {
 export function exportCopies(comparisons, runs) {
   const exporting = new Set(
     runs
-      .filter((run) => run.commands.some((command) => command.mode === "export-comparison"))
+      .filter((run) =>
+        run.commands.some(
+          (command) =>
+            command.mode === "export-comparison" ||
+            (run.kind === "rtdb-production-comparison-v1" && command.mode === "local"),
+        ),
+      )
       .map((run) => run.id),
   );
   return comparisons

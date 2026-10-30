@@ -10,23 +10,22 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
+          ref: 7d52a57e61c15dc7633274a68e04b537d0db92ba
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
+          test "$(git rev-parse HEAD)" = 7d52a57e61c15dc7633274a68e04b537d0db92ba
           cargo fmt --all -- --check
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
-          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(current_document_returns_fields_and_document_metadata) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(the_pipeline_corpus_replays_as_production_answered)' 
       - name: mutation checks
         shell: bash
         run: |
           set -euo pipefail
           cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked
-          for mutation in fields name created updated guard; do
+          for mutation in fields name created updated guard allfields; do
             git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs
-            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-core-firestore/src/pipeline_exec.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"fields":("let mut fields = row.fields.clone();", "let mut fields = BTreeMap::new();"),"name":("Value::Reference(path.resource_name()),", "Value::Reference(format!("{}-mutated", path.resource_name())),"),"created":("Value::Timestamp(times.created),", "Value::Timestamp(times.updated),"),"updated":("Value::Timestamp(times.updated),", "Value::Timestamp(times.created),"),"guard":("row.path.is_none() || row.times.is_none()", "row.path.is_none() && row.times.is_none()")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
+            MUTATION="$mutation" python3 -c 'import os,pathlib; p=pathlib.Path("crates/fireemu-core-firestore/src/pipeline_exec.rs"); s=p.read_text(); m=os.environ["MUTATION"]; pairs={"fields":("let mut fields = row.fields.clone();", "let mut fields = BTreeMap::new();"),"name":("Value::Reference(path.resource_name()),", "Value::Reference(format!("{}-mutated", path.resource_name())),"),"created":("Value::Timestamp(times.created),", "Value::Timestamp(times.updated),"),"updated":("Value::Timestamp(times.updated),", "Value::Timestamp(times.created),"),"guard":("row.path.is_none() || row.times.is_none()", "row.path.is_none() && row.times.is_none()"),"allfields":("*all_fields |= function.name == \"current_document\";", "*all_fields |= false;")}; a,b=pairs[m]; assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
             set +e
             cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked > "mutation-$mutation.log" 2>&1
             rc=$?

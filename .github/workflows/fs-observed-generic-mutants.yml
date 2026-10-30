@@ -12,11 +12,11 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mutant: [noop, getfield]
+        mutant: [noop, guard]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6c33a4e5cfc40a45eda36adf71a6947c2624a90f
+          ref: dd49b0f73a72d2334444132765c6ee6f2c416936
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
@@ -24,13 +24,14 @@ jobs:
       - env:
           MUTANT: ${{ matrix.mutant }}
         run: |
-          test "$(git rev-parse HEAD)" = 6c33a4e5cfc40a45eda36adf71a6947c2624a90f
+          test "$(git rev-parse HEAD)" = dd49b0f73a72d2334444132765c6ee6f2c416936
           python3 - <<'PY'
           import os
           from pathlib import Path
           p = Path('crates/fireemu-core-firestore/src/pipeline_exec.rs')
           s = p.read_text()
           changes = {
+            'guard': ('if DocumentId::try_new(id.clone()).is_err() {', 'if false && DocumentId::try_new(id.clone()).is_err() {'),
             'cmp': ('match a.cmp(b) {', 'match b.cmp(a) {'),
             'size': ('n.checked_add(1)', 'n.checked_add(2)'),
             'reverse': ('s.chars().rev().collect()', 's.chars().collect()'),
@@ -51,7 +52,7 @@ jobs:
               p.write_text(s.replace(old, new))
           PY
           set +e
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(observed_generic_) | test(observed_reference_forms_and_autogen_id) | test(observed_coalesce_is_lazy_and_skips_null_and_absent)'
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked --no-fail-fast -E 'test(observed_generic_) | test(observed_reference_forms_and_autogen_id) | test(observed_coalesce_is_lazy_and_skips_null_and_absent) | test(observed_replace_document_id_refuses_descendant_paths)'
           status=$?
           set -e
           if [ "$MUTANT" = noop ]; then test "$status" = 0; else test "$status" = 100; fi

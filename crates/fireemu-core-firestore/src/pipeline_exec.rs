@@ -805,6 +805,12 @@ impl Expr {
                     "'{name}' function must have an even number of arguments"
                 )));
             }
+            if let Arity::AtLeast(minimum) = function.arity {
+                return Err(ExprError::Arity(format!(
+                    "function {name:?} takes at least {minimum} argument(s), got {} argument(s)",
+                    args.len()
+                )));
+            }
             let expected = match function.arity {
                 Arity::Exact(n) => format!("{n} argument(s)"),
                 Arity::Any => "any number of arguments".to_owned(),

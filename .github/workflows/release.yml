@@ -5,14 +5,19 @@ name: release
 # commit, and the version is stamped from the tag rather than read from a file, so nothing in
 # the tree can disagree with what was published.
 #
-# `workflow_dispatch` runs the same jobs end to end without publishing anything: it builds
-# every platform, assembles and packs every package, and uploads the artifacts, so the
-# packaging can be exercised on a branch before a tag exists.
+# By default, `workflow_dispatch` runs the same jobs without publishing anything. The explicit
+# v0.38.1 recovery input instead reuses the verified artifacts from the original release run.
+# Recovery npm provenance identifies the recovery workflow SHA, not the original build SHA.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      recover_v0381:
+        description: "Recover the partially published v0.38.1 from its original verified run"
+        required: false
+        type: boolean
+        default: false
       version:
         description: "Version to stamp for the dry run (no tag is created, nothing is published)"
         required: false
@@ -39,6 +44,7 @@ jobs:
   # The single source of truth for what gets built is npm/platforms/platforms.mjs; the matrix
   # is read out of it rather than repeated here.
   plan:
+    if: inputs.recover_v0381 != true
     runs-on: ubuntu-latest
     outputs:
       platforms: ${{ steps.matrix.outputs.platforms }}
@@ -102,6 +108,7 @@ jobs:
   # The Emulator UI is built once and reused by every platform, so every binary in a release
   # embeds byte-identical assets.
   ui:
+    if: inputs.recover_v0381 != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -596,3 +603,60 @@ jobs:
           # shellcheck disable=SC2086 # $flags is empty or one fixed flag
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu ${VERSION}" \
             --notes-file notes/release-notes.md $flags dist/*
+
+  recover-v0381:
+    if: github.event_name == 'workflow_dispatch' && inputs.recover_v0381 == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 24122ce3e375323da91290de11d01b45d14aa9a5
+          path: recovery-source
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: check the provenance verification runtime
+        run: node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major !== 24 || minor < 15) process.exit(1)'
+      - name: install the original publishing CLI
+        run: npm install --global npm@11.9.0
+      - name: verify original artifacts and recover npm publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node npm/scripts/recover-v0381.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovery-v0381-release-assets
+          path: recovery-output/*
+          if-no-files-found: error
+          retention-days: 30
+
+  recover-v0381-github-release:
+    needs: [recover-v0381]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: recovery-v0381-release-assets
+          path: dist
+      - name: create the original tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          test -s dist/release-notes.md
+          gh release view v0.38.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 1
+          gh release create v0.38.1 --repo "$GITHUB_REPOSITORY" --verify-tag --title "Fireemu 0.38.1" \
+            --notes-file dist/release-notes.md dist/fireemu-* dist/SHA256SUMS dist/recovery-provenance.txt

@@ -141,9 +141,8 @@ publish_runs = release.dig("jobs", "publish", "steps").map { |step| step["run"] 
 assert(publish_runs.include?("npm@11.9.0"), "release publish must pin an npm version that supports Trusted Publishing")
 assert(publish_runs.include?("npm publish ./npm/fireemu"), "release publish must treat the launcher as a local path")
 assert(!publish_runs.include?("gh release create"), "the publish job must not create the GitHub Release: it only reads the repository")
-# Permissions, per job. The workflow default is read-only, and no job but these two holds more:
-# `publish` mints the OIDC token that npm Trusted Publishing and the attestations need, and
-# `github-release` writes the Release. The rest run build, test and third-party dependency code.
+# Permissions, per job. The workflow default is read-only. Publication jobs mint OIDC tokens;
+# release jobs write GitHub Releases; recovery additionally reads original run artifacts and attestations.
 assert(release["permissions"] == { "contents" => "read" }, "the workflow default must stay read-only: the jobs that need more ask for it themselves")
 # Nothing is set for every job at once: an env such as BASH_ENV or NODE_OPTIONS, or `defaults`, would
 # reach the job that holds the release token. (`on:` parses as the key `true`.)
@@ -161,7 +160,9 @@ end
 assert(every_use.all? { |use| use.match?(/\A[\w.-]+\/[\w.-]+(\/[\w.\/-]+)?@[0-9a-f]{40}\z/) }, "every action in the release workflow is pinned to a 40-hex commit, never a branch or a tag")
 expected_permissions = Hash.new({ "contents" => "read" }).merge(
   "publish" => { "contents" => "read", "id-token" => "write", "attestations" => "write" },
-  "github-release" => { "contents" => "write" }
+  "github-release" => { "contents" => "write" },
+  "recover-v0381" => { "contents" => "read", "actions" => "read", "attestations" => "read", "id-token" => "write" },
+  "recover-v0381-github-release" => { "contents" => "write" }
 )
 release.fetch("jobs").each do |job, definition|
   effective = definition["permissions"] || release["permissions"]
@@ -383,3 +384,11 @@ assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discov
 end
 
 puts "CI workflow contract passed"
+
+recovery = release.dig("jobs", "recover-v0381")
+assert(recovery["environment"] == "npm-release", "recovery must use the npm-release environment")
+assert(recovery["if"] == "github.event_name == 'workflow_dispatch' && inputs.recover_v0381 == true && github.ref == 'refs/heads/main'", "recovery must require explicit dispatch on main")
+assert(recovery["steps"].any? { |step| step["run"] == "node npm/scripts/recover-v0381.mjs" }, "recovery must run the guarded artifact recovery script")
+recovery_release = release.dig("jobs", "recover-v0381-github-release")
+assert(recovery_release["needs"] == ["recover-v0381"], "recovery release must wait for npm publication")
+assert(recovery_release["steps"].none? { |step| step["uses"]&.start_with?("actions/checkout@") }, "recovery release must not check out code")

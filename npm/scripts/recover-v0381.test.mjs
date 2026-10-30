@@ -189,3 +189,17 @@ test('known published versions are never published again when still invisible', 
   }), /absent/);
   assert.equal(publishes, 0);
 });
+
+test('post-publication lookup tolerates over two minutes of 404 responses', async () => {
+  const { lookupForPhase } = await import('./recover-v0381.mjs');
+  let elapsed = 0;
+  let calls = 0;
+  const result = await lookupForPhase('fireemu', 'postpublish', {
+    lookup: async () => { calls++; return elapsed >= 125_000 ? { version: '0.38.1' } : null; },
+    sleep: async ms => { elapsed += ms; },
+    now: () => elapsed,
+  });
+  assert.deepEqual(result, { version: '0.38.1' });
+  assert.equal(elapsed, 125_000);
+  assert.equal(calls, 26);
+});

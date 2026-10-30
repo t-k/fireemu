@@ -29,7 +29,7 @@ jobs:
           from pathlib import Path
           path = Path('crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs')
           source = path.read_text()
-          changes = {'extrema': ('let selected = if maximum {', 'let selected = if !maximum {'), 'sum': ('let mut total = 0_i64;', 'let mut total = 1_i64;'), 'negate': ('value.checked_neg().map_or_else(', 'value.checked_abs().map_or_else(')}
+          changes = {'extrema': ('let selected = if maximum {', 'let selected = if !maximum {'), 'sum': ('let mut total = 0_i64;', 'let mut total = 1_i64;'), 'negate': ('.checked_neg()\n            .map_or_else(|| unobserved("negate"', '.checked_abs()\n            .map_or_else(|| unobserved("negate"')}
           if os.environ['MUTANT'] != 'noop':
               old, new = changes[os.environ['MUTANT']]
               assert source.count(old) == 1

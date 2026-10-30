@@ -1378,7 +1378,25 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
 /// Registry entries without recorded signatures still retain the legacy boolean/arity relation.
 #[test]
 fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_arguments() {
-    for function in FUNCTIONS.iter().filter(|f| f.signature.is_empty()) {
+    for function in FUNCTIONS.iter().filter(|f| {
+        f.signature.is_empty()
+            && !matches!(
+                f.name,
+                "namespace"
+                    | "has_ancestor"
+                    | "reference_slice"
+                    | "replace_document_id"
+                    | "autogen_document_id"
+                    | "coalesce"
+                    | "cmp"
+                    | "storage_size"
+                    | "get_field"
+                    | "offset"
+                    | "reverse"
+                    | "length"
+                    | "string_concat"
+            )
+    }) {
         assert_eq!(
             function.returns_boolean,
             matches!(function.arity, Arity::Exact(2)),

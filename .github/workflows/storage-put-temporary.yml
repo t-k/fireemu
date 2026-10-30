@@ -9,6 +9,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -99,6 +101,13 @@ jobs:
           if cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)' > mutation-logs/signed-header-inverted.txt 2>&1; then exit 1; fi
           grep -q 'assertion' mutation-logs/signed-header-inverted.txt
           git restore crates/fireemu-adapter-http/src/storage.rs
+      - name: exact-head SDK smoke
+        run: |
+          pnpm -C conformance install --frozen-lockfile
+          cargo build -p fireemu --locked
+          target/debug/fireemu exec --project demo-signed-put --only storage --storage-port 0 --hub-port 0 -- node conformance/src/storage-signed-put-smoke.mjs
+      - name: exact-head adapter tests
+        run: cargo nextest run -p fireemu-adapter-http --profile pr --no-fail-fast
       - name: regenerate bound Quint evidence
         run: |
           set -euo pipefail

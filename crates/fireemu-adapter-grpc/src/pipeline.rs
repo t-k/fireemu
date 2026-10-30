@@ -4992,6 +4992,75 @@ mod tests {
     }
 
     #[test]
+    fn array_transform_element_alias_validation_and_priority() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("exact", "field", "field", Unrecorded::Refuse),
+            ("exact", "field", "empty", Unrecorded::Refuse),
+            ("short", "field", "field", Unrecorded::Refuse),
+            ("exact", "string", "empty", Unrecorded::Refuse),
+            ("exact", "integer", "field", Unrecorded::Refuse),
+            ("exact", "variable", "field", Unrecorded::Refuse),
+            ("exact", "field", "field", Unrecorded::OfficialEmulator),
+            ("short", "variable", "empty", Unrecorded::OfficialEmulator),
+            ("short", "integer", "empty", Unrecorded::OfficialEmulator),
+            ("short", "string", "field", Unrecorded::OfficialEmulator),
+        ];
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        for (arity, alias, input, profile) in cases {
+            let input = if input == "empty" {
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                }
+            } else {
+                field()
+            };
+            let alias = pb::Value {
+                value_type: Some(match alias {
+                    "field" => V::FieldReferenceValue("i".to_owned()),
+                    "string" => V::StringValue("item".to_owned()),
+                    "integer" => V::IntegerValue(1),
+                    _ => V::VariableReferenceValue("item".to_owned()),
+                }),
+            };
+            let mut args = vec![input, alias];
+            if arity == "exact" {
+                args.extend([
+                    pb::Value {
+                        value_type: Some(V::StringValue("index".to_owned())),
+                    },
+                    field(),
+                ]);
+            }
+            let operand = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "array_transform".to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let result = decode_operand_tree(&operand, profile);
+            if arity == "short" {
+                assert!(!result.unwrap_err().message().contains("element_alias"));
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::FieldReferenceValue(_))))
+            {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(error.message(), "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference");
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, String::new());
+                assert_eq!(gate.answer(error).code(), tonic::Code::Unimplemented);
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::StringValue(_))))
+            {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            }
+        }
+    }
+
+    #[test]
     fn where_is_type_keeps_static_type_validation() {
         use pb::value::ValueType as V;
         let field = || pb::Value {

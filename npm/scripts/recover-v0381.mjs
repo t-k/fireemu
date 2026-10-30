@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 const SHA = '24122ce3e375323da91290de11d01b45d14aa9a5';
 const PRIOR_RECOVERY_SHA = '34f100efc528b734b171dc88f87a1c4502e2c925';
 const SECOND_RECOVERY_SHA = '4bbd2dcc5926d28f8e38da43df0fcc5f0201c9ec';
+const THIRD_RECOVERY_SHA = 'e4d932e62bbf3ced35cccf5c57f8249c19e446dc';
 const REPO = 't-k/fireemu';
 const RUN = '40986239359';
 const VERSION = '0.38.1';
@@ -86,13 +87,25 @@ export async function registry(name, timeoutMs = 10_000) {
   return metadata;
 }
 
+export async function fetchTarball(input, { fetchFn = fetch, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => performance.now(), attempts = 61 } = {}) {
+  const url = new URL(input);
+  if (url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org') fail('unexpected tarball URL');
+  const deadline = now() + 300_000;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    const response = await fetchFn(url, { redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(60_000, Math.floor(remaining)))) });
+    if (response.ok) return Buffer.from(await response.arrayBuffer());
+    if (response.status !== 404) fail(`tarball HTTP ${response.status}`);
+    await response.body?.cancel();
+    if (attempt + 1 < attempts && now() < deadline) await sleep(Math.min(5_000, deadline - now()));
+  }
+  fail('tarball HTTP 404 after bounded retries');
+}
+
 async function verifyPresent(name, expected, metadata, dir, allowedShas) {
   if (metadata.dist.integrity !== expected.integrity) fail(`registry integrity mismatch: ${name}`);
-  const url = new URL(metadata.dist.tarball);
-  if (url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org') fail('unexpected tarball URL');
-  const response = await fetch(url, { redirect: 'error' });
-  if (!response.ok) fail(`tarball HTTP ${response.status}`);
-  const tarball = Buffer.from(await response.arrayBuffer());
+  const tarball = await fetchTarball(metadata.dist.tarball);
   if (`sha512-${hash('sha512', tarball, 'base64')}` !== expected.integrity) fail(`tarball digest mismatch: ${name}`);
   const audit = join(dir, `audit-${name.replace(/[^a-z0-9]/g, '-')}`);
   mkdirSync(audit);
@@ -112,9 +125,10 @@ export function validateProvenance(statement, name, integrity, expectedSha) {
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const deps = statement.predicate?.buildDefinition?.resolvedDependencies;
   const invocation = statement.predicate?.runDetails?.metadata?.invocationId;
-  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : expectedSha === PRIOR_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41001331458\/attempts\/1$/ : expectedSha === SECOND_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41007719982\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
+  const pattern = expectedSha === SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/40986239359\/attempts\/1$/ : expectedSha === PRIOR_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41001331458\/attempts\/1$/ : expectedSha === SECOND_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41007719982\/attempts\/1$/ : expectedSha === THIRD_RECOVERY_SHA ? /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/41012136275\/attempts\/1$/ : /^https:\/\/github\.com\/t-k\/fireemu\/actions\/runs\/\d+\/attempts\/\d+$/;
   if (expectedSha === PRIOR_RECOVERY_SHA && name !== '@fireemu/darwin-x64') return false;
   if (expectedSha === SECOND_RECOVERY_SHA && name !== '@fireemu/linux-arm64') return false;
+  if (expectedSha === THIRD_RECOVERY_SHA && name !== '@fireemu/linux-x64') return false;
   return Boolean(typeof invocation === 'string' && pattern.test(invocation) && statement.subject?.some(x => x.name === `pkg:npm/${name.replace('@', '%40')}@${VERSION}` && x.digest?.sha512 === digest) && workflow?.ref === (expectedSha === SHA ? `refs/tags/v${VERSION}` : 'refs/heads/main') && workflow?.repository === `https://github.com/${REPO}` && workflow?.path === '.github/workflows/release.yml' && deps?.some(x => x.digest?.gitCommit === expectedSha));
 }
 
@@ -139,7 +153,7 @@ export async function installForAudit(name, install, { sleep = ms => new Promise
 }
 
 export function lookupPhase(name) {
-  return ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64'].includes(name) ? 'known' : 'new';
+  return ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64', '@fireemu/linux-x64'].includes(name) ? 'known' : 'new';
 }
 
 export async function lookupForPhase(name, phase, { lookup = registry, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = () => performance.now(), attempts = 61 } = {}) {
@@ -203,7 +217,7 @@ async function main() {
     const preflight = process.argv.includes('--preflight');
     await publishAll(tarballs, {
       lookup: name => lookupForPhase(name, lookupPhase(name)),
-      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, PRIOR_RECOVERY_SHA, SECOND_RECOVERY_SHA, process.env.GITHUB_SHA]),
+      verify: (name, expected, metadata) => verifyPresent(name, expected, metadata, dir, [SHA, PRIOR_RECOVERY_SHA, SECOND_RECOVERY_SHA, THIRD_RECOVERY_SHA, process.env.GITHUB_SHA]),
       publish: async (name, expected) => { invoke('npm', ['publish', expected.path, '--provenance', '--access', 'public']); },
       verifyPublished: async (name, expected) => {
         const metadata = await lookupForPhase(name, 'postpublish');

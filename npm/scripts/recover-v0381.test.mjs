@@ -280,8 +280,8 @@ test('failed audit verification stops before publishing anything', async () => {
 
 test('every package already published by these runs is treated as known', async () => {
   const { lookupPhase } = await import('./recover-v0381.mjs');
-  for (const name of ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64']) assert.equal(lookupPhase(name), 'known');
-  assert.equal(lookupPhase('@fireemu/linux-x64'), 'new');
+  for (const name of ['@fireemu/darwin-arm64', '@fireemu/darwin-x64', '@fireemu/linux-arm64', '@fireemu/linux-x64']) assert.equal(lookupPhase(name), 'known');
+  assert.equal(lookupPhase('@fireemu/win32-x64'), 'new');
   assert.equal(lookupPhase('fireemu'), 'new');
 });
 
@@ -297,4 +297,91 @@ test('audit tolerates ETARGET for over two minutes without republishing', async 
     }, { now: () => elapsed, sleep: async ms => { elapsed += ms; } }),
   });
   assert.equal(publishes, 1); assert.equal(elapsed, 125_000); assert.equal(calls, 26);
+});
+
+const tarballCases = [
+  ['known', 'success', 'first'], ['known', 'missing', 'last'], ['known', 'error', 'first'],
+  ['postpublish', 'success', 'last'], ['postpublish', 'missing', 'last'], ['postpublish', 'error', 'first'],
+  ['known', 'missing', 'first'], ['known', 'error', 'last'],
+];
+for (const [phase, outcome, attempt] of tarballCases) {
+  test(`tarball ${phase} ${outcome} ${attempt}`, async () => {
+    const { fetchTarball, publishAll } = await import('./recover-v0381.mjs');
+    let calls = 0; let sleeps = 0; let publishes = 0;
+    const verify = () => fetchTarball('https://registry.npmjs.org/file.tgz', {
+      fetchFn: async () => {
+        calls++;
+        if (attempt === 'last' && calls === 1) return { status: 404, ok: false };
+        if (outcome === 'missing') return { status: 404, ok: false };
+        if (outcome === 'error') return { status: 503, ok: false };
+        return { status: 200, ok: true, arrayBuffer: async () => Buffer.from('package') };
+      }, sleep: async () => { sleeps++; }, attempts: 2,
+    });
+    const operation = () => publishAll(new Map([['@fireemu/linux-x64', 1]]), {
+      lookup: async () => phase === 'known' ? {} : null, verify,
+      publish: async () => { publishes++; }, verifyPublished: verify,
+    });
+    if (outcome === 'success') await operation(); else await assert.rejects(operation());
+    const expectedCalls = outcome === 'missing' ? 2 : attempt === 'last' ? 2 : 1;
+    assert.equal(calls, expectedCalls); assert.equal(sleeps, expectedCalls - 1);
+    assert.equal(publishes, phase === 'postpublish' ? 1 : 0);
+  });
+}
+
+test('tarball 404 retry is bounded at five minutes', async () => {
+  const { fetchTarball } = await import('./recover-v0381.mjs');
+  let elapsed = 0; let calls = 0;
+  await assert.rejects(fetchTarball('https://registry.npmjs.org/file.tgz', {
+    fetchFn: async () => { calls++; return { status: 404, ok: false }; },
+    sleep: async ms => { elapsed += ms; }, now: () => elapsed,
+  }), /404/);
+  assert.equal(elapsed, 300_000); assert.equal(calls, 60);
+});
+
+test('tarball transport, body, and URL failures never retry', async () => {
+  const { fetchTarball } = await import('./recover-v0381.mjs');
+  let calls = 0;
+  await assert.rejects(fetchTarball('https://attacker.invalid/file.tgz', { fetchFn: async () => { calls++; } }));
+  assert.equal(calls, 0);
+  for (const fetchFn of [async () => { calls++; throw new Error('network'); }, async () => { calls++; return { status: 200, ok: true, arrayBuffer: async () => { throw new Error('body'); } }; }]) {
+    calls = 0;
+    await assert.rejects(fetchTarball('https://registry.npmjs.org/file.tgz', { fetchFn, sleep: async () => assert.fail() }));
+    assert.equal(calls, 1);
+  }
+});
+
+test('only linux-x64 from the exact third recovery run and SHA is accepted', () => {
+  const sha = 'e4d932e62bbf3ced35cccf5c57f8249c19e446dc';
+  const digest = '00'.repeat(64);
+  const integrity = `sha512-${Buffer.from(digest, 'hex').toString('base64')}`;
+  const statement = { subject: [{ name: 'pkg:npm/%40fireemu/linux-x64@0.38.1', digest: { sha512: digest } }], predicate: { buildDefinition: { externalParameters: { workflow: { repository: 'https://github.com/t-k/fireemu', path: '.github/workflows/release.yml', ref: 'refs/heads/main' } }, resolvedDependencies: [{ digest: { gitCommit: sha } }] }, runDetails: { metadata: { invocationId: 'https://github.com/t-k/fireemu/actions/runs/41012136275/attempts/1' } } } };
+  assert.equal(validateProvenance(statement, '@fireemu/linux-x64', integrity, sha), true);
+  const wrongRun = structuredClone(statement); wrongRun.predicate.runDetails.metadata.invocationId = 'https://github.com/t-k/fireemu/actions/runs/41012136276/attempts/1';
+  assert.equal(validateProvenance(wrongRun, '@fireemu/linux-x64', integrity, sha), false);
+  const wrongPackage = structuredClone(statement); wrongPackage.subject[0].name = 'pkg:npm/%40fireemu/win32-x64@0.38.1';
+  assert.equal(validateProvenance(wrongPackage, '@fireemu/win32-x64', integrity, sha), false);
+});
+
+test('tarball propagation can exceed two minutes without republishing', async () => {
+  const { fetchTarball, publishAll } = await import('./recover-v0381.mjs');
+  let elapsed = 0; let calls = 0; let publishes = 0;
+  await publishAll(new Map([['@fireemu/linux-x64', 1]]), {
+    lookup: async () => null, verify: async () => assert.fail(),
+    publish: async () => { publishes++; },
+    verifyPublished: () => fetchTarball('https://registry.npmjs.org/file.tgz', {
+      fetchFn: async () => { calls++; return elapsed < 125_000 ? { status: 404, ok: false } : { status: 200, ok: true, arrayBuffer: async () => Buffer.from('package') }; },
+      now: () => elapsed, sleep: async ms => { elapsed += ms; },
+    }),
+  });
+  assert.equal(publishes, 1); assert.equal(elapsed, 125_000); assert.equal(calls, 26);
+});
+
+test('tarball retry releases the 404 response body before waiting', async () => {
+  const { fetchTarball } = await import('./recover-v0381.mjs');
+  let cancelled = 0; let calls = 0;
+  await fetchTarball('https://registry.npmjs.org/file.tgz', {
+    fetchFn: async () => ++calls === 1 ? { status: 404, ok: false, body: { cancel: async () => { cancelled++; } } } : { status: 200, ok: true, arrayBuffer: async () => Buffer.from('package') },
+    sleep: async () => assert.equal(cancelled, 1), attempts: 2,
+  });
+  assert.equal(cancelled, 1);
 });

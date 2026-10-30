@@ -38,8 +38,8 @@ jobs:
           export FIREEMU_SANDBOX_LANE=fs-ent-pipeline
           export FS_QUERY_INDEX_IN=/tmp/fs-strict-arity-programs.json
           export FS_QUERY_INDEX_OUT=/tmp/fs-strict-arity-fireemu.json
-          export FS_QUERY_INDEX_RUN=local-strict-arity-preflight
-          python3 /tmp/fs-strict-portctl.py run --service fs-strict-arity --range 20000-29999 -- bash -c 'exec target/debug/fireemu exec --config conformance/fs-ent-pipeline.fireemu.json --project demo-fs-query-index --only firestore --firestore-port "$PORT" --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local'
+          export FS_QUERY_INDEX_RUN=1793400000000
+          python3 /tmp/fs-strict-portctl.py run --service fs-strict-arity --range 20000-29999 -- bash -c 'exec target/debug/fireemu exec --config conformance/fs-ent-pipeline.fireemu.json --project fireemu-oracle-query --only firestore --firestore-port "$PORT" --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local'
           python3 /tmp/fs-strict-report.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

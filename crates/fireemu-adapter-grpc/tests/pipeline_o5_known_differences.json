@@ -371,35 +371,6 @@
   {
     "category": "unsupported-subset",
     "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "'map' function must have an even number of arguments",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
-    "row": "fs-ent-pipeline/o5/value-shapes#map-one-argument",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "'map' function must have an even number of arguments; this text is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "unsupported-subset",
-    "production": {
       "results": [
         "{\"fields\":{\"v\":{\"stringValue\":\"d\"}}}"
       ],
@@ -3259,47 +3230,6 @@
           "error": {
             "code": 501,
             "message": "The function document_id(...) requires `Reference` but got `LONG`.; production has not refused a request of this shape with this text, so this refusal is not observed locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
-    "category": "validation-order-or-subset",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "The 'select(...)' stage requires at least one field.",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "production": {
-      "body": [
-        {
-          "error": {
-            "code": 400,
-            "message": "map key must be of type STRING, given type is DOUBLE",
-            "status": "INVALID_ARGUMENT"
-          }
-        }
-      ],
-      "status": 400
-    },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
-    "row": "fs-ent-pipeline/o5/appendix#proposed-n76-map-add-then-empty",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "The 'select(...)' stage requires at least one field.; production has not refused a request of this shape with this text, so this refusal is not observed locally",
             "status": "UNIMPLEMENTED"
           }
         }

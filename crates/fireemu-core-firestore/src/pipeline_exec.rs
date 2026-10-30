@@ -797,7 +797,7 @@ impl Expr {
         if !fits {
             // The official emulator's text for an odd number of `map(...)` arguments.
             if function.arity == Arity::Pairs {
-                return Err(ExprError::Invalid(format!(
+                return Err(ExprError::Arity(format!(
                     "'{name}' function must have an even number of arguments"
                 )));
             }

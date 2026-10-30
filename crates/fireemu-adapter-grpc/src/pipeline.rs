@@ -1229,7 +1229,16 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     stages.push(match stage.name.as_str() {
-                        "add_fields" => Stage::AddFields(decode_add_fields(stage, unrecorded)?),
+                        "add_fields" => match decode_add_fields(stage, unrecorded) {
+                            Ok(aliases) => Stage::AddFields(aliases),
+                            Err(error)
+                                if error.message().starts_with("map key must be of type") =>
+                            {
+                                deferred_name.get_or_insert(error);
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        },
                         "distinct" => Stage::Distinct(decode_distinct(stage, unrecorded)?),
                         _ => {
                             let (accumulators, groups) = decode_aggregate(stage, unrecorded)?;
@@ -3704,6 +3713,12 @@ fn decode_add_fields(
             ));
         }
     }
+    if let Some(error) = ordered_keys(fields)
+        .into_iter()
+        .find_map(|alias| map_key_error(&fields[alias]))
+    {
+        return Err(error);
+    }
     Ok(aliases)
 }
 
@@ -4764,6 +4779,196 @@ fn with_code(mut status: Status, code: &str) -> Status {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_map_refusal_precedence_cases() {
+        use serde_json::json;
+        const ROWS: &str = r"Operation	Key	Later	Profile
+odd_map	valid	none	strict
+odd_map	unknown	none	strict
+add_fields_map	double	empty_select	strict
+add_fields_map	double	invalid_limit	emulator
+add_fields_map	valid	empty_select	strict
+add_fields_map	unknown	empty_select	strict
+odd_map	unknown	invalid_limit	emulator
+odd_map	double	none	emulator
+odd_map	valid	empty_select	emulator
+add_fields_map	valid	invalid_limit	strict
+add_fields_map	unknown	none	strict";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [operation, key, later, profile] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let mode = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let key_value = match *key {
+                "valid" => json!({"stringValue":"k"}),
+                "double" => json!({"doubleValue":1.5}),
+                "unknown" => json!({"functionValue":{"name":"unknown_function","args":[]}}),
+                _ => unreachable!(),
+            };
+            let args = if *operation == "odd_map" {
+                vec![key_value]
+            } else {
+                vec![key_value, json!({"fieldReferenceValue":"i"})]
+            };
+            let map = json!({"functionValue":{"name":"map","args":args}});
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *operation == "odd_map" {
+                stages.push(json!({"name":"select","args":[{"mapValue":{"fields":{"v":map}}}]}));
+            } else {
+                stages
+                    .push(json!({"name":"add_fields","args":[{"mapValue":{"fields":{"a":map}}}]}));
+            }
+            match *later {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let result = compile_pipeline_in_order(&request, &parent, mode, None);
+            let error = result.unwrap_err();
+            if *operation == "odd_map" {
+                assert_eq!(
+                    error.message(),
+                    "'map' function must have an even number of arguments",
+                    "{line}"
+                );
+            } else if *key == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            } else if *later == "invalid_limit" {
+                assert!(error.message().contains("limit"), "{line}: {error:?}");
+            } else if *key == "double" {
+                assert_eq!(
+                    error.message(),
+                    "map key must be of type STRING, given type is DOUBLE",
+                    "{line}"
+                );
+            } else {
+                assert!(error.message().contains("select"), "{line}: {error:?}");
+            }
+            if mode == Unrecorded::Refuse {
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, database.to_owned());
+                assert_eq!(
+                    gate.answer(error).code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_map_add_fields_refusal_precedes_empty_select() {
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let (p, program) = programs
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p["id"] == "fs-ent-pipeline/o5/appendix")
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s["id"] == "proposed-n76-map-add-then-empty")
+            .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let request =
+            crate::rest::pipeline_json::request_from_json(database, &step["body"]).unwrap();
+        let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+        let error =
+            compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "map key must be of type STRING, given type is DOUBLE"
+        );
+    }
+
+    #[test]
+    fn recorded_map_constructor_refusals() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use fireemu_core_firestore::value::Value;
+        let odd = Expr::call(
+            "map",
+            vec![Expr::Constant(Value::String("k".to_owned()))],
+            Placement::Value,
+        )
+        .unwrap_err();
+        assert_eq!(
+            odd,
+            ExprError::Arity("'map' function must have an even number of arguments".to_owned())
+        );
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id) in [
+            ("value-shapes", "map-one-argument"),
+            ("appendix", "proposed-n76-map-add-then-empty"),
+        ] {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                tonic::Code::InvalidArgument,
+                "{id}: {computed:?}"
+            );
+            assert_eq!(computed.message(), expected, "{id}");
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(rest.code(), tonic::Code::InvalidArgument, "REST {id}");
+            assert_eq!(rest.message(), expected, "REST {id}");
+            let grpc_shape = shape_of_request(&request);
+            assert!(grpc_shape.is_some(), "gRPC shape {id}");
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            assert_eq!(grpc.code(), tonic::Code::InvalidArgument, "gRPC {id}");
+            assert_eq!(grpc.message(), expected, "gRPC {id}");
+        }
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]

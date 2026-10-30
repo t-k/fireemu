@@ -658,6 +658,10 @@ const FUNCTIONS: &[Function] = &[
     scalar::DIVIDE,
     scalar::MOD,
     scalar::ABS,
+    scalar::MINIMUM,
+    scalar::MAXIMUM,
+    scalar::SUM,
+    scalar::NEGATE,
     scalar::ROUND,
     scalar::FLOOR,
     scalar::CEIL,
@@ -799,6 +803,12 @@ impl Expr {
             if function.arity == Arity::Pairs {
                 return Err(ExprError::Arity(format!(
                     "'{name}' function must have an even number of arguments"
+                )));
+            }
+            if let Arity::AtLeast(minimum) = function.arity {
+                return Err(ExprError::Invalid(format!(
+                    "function {name:?} takes at least {minimum} argument(s), got {} argument(s)",
+                    args.len()
                 )));
             }
             let expected = match function.arity {

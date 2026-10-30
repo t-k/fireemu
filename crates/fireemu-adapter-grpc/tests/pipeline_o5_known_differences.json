@@ -2235,41 +2235,6 @@
     }
   },
   {
-    "category": "unsupported-current-document",
-    "emulator": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    },
-    "production": {
-      "results": [
-        "{\"fields\":{\"v\":{\"mapValue\":{\"fields\":{\"__create_time__\":{\"timestampValue\":\"<t2>\"},\"__name__\":{\"referenceValue\":\"{docs}/fx5/d\"},\"__update_time__\":{\"timestampValue\":\"<t2>\"},\"i\":{\"integerValue\":\"1\"}}}}}}"
-      ],
-      "status": 200
-    },
-    "reason": "Production returns the current document map, while the finite local subset refuses current_document under both profiles.",
-    "row": "fs-ent-pipeline/o5/function-names#fn-current_document",
-    "strict": {
-      "body": [
-        {
-          "error": {
-            "code": 501,
-            "message": "function \"current_document\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
-          }
-        }
-      ],
-      "status": 501
-    }
-  },
-  {
     "category": "unsupported-subset",
     "emulator": {
       "body": [

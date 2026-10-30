@@ -1989,7 +1989,9 @@ fn constant_call_error(expr: &Expr) -> Option<Status> {
                 true
             }
             Expr::Constant(_) => false,
-            Expr::Call { args, .. } => args.iter().any(reads_field),
+            Expr::Call { function, args } => {
+                function.name == "current_document" || args.iter().any(reads_field)
+            }
         }
     }
     // A call of a string or math function fails per row, like the logic functions below: its

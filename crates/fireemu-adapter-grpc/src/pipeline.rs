@@ -1478,7 +1478,8 @@ pub(crate) fn execute_subcollection_array(
             .filter_map(|r| r.document.as_ref())
         {
             let row = document_row(child)?;
-            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime) {
+            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime.clone())
+            {
                 pipeline_exec::Eval::Value(value) => values.push(value),
                 _ => {
                     return Err(Status::unimplemented(
@@ -1506,7 +1507,7 @@ pub(crate) fn execute_subcollection_array(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            runtime.clone(),
         );
         let mut rows = cursor
             .push(document_row(document)?)
@@ -1631,9 +1632,10 @@ pub(crate) fn execute_correlated_scalar(
     let mut output_bytes = 0usize;
     for document in parents {
         let parent_row = document_row(&document)?;
-        let pipeline_exec::Eval::Value(Value::String(parent_value)) =
-            Expr::Field(binding.1.clone()).eval_in_with_runtime(&parent_row, unrecorded, runtime)
-        else {
+        let pipeline_exec::Eval::Value(Value::String(parent_value)) = Expr::Field(
+            binding.1.clone(),
+        )
+        .eval_in_with_runtime(&parent_row, unrecorded, runtime.clone()) else {
             return Err(Status::unimplemented(
                 "correlated binding type is unobserved",
             ));
@@ -1642,7 +1644,7 @@ pub(crate) fn execute_correlated_scalar(
         for child in &children {
             let child_row = document_row(child)?;
             let pipeline_exec::Eval::Value(Value::String(key)) = Expr::Field(predicate.clone())
-                .eval_in_with_runtime(&child_row, unrecorded, runtime)
+                .eval_in_with_runtime(&child_row, unrecorded, runtime.clone())
             else {
                 return Err(Status::unimplemented(
                     "correlated predicate type is unobserved",
@@ -1652,10 +1654,10 @@ pub(crate) fn execute_correlated_scalar(
                 continue;
             }
             if let Some((filter_field, expected)) = filter {
-                let pipeline_exec::Eval::Value(Value::String(actual)) =
-                    Expr::Field(filter_field.clone())
-                        .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                else {
+                let pipeline_exec::Eval::Value(Value::String(actual)) = Expr::Field(
+                    filter_field.clone(),
+                )
+                .eval_in_with_runtime(&child_row, unrecorded, runtime.clone()) else {
                     return Err(Status::unimplemented(
                         "correlated filter type is unobserved",
                     ));
@@ -1668,9 +1670,11 @@ pub(crate) fn execute_correlated_scalar(
                 return Err(Status::invalid_argument(SCALAR_MULTIPLE_RESULTS));
             }
             matched = Some(
-                match Expr::Field(field.clone())
-                    .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                {
+                match Expr::Field(field.clone()).eval_in_with_runtime(
+                    &child_row,
+                    unrecorded,
+                    runtime.clone(),
+                ) {
                     pipeline_exec::Eval::Value(Value::String(value)) => Value::String(value),
                     _ => {
                         return Err(Status::unimplemented(
@@ -1700,7 +1704,7 @@ pub(crate) fn execute_correlated_scalar(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            runtime.clone(),
         );
         let mut rows = cursor.push(parent_row).map_err(|e| eval_status(&e))?;
         rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);

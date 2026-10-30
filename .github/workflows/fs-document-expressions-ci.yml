@@ -10,9 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3de5881a5c47dafe47516c38a37f1f31e0db1442
+          ref: 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
       - run: |
-          test "$(git rev-parse HEAD)" = 3de5881a5c47dafe47516c38a37f1f31e0db1442
+          test "$(git rev-parse HEAD)" = 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
           cargo fmt --all -- --check
           cargo test -p fireemu-core-firestore --locked
           cargo test -p fireemu-adapter-grpc --locked

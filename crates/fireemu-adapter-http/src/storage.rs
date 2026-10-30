@@ -2785,7 +2785,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
 /// form-data upload, and everything else is the 501 catch-all.
 fn fallthrough(method: &str, segments: &[&str]) -> Result<Route, String> {
     match (method, segments) {
-        ("GET", [bucket, rest @ ..]) if !rest.is_empty() => {
+        ("GET" | "PUT", [bucket, rest @ ..]) if !rest.is_empty() => {
             let name = rest
                 .iter()
                 .map(|s| decode_segment(s))
@@ -3558,7 +3558,8 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
             Route::FbBucket { .. }
             | Route::GcsUpload { .. }
             | Route::GcsCopy { .. }
-            | Route::FormUpload { .. },
+            | Route::FormUpload { .. }
+            | Route::XmlStyle { .. },
             "POST" | "PUT",
         ) => "storage.upload",
         (Route::FbBucket { .. } | Route::GcsList { .. }, _) => "storage.list",
@@ -3763,6 +3764,9 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         } => gcs_acl_entry_delete(state, &bucket, &name, &entity),
         Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
         Route::FormUpload { bucket } => form_upload(state, &bucket, req),
+        Route::XmlStyle { bucket, name } if req.method == "PUT" => {
+            xml_style_put(state, &bucket, &name, req, &params)
+        }
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
         // The short bucket spelling is resolved before dispatch; one that reaches here is the catch-all.
         Route::NotImplemented | Route::GcsBucketShort { .. } => Ok(plain_status(501)),
@@ -3848,6 +3852,7 @@ fn unknown_bucket_written(
         Route::GcsUpload { bucket } if matches!(method, "POST" | "PUT") => bucket,
         Route::GcsCopy { dst_bucket, .. } => dst_bucket,
         Route::FormUpload { bucket } => bucket,
+        Route::XmlStyle { bucket, .. } if method == "PUT" => bucket,
         _ => return None,
     };
     let Ok(parsed) = BucketName::try_new(bucket) else {
@@ -6942,6 +6947,86 @@ fn xml_read_admission(
         "Access denied.",
         Some(&format!("Anonymous caller does not have storage.objects.get access to the Google Cloud Storage object. Permission 'storage.objects.get' denied on resource (or it may not exist). Fireemu: make the object public (file.makePublic(), predefinedAcl=publicRead or an allUsers READER ACL entry) or list the bucket {:?} in storage.publicBuckets, which stands for a bucket whose IAM grants allUsers the object viewer role.", bucket.as_str())),
     ))
+}
+
+/// Local XML object upload. Signed URL expiry and header presence are checked, but the
+/// cryptographic signature and signed header values are not verified.
+fn xml_style_put(
+    state: &StorageState,
+    bucket: &str,
+    name: &str,
+    req: StorageRequest,
+    params: &BTreeMap<String, String>,
+) -> Outcome {
+    use crate::storage_xml::{check_signed_url, SignedUrl};
+    match check_signed_url(params, now_unix_seconds(state)) {
+        SignedUrl::Valid => {}
+        SignedUrl::Expired => {
+            return Err(xml_error(
+                400,
+                "ExpiredToken",
+                "Invalid argument.",
+                Some("Request has expired."),
+            ))
+        }
+        SignedUrl::Invalid(details) => {
+            return Err(xml_error(
+                400,
+                "InvalidArgument",
+                "Invalid argument.",
+                Some(details),
+            ))
+        }
+        SignedUrl::Absent if state.is_strict() => {
+            return Err(xml_error(403, "AccessDenied", "Access denied.", None))
+        }
+        SignedUrl::Absent => {}
+    }
+    if let Some(headers) = params.get("X-Goog-SignedHeaders") {
+        for header in headers.split(';') {
+            if header.is_empty()
+                || (header != "host" && req.header(&header.to_ascii_lowercase()).is_none())
+            {
+                return Err(xml_error(
+                    400,
+                    "InvalidArgument",
+                    "Missing signed header.",
+                    None,
+                ));
+            }
+        }
+    }
+    if let Some(range) = req.header("x-goog-content-length-range") {
+        let parsed = range.split_once(',').and_then(|(min, max)| {
+            Some((
+                min.trim().parse::<u64>().ok()?,
+                max.trim().parse::<u64>().ok()?,
+            ))
+        });
+        let valid = parsed
+            .is_some_and(|(min, max)| min <= max && (min..=max).contains(&(req.body.len() as u64)));
+        if !valid {
+            return Err(xml_error(
+                400,
+                "InvalidArgument",
+                "Invalid content length range.",
+                None,
+            ));
+        }
+    }
+    let b = bucket_name(bucket)?;
+    let n = upload_object_name(state, name)?;
+    let meta = NewMetadata {
+        content_type: req.header("content-type").map(str::to_owned),
+        custom: Some(BTreeMap::new()),
+        ..NewMetadata::default()
+    };
+    let prepared = PreparedObject::new(req.body);
+    let mut store = state.store()?;
+    store
+        .put_prepared(&b, &n, prepared, meta, Precondition::default(), state.now())
+        .map_err(gcs_core_err)?;
+    Ok(StorageResponse::empty(200))
 }
 
 /// The `GET /{bucket}/{object...}` fallback: object bytes when it exists, the JSON API's

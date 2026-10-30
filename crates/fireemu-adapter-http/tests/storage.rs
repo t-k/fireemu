@@ -9714,7 +9714,10 @@ proptest::proptest! {
 fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
     let s = state(None);
     let path = format!("/{BUCKET}/dir%2Fimage.png?X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range");
-    let headers = [("content-type", "image/png"), ("x-goog-content-length-range", "0,4")];
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,4"),
+    ];
     let response = handle(&s, req("PUT", &path, &headers, &[137, 80, 78, 71]));
     assert_eq!(response.status, 200);
     let read = handle(&s, req("GET", &path, &[], &[]));
@@ -9723,4 +9726,28 @@ fn signed_xml_put_checks_range_and_preserves_existing_object_on_refusal() {
     assert_eq!(refused.status, 400);
     let read = handle(&s, req("GET", &path, &[], &[]));
     assert_eq!(read.body.as_ref(), &[137, 80, 78, 71]);
+}
+
+#[test]
+fn signed_xml_put_refuses_invalid_requests_before_overwrite() {
+    let s = state(None);
+    let valid = format!("/{BUCKET}/existing?X-Goog-Signature=test&X-Goog-Date=20260829T120000Z&X-Goog-Expires=3600&X-Goog-SignedHeaders=content-type%3Bhost%3Bx-goog-content-length-range");
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "4,4"),
+    ];
+    assert_eq!(
+        handle(&s, req("PUT", &valid, &headers, b"old!")).status,
+        200
+    );
+    for (path, request_headers, body, status) in [
+        (valid.clone(), vec![("content-type", "image/png"), ("x-goog-content-length-range", "5,4")], &b"new!"[..], 400),
+        (valid.clone(), vec![("content-type", "image/png"), ("x-goog-content-length-range", "4,4")], &b"large"[..], 400),
+        (valid.clone(), vec![("x-goog-content-length-range", "4,4")], &b"new!"[..], 400),
+        (format!("/{BUCKET}/existing?X-Goog-Signature=test&X-Goog-Date=20260829T100000Z&X-Goog-Expires=60"), vec![], &b"new!"[..], 400),
+        (format!("/{BUCKET}/existing"), vec![], &b"new!"[..], 403),
+    ] {
+        assert_eq!(handle(&s, req("PUT", &path, &request_headers, body)).status, status);
+        assert_eq!(handle(&s, req("GET", &valid, &[], &[])).body.as_ref(), b"old!");
+    }
 }

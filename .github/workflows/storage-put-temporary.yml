@@ -13,4 +13,4 @@ jobs:
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - run: cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put_checks_range_and_preserves_existing_object_on_refusal)'
+      - run: cargo nextest run -p fireemu-adapter-http --test storage -E 'test(signed_xml_put)'

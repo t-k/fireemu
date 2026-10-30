@@ -4830,7 +4830,7 @@ add_fields_map	unknown	none	strict";
             match *later {
                 "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
                 "invalid_limit" => {
-                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}))
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
                 }
                 _ => {}
             }

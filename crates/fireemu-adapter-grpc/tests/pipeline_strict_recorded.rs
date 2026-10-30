@@ -877,7 +877,7 @@ fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
         Case {
             label: "map(\"k\")",
             stages: vec![select(func("map", vec![string("k")]))],
-            strict: None,
+            strict: Some((400, "'map' function must have an even number of arguments")),
             emulator: (400, "'map' function must have an even number of arguments"),
         },
         Case {
@@ -950,9 +950,8 @@ fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
 
 #[test]
 fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
-    // Production's order between an argument-type refusal and an empty map or a later stage's
-    // check is unrecorded, so under strict a function call that fails on its constants (fields
-    // read as absent) refuses the pipeline as unobserved; the emulator profile keeps its order.
+    // N76 records a map key refusal before an empty select. Other cases below retain their
+    // unrecorded validation-order boundaries.
     let empty = || stage("select", vec![map(vec![])]);
     let double = json!({ "doubleValue": 1.5 });
     check(vec![
@@ -968,8 +967,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "map key must be of type STRING, given type is DOUBLE")),
+            emulator: (400, "map key must be of type STRING, given type is DOUBLE"),
         },
         Case {
             label: "N78 select {v: document_id(1.5)} then limit(\"x\")",

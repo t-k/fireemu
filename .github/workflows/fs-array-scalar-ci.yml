@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
+          ref: d03e81e3257fdc75d43f6e7b18194e48c89c5500
           fetch-depth: 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -23,8 +23,10 @@ jobs:
           tool: cargo-nextest@0.9.143
       - name: Verify exact source and run mutations
         run: |
-          test "$(git rev-parse HEAD)" = 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
+          test "$(git rev-parse HEAD)" = d03e81e3257fdc75d43f6e7b18194e48c89c5500
           test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(array_transform_unobserved_index_alias_remains_refused) | test(array_transform_element_alias_validation_and_priority)'
+          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings
           python3 .ci-helper/.github/temporary/array_mutations.py
       - name: Preserve mutation logs
         if: always()

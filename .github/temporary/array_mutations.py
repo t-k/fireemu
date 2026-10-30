@@ -13,6 +13,7 @@ cases = [
     ('root_function_guard', 'crates/fireemu-adapter-grpc/src/pipeline.rs', "if name.split('/').count() == 5 {", "if false && name.split('/').count() == 5 {", 'fireemu-adapter-grpc', 'strict_refuses_document_functions_of_a_root'),
     ('like_underscore', 'crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs', "'_' => {\n                regex.push('.');", "'_' => {\n                regex.push('_');", 'fireemu-adapter-grpc', 'like_wildcards_escapes_and_dynamic_pattern'),
     ('nan_vector', 'crates/fireemu-adapter-grpc/src/pipeline.rs', 'Some(V::DoubleValue(d)) if d.is_nan()', 'Some(V::DoubleValue(d)) if d.is_nan() && false', 'fireemu-adapter-grpc', 'generated_infinity_reference_projection_cases'),
+    ('index_alias', 'crates/fireemu-adapter-grpc/src/pipeline.rs', '&& index == 0', '&& index <= 1', 'fireemu-adapter-grpc', 'array_transform_unobserved_index_alias_remains_refused'),
 ]
 output = pathlib.Path('/tmp/array-scalar-mutants')
 output.mkdir(exist_ok=True)

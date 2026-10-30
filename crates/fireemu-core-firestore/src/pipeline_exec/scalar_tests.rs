@@ -4349,6 +4349,7 @@ fn observed_generic_unrecorded_boundaries_and_arity_are_bounded() {
 #[test]
 fn numeric_scalar_domain_pict_rows() {
     let cases = [
+        ("minimum", "array", "integers", "strict"),
         ("minimum", "array", "doubles", "strict"),
         ("maximum", "array", "doubles", "strict"),
         ("minimum", "variadic", "mixed", "strict"),
@@ -4363,22 +4364,21 @@ fn numeric_scalar_domain_pict_rows() {
         ("sum", "array", "empty", "strict"),
         ("sum", "array", "integers", "strict"),
         ("sum", "array", "overflow", "strict"),
-        ("maximum", "array", "empty", "emulator"),
-        ("minimum", "array", "empty", "emulator"),
-        ("minimum", "variadic", "overflow", "emulator"),
-        ("negate", "scalar", "overflow", "emulator"),
-        ("sum", "array", "null", "emulator"),
-        ("maximum", "variadic", "nonnumeric", "emulator"),
-        ("maximum", "variadic", "integers", "emulator"),
-        ("negate", "scalar", "integers", "strict"),
+        ("negate", "scalar", "integers", "emulator"),
+        ("minimum", "variadic", "nonnumeric", "emulator"),
+        ("maximum", "variadic", "overflow", "emulator"),
         ("sum", "array", "doubles", "emulator"),
-        ("minimum", "array", "nonnumeric", "emulator"),
-        ("minimum", "variadic", "doubles", "emulator"),
-        ("minimum", "variadic", "integers", "emulator"),
-        ("minimum", "variadic", "mixed", "emulator"),
-        ("maximum", "variadic", "null", "emulator"),
+        ("negate", "scalar", "overflow", "emulator"),
+        ("maximum", "variadic", "integers", "emulator"),
+        ("sum", "array", "null", "emulator"),
+        ("maximum", "array", "nonnumeric", "strict"),
+        ("maximum", "array", "mixed", "emulator"),
+        ("maximum", "array", "empty", "emulator"),
+        ("maximum", "variadic", "doubles", "emulator"),
+        ("minimum", "variadic", "overflow", "emulator"),
+        ("minimum", "array", "empty", "emulator"),
         ("minimum", "variadic", "absent", "emulator"),
-        ("maximum", "array", "overflow", "strict"),
+        ("minimum", "variadic", "null", "emulator"),
     ];
     for (name, shape, input, profile) in cases {
         let values = match input {

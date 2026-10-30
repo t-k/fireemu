@@ -352,32 +352,32 @@ const fn document_function(
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
     comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
-        eval_comparison(Comparison::Equal, args, cx)
+        eval_comparison(Comparison::Equal, args, cx.clone())
     }),
     comparison(
         "not_equal",
         "not_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::NotEqual, args, cx),
+        |args, cx| eval_comparison(Comparison::NotEqual, args, cx.clone()),
     ),
     comparison(
         "less_than",
         "less_than(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::Less, args, cx),
+        |args, cx| eval_comparison(Comparison::Less, args, cx.clone()),
     ),
     comparison(
         "less_than_or_equal",
         "less_than_or_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx),
+        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx.clone()),
     ),
     comparison(
         "greater_than",
         "greater_than(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::Greater, args, cx),
+        |args, cx| eval_comparison(Comparison::Greater, args, cx.clone()),
     ),
     comparison(
         "greater_than_or_equal",
         "greater_than_or_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx),
+        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx.clone()),
     ),
     Function {
         name: "array",
@@ -978,7 +978,7 @@ impl Expr {
                     condition,
                     runtime,
                 };
-                (function.eval)(&args, cx)
+                (function.eval)(&args, cx.clone())
             }
         }
     }
@@ -1297,7 +1297,7 @@ fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "array_length", cx) {
+    match array_access(args, "array_length", cx.clone()) {
         Ok(values) => Eval::Value(Value::Integer(
             i64::try_from(values.len()).unwrap_or(i64::MAX),
         )),
@@ -1306,21 +1306,21 @@ fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_array_first(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "first", cx) {
+    match array_access(args, "first", cx.clone()) {
         Ok(values) => values.first().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
 fn eval_array_last(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "last", cx) {
+    match array_access(args, "last", cx.clone()) {
         Ok(values) => values.last().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
 fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
-    let values = match array_access(args, "array_get", cx) {
+    let values = match array_access(args, "array_get", cx.clone()) {
         Ok(values) => values,
         Err(result) => return result,
     };
@@ -1353,11 +1353,11 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool) -> Eval {
-    let values = match subsequence_array(args, name, cx, false) {
+    let values = match subsequence_array(args, name, cx.clone(), false) {
         Ok(values) => values,
         Err(error) => return error,
     };
-    let n = match subsequence_integer(&args[1], name, cx) {
+    let n = match subsequence_integer(&args[1], name, cx.clone()) {
         Ok(n) if n >= 0 => usize::try_from(n).unwrap_or(usize::MAX),
         Ok(_) => {
             return Eval::Error(EvalError::Unobserved {
@@ -1403,10 +1403,10 @@ fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool)
     Eval::Value(Value::Array(selected))
 }
 fn eval_maximum_n(args: &[Eval], cx: Context) -> Eval {
-    eval_extrema_n(args, cx, "maximum_n", true)
+    eval_extrema_n(args, cx.clone(), "maximum_n", true)
 }
 fn eval_minimum_n(args: &[Eval], cx: Context) -> Eval {
-    eval_extrema_n(args, cx, "minimum_n", false)
+    eval_extrema_n(args, cx.clone(), "minimum_n", false)
 }
 
 fn eval_join(args: &[Eval], cx: Context) -> Eval {
@@ -1536,7 +1536,7 @@ fn subsequence_array<'a>(
 }
 
 fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i64, Eval> {
-    if let Some(error) = scalar::int_argument(name, arg, cx) {
+    if let Some(error) = scalar::int_argument(name, arg, cx.clone()) {
         return Err(error);
     }
     match arg {
@@ -1549,16 +1549,16 @@ fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i6
 }
 
 fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
-    let values = match subsequence_array(args, "array_slice", cx, false) {
+    let values = match subsequence_array(args, "array_slice", cx.clone(), false) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let offset = match subsequence_integer(&args[1], "array_slice", cx) {
+    let offset = match subsequence_integer(&args[1], "array_slice", cx.clone()) {
         Ok(v) => v,
         Err(e) => return e,
     };
     let length = if let Some(arg) = args.get(2) {
-        match subsequence_integer(arg, "array_slice", cx) {
+        match subsequence_integer(arg, "array_slice", cx.clone()) {
             Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX),
             Ok(_) => {
                 return Eval::Error(EvalError::Unobserved {
@@ -1594,7 +1594,7 @@ fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
             reason: "unrecorded argument or element types",
         });
     }
-    let values = match subsequence_array(args, "array_index_of_all", cx, true) {
+    let values = match subsequence_array(args, "array_index_of_all", cx.clone(), true) {
         Ok(values) => values,
         Err(error) => return error,
     };
@@ -1613,7 +1613,7 @@ fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
-    let values = match subsequence_array(args, "array_index_of", cx, true) {
+    let values = match subsequence_array(args, "array_index_of", cx.clone(), true) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -1631,11 +1631,11 @@ fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
 }
 
 fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) -> Eval {
-    let values = match subsequence_array(args, name, cx, false) {
+    let values = match subsequence_array(args, name, cx.clone(), false) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let count = match subsequence_integer(&args[1], name, cx) {
+    let count = match subsequence_integer(&args[1], name, cx.clone()) {
         Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX).min(values.len()),
         Ok(_) => {
             return Eval::Error(EvalError::Invalid(format!(
@@ -1652,10 +1652,10 @@ fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) 
     Eval::Value(Value::Array(selected.to_vec()))
 }
 fn eval_array_first_n(args: &[Eval], cx: Context) -> Eval {
-    eval_array_count(args, cx, "array_first_n", false)
+    eval_array_count(args, cx.clone(), "array_first_n", false)
 }
 fn eval_array_last_n(args: &[Eval], cx: Context) -> Eval {
-    eval_array_count(args, cx, "array_last_n", true)
+    eval_array_count(args, cx.clone(), "array_last_n", true)
 }
 
 /// A map function with production's recorded argument-count signature.

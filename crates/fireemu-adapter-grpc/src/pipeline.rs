@@ -2443,6 +2443,9 @@ fn decode_operand_tree_in(
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
+                Unrecorded::Refuse if recorded_literal_error_class(&error) => {
+                    Err(Status::invalid_argument(error))
+                }
                 Unrecorded::Refuse => Err(Status::unimplemented(unobserved_literal(&error))),
                 Unrecorded::OfficialEmulator => Err(Status::invalid_argument(error)),
             }
@@ -2506,6 +2509,13 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
+            // A syntactically invalid non-resource name has a computed refusal; the caller's
+            // request-shape gate decides whether production recorded it.
+            if !name.starts_with("projects/") {
+                if let Some(error) = reference_literal_error(name) {
+                    return Some(Status::invalid_argument(error));
+                }
+            }
             // O-5 appendix also records the request database's documents root.
             let inside = name == own
                 || name
@@ -2694,6 +2704,20 @@ fn decode_official_literal(
             crate::decode::decode_value(value).map_err(|e| Status::invalid_argument(e.to_string()))
         }
     }
+}
+
+// These structural classes have recorded refusals. The request gate remains authoritative for
+// the exact request shape and computed message.
+fn recorded_literal_error_class(error: &str) -> bool {
+    error.starts_with("Field __type__ must be a string; founds ")
+        || error.starts_with("Document parent name ")
+        || matches!(
+            error,
+            "Vector map is missing key 'value'."
+                | "Vector value type must be an array."
+                | "Vector value map has extraneous entries."
+                | "Vector must only contain values of type 'double'"
+        )
 }
 
 /// Strict's answer for a literal the official emulator refuses (`error` is its text): it names

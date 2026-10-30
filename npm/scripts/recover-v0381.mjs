@@ -169,7 +169,7 @@ async function main() {
     if (preflight) { console.log('preflight complete; no packages published'); return; }
     invoke('cp', ['-R', `${assets}/.`, output]);
     invoke('cp', ['-R', `${notes}/.`, output]);
-    writeFileSync(join(output, 'recovery-provenance.txt'), `The release binaries were built and tested from ${SHA} in run ${RUN}. The remaining npm packages were published from those artifacts in recovery run ${process.env.GITHUB_RUN_ID}, workflow SHA ${process.env.GITHUB_SHA}. Their npm provenance identifies the recovery run, not the original build run.\n`);
+    writeFileSync(join(output, 'recovery-provenance.txt'), `The release binaries were built and tested from ${SHA} in run ${RUN}. The remaining npm packages were published from those artifacts by the recovery workflow. Recovery completion run ${process.env.GITHUB_RUN_ID} used workflow SHA ${process.env.GITHUB_SHA}. Each package’s npm provenance identifies its actual publishing run; recovered packages reference recovery runs rather than the original build run.\n`);
     console.log(`Original build: ${SHA}, run ${RUN}; recovery publish: ${process.env.GITHUB_SHA}, run ${process.env.GITHUB_RUN_ID}.`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }

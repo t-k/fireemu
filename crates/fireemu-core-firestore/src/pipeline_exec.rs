@@ -1309,7 +1309,9 @@ fn eval_namespace(args: &[Eval], _cx: Context<'_>) -> Eval {
         return error;
     }
     match args {
-        [Eval::Value(Value::Reference(name))] if DocumentPath::from_resource_name(name).is_ok() => {
+        [Eval::Value(Value::Reference(name))]
+            if DocumentPath::from_resource_name(name).is_some() =>
+        {
             Eval::Value(Value::String(String::new()))
         }
         _ => generic_unobserved("namespace"),
@@ -1324,7 +1326,7 @@ fn eval_has_ancestor(args: &[Eval], _cx: Context<'_>) -> Eval {
     else {
         return generic_unobserved("has_ancestor");
     };
-    let (Ok(path), Ok(parent)) = (
+    let (Some(path), Some(parent)) = (
         DocumentPath::from_resource_name(name),
         DocumentPath::from_resource_name(ancestor),
     ) else {
@@ -1347,7 +1349,7 @@ fn eval_reference_slice(args: &[Eval], _cx: Context<'_>) -> Eval {
     else {
         return generic_unobserved("reference_slice");
     };
-    let Ok(path) = DocumentPath::from_resource_name(name) else {
+    let Some(path) = DocumentPath::from_resource_name(name) else {
         return generic_unobserved("reference_slice");
     };
     let Ok(end) = usize::try_from(*end) else {
@@ -1369,7 +1371,7 @@ fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
     let [Eval::Value(Value::Reference(name)), Eval::Value(Value::String(id))] = args else {
         return generic_unobserved("replace_document_id");
     };
-    let Ok(path) = DocumentPath::from_resource_name(name) else {
+    let Some(path) = DocumentPath::from_resource_name(name) else {
         return generic_unobserved("replace_document_id");
     };
     let mut pairs = path

@@ -12,11 +12,11 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        mutant: [noop, 'null']
+        mutant: [noop, minimum, maximum, 'null', absent, promotion, nonnumeric, negate]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 33e75715538e1381b48d6c1c1a2adbdffa7c1e2f
+          ref: 6e185fb1704026bbfabe6ae8e30ece000e25b7e4
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
@@ -24,7 +24,7 @@ jobs:
       - env:
           MUTANT: ${{ matrix.mutant }}
         run: |
-          test "$(git rev-parse HEAD)" = 33e75715538e1381b48d6c1c1a2adbdffa7c1e2f
+          test "$(git rev-parse HEAD)" = 6e185fb1704026bbfabe6ae8e30ece000e25b7e4
           python3 - <<'PY'
           import os
           from pathlib import Path

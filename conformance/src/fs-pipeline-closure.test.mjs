@@ -315,12 +315,20 @@ test("finite contract adjudications preserve their strict-only raw outcomes", ()
       const proof = json(entry.path);
       assert.equal(proof.profile, "strict");
       assert.equal(proof.sourceCommit, "1bdc3cdd794de3166b65f72188e04bd0ea30a66a");
-      assert.equal(proof.binarySha256, "c33360d75467ebee4cf2857bcd6b314429f6405d34a3676952ce9231904ead2a");
-      assert.deepEqual(proof.proofs.map((row) => [row.id, row.rounds, row.code, row.frames]), [
-        ["scalar-one", 2, 0, 1],
-        ["scalar-many", 2, 3, 0],
+      assert.equal(
+        proof.binarySha256,
+        "c33360d75467ebee4cf2857bcd6b314429f6405d34a3676952ce9231904ead2a",
+      );
+      assert.deepEqual(
+        proof.proofs.map((row) => [row.id, row.rounds, row.code, row.frames]),
+        [
+          ["scalar-one", 2, 0, 1],
+          ["scalar-many", 2, 3, 0],
+        ],
+      );
+      assert.deepEqual(proof.proofs[0].documents, [
+        { child: { stringValue: "child-a" }, key: { stringValue: "A" } },
       ]);
-      assert.deepEqual(proof.proofs[0].documents, [{ child: { stringValue: "child-a" }, key: { stringValue: "A" } }]);
       assert.equal(proof.proofs[1].message, "Subpipeline returned multiple results.");
       continue;
     }

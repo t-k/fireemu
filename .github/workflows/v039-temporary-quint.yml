@@ -9,7 +9,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 41b298022613b3690910dcd3e2864ab5966f4176
+          ref: 94abafe2a6817eaca44fd59f7de66c096f9e0438
+      - run: test "$(git rev-parse HEAD)" = 94abafe2a6817eaca44fd59f7de66c096f9e0438
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 10.32.1
@@ -17,4 +18,26 @@ jobs:
         with:
           node-version: 24
       - run: pnpm -C conformance install --frozen-lockfile
-      - run: node --test --test-name-pattern='R21 v0.40' conformance/src/release-strict-regression.test.mjs
+      - run: node --test --test-name-pattern='R21 v0.3[89]|R21 v0.40' conformance/src/release-strict-regression.test.mjs
+  affected:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 94abafe2a6817eaca44fd59f7de66c096f9e0438
+      - run: test "$(git rev-parse HEAD)" = 94abafe2a6817eaca44fd59f7de66c096f9e0438
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          components: clippy
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: pnpm -C conformance install --frozen-lockfile
+      - run: cargo clippy --locked -p fireemu-adapter-database -p fireemu-core-database -p fireemu-adapter-functions -p fireemu-adapter-grpc -p fireemu-core-firestore -p fireemu-adapter-http --all-targets --all-features -- -D warnings
+      - run: cargo nextest run --locked -p fireemu-adapter-database -p fireemu-core-database -p fireemu-adapter-functions -p fireemu-adapter-grpc -p fireemu-core-firestore -p fireemu-adapter-http --profile pr

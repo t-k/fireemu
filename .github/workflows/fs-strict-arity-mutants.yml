@@ -1,0 +1,41 @@
+name: fs-strict-arity-mutants
+on:
+  push:
+    branches: [work/fs-strict-arity-mutants-ci]
+permissions:
+  contents: read
+jobs:
+  mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fba43560f9a8a8edc16565c62e3953c3234225ca
+      - name: baseline and changed-function mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = fba43560f9a8a8edc16565c62e3953c3234225ca
+          for item in 'fireemu-core-firestore recorded_arity_metadata_formats_document_and_comparison_signatures' 'fireemu-adapter-grpc generated_comparison_arity_and_precedence_cases' 'fireemu-adapter-grpc where_is_type_keeps_static_type_validation' 'fireemu-adapter-grpc valid_where_equal_retains_field_filter_pushdown'; do
+            read -r package testname <<< "$item"
+            cargo test -p "$package" --lib "$testname" --locked
+          done
+          for mutation in comparison document overload arity boundary pushdown; do
+            git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs crates/fireemu-adapter-grpc/src/pipeline.rs
+            MUTATION="$mutation" python3 -c 'import os,pathlib; m=os.environ["MUTATION"]; core="crates/fireemu-core-firestore/src/pipeline_exec.rs"; scalar="crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs"; adapter="crates/fireemu-adapter-grpc/src/pipeline.rs"; cases={"comparison":(core,"\"equal(x: any, y: any): boolean\"","\"equal(x: wrong, y: any): boolean\""),"document":(core,"\"document_id(ref: document_reference): any\"","\"document_id(ref: document_reference): wrong\""),"overload":(scalar,"ltrim[T: string | bytes](value: T, to_trim: T): T","ltrim[T: string | bytes](value: T, to_trim: T): wrong"),"arity":(adapter,"vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); function.args.len()];","vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); 2];"),"boundary":(adapter,"&& !matches!(\n                def.name,","&& matches!(\n                def.name,"),"pushdown":(adapter,"def.name == \"equal\" && !path.is_document_name()","def.name != \"equal\" && !path.is_document_name()")}; path,a,b=cases[m]; p=pathlib.Path(path); s=p.read_text(); assert s.count(a)==1,(m,s.count(a)); p.write_text(s.replace(a,b,1))'
+            case "$mutation" in
+              comparison|document|overload) package=fireemu-core-firestore; testname=recorded_arity_metadata_formats_document_and_comparison_signatures ;;
+              arity) package=fireemu-adapter-grpc; testname=generated_comparison_arity_and_precedence_cases ;;
+              boundary) package=fireemu-adapter-grpc; testname=where_is_type_keeps_static_type_validation ;;
+              pushdown) package=fireemu-adapter-grpc; testname=valid_where_equal_retains_field_filter_pushdown ;;
+            esac
+            set +e
+            cargo test -p "$package" --lib "$testname" --locked > "mutation-$mutation.log" 2>&1
+            rc=$?
+            set -e
+            cat "mutation-$mutation.log"
+            test "$rc" = 101
+            grep -q "$testname ... FAILED" "mutation-$mutation.log"
+          done
+          git checkout -- crates/fireemu-core-firestore/src/pipeline_exec.rs crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs crates/fireemu-adapter-grpc/src/pipeline.rs

@@ -11,6 +11,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+      - name: assert exact head and bound inputs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD
+          sha256sum Cargo.toml Cargo.lock verification/quint/evidence/cargo-authority.json crates/fireemu-adapter-http/src/storage.rs crates/fireemu-adapter-http/src/storage_server.rs
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
@@ -106,8 +113,6 @@ jobs:
           pnpm -C conformance install --frozen-lockfile
           cargo build -p fireemu --locked
           target/debug/fireemu exec --project demo-signed-put --only storage --storage-port 0 --hub-port 0 -- node conformance/src/storage-signed-put-smoke.mjs
-      - name: exact-head adapter tests
-        run: cargo nextest run -p fireemu-adapter-http --profile pr --no-fail-fast
       - name: regenerate bound Quint evidence
         run: |
           set -euo pipefail

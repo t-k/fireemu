@@ -4932,6 +4932,111 @@ mod tests {
         }
     }
 
+    #[test]
+    fn captured_array_and_like_expressions_preserve_typed_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let field = |name: &str| val(V::FieldReferenceValue(name.to_owned()));
+        let variable = |name: &str| val(V::VariableReferenceValue(name.to_owned()));
+        let string = |text: &str| val(V::StringValue(text.to_owned()));
+        let integer = |number| val(V::IntegerValue(number));
+        let call = |name: &str, args| {
+            val(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let row = Row::derived(
+            [
+                (
+                    "itemsPop".to_owned(),
+                    Value::Array(vec![Value::Integer(0), Value::Integer(2)]),
+                ),
+                ("itemsEmpty".to_owned(), Value::Array(vec![])),
+                (
+                    "textPositive".to_owned(),
+                    Value::String("apricot".to_owned()),
+                ),
+                ("textNegative".to_owned(), Value::String("berry".to_owned())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let cases = [
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(2)]),
+            ),
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(0), Value::Integer(4)]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call("like", vec![field("textPositive"), string("%ap%")]),
+                Value::Boolean(true),
+            ),
+            (
+                call("like", vec![field("textNegative"), string("%ap%")]),
+                Value::Boolean(false),
+            ),
+        ];
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (wire, expected) in &cases {
+                let expression = decode_operand_tree(wire, mode).unwrap();
+                let runtime = RuntimeContext {
+                    regex_resolver: Some(crate::pipeline_regex::resolve),
+                    ..RuntimeContext::default()
+                };
+                assert_eq!(
+                    expression.eval_in_with_runtime(&row, mode, runtime),
+                    Eval::Value(expected.clone())
+                );
+            }
+            assert!(decode_operand_tree(&call("rand", vec![]), mode).is_ok());
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

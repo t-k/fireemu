@@ -11,14 +11,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3f7943fe257f103cae3acf8982eb130097375db5
+          ref: 338e2e8e62b496304fd475369ec1ec05beb8b2ea
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - name: Run affected crates
         run: |
-          test "$(git rev-parse HEAD)" = 3f7943fe257f103cae3acf8982eb130097375db5
+          test "$(git rev-parse HEAD)" = 338e2e8e62b496304fd475369ec1ec05beb8b2ea
           cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast
       - name: Clippy affected crates
         if: always()

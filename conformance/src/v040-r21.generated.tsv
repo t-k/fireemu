@@ -1,0 +1,16 @@
+Row	Status	Mutation
+array	promoted	none
+map	promoted	none
+other	unchanged	none
+array	unchanged	fixture
+array	unchanged	rows
+other	unchanged	summary
+map	unchanged	artifact
+map	promoted	summary
+other	unchanged	rows
+map	promoted	rows
+array	promoted	summary
+array	promoted	artifact
+other	unchanged	artifact
+map	promoted	fixture
+other	unchanged	fixture

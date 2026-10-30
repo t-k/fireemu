@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ebf898054a9bd43c1bc1526fc8d97f653dfe5097
+          ref: ef314287c3bf24c599c7df9c83160db6a29cbb89
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = ebf898054a9bd43c1bc1526fc8d97f653dfe5097
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(recorded_map_add_fields_refusal_precedes_empty_select)'
+          test "$(git rev-parse HEAD)" = ef314287c3bf24c599c7df9c83160db6a29cbb89
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(recorded_map_add_fields_refusal_precedes_empty_select) | test(recorded_map_constructor_refusals) | test(generated_map_refusal_precedence_cases)'

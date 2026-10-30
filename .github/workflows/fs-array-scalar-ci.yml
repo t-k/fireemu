@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ede61810e570f9545a5e04445cc044e635a1e043
+          ref: 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = ede61810e570f9545a5e04445cc044e635a1e043
+          test "$(git rev-parse HEAD)" = 8bdec523f70c14b8884c7e4318fd91e7ffe3f7df
           cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
       - name: Clippy changed crates
         if: always()

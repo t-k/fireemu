@@ -3959,3 +3959,61 @@ fn numeric_scalar_unobserved_inputs_are_refused() {
     assert!(is_unobserved(&strict("negate", &[int(i64::MIN)])));
     assert!(is_unobserved(&strict("negate", &[text("x")])));
 }
+
+#[test]
+fn numeric_scalar_pict_rows() {
+    let cases = [
+        ("minimum", "array", "integers"),
+        ("minimum", "variadic", "integers"),
+        ("maximum", "array", "integers"),
+        ("maximum", "variadic", "integers"),
+        ("sum", "array", "integers"),
+        ("negate", "scalar", "integers"),
+        ("maximum", "array", "empty"),
+        ("sum", "array", "empty"),
+        ("sum", "array", "overflow"),
+        ("minimum", "array", "wrong_type"),
+        ("minimum", "variadic", "overflow"),
+        ("sum", "array", "wrong_type"),
+        ("negate", "scalar", "overflow"),
+        ("minimum", "array", "empty"),
+        ("maximum", "variadic", "wrong_type"),
+        ("negate", "scalar", "wrong_type"),
+        ("maximum", "variadic", "overflow"),
+    ];
+    for (name, shape, input) in cases {
+        let values = match input {
+            "integers" => vec![Value::Integer(7), Value::Integer(2)],
+            "empty" => vec![],
+            "wrong_type" => vec![Value::Null, Value::Integer(2)],
+            "overflow" => vec![Value::Integer(i64::MAX), Value::Integer(1)],
+            _ => unreachable!(),
+        };
+        let args = match shape {
+            "array" => vec![array(values)],
+            "variadic" => values.into_iter().map(Eval::Value).collect(),
+            "scalar" if input == "integers" => vec![int(7)],
+            "scalar" if input == "overflow" => vec![int(i64::MIN)],
+            "scalar" => vec![null()],
+            _ => unreachable!(),
+        };
+        let actual = strict(name, &args);
+        if input == "empty"
+            || input == "wrong_type"
+            || (input == "overflow" && (name == "sum" || name == "negate"))
+        {
+            assert!(is_unobserved(&actual), "{name} {shape} {input}: {actual:?}");
+        } else {
+            let expected = match (name, input) {
+                ("minimum", "integers") => 2,
+                ("maximum", "integers") => 7,
+                ("minimum", "overflow") => 1,
+                ("maximum", "overflow") => i64::MAX,
+                ("sum", "integers") => 9,
+                ("negate", "integers") => -7,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, int(expected), "{name} {shape} {input}");
+        }
+    }
+}

@@ -17,7 +17,7 @@ const fn function(
     name: &'static str,
     arity: Arity,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -172,7 +172,7 @@ fn left_to_right(
     function: &'static str,
     args: &[Eval],
     decider: bool,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<Option<bool>, Eval> {
     if let Some(error) = first_error(args) {
         // An operand whose own evaluation fails is reported before the walk, wherever it
@@ -226,21 +226,21 @@ fn tri(state: Option<bool>) -> Eval {
     state.map_or_else(null, boolean)
 }
 
-fn eval_and(args: &[Eval], cx: Context) -> Eval {
+fn eval_and(args: &[Eval], cx: Context<'_>) -> Eval {
     match left_to_right("and", args, false, cx) {
         Ok(state) => tri(state),
         Err(error) => error,
     }
 }
 
-fn eval_or(args: &[Eval], cx: Context) -> Eval {
+fn eval_or(args: &[Eval], cx: Context<'_>) -> Eval {
     match left_to_right("or", args, true, cx) {
         Ok(state) => tri(state),
         Err(error) => error,
     }
 }
 
-fn eval_not(args: &[Eval], _cx: Context) -> Eval {
+fn eval_not(args: &[Eval], _cx: Context<'_>) -> Eval {
     match all_booleans("not", args) {
         Ok(states) => tri(states[0].map(|b| !b)),
         Err(error) => error,
@@ -249,7 +249,7 @@ fn eval_not(args: &[Eval], _cx: Context) -> Eval {
 
 /// `xor`: unknown when any operand is, else whether an odd number is true (two to five operands
 /// were recorded, O-6 and O-9).
-fn eval_xor(args: &[Eval], _cx: Context) -> Eval {
+fn eval_xor(args: &[Eval], _cx: Context<'_>) -> Eval {
     match all_booleans("xor", args) {
         Ok(states) if states.contains(&None) => null(),
         Ok(states) => boolean(states.iter().filter(|s| **s == Some(true)).count() % 2 == 1),
@@ -258,21 +258,21 @@ fn eval_xor(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// `nor`: the negation of `or`, read left to right like it.
-fn eval_nor(args: &[Eval], cx: Context) -> Eval {
+fn eval_nor(args: &[Eval], cx: Context<'_>) -> Eval {
     match left_to_right("nor", args, true, cx) {
         Ok(state) => tri(state.map(|b| !b)),
         Err(error) => error,
     }
 }
 
-fn eval_exists(args: &[Eval], _cx: Context) -> Eval {
+fn eval_exists(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
     boolean(!matches!(args[0], Eval::Absent))
 }
 
-fn eval_is_absent(args: &[Eval], _cx: Context) -> Eval {
+fn eval_is_absent(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -280,7 +280,7 @@ fn eval_is_absent(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// `is_error(x)`: whether evaluating `x` failed. A refusal fireemu cannot classify stays one.
-fn eval_is_error(args: &[Eval], _cx: Context) -> Eval {
+fn eval_is_error(args: &[Eval], _cx: Context<'_>) -> Eval {
     match &args[0] {
         Eval::Error(error @ EvalError::Unobserved { .. }) => Eval::Error(error.clone()),
         Eval::Error(_) => boolean(true),
@@ -307,7 +307,7 @@ fn kind_name(value: &Value) -> &'static str {
     }
 }
 
-fn eval_type(args: &[Eval], _cx: Context) -> Eval {
+fn eval_type(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -323,7 +323,7 @@ fn eval_type(args: &[Eval], _cx: Context) -> Eval {
 /// (FS-ENT-ORACLE O-9b `types-matrix`): a missing value gives null whatever the name (the name
 /// `null` included), a stored value gives true for its own type and false for every other, and
 /// the names no stored value has (`int32`, `decimal128`, `max_key`, ...) give false.
-fn eval_is_type(args: &[Eval], _cx: Context) -> Eval {
+fn eval_is_type(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -366,7 +366,7 @@ fn array_argument<'a>(
     function: &'static str,
     arg: &'a Eval,
     null_recorded: bool,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<&'a [Value], Eval> {
     match arg {
         Eval::Value(Value::Array(values)) => Ok(values),
@@ -387,7 +387,7 @@ fn contains(values: &[Value], wanted: &Eval) -> bool {
     }
 }
 
-fn eval_array_contains(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_contains(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -397,11 +397,11 @@ fn eval_array_contains(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_array_contains_all(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_contains_all(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_all", &args[0], false, cx.clone()) {
+    let values = match array_argument("array_contains_all", &args[0], false, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -415,11 +415,11 @@ fn eval_array_contains_all(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_array_contains_any(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_contains_any(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    let values = match array_argument("array_contains_any", &args[0], false, cx.clone()) {
+    let values = match array_argument("array_contains_any", &args[0], false, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -435,7 +435,7 @@ fn eval_array_contains_any(args: &[Eval], cx: Context) -> Eval {
 
 /// `equal_any(x, list)`: whether `x` equals an element; a missing `x` equals nothing. Production
 /// named the failed call `eq_any` when the list was not an array.
-fn eval_equal_any(args: &[Eval], cx: Context) -> Eval {
+fn eval_equal_any(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -447,7 +447,7 @@ fn eval_equal_any(args: &[Eval], cx: Context) -> Eval {
 
 /// `not_equal_any(x, list)`: the opposite, true for a missing `x`. Production named the failed
 /// call `eq_any` when the list was not an array, as for `equal_any` (O-9 `ops-main`).
-fn eval_not_equal_any(args: &[Eval], cx: Context) -> Eval {
+fn eval_not_equal_any(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }

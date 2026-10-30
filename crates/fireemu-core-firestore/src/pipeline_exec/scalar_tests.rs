@@ -40,7 +40,7 @@ fn call_in(name: &str, args: &[Eval], unrecorded: Unrecorded, condition: bool) -
         Context {
             unrecorded,
             condition,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -2470,12 +2470,12 @@ fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
     let cx = Context {
         unrecorded: Unrecorded::Refuse,
         condition: false,
-        runtime: RuntimeContext {
+        runtime: &RuntimeContext {
             regex_resolver: Some(unexpected),
             ..RuntimeContext::default()
         },
     };
-    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx.clone());
+    let evaluate = |args: &[Eval]| (function("regex_contains").unwrap().eval)(args, cx);
     assert_eq!(evaluate(&[null(), text("b")]), null());
     assert_eq!(
         evaluate(&[int(1), text("b")]),
@@ -2579,7 +2579,7 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         let cx = Context {
             unrecorded: mode,
             condition: false,
-            runtime: RuntimeContext {
+            runtime: &RuntimeContext {
                 regex_resolver: Some(resolver),
                 ..RuntimeContext::default()
             },

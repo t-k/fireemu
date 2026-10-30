@@ -273,14 +273,14 @@ pub struct RuntimeContext {
 }
 
 /// What a function sees besides its arguments.
-#[derive(Debug, Clone)]
-pub struct Context {
+#[derive(Debug, Clone, Copy)]
+pub struct Context<'a> {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
     /// Whether the call is the whole condition of a `where` stage (its arguments are not).
     pub condition: bool,
     /// Immutable request-scoped values.
-    pub runtime: RuntimeContext,
+    pub runtime: &'a RuntimeContext,
 }
 
 /// One entry of the static function table.
@@ -298,7 +298,7 @@ pub struct Function {
     /// each is its signature with the fewest and the most arguments it takes. Empty for a
     /// function with one signature.
     pub overloads: &'static [(&'static str, usize, usize)],
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 }
 
 impl fmt::Debug for Function {
@@ -321,7 +321,7 @@ impl PartialEq for Function {
 const fn comparison(
     name: &'static str,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -337,7 +337,7 @@ const fn comparison(
 const fn document_function(
     name: &'static str,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -352,32 +352,32 @@ const fn document_function(
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
     comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
-        eval_comparison(Comparison::Equal, args, cx.clone())
+        eval_comparison(Comparison::Equal, args, cx)
     }),
     comparison(
         "not_equal",
         "not_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::NotEqual, args, cx.clone()),
+        |args, cx| eval_comparison(Comparison::NotEqual, args, cx),
     ),
     comparison(
         "less_than",
         "less_than(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::Less, args, cx.clone()),
+        |args, cx| eval_comparison(Comparison::Less, args, cx),
     ),
     comparison(
         "less_than_or_equal",
         "less_than_or_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx.clone()),
+        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx),
     ),
     comparison(
         "greater_than",
         "greater_than(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::Greater, args, cx.clone()),
+        |args, cx| eval_comparison(Comparison::Greater, args, cx),
     ),
     comparison(
         "greater_than_or_equal",
         "greater_than_or_equal(x: any, y: any): boolean",
-        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx.clone()),
+        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx),
     ),
     Function {
         name: "array",
@@ -847,24 +847,28 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, false, RuntimeContext::default())
+        self.eval_at(row, unrecorded, false, &RuntimeContext::default())
     }
 
     /// Evaluates an expression with request-scoped adapter operations.
     #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Preserve the public owned runtime API"
+    )]
     pub fn eval_in_with_runtime(
         &self,
         row: &Row,
         unrecorded: Unrecorded,
         runtime: RuntimeContext,
     ) -> Eval {
-        self.eval_at(row, unrecorded, false, runtime.clone())
+        self.eval_at(row, unrecorded, false, &runtime)
     }
 
     /// Evaluates the expression as the whole condition of a `where` stage.
     #[must_use]
     pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, true, RuntimeContext::default())
+        self.eval_at(row, unrecorded, true, &RuntimeContext::default())
     }
 
     fn eval_at(
@@ -872,17 +876,21 @@ impl Expr {
         row: &Row,
         unrecorded: Unrecorded,
         condition: bool,
-        runtime: RuntimeContext,
+        runtime: &RuntimeContext,
     ) -> Eval {
         self.eval_scoped(row, unrecorded, condition, runtime, &[])
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Expression dispatch keeps lazy evaluation in one place"
+    )]
     fn eval_scoped(
         &self,
         row: &Row,
         unrecorded: Unrecorded,
         condition: bool,
-        runtime: RuntimeContext,
+        runtime: &RuntimeContext,
         bindings: &[(String, Value)],
     ) -> Eval {
         match self {
@@ -981,14 +989,14 @@ impl Expr {
                 }
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_scoped(row, unrecorded, false, runtime.clone(), bindings))
+                    .map(|arg| arg.eval_scoped(row, unrecorded, false, runtime, bindings))
                     .collect();
                 let cx = Context {
                     unrecorded,
                     condition,
                     runtime,
                 };
-                (function.eval)(&args, cx.clone())
+                (function.eval)(&args, cx)
             }
         }
     }
@@ -999,7 +1007,7 @@ fn eval_array_binding(
     args: &[Expr],
     row: &Row,
     policy: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
     bindings: &[(String, Value)],
 ) -> Eval {
     let unknown = || {
@@ -1008,7 +1016,7 @@ fn eval_array_binding(
             reason: "array callback input is unobserved",
         })
     };
-    let values = match args[0].eval_scoped(row, policy, false, runtime.clone(), bindings) {
+    let values = match args[0].eval_scoped(row, policy, false, runtime, bindings) {
         Eval::Value(Value::Array(values)) => values,
         Eval::Error(error) => return Eval::Error(error),
         _ => return unknown(),
@@ -1035,7 +1043,7 @@ fn eval_array_binding(
             };
             nested.push((index_alias.clone(), Value::Integer(index)));
         }
-        match body.eval_scoped(row, policy, false, runtime.clone(), &nested) {
+        match body.eval_scoped(row, policy, false, runtime, &nested) {
             Eval::Value(Value::Boolean(true)) if name == "array_filter" => output.push(value),
             Eval::Value(Value::Boolean(false) | Value::Null) if name == "array_filter" => {}
             Eval::Value(value) if name == "array_transform" => output.push(value),
@@ -1047,7 +1055,7 @@ fn eval_array_binding(
 }
 
 // The table requires an evaluator, but control expressions are evaluated lazily in Expr.
-fn eval_control_fallback(_args: &[Eval], _cx: Context) -> Eval {
+fn eval_control_fallback(_args: &[Eval], _cx: Context<'_>) -> Eval {
     Eval::Error(EvalError::Unobserved {
         function: "control",
         reason: "control requires lazy expression evaluation",
@@ -1059,10 +1067,10 @@ fn eval_control(
     args: &[Expr],
     row: &Row,
     policy: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
     bindings: &[(String, Value)],
 ) -> Eval {
-    let evaluate = |expr: &Expr| expr.eval_scoped(row, policy, false, runtime.clone(), bindings);
+    let evaluate = |expr: &Expr| expr.eval_scoped(row, policy, false, runtime, bindings);
     let unknown = || {
         Eval::Error(EvalError::Unobserved {
             function: name,
@@ -1155,7 +1163,7 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
 /// every pair of operand kinds, a missing field included, under all six comparisons as the
 /// official emulator does (FS-ENT-ORACLE O-2 for every kind but vectors, O-3 for vectors and a
 /// missing field against every other kind, 2026-10-20).
-fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
+fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1167,7 +1175,7 @@ fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
 
 /// `array(...)`: the elements in order, null for an absent element (production and the
 /// official emulator answer `[1, null]` for `array(i, x)`).
-fn eval_array(args: &[Eval], _cx: Context) -> Eval {
+fn eval_array(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1186,7 +1194,7 @@ const fn array_access_function(
     name: &'static str,
     arity: Arity,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -1201,7 +1209,7 @@ const fn array_access_function(
 fn array_access<'a>(
     args: &'a [Eval],
     name: &'static str,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<&'a [Value], Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
@@ -1249,7 +1257,7 @@ fn array_access<'a>(
     }
 }
 
-fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
+fn eval_array_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1267,7 +1275,7 @@ fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
     }
 }
 
-fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_concat(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1306,8 +1314,8 @@ fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Array(result))
 }
 
-fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "array_length", cx.clone()) {
+fn eval_array_length(args: &[Eval], cx: Context<'_>) -> Eval {
+    match array_access(args, "array_length", cx) {
         Ok(values) => Eval::Value(Value::Integer(
             i64::try_from(values.len()).unwrap_or(i64::MAX),
         )),
@@ -1315,22 +1323,22 @@ fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_array_first(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "first", cx.clone()) {
+fn eval_array_first(args: &[Eval], cx: Context<'_>) -> Eval {
+    match array_access(args, "first", cx) {
         Ok(values) => values.first().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
-fn eval_array_last(args: &[Eval], cx: Context) -> Eval {
-    match array_access(args, "last", cx.clone()) {
+fn eval_array_last(args: &[Eval], cx: Context<'_>) -> Eval {
+    match array_access(args, "last", cx) {
         Ok(values) => values.last().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
-fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
-    let values = match array_access(args, "array_get", cx.clone()) {
+fn eval_array_get(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match array_access(args, "array_get", cx) {
         Ok(values) => values,
         Err(result) => return result,
     };
@@ -1362,12 +1370,12 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .map_or(Eval::Absent, Eval::Value)
 }
 
-fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool) -> Eval {
-    let values = match subsequence_array(args, name, cx.clone(), false) {
+fn eval_extrema_n(args: &[Eval], cx: Context<'_>, name: &'static str, maximum: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
         Ok(values) => values,
         Err(error) => return error,
     };
-    let n = match subsequence_integer(&args[1], name, cx.clone()) {
+    let n = match subsequence_integer(&args[1], name, cx) {
         Ok(n) if n >= 0 => usize::try_from(n).unwrap_or(usize::MAX),
         Ok(_) => {
             return Eval::Error(EvalError::Unobserved {
@@ -1412,14 +1420,14 @@ fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool)
     selected.truncate(n);
     Eval::Value(Value::Array(selected))
 }
-fn eval_maximum_n(args: &[Eval], cx: Context) -> Eval {
-    eval_extrema_n(args, cx.clone(), "maximum_n", true)
+fn eval_maximum_n(args: &[Eval], cx: Context<'_>) -> Eval {
+    eval_extrema_n(args, cx, "maximum_n", true)
 }
-fn eval_minimum_n(args: &[Eval], cx: Context) -> Eval {
-    eval_extrema_n(args, cx.clone(), "minimum_n", false)
+fn eval_minimum_n(args: &[Eval], cx: Context<'_>) -> Eval {
+    eval_extrema_n(args, cx, "minimum_n", false)
 }
 
-fn eval_join(args: &[Eval], cx: Context) -> Eval {
+fn eval_join(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1500,7 +1508,7 @@ fn eval_join(args: &[Eval], cx: Context) -> Eval {
 fn subsequence_array<'a>(
     args: &'a [Eval],
     name: &'static str,
-    cx: Context,
+    cx: Context<'_>,
     search_null_is_value: bool,
 ) -> Result<&'a [Value], Eval> {
     if let Some(error) = first_error(args) {
@@ -1545,8 +1553,8 @@ fn subsequence_array<'a>(
     }
 }
 
-fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i64, Eval> {
-    if let Some(error) = scalar::int_argument(name, arg, cx.clone()) {
+fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context<'_>) -> Result<i64, Eval> {
+    if let Some(error) = scalar::int_argument(name, arg, cx) {
         return Err(error);
     }
     match arg {
@@ -1558,17 +1566,17 @@ fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i6
     }
 }
 
-fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
-    let values = match subsequence_array(args, "array_slice", cx.clone(), false) {
+fn eval_array_slice(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match subsequence_array(args, "array_slice", cx, false) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let offset = match subsequence_integer(&args[1], "array_slice", cx.clone()) {
+    let offset = match subsequence_integer(&args[1], "array_slice", cx) {
         Ok(v) => v,
         Err(e) => return e,
     };
     let length = if let Some(arg) = args.get(2) {
-        match subsequence_integer(arg, "array_slice", cx.clone()) {
+        match subsequence_integer(arg, "array_slice", cx) {
             Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX),
             Ok(_) => {
                 return Eval::Error(EvalError::Unobserved {
@@ -1592,7 +1600,7 @@ fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_index_of_all(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1604,7 +1612,7 @@ fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
             reason: "unrecorded argument or element types",
         });
     }
-    let values = match subsequence_array(args, "array_index_of_all", cx.clone(), true) {
+    let values = match subsequence_array(args, "array_index_of_all", cx, true) {
         Ok(values) => values,
         Err(error) => return error,
     };
@@ -1622,8 +1630,8 @@ fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Array(result))
 }
 
-fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
-    let values = match subsequence_array(args, "array_index_of", cx.clone(), true) {
+fn eval_array_index_of(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match subsequence_array(args, "array_index_of", cx, true) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -1640,12 +1648,12 @@ fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) -> Eval {
-    let values = match subsequence_array(args, name, cx.clone(), false) {
+fn eval_array_count(args: &[Eval], cx: Context<'_>, name: &'static str, last: bool) -> Eval {
+    let values = match subsequence_array(args, name, cx, false) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let count = match subsequence_integer(&args[1], name, cx.clone()) {
+    let count = match subsequence_integer(&args[1], name, cx) {
         Ok(v) if v >= 0 => usize::try_from(v).unwrap_or(usize::MAX).min(values.len()),
         Ok(_) => {
             return Eval::Error(EvalError::Invalid(format!(
@@ -1661,11 +1669,11 @@ fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) 
     };
     Eval::Value(Value::Array(selected.to_vec()))
 }
-fn eval_array_first_n(args: &[Eval], cx: Context) -> Eval {
-    eval_array_count(args, cx.clone(), "array_first_n", false)
+fn eval_array_first_n(args: &[Eval], cx: Context<'_>) -> Eval {
+    eval_array_count(args, cx, "array_first_n", false)
 }
-fn eval_array_last_n(args: &[Eval], cx: Context) -> Eval {
-    eval_array_count(args, cx.clone(), "array_last_n", true)
+fn eval_array_last_n(args: &[Eval], cx: Context<'_>) -> Eval {
+    eval_array_count(args, cx, "array_last_n", true)
 }
 
 /// A map function with production's recorded argument-count signature.
@@ -1673,7 +1681,7 @@ const fn map_family_function(
     name: &'static str,
     arity: Arity,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -1706,7 +1714,7 @@ fn map_argument<'a>(
     }
 }
 
-fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_set(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1764,7 +1772,7 @@ fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Map(map))
 }
 
-fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_remove(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1820,7 +1828,7 @@ fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_merge(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1859,7 +1867,7 @@ fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Map(result))
 }
 
-fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_keys(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_keys", false) {
         Ok(map) => Eval::Value(Value::Array(
             map.keys().cloned().map(Value::String).collect(),
@@ -1867,13 +1875,13 @@ fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
         Err(value) => value,
     }
 }
-fn eval_map_values(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_values(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_values", false) {
         Ok(map) => Eval::Value(Value::Array(map.values().cloned().collect())),
         Err(value) => value,
     }
 }
-fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_entries(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_entries", false) {
         Ok(map) => Eval::Value(Value::Array(
             map.iter()
@@ -1894,7 +1902,7 @@ fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// Literal map lookup; missing keys are absent and null arguments give null.
-fn eval_map_get(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_get(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1971,7 +1979,7 @@ const RECORDED_MAP_KEY_TYPES: [&str; 2] = ["LONG", "BOOLEAN"];
 /// drops its entry before the duplicate check), and a key that is not a string is refused
 /// naming its type (production named LONG and BOOLEAN keys; strict refuses another type as
 /// unobserved).
-fn eval_map(args: &[Eval], cx: Context) -> Eval {
+fn eval_map(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -2097,14 +2105,14 @@ fn is_documents_root(name: &str) -> bool {
     )
 }
 
-fn eval_document_id(args: &[Eval], cx: Context) -> Eval {
+fn eval_document_id(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("document_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.document_id().as_str().to_owned())),
         Err(e) => e,
     }
 }
 
-fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
+fn eval_collection_id(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("collection_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.collection_id().as_str().to_owned())),
         Err(e) => e,
@@ -2113,7 +2121,7 @@ fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
 
 /// The parent document; for a top-level document production and the official emulator
 /// answer the database's documents root as a reference.
-fn eval_parent(args: &[Eval], cx: Context) -> Eval {
+fn eval_parent(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("parent", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::Reference(path.parent_document().map_or_else(
             || {
@@ -2508,23 +2516,17 @@ impl Cursor {
                     rows.truncate(usize::try_from(*count).unwrap_or(usize::MAX));
                     rows
                 }
-                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime.clone())?,
+                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, &self.runtime)?,
                 stage @ Stage::FindNearest { .. } => {
-                    nearest_rows(rows, stage, self.unrecorded, self.runtime.clone())?
+                    nearest_rows(rows, stage, self.unrecorded, &self.runtime)?
                 }
                 Stage::Distinct(aliases) => {
-                    distinct_rows(&rows, aliases, self.unrecorded, self.runtime.clone())?
+                    distinct_rows(&rows, aliases, self.unrecorded, &self.runtime)?
                 }
                 Stage::Aggregate {
                     accumulators,
                     groups,
-                } => aggregate_rows(
-                    &rows,
-                    accumulators,
-                    groups,
-                    self.unrecorded,
-                    self.runtime.clone(),
-                )?,
+                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded, &self.runtime)?,
                 _ => continue,
             };
             for row in produced {
@@ -2581,8 +2583,7 @@ impl Cursor {
                     alias,
                     index_field,
                 } => {
-                    let value =
-                        expression.eval_at(&row, self.unrecorded, false, self.runtime.clone());
+                    let value = expression.eval_at(&row, self.unrecorded, false, &self.runtime);
                     match value {
                         Eval::Value(Value::Array(values)) => {
                             frames.push(UnnestFrame {
@@ -2616,7 +2617,7 @@ impl Cursor {
                     }
                 }
                 Stage::Where(condition) => {
-                    match condition.eval_at(&row, self.unrecorded, true, self.runtime.clone()) {
+                    match condition.eval_at(&row, self.unrecorded, true, &self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
                         // Production dropped the row for a condition of every other kind
                         // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
@@ -2659,7 +2660,7 @@ impl Cursor {
                     let mut fields = BTreeMap::new();
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_at(&row, self.unrecorded, false, self.runtime.clone()) {
+                        match expr.eval_at(&row, self.unrecorded, false, &self.runtime) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent if alias.segments().len() > 1 => {
                                 // Production and the official emulator retain parent maps
@@ -2691,7 +2692,7 @@ impl Cursor {
                     let mut values = Vec::with_capacity(aliases.len());
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_at(&row, self.unrecorded, false, self.runtime.clone()) {
+                        match expr.eval_at(&row, self.unrecorded, false, &self.runtime) {
                             Eval::Value(value) => values.push((alias, Some(value))),
                             // A missing value (FS-ENT-ORACLE O-9 `fields-main`): a nested
                             // alias creates the parents as empty maps (a scalar parent is
@@ -2721,21 +2722,17 @@ impl Cursor {
                     }
                 }
                 Stage::ReplaceWith { expression, mode } => {
-                    let replacement = match expression.eval_at(
-                        &row,
-                        self.unrecorded,
-                        false,
-                        self.runtime.clone(),
-                    ) {
-                        Eval::Value(Value::Map(fields)) => fields,
-                        Eval::Error(error) => return Err(error),
-                        _ => {
-                            return Err(EvalError::Unobserved {
-                                function: "replace_with",
-                                reason: "non-map replacement",
-                            })
-                        }
-                    };
+                    let replacement =
+                        match expression.eval_at(&row, self.unrecorded, false, &self.runtime) {
+                            Eval::Value(Value::Map(fields)) => fields,
+                            Eval::Error(error) => return Err(error),
+                            _ => {
+                                return Err(EvalError::Unobserved {
+                                    function: "replace_with",
+                                    reason: "non-map replacement",
+                                })
+                            }
+                        };
                     match mode {
                         ReplaceMode::Full => {
                             row.fields = replacement;
@@ -2825,7 +2822,7 @@ fn nearest_rows(
     rows: Vec<Row>,
     stage: &Stage,
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let Stage::FindNearest {
         expression,
@@ -2839,7 +2836,7 @@ fn nearest_rows(
     };
     let mut ranked = Vec::new();
     for mut row in rows {
-        let vector = match expression.eval_at(&row, unrecorded, false, runtime.clone()) {
+        let vector = match expression.eval_at(&row, unrecorded, false, runtime) {
             Eval::Value(Value::Vector(vector)) => vector,
             Eval::Error(error) => return Err(error),
             _ if unrecorded == Unrecorded::Refuse => {
@@ -2941,7 +2938,7 @@ fn sort_rows(
     rows: Vec<Row>,
     keys: &[SortKey],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut keyed = Vec::with_capacity(rows.len());
     for row in rows {
@@ -2949,7 +2946,7 @@ fn sort_rows(
             .iter()
             .map(|key| {
                 blocking_value(
-                    key.expr.eval_at(&row, unrecorded, false, runtime.clone()),
+                    key.expr.eval_at(&row, unrecorded, false, runtime),
                     unrecorded,
                     "sort",
                 )
@@ -3008,13 +3005,13 @@ fn key_values(
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
     stage: &'static str,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Value>, EvalError> {
     aliases
         .iter()
         .map(|(_, expr)| {
             blocking_value(
-                expr.eval_at(row, unrecorded, false, runtime.clone()),
+                expr.eval_at(row, unrecorded, false, runtime),
                 unrecorded,
                 stage,
             )
@@ -3028,18 +3025,12 @@ fn distinct_rows(
     rows: &[Row],
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for row in rows {
-        let key = GroupKey(key_values(
-            row,
-            aliases,
-            unrecorded,
-            "distinct",
-            runtime.clone(),
-        )?);
+        let key = GroupKey(key_values(row, aliases, unrecorded, "distinct", runtime)?);
         if seen.contains(&key) {
             continue;
         }
@@ -3113,11 +3104,11 @@ impl Accumulator {
         running: &mut Running,
         row: &Row,
         unrecorded: Unrecorded,
-        runtime: RuntimeContext,
+        runtime: &RuntimeContext,
     ) -> Result<(), EvalError> {
         let value = match &self.argument {
             Some(argument) => blocking_value(
-                argument.eval_at(row, unrecorded, false, runtime.clone()),
+                argument.eval_at(row, unrecorded, false, runtime),
                 unrecorded,
                 "aggregate",
             )?,
@@ -3257,7 +3248,7 @@ fn aggregate_rows(
     accumulators: &[(String, Accumulator)],
     groups: &[(String, Expr)],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     type Group = (Vec<Value>, Vec<Running>);
     let start = || {
@@ -3272,7 +3263,7 @@ fn aggregate_rows(
         order.push((Vec::new(), start()));
     }
     for row in rows {
-        let key = key_values(row, groups, unrecorded, "aggregate", runtime.clone())?;
+        let key = key_values(row, groups, unrecorded, "aggregate", runtime)?;
         let at = if groups.is_empty() {
             0
         } else {
@@ -3283,7 +3274,7 @@ fn aggregate_rows(
         };
         let running = &mut order[at].1;
         for ((_, accumulator), state) in accumulators.iter().zip(running.iter_mut()) {
-            accumulator.add(state, row, unrecorded, runtime.clone())?;
+            accumulator.add(state, row, unrecorded, runtime)?;
         }
     }
     order

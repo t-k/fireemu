@@ -116,8 +116,8 @@ pub(super) const TIMESTAMP_EXTRACT: Function = function("timestamp_extract", Ari
     ("timestamp_extract[T: timestamp | bson_timestamp](timestamp: T, part: (microsecond|millisecond|second|minute|hour|dayofweek|day|dayofyear|week|week(monday)|week(tuesday)|week(wednesday)|week(thursday)|week(friday)|week(saturday)|week(sunday)|isoweek|month|quarter|year|isoyear), time_zone: string): int64", 3, 3),
 ], eval_timestamp_extract);
 
-pub(super) const TIMESTAMP_ADD: Function = function("timestamp_add", Arity::Exact(3), false, "timestamp_add[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_add", args, cx.clone(), false));
-pub(super) const TIMESTAMP_SUBTRACT: Function = function("timestamp_subtract", Arity::Exact(3), false, "timestamp_subtract[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_subtract", args, cx.clone(), true));
+pub(super) const TIMESTAMP_ADD: Function = function("timestamp_add", Arity::Exact(3), false, "timestamp_add[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_add", args, cx, false));
+pub(super) const TIMESTAMP_SUBTRACT: Function = function("timestamp_subtract", Arity::Exact(3), false, "timestamp_subtract[T: timestamp | bson_timestamp](timestamp: T, unit: (microsecond|millisecond|second|minute|hour|day), amount: int64): timestamp", &[], |args, cx| timestamp_shift("timestamp_subtract", args, cx, true));
 pub(super) const TIMESTAMP_DIFF: Function = function("timestamp_diff", Arity::Exact(3), false, "timestamp_diff[T1: timestamp | bson_timestamp, T2: timestamp | bson_timestamp](end: T1, start: T2, unit: (microsecond|millisecond|second|minute|hour|day)): int64", &[], timestamp_diff);
 
 pub(super) const UNIX_MICROS_TO_TIMESTAMP: Function = function(
@@ -126,7 +126,7 @@ pub(super) const UNIX_MICROS_TO_TIMESTAMP: Function = function(
     false,
     "unix_micros_to_timestamp(input: int64): timestamp",
     &[],
-    |args, cx| unix_to_timestamp("unix_micros_to_timestamp", args, cx.clone(), 1_000_000),
+    |args, cx| unix_to_timestamp("unix_micros_to_timestamp", args, cx, 1_000_000),
 );
 pub(super) const UNIX_MILLIS_TO_TIMESTAMP: Function = function(
     "unix_millis_to_timestamp",
@@ -134,7 +134,7 @@ pub(super) const UNIX_MILLIS_TO_TIMESTAMP: Function = function(
     false,
     "unix_millis_to_timestamp(input: int64): timestamp",
     &[],
-    |args, cx| unix_to_timestamp("unix_millis_to_timestamp", args, cx.clone(), 1_000),
+    |args, cx| unix_to_timestamp("unix_millis_to_timestamp", args, cx, 1_000),
 );
 pub(super) const UNIX_SECONDS_TO_TIMESTAMP: Function = function(
     "unix_seconds_to_timestamp",
@@ -142,7 +142,7 @@ pub(super) const UNIX_SECONDS_TO_TIMESTAMP: Function = function(
     false,
     "unix_seconds_to_timestamp(input: int64): timestamp",
     &[],
-    |args, cx| unix_to_timestamp("unix_seconds_to_timestamp", args, cx.clone(), 1),
+    |args, cx| unix_to_timestamp("unix_seconds_to_timestamp", args, cx, 1),
 );
 pub(super) const TIMESTAMP_TO_UNIX_MICROS: Function = function(
     "timestamp_to_unix_micros",
@@ -150,7 +150,7 @@ pub(super) const TIMESTAMP_TO_UNIX_MICROS: Function = function(
     false,
     "timestamp_to_unix_micros[T: timestamp | bson_timestamp](input: T): int64",
     &[],
-    |args, cx| timestamp_to_unix("timestamp_to_unix_micros", args, cx.clone(), 1_000_000),
+    |args, cx| timestamp_to_unix("timestamp_to_unix_micros", args, cx, 1_000_000),
 );
 pub(super) const TIMESTAMP_TO_UNIX_MILLIS: Function = function(
     "timestamp_to_unix_millis",
@@ -158,7 +158,7 @@ pub(super) const TIMESTAMP_TO_UNIX_MILLIS: Function = function(
     false,
     "timestamp_to_unix_millis[T: timestamp | bson_timestamp](input: T): int64",
     &[],
-    |args, cx| timestamp_to_unix("timestamp_to_unix_millis", args, cx.clone(), 1_000),
+    |args, cx| timestamp_to_unix("timestamp_to_unix_millis", args, cx, 1_000),
 );
 pub(super) const TIMESTAMP_TO_UNIX_SECONDS: Function = function(
     "timestamp_to_unix_seconds",
@@ -166,7 +166,7 @@ pub(super) const TIMESTAMP_TO_UNIX_SECONDS: Function = function(
     false,
     "timestamp_to_unix_seconds[T: timestamp | bson_timestamp](input: T): int64",
     &[],
-    |args, cx| timestamp_to_unix("timestamp_to_unix_seconds", args, cx.clone(), 1),
+    |args, cx| timestamp_to_unix("timestamp_to_unix_seconds", args, cx, 1),
 );
 
 const REGEX_CONTAINS_SIGNATURE: &str =
@@ -217,7 +217,7 @@ const fn function(
     returns_boolean: bool,
     signature: &'static str,
     overloads: &'static [(&'static str, usize, usize)],
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -315,7 +315,7 @@ pub(super) const STRING_REPLACE_ALL: Function = function(
     false,
     "string_replace_all[T: string | bytes](input: T, find: T, replacement: T): T",
     &[],
-    |args, cx| eval_string_replace("string_replace_all", args, cx.clone(), true),
+    |args, cx| eval_string_replace("string_replace_all", args, cx, true),
 );
 pub(super) const STRING_REPLACE_ONE: Function = function(
     "string_replace_one",
@@ -323,7 +323,7 @@ pub(super) const STRING_REPLACE_ONE: Function = function(
     false,
     "string_replace_one[T: string | bytes](input: T, find: T, replacement: T): T",
     &[],
-    |args, cx| eval_string_replace("string_replace_one", args, cx.clone(), false),
+    |args, cx| eval_string_replace("string_replace_one", args, cx, false),
 );
 pub(super) const STRING_REVERSE: Function = function(
     "string_reverse",
@@ -550,7 +550,7 @@ pub(super) const COSINE_DISTANCE: Function = function(
     },
 );
 
-fn eval_vector_length(args: &[Eval], _cx: Context) -> Eval {
+fn eval_vector_length(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -650,7 +650,7 @@ fn null() -> Eval {
     Eval::Value(Value::Null)
 }
 
-fn strict(cx: Context) -> bool {
+fn strict(cx: Context<'_>) -> bool {
     cx.unrecorded == Unrecorded::Refuse
 }
 
@@ -708,7 +708,7 @@ fn check<'a>(
     function: &'static str,
     args: &'a [Eval],
     params: &[Param],
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<Vec<&'a Value>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
@@ -727,7 +727,7 @@ fn check<'a>(
         }
     }
     if let Some((param, value)) = wrong {
-        if missing && strict(cx.clone()) {
+        if missing && strict(cx) {
             return Err(unobserved(
                 function,
                 "a null beside an argument of the wrong type",
@@ -757,13 +757,13 @@ fn java_double(d: f64) -> Option<String> {
 
 /// An `int64` argument that production would have coerced from a double: it refuses a double
 /// with `Cannot coerce Float64 (x) to Int64`.
-pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context) -> Option<Eval> {
+pub(super) fn int_argument(function: &'static str, arg: &Eval, cx: Context<'_>) -> Option<Eval> {
     let Eval::Value(Value::Double(d)) = arg else {
         return None;
     };
     Some(match java_double(*d) {
         Some(text) => invalid(format!("Cannot coerce Float64 ({text}) to Int64")),
-        None if strict(cx.clone()) => unobserved(function, "a double with no recorded text"),
+        None if strict(cx) => unobserved(function, "a double with no recorded text"),
         None => invalid(format!("Cannot coerce Float64 ({d:?}) to Int64")),
     })
 }
@@ -831,7 +831,7 @@ fn calendar_unit(name: &'static str, arg: &Eval, extract: bool) -> Result<String
 fn calendar_values(
     name: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     extract: bool,
 ) -> Result<(Timestamp, String, Option<String>), Eval> {
     if let Some(error) = first_error(args) {
@@ -843,7 +843,7 @@ fn calendar_values(
     } else {
         vec![Param::Timestamp, Param::Str("String")]
     };
-    let values = check(name, args, &params, cx.clone())?;
+    let values = check(name, args, &params, cx)?;
     let Value::Timestamp(timestamp) = values[0] else {
         unreachable!()
     };
@@ -864,7 +864,7 @@ fn resolve_zone(
     zone: &str,
     unit: &str,
     operation: ZoneOperation,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Eval {
     let Some(resolver) = cx.runtime.zone_resolver else {
         return unobserved(name, "named time zone resolver is unavailable");
@@ -895,11 +895,11 @@ pub(super) fn local_calendar_value(
     let cx = Context {
         unrecorded: Unrecorded::Refuse,
         condition: false,
-        runtime: super::RuntimeContext::default(),
+        runtime: &super::RuntimeContext::default(),
     };
     let result = match operation {
-        ZoneOperation::Trunc => eval_timestamp_trunc(&args, cx.clone()),
-        ZoneOperation::Extract => eval_timestamp_extract(&args, cx.clone()),
+        ZoneOperation::Trunc => eval_timestamp_trunc(&args, cx),
+        ZoneOperation::Extract => eval_timestamp_extract(&args, cx),
     };
     match result {
         Eval::Value(Value::Timestamp(value)) => Ok(ZoneResult::Timestamp(value)),
@@ -930,9 +930,8 @@ fn week_day(unit: &str) -> Option<i64> {
     }
 }
 
-fn eval_timestamp_trunc(args: &[Eval], cx: Context) -> Eval {
-    let (timestamp, unit, zone) = match calendar_values("timestamp_trunc", args, cx.clone(), false)
-    {
+fn eval_timestamp_trunc(args: &[Eval], cx: Context<'_>) -> Eval {
+    let (timestamp, unit, zone) = match calendar_values("timestamp_trunc", args, cx, false) {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -983,9 +982,8 @@ fn eval_timestamp_trunc(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_timestamp_extract(args: &[Eval], cx: Context) -> Eval {
-    let (timestamp, unit, zone) = match calendar_values("timestamp_extract", args, cx.clone(), true)
-    {
+fn eval_timestamp_extract(args: &[Eval], cx: Context<'_>) -> Eval {
+    let (timestamp, unit, zone) = match calendar_values("timestamp_extract", args, cx, true) {
         Ok(value) => value,
         Err(error) => return error,
     };
@@ -1057,7 +1055,7 @@ fn timestamp_unit(name: &'static str, unit: &Eval) -> Result<i64, Eval> {
     scale.ok_or_else(|| invalid(format!("The argument 'unit' for function '{name}' must be a literal of type string from the following list: {TIMESTAMP_UNITS}")))
 }
 
-fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: bool) -> Eval {
+fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context<'_>, subtract: bool) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1065,7 +1063,7 @@ fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: boo
         Ok(scale) => scale,
         Err(error) => return error,
     };
-    if let Some(error) = int_argument(name, &args[2], cx.clone()) {
+    if let Some(error) = int_argument(name, &args[2], cx) {
         return error;
     }
     let error_name = if subtract { "timestamp_sub" } else { name };
@@ -1111,7 +1109,7 @@ fn timestamp_shift(name: &'static str, args: &[Eval], cx: Context, subtract: boo
     }
 }
 
-fn timestamp_diff(args: &[Eval], cx: Context) -> Eval {
+fn timestamp_diff(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1141,14 +1139,14 @@ fn timestamp_diff(args: &[Eval], cx: Context) -> Eval {
 }
 
 /// Convert signed Unix units without losing subsecond precision at negative epochs.
-fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
+fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context<'_>, scale: i64) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    if let Some(error) = int_argument(name, &args[0], cx.clone()) {
+    if let Some(error) = int_argument(name, &args[0], cx) {
         return error;
     }
-    let values = match check(name, args, &[Param::Int], cx.clone()) {
+    let values = match check(name, args, &[Param::Int], cx) {
         Ok(values) => values,
         Err(value) => return value,
     };
@@ -1164,8 +1162,8 @@ fn unix_to_timestamp(name: &'static str, args: &[Eval], cx: Context, scale: i64)
 }
 
 /// Convert a bounded timestamp to Unix units, truncating fractional units toward the past.
-fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context, scale: i64) -> Eval {
-    let values = match check(name, args, &[Param::Timestamp], cx.clone()) {
+fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context<'_>, scale: i64) -> Eval {
+    let values = match check(name, args, &[Param::Timestamp], cx) {
         Ok(values) => values,
         Err(value) => return value,
     };
@@ -1184,12 +1182,17 @@ fn timestamp_to_unix(name: &'static str, args: &[Eval], cx: Context, scale: i64)
 }
 
 /// Compile a bounded pattern and preserve the distinction between syntax and resource limits.
-fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOperation) -> Eval {
+fn regex_eval(
+    name: &'static str,
+    args: &[Eval],
+    cx: Context<'_>,
+    operation: RegexOperation,
+) -> Eval {
     let values = match check(
         name,
         args,
         &[Param::Str("String"), Param::Str("String or Regex")],
-        cx.clone(),
+        cx,
     ) {
         Ok(values) => values,
         Err(error) => return error,
@@ -1197,7 +1200,7 @@ fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOp
     let [Value::String(subject), Value::String(pattern)] = values.as_slice() else {
         unreachable!()
     };
-    if strict(cx.clone()) && !common_regex_grammar(pattern) {
+    if strict(cx) && !common_regex_grammar(pattern) {
         return unobserved(name, "a regex construct outside the common RE2 grammar");
     }
     let Some(resolver) = cx.runtime.regex_resolver else {
@@ -1224,12 +1227,12 @@ fn regex_eval(name: &'static str, args: &[Eval], cx: Context, operation: RegexOp
     }
 }
 
-fn eval_like(args: &[Eval], cx: Context) -> Eval {
+fn eval_like(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match check(
         "like",
         args,
         &[Param::Str("String"), Param::Str("String")],
-        cx.clone(),
+        cx,
     ) {
         Ok(values) => values,
         Err(error) => return error,
@@ -1273,25 +1276,25 @@ fn eval_like(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_regex_contains(args: &[Eval], cx: Context) -> Eval {
-    regex_eval("regex_contains", args, cx.clone(), RegexOperation::Contains)
+fn eval_regex_contains(args: &[Eval], cx: Context<'_>) -> Eval {
+    regex_eval("regex_contains", args, cx, RegexOperation::Contains)
 }
 
-fn eval_regex_match(args: &[Eval], cx: Context) -> Eval {
-    regex_eval("regex_match", args, cx.clone(), RegexOperation::Match)
+fn eval_regex_match(args: &[Eval], cx: Context<'_>) -> Eval {
+    regex_eval("regex_match", args, cx, RegexOperation::Match)
 }
 
-fn eval_regex_find(args: &[Eval], cx: Context) -> Eval {
-    regex_eval("regex_find", args, cx.clone(), RegexOperation::Find)
+fn eval_regex_find(args: &[Eval], cx: Context<'_>) -> Eval {
+    regex_eval("regex_find", args, cx, RegexOperation::Find)
 }
 
-fn eval_regex_find_all(args: &[Eval], cx: Context) -> Eval {
-    regex_eval("regex_find_all", args, cx.clone(), RegexOperation::FindAll)
+fn eval_regex_find_all(args: &[Eval], cx: Context<'_>) -> Eval {
+    regex_eval("regex_find_all", args, cx, RegexOperation::FindAll)
 }
 
 /// `concat(a, b, ...)`: strings, bytes or arrays of one kind joined. The first argument sets the
 /// kind; production refused a string followed by bytes or an integer.
-fn eval_concat(args: &[Eval], cx: Context) -> Eval {
+fn eval_concat(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1306,7 +1309,7 @@ fn eval_concat(args: &[Eval], cx: Context) -> Eval {
         Some(Value::Bytes(_)) => "BYTES",
         Some(Value::Array(_)) => "ARRAY",
         Some(other) => {
-            return if strict(cx.clone()) {
+            return if strict(cx) {
                 unobserved("concat", "an argument that is no string, bytes or array")
             } else {
                 Eval::Error(EvalError::WrongType {
@@ -1324,7 +1327,7 @@ fn eval_concat(args: &[Eval], cx: Context) -> Eval {
             Eval::Value(Value::Null) | Eval::Absent => missing = true,
             Eval::Value(value) if type_name(value) == expected => {}
             Eval::Value(value) => {
-                if strict(cx.clone()) && (expected != "STRING" || args.iter().any(is_missing)) {
+                if strict(cx) && (expected != "STRING" || args.iter().any(is_missing)) {
                     return unobserved("concat", "an argument of another type than the first");
                 }
                 return Eval::Error(EvalError::WrongType {
@@ -1379,7 +1382,7 @@ fn case_recorded(text: &str) -> bool {
     !text.contains(['\u{3a3}', '\u{3c2}'])
 }
 
-fn eval_to_lower(args: &[Eval], cx: Context) -> Eval {
+fn eval_to_lower(args: &[Eval], cx: Context<'_>) -> Eval {
     map_case(
         "to_lower",
         args,
@@ -1389,7 +1392,7 @@ fn eval_to_lower(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_to_upper(args: &[Eval], cx: Context) -> Eval {
+fn eval_to_upper(args: &[Eval], cx: Context<'_>) -> Eval {
     map_case(
         "to_upper",
         args,
@@ -1402,23 +1405,23 @@ fn eval_to_upper(args: &[Eval], cx: Context) -> Eval {
 fn map_case(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     text: fn(&str) -> String,
     byte: fn(&u8) -> u8,
 ) -> Eval {
-    let values = match check(function, args, &[Param::StrOrBytes], cx.clone()) {
+    let values = match check(function, args, &[Param::StrOrBytes], cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
     match values[0] {
-        Value::String(s) if strict(cx.clone()) && !case_recorded(s) => unobserved(
+        Value::String(s) if strict(cx) && !case_recorded(s) => unobserved(
             function,
             "a Greek sigma, whose case mapping depends on its position",
         ),
         Value::String(s) => Eval::Value(Value::String(text(s))),
         // Production answered the bytes `[1]` unchanged; a letter among the bytes is a case the
         // rows do not show.
-        Value::Bytes(b) if strict(cx.clone()) && b.iter().any(u8::is_ascii_alphabetic) => {
+        Value::Bytes(b) if strict(cx) && b.iter().any(u8::is_ascii_alphabetic) => {
             unobserved(function, "bytes holding ASCII letters")
         }
         Value::Bytes(b) => Eval::Value(Value::Bytes(b.iter().map(byte).collect())),
@@ -1426,20 +1429,20 @@ fn map_case(
     }
 }
 
-fn eval_starts_with(args: &[Eval], cx: Context) -> Eval {
-    two_strings("starts_with", args, cx.clone(), |value, prefix| {
+fn eval_starts_with(args: &[Eval], cx: Context<'_>) -> Eval {
+    two_strings("starts_with", args, cx, |value, prefix| {
         value.starts_with(prefix)
     })
 }
 
-fn eval_ends_with(args: &[Eval], cx: Context) -> Eval {
-    two_strings("ends_with", args, cx.clone(), |value, suffix| {
+fn eval_ends_with(args: &[Eval], cx: Context<'_>) -> Eval {
+    two_strings("ends_with", args, cx, |value, suffix| {
         value.ends_with(suffix)
     })
 }
 
-fn eval_string_contains(args: &[Eval], cx: Context) -> Eval {
-    two_strings("string_contains", args, cx.clone(), |value, part| {
+fn eval_string_contains(args: &[Eval], cx: Context<'_>) -> Eval {
+    two_strings("string_contains", args, cx, |value, part| {
         value.contains(part)
     })
 }
@@ -1449,10 +1452,10 @@ fn eval_string_contains(args: &[Eval], cx: Context) -> Eval {
 fn two_strings(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     test: fn(&str, &str) -> bool,
 ) -> Eval {
-    if cx.condition && strict(cx.clone()) {
+    if cx.condition && strict(cx) {
         return unobserved(function, "a whole `where` condition");
     }
     let values = match check(
@@ -1470,8 +1473,8 @@ fn two_strings(
     }
 }
 
-fn eval_char_length(args: &[Eval], cx: Context) -> Eval {
-    let values = match check("char_length", args, &[Param::Str("String")], cx.clone()) {
+fn eval_char_length(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match check("char_length", args, &[Param::Str("String")], cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -1487,13 +1490,13 @@ fn eval_char_length(args: &[Eval], cx: Context) -> Eval {
 fn recorded_string_args<'a>(
     function: &'static str,
     args: &'a [Eval],
-    cx: Context,
+    cx: Context<'_>,
     params: &[Param],
 ) -> Result<Vec<&'a Value>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
     }
-    if strict(cx.clone())
+    if strict(cx)
         && args.iter().zip(params).any(|(arg, param)| {
             !matches!(
                 (arg, param),
@@ -1504,15 +1507,14 @@ fn recorded_string_args<'a>(
     {
         return Err(unobserved(function, "an unrecorded argument type or null"));
     }
-    check(function, args, params, cx.clone())
+    check(function, args, params, cx)
 }
 
-fn eval_byte_length(args: &[Eval], cx: Context) -> Eval {
-    let values =
-        match recorded_string_args("byte_length", args, cx.clone(), &[Param::Str("String")]) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+fn eval_byte_length(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match recorded_string_args("byte_length", args, cx, &[Param::Str("String")]) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     let Value::String(value) = values[0] else {
         unreachable!("checked above")
     };
@@ -1521,11 +1523,11 @@ fn eval_byte_length(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_index_of(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args(
         "string_index_of",
         args,
-        cx.clone(),
+        cx,
         &[Param::Str("String"), Param::Str("String")],
     ) {
         Ok(v) => v,
@@ -1534,7 +1536,7 @@ fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
     let (Value::String(value), Value::String(search)) = (values[0], values[1]) else {
         unreachable!("checked above")
     };
-    if strict(cx.clone()) && !value.is_ascii() && !search.is_empty() {
+    if strict(cx) && !value.is_ascii() && !search.is_empty() {
         return unobserved("string_index_of", "a non-ASCII search offset");
     }
     let index = value.find(search).map_or(-1, |byte| {
@@ -1543,7 +1545,7 @@ fn eval_string_index_of(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Integer(index))
 }
 
-fn eval_string_repeat(args: &[Eval], cx: Context) -> Eval {
+fn eval_string_repeat(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match recorded_string_args(
         "string_repeat",
         args,
@@ -1576,7 +1578,7 @@ fn eval_string_repeat(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::String(value.repeat(count)))
 }
 
-fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context, all: bool) -> Eval {
+fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context<'_>, all: bool) -> Eval {
     let values = match recorded_string_args(
         function,
         args,
@@ -1625,29 +1627,28 @@ fn eval_string_replace(function: &'static str, args: &[Eval], cx: Context, all: 
     }))
 }
 
-fn eval_string_reverse(args: &[Eval], cx: Context) -> Eval {
-    let values =
-        match recorded_string_args("string_reverse", args, cx.clone(), &[Param::Str("String")]) {
-            Ok(v) => v,
-            Err(e) => return e,
-        };
+fn eval_string_reverse(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match recorded_string_args("string_reverse", args, cx, &[Param::Str("String")]) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
     let Value::String(value) = values[0] else {
         unreachable!("checked above")
     };
     Eval::Value(Value::String(value.chars().rev().collect()))
 }
 
-fn eval_substring(args: &[Eval], cx: Context) -> Eval {
+fn eval_substring(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
     // A null length was not asked.
-    if strict(cx.clone()) && args.get(2).is_some_and(is_missing) {
+    if strict(cx) && args.get(2).is_some_and(is_missing) {
         return unobserved("substring", "a null length");
     }
     if let Some(answer) = args
         .get(1)
-        .and_then(|arg| int_argument("substring", arg, cx.clone()))
+        .and_then(|arg| int_argument("substring", arg, cx))
     {
         if !args.first().is_some_and(is_missing) {
             return answer;
@@ -1655,12 +1656,12 @@ fn eval_substring(args: &[Eval], cx: Context) -> Eval {
     }
     if let Some(answer) = args
         .get(2)
-        .and_then(|arg| int_argument("substring", arg, cx.clone()))
+        .and_then(|arg| int_argument("substring", arg, cx))
     {
         return answer;
     }
     let params = [Param::StrOrBytes, Param::Int, Param::Int];
-    let values = match check("substring", args, &params, cx.clone()) {
+    let values = match check("substring", args, &params, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -1683,7 +1684,7 @@ fn eval_substring(args: &[Eval], cx: Context) -> Eval {
         } else {
             *position
         };
-        if start < 0 && strict(cx.clone()) {
+        if start < 0 && strict(cx) {
             return Err(unobserved(
                 "substring",
                 "a negative position before the start",
@@ -1725,7 +1726,7 @@ struct Ends {
     end: bool,
 }
 
-fn eval_trim(args: &[Eval], cx: Context) -> Eval {
+fn eval_trim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "trim",
         args,
@@ -1737,7 +1738,7 @@ fn eval_trim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_ltrim(args: &[Eval], cx: Context) -> Eval {
+fn eval_ltrim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "ltrim",
         args,
@@ -1749,7 +1750,7 @@ fn eval_ltrim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_rtrim(args: &[Eval], cx: Context) -> Eval {
+fn eval_rtrim(args: &[Eval], cx: Context<'_>) -> Eval {
     trim_call(
         "rtrim",
         args,
@@ -1761,20 +1762,20 @@ fn eval_rtrim(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn trim_call(function: &'static str, args: &[Eval], cx: Context, ends: Ends) -> Eval {
+fn trim_call(function: &'static str, args: &[Eval], cx: Context<'_>, ends: Ends) -> Eval {
     let params = [Param::StrOrBytes, Param::StrOrBytes];
-    let values = match check(function, args, &params, cx.clone()) {
+    let values = match check(function, args, &params, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
     match (values[0], values.get(1)) {
-        (Value::String(s), None) => trim_string(function, s, None, cx.clone(), ends),
+        (Value::String(s), None) => trim_string(function, s, None, cx, ends),
         (Value::String(s), Some(Value::String(set))) => {
-            trim_string(function, s, Some(set), cx.clone(), ends)
+            trim_string(function, s, Some(set), cx, ends)
         }
         (Value::Bytes(b), None) => {
             let space = |byte: &u8| byte.is_ascii_whitespace();
-            if strict(cx.clone())
+            if strict(cx)
                 && ((ends.start && b.first().is_some_and(space))
                     || (ends.end && b.last().is_some_and(space)))
             {
@@ -1783,7 +1784,7 @@ fn trim_call(function: &'static str, args: &[Eval], cx: Context, ends: Ends) -> 
             Eval::Value(Value::Bytes(trim_slice(b, space, ends).to_vec()))
         }
         (Value::Bytes(b), Some(Value::Bytes(set))) => {
-            if strict(cx.clone()) {
+            if strict(cx) {
                 return unobserved(function, "bytes to trim");
             }
             Eval::Value(Value::Bytes(
@@ -1791,7 +1792,7 @@ fn trim_call(function: &'static str, args: &[Eval], cx: Context, ends: Ends) -> 
             ))
         }
         _ => {
-            if strict(cx.clone()) {
+            if strict(cx) {
                 unobserved(function, "an input and a set of another type")
             } else {
                 Eval::Error(EvalError::WrongType {
@@ -1830,7 +1831,7 @@ fn trim_string(
     function: &'static str,
     text: &str,
     set: Option<&str>,
-    cx: Context,
+    cx: Context<'_>,
     ends: Ends,
 ) -> Eval {
     let chars: Vec<char> = text.chars().collect();
@@ -1839,7 +1840,7 @@ fn trim_string(
         None => recorded_space(*c) || c.is_whitespace(),
     };
     let (start, end) = trim_range(&chars, strip, ends);
-    if strict(cx.clone()) {
+    if strict(cx) {
         // The white space beyond the recorded characters, and an empty set, were not shown.
         let unrecorded_removed = set.is_none()
             && chars[..start]
@@ -1853,17 +1854,17 @@ fn trim_string(
     Eval::Value(Value::String(chars[start..end].iter().collect()))
 }
 
-fn eval_split(args: &[Eval], cx: Context) -> Eval {
+fn eval_split(args: &[Eval], cx: Context<'_>) -> Eval {
     // Production named `String` for an integer input (O-8B `split-int`).
     let params = [Param::StrOrBytesAsString, Param::StrOrBytesAsString];
-    let values = match check("split", args, &params, cx.clone()) {
+    let values = match check("split", args, &params, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
     match (values[0], values.get(1).copied()) {
         (Value::String(s), None) => {
             // One argument splits at commas; the one row shows a text with none.
-            if strict(cx.clone()) && s.contains(',') {
+            if strict(cx) && s.contains(',') {
                 return unobserved("split", "one argument and a text with a comma");
             }
             Eval::Value(Value::Array(
@@ -1874,7 +1875,7 @@ fn eval_split(args: &[Eval], cx: Context) -> Eval {
         }
         (Value::String(s), Some(Value::String(delimiter))) => {
             if delimiter.is_empty() {
-                if strict(cx.clone()) && s.is_empty() {
+                if strict(cx) && s.is_empty() {
                     return unobserved("split", "an empty text and an empty delimiter");
                 }
                 return Eval::Value(Value::Array(
@@ -1889,7 +1890,7 @@ fn eval_split(args: &[Eval], cx: Context) -> Eval {
         }
         (Value::Bytes(b), Some(Value::Bytes(delimiter))) => {
             if delimiter.is_empty() {
-                return if strict(cx.clone()) {
+                return if strict(cx) {
                     unobserved("split", "an empty delimiter of bytes")
                 } else {
                     Eval::Value(Value::Array(
@@ -1913,7 +1914,7 @@ fn eval_split(args: &[Eval], cx: Context) -> Eval {
             Eval::Value(Value::Array(parts))
         }
         (Value::Bytes(_), None) => {
-            if strict(cx.clone()) {
+            if strict(cx) {
                 unobserved("split", "bytes and no delimiter")
             } else {
                 Eval::Error(EvalError::WrongType {
@@ -1924,7 +1925,7 @@ fn eval_split(args: &[Eval], cx: Context) -> Eval {
             }
         }
         (_, Some(other)) => {
-            if strict(cx.clone()) {
+            if strict(cx) {
                 unobserved("split", "an input and a delimiter of another type")
             } else {
                 Eval::Error(EvalError::WrongType {
@@ -1967,11 +1968,10 @@ fn numbers(
     function: &'static str,
     args: &[Eval],
     count: usize,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<Vec<Num>, Eval> {
     let params = vec![Param::Number; count];
-    check(function, args, &params, cx.clone())
-        .map(|values| values.into_iter().map(Num::of).collect())
+    check(function, args, &params, cx).map(|values| values.into_iter().map(Num::of).collect())
 }
 
 fn double(d: f64) -> Eval {
@@ -1982,7 +1982,7 @@ fn integer(i: i64) -> Eval {
     Eval::Value(Value::Integer(i))
 }
 
-fn eval_add(args: &[Eval], cx: Context) -> Eval {
+fn eval_add(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "add",
         args,
@@ -1993,7 +1993,7 @@ fn eval_add(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_subtract(args: &[Eval], cx: Context) -> Eval {
+fn eval_subtract(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "subtract",
         args,
@@ -2004,7 +2004,7 @@ fn eval_subtract(args: &[Eval], cx: Context) -> Eval {
     )
 }
 
-fn eval_multiply(args: &[Eval], cx: Context) -> Eval {
+fn eval_multiply(args: &[Eval], cx: Context<'_>) -> Eval {
     arithmetic(
         "multiply",
         args,
@@ -2020,12 +2020,12 @@ fn eval_multiply(args: &[Eval], cx: Context) -> Eval {
 fn arithmetic(
     function: &'static str,
     args: &[Eval],
-    cx: Context,
+    cx: Context<'_>,
     exact: fn(i64, i64) -> Option<i64>,
     float: fn(f64, f64) -> f64,
     overflow: &str,
 ) -> Eval {
-    let values = match numbers(function, args, 2, cx.clone()) {
+    let values = match numbers(function, args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2035,8 +2035,8 @@ fn arithmetic(
     }
 }
 
-fn eval_divide(args: &[Eval], cx: Context) -> Eval {
-    let values = match numbers("divide", args, 2, cx.clone()) {
+fn eval_divide(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numbers("divide", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2047,7 +2047,7 @@ fn eval_divide(args: &[Eval], cx: Context) -> Eval {
         (Num::Double(a), Num::Double(b)) => double(a / b),
         // A double by an integer was shown (`divide-nan`); an integer by a double was not.
         (Num::Double(a), Num::Int(_)) => double(a / values[1].double()),
-        (a, b) if strict(cx.clone()) => {
+        (a, b) if strict(cx) => {
             let _ = (a, b);
             unobserved("divide", "an integer by a double")
         }
@@ -2055,8 +2055,8 @@ fn eval_divide(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_mod(args: &[Eval], cx: Context) -> Eval {
-    let values = match numbers("mod", args, 2, cx.clone()) {
+fn eval_mod(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numbers("mod", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2065,7 +2065,7 @@ fn eval_mod(args: &[Eval], cx: Context) -> Eval {
         // The remainder of the smallest integer by -1 is 0 (O-8B `mod-min-by-minus-one`).
         (Num::Int(a), Num::Int(b)) => integer(a.wrapping_rem(b)),
         (Num::Double(a), Num::Double(b)) => double(a % b),
-        (a, b) if strict(cx.clone()) => {
+        (a, b) if strict(cx) => {
             let _ = (a, b);
             unobserved("mod", "an integer and a double")
         }
@@ -2073,8 +2073,8 @@ fn eval_mod(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_abs(args: &[Eval], cx: Context) -> Eval {
-    let values = match numbers("abs", args, 1, cx.clone()) {
+fn eval_abs(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numbers("abs", args, 1, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2087,43 +2087,40 @@ fn eval_abs(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_floor(args: &[Eval], cx: Context) -> Eval {
-    rounding("floor", args, cx.clone(), f64::floor)
+fn eval_floor(args: &[Eval], cx: Context<'_>) -> Eval {
+    rounding("floor", args, cx, f64::floor)
 }
 
-fn eval_ceil(args: &[Eval], cx: Context) -> Eval {
-    rounding("ceil", args, cx.clone(), f64::ceil)
+fn eval_ceil(args: &[Eval], cx: Context<'_>) -> Eval {
+    rounding("ceil", args, cx, f64::ceil)
 }
 
 /// An integer stays as it is; a double goes to a whole double. Infinity was not shown.
-fn rounding(function: &'static str, args: &[Eval], cx: Context, op: fn(f64) -> f64) -> Eval {
-    let values = match numbers(function, args, 1, cx.clone()) {
+fn rounding(function: &'static str, args: &[Eval], cx: Context<'_>, op: fn(f64) -> f64) -> Eval {
+    let values = match numbers(function, args, 1, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
     match values[0] {
         Num::Int(i) => integer(i),
-        Num::Double(d) if strict(cx.clone()) && d.is_infinite() => {
+        Num::Double(d) if strict(cx) && d.is_infinite() => {
             unobserved(function, "an infinite number")
         }
         Num::Double(d) => double(op(d)),
     }
 }
 
-fn eval_round(args: &[Eval], cx: Context) -> Eval {
+fn eval_round(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    if let Some(answer) = args
-        .get(1)
-        .and_then(|arg| int_argument("round", arg, cx.clone()))
-    {
+    if let Some(answer) = args.get(1).and_then(|arg| int_argument("round", arg, cx)) {
         if !args.first().is_some_and(is_missing) {
             return answer;
         }
     }
     let params = [Param::Number, Param::Int];
-    let values = match check("round", args, &params, cx.clone()) {
+    let values = match check("round", args, &params, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2135,28 +2132,28 @@ fn eval_round(args: &[Eval], cx: Context) -> Eval {
     match (number, places) {
         (Num::Int(i), None) => integer(i),
         (Num::Int(i), Some(places)) if places >= 0 => {
-            if strict(cx.clone()) {
+            if strict(cx) {
                 unobserved("round", "an integer and places of zero or more")
             } else {
                 integer(i)
             }
         }
-        (Num::Int(i), Some(places)) => round_integer(i, places, cx.clone()),
-        (Num::Double(d), _) if strict(cx.clone()) && !d.is_finite() => {
+        (Num::Int(i), Some(places)) => round_integer(i, places, cx),
+        (Num::Double(d), _) if strict(cx) && !d.is_finite() => {
             unobserved("round", "a number that is not finite")
         }
         (Num::Double(d), None) => double(d.round()),
-        (Num::Double(d), Some(places)) => round_places(d, places, cx.clone()),
+        (Num::Double(d), Some(places)) => round_places(d, places, cx),
     }
 }
 
 /// A double rounded to `places` decimals, half away from zero. Places of 309 or more leave the
 /// number alone (O-8B `round-huge-places`); the places the rows do not show are unobserved.
-fn round_places(d: f64, places: i64, cx: Context) -> Eval {
+fn round_places(d: f64, places: i64, cx: Context<'_>) -> Eval {
     if places >= 309 {
         return double(d);
     }
-    if strict(cx.clone()) && !(-15..=15).contains(&places) {
+    if strict(cx) && !(-15..=15).contains(&places) {
         return unobserved("round", "places the rows do not show");
     }
     if places < -308 {
@@ -2179,9 +2176,9 @@ fn round_places(d: f64, places: i64, cx: Context) -> Eval {
 }
 
 /// An integer rounded to a power of ten, half away from zero.
-fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
+fn round_integer(i: i64, places: i64, cx: Context<'_>) -> Eval {
     let overflow = || {
-        if strict(cx.clone()) {
+        if strict(cx) {
             unobserved("round", "an integer that rounds past the largest")
         } else {
             invalid("round(...) int64 overflow")
@@ -2192,7 +2189,7 @@ fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
         .and_then(|value| u32::try_from(value).ok())
         .filter(|digits| *digits <= 18)
     else {
-        return if strict(cx.clone()) {
+        return if strict(cx) {
             unobserved("round", "places the rows do not show")
         } else {
             integer(0)
@@ -2209,13 +2206,13 @@ fn round_integer(i: i64, places: i64, cx: Context) -> Eval {
     base.checked_add(step).map_or_else(overflow, integer)
 }
 
-fn eval_pow(args: &[Eval], cx: Context) -> Eval {
-    let values = match numbers("pow", args, 2, cx.clone()) {
+fn eval_pow(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numbers("pow", args, 2, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
     let (base, exponent) = (values[0].double(), values[1].double());
-    if strict(cx.clone()) && (!base.is_finite() || !exponent.is_finite()) {
+    if strict(cx) && (!base.is_finite() || !exponent.is_finite()) {
         return unobserved("pow", "a number that is not finite");
     }
     if base < 0.0 && exponent.is_finite() && exponent.fract() != 0.0 {
@@ -2226,8 +2223,8 @@ fn eval_pow(args: &[Eval], cx: Context) -> Eval {
     double(base.powf(exponent))
 }
 
-fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
-    let values = match numeric_inputs("sqrt", args, cx.clone()) {
+fn eval_sqrt(args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numeric_inputs("sqrt", args, cx) {
         Ok(values) => values,
         Err(answer) => return answer,
     };
@@ -2239,11 +2236,11 @@ fn eval_sqrt(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<Num>, Eval> {
+fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context<'_>) -> Result<Vec<Num>, Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
     }
-    if !strict(cx.clone())
+    if !strict(cx)
         && args.len() == 1
         && matches!(name, "exp" | "ln" | "log" | "log10")
         && matches!(&args[0], Eval::Value(Value::String(_)))
@@ -2254,7 +2251,7 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
             got: "STRING",
         }));
     }
-    if !strict(cx.clone()) && name == "sqrt" {
+    if !strict(cx) && name == "sqrt" {
         if let Some(Eval::Value(value)) = args.first() {
             if !matches!(value, Value::Null | Value::Integer(_) | Value::Double(_)) {
                 return Err(Eval::Error(EvalError::WrongType {
@@ -2265,7 +2262,7 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
             }
         }
     }
-    if strict(cx.clone()) {
+    if strict(cx) {
         if args.len() == 1 {
             match &args[0] {
                 Eval::Value(Value::Null) => return Err(null()),
@@ -2290,11 +2287,11 @@ fn numeric_inputs(name: &'static str, args: &[Eval], cx: Context) -> Result<Vec<
             ));
         }
     }
-    numbers(name, args, args.len(), cx.clone())
+    numbers(name, args, args.len(), cx)
 }
 
-fn eval_exp(args: &[Eval], cx: Context) -> Eval {
-    match numeric_inputs("exp", args, cx.clone()) {
+fn eval_exp(args: &[Eval], cx: Context<'_>) -> Eval {
+    match numeric_inputs("exp", args, cx) {
         Ok(v) => {
             let input = v[0].double();
             let result = input.exp();
@@ -2309,8 +2306,8 @@ fn eval_exp(args: &[Eval], cx: Context) -> Eval {
         Err(e) => e,
     }
 }
-fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
-    let values = match numeric_inputs(name, args, cx.clone()) {
+fn logarithm(name: &'static str, args: &[Eval], cx: Context<'_>) -> Eval {
+    let values = match numeric_inputs(name, args, cx) {
         Ok(v) => v,
         Err(e) => return e,
     };
@@ -2349,20 +2346,20 @@ fn logarithm(name: &'static str, args: &[Eval], cx: Context) -> Eval {
         None => x.ln(),
     })
 }
-fn eval_ln(args: &[Eval], cx: Context) -> Eval {
-    logarithm("ln", args, cx.clone())
+fn eval_ln(args: &[Eval], cx: Context<'_>) -> Eval {
+    logarithm("ln", args, cx)
 }
-fn eval_log(args: &[Eval], cx: Context) -> Eval {
-    logarithm("log", args, cx.clone())
+fn eval_log(args: &[Eval], cx: Context<'_>) -> Eval {
+    logarithm("log", args, cx)
 }
-fn eval_log10(args: &[Eval], cx: Context) -> Eval {
-    logarithm("log10", args, cx.clone())
+fn eval_log10(args: &[Eval], cx: Context<'_>) -> Eval {
+    logarithm("log10", args, cx)
 }
-fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
+fn eval_trunc(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
-    if strict(cx.clone()) && args.len() == 1 {
+    if strict(cx) && args.len() == 1 {
         match &args[0] {
             Eval::Value(Value::Null) => return null(),
             Eval::Value(Value::String(_)) => {
@@ -2375,7 +2372,7 @@ fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
             _ => {}
         }
     }
-    if strict(cx.clone())
+    if strict(cx)
         && (args.iter().any(is_missing)
             || args
                 .iter()
@@ -2383,7 +2380,7 @@ fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
     {
         return unobserved("trunc", "argument shape or special value is unobserved");
     }
-    if strict(cx.clone())
+    if strict(cx)
         && !args.iter().enumerate().all(|(i, arg)| match (i, arg) {
             (0 | 1, Eval::Value(Value::Integer(_))) => true,
             (0, Eval::Value(Value::Double(d))) => {
@@ -2394,7 +2391,7 @@ fn eval_trunc(args: &[Eval], cx: Context) -> Eval {
     {
         return unobserved("trunc", "argument shape is unobserved");
     }
-    let values = match check("trunc", args, &[Param::Number, Param::Int], cx.clone()) {
+    let values = match check("trunc", args, &[Param::Number, Param::Int], cx) {
         Ok(v) => v,
         Err(e) => return e,
     };

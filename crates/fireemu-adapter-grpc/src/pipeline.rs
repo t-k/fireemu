@@ -1229,7 +1229,16 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     stages.push(match stage.name.as_str() {
-                        "add_fields" => Stage::AddFields(decode_add_fields(stage, unrecorded)?),
+                        "add_fields" => match decode_add_fields(stage, unrecorded) {
+                            Ok(aliases) => Stage::AddFields(aliases),
+                            Err(error)
+                                if error.message().starts_with("map key must be of type") =>
+                            {
+                                deferred_name.get_or_insert(error);
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        },
                         "distinct" => Stage::Distinct(decode_distinct(stage, unrecorded)?),
                         _ => {
                             let (accumulators, groups) = decode_aggregate(stage, unrecorded)?;
@@ -3703,6 +3712,12 @@ fn decode_add_fields(
                 &path.canonical(),
             ));
         }
+    }
+    if let Some(error) = ordered_keys(fields)
+        .into_iter()
+        .find_map(|alias| map_key_error(&fields[alias]))
+    {
+        return Err(error);
     }
     Ok(aliases)
 }

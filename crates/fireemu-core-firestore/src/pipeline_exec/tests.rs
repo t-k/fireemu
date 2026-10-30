@@ -1814,7 +1814,14 @@ fn array_filter_keeps_true_values_and_skips_false_and_null() {
         "greater_than",
         vec![variable, Expr::Constant(Value::Integer(1))],
     );
-    let expression = call("array_filter", vec![values, alias.clone(), predicate]);
+    let expression = call(
+        "array_filter",
+        vec![values.clone(), alias.clone(), predicate],
+    );
+    let null_predicate = call(
+        "array_filter",
+        vec![values, alias.clone(), Expr::Constant(Value::Null)],
+    );
     let empty = call(
         "array_filter",
         vec![
@@ -1831,6 +1838,10 @@ fn array_filter_keeps_true_values_and_skips_false_and_null() {
         );
         assert_eq!(
             empty.eval_in(&doc, profile),
+            Eval::Value(Value::Array(vec![]))
+        );
+        assert_eq!(
+            null_predicate.eval_in(&doc, profile),
             Eval::Value(Value::Array(vec![]))
         );
     }

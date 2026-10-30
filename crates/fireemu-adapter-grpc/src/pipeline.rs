@@ -4839,29 +4839,55 @@ mod tests {
     #[test]
     fn where_is_type_keeps_static_type_validation() {
         use pb::value::ValueType as V;
-        let condition = pb::Value {
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        let bogus = || pb::Value {
+            value_type: Some(V::StringValue("bogus".to_owned())),
+        };
+        let variable = || pb::Value {
+            value_type: Some(V::VariableReferenceValue("v".to_owned())),
+        };
+        let unknown = || pb::Value {
             value_type: Some(V::FunctionValue(pb::Function {
-                name: "is_type".to_owned(),
-                args: vec![
-                    pb::Value {
-                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
-                    },
-                    pb::Value {
-                        value_type: Some(V::StringValue("bogus".to_owned())),
-                    },
-                ],
+                name: "not_a_registered_function".to_owned(),
                 ..Default::default()
             })),
         };
         for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
-            let stage = pb::pipeline::Stage {
-                name: "where".to_owned(),
-                args: vec![condition.clone()],
-                ..Default::default()
-            };
-            let error = decode_condition(&stage, mode).unwrap_err();
-            assert_eq!(error.code(), tonic::Code::InvalidArgument);
-            assert!(error.message().contains("argument 'type'"));
+            for (args, code, text) in [
+                (
+                    vec![field(), bogus()],
+                    tonic::Code::InvalidArgument,
+                    "argument 'type'",
+                ),
+                (
+                    vec![field(), variable()],
+                    tonic::Code::Unimplemented,
+                    "variable and pipeline",
+                ),
+                (
+                    vec![unknown(), bogus()],
+                    tonic::Code::Unimplemented,
+                    "not_a_registered_function",
+                ),
+            ] {
+                let condition = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "is_type".to_owned(),
+                        args,
+                        ..Default::default()
+                    })),
+                };
+                let stage = pb::pipeline::Stage {
+                    name: "where".to_owned(),
+                    args: vec![condition],
+                    ..Default::default()
+                };
+                let error = decode_condition(&stage, mode).unwrap_err();
+                assert_eq!(error.code(), code);
+                assert!(error.message().contains(text), "{error}");
+            }
         }
     }
 

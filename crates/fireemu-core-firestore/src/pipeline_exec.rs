@@ -806,7 +806,7 @@ impl Expr {
                 )));
             }
             if let Arity::AtLeast(minimum) = function.arity {
-                return Err(ExprError::Arity(format!(
+                return Err(ExprError::Invalid(format!(
                     "function {name:?} takes at least {minimum} argument(s), got {} argument(s)",
                     args.len()
                 )));

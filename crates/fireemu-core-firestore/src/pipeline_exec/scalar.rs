@@ -454,6 +454,18 @@ pub(super) const ABS: Function = function(
     &[],
     eval_abs,
 );
+pub(super) const MINIMUM: Function =
+    function("minimum", Arity::AtLeast(1), false, "", &[], |args, cx| {
+        extrema("minimum", args, cx, false)
+    });
+pub(super) const MAXIMUM: Function =
+    function("maximum", Arity::AtLeast(1), false, "", &[], |args, cx| {
+        extrema("maximum", args, cx, true)
+    });
+pub(super) const SUM: Function = function("sum", Arity::Exact(1), false, "", &[], eval_sum);
+pub(super) const NEGATE: Function =
+    function("negate", Arity::Exact(1), false, "", &[], eval_negate);
+
 pub(super) const ROUND: Function = function(
     "round",
     Arity::Between(1, 2),
@@ -2070,6 +2082,75 @@ fn eval_mod(args: &[Eval], cx: Context<'_>) -> Eval {
             unobserved("mod", "an integer and a double")
         }
         (a, b) => double(a.double() % b.double()),
+    }
+}
+
+fn extrema(name: &'static str, args: &[Eval], _cx: Context<'_>, maximum: bool) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let values: Vec<&Value> = match args {
+        [Eval::Value(Value::Array(values))] => values.iter().collect(),
+        [_, _, ..] => args
+            .iter()
+            .filter_map(|arg| match arg {
+                Eval::Value(value) => Some(value),
+                _ => None,
+            })
+            .collect(),
+        _ => return unobserved(name, "unrecorded argument shape"),
+    };
+    if values.len()
+        != if args.len() == 1 {
+            values.len()
+        } else {
+            args.len()
+        }
+        || values.is_empty()
+        || values.iter().any(|v| !matches!(v, Value::Integer(_)))
+    {
+        return unobserved(name, "unrecorded input values");
+    }
+    let selected = if maximum {
+        values.into_iter().max_by(|a, b| a.canonical_cmp(b))
+    } else {
+        values.into_iter().min_by(|a, b| a.canonical_cmp(b))
+    };
+    Eval::Value(selected.expect("nonempty values").clone())
+}
+
+fn eval_sum(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Array(values))] = args else {
+        return unobserved("sum", "unrecorded argument shape");
+    };
+    if values.is_empty() {
+        return unobserved("sum", "empty array");
+    }
+    let mut total = 0_i64;
+    for value in values {
+        let Value::Integer(value) = value else {
+            return unobserved("sum", "unrecorded input values");
+        };
+        let Some(sum) = total.checked_add(*value) else {
+            return unobserved("sum", "integer overflow");
+        };
+        total = sum;
+    }
+    integer(total)
+}
+
+fn eval_negate(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Integer(value))] => value
+            .checked_neg()
+            .map_or_else(|| unobserved("negate", "integer overflow"), integer),
+        _ => unobserved("negate", "unrecorded input values"),
     }
 }
 

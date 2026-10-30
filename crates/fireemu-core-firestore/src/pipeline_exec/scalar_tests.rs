@@ -3911,8 +3911,192 @@ fn vector_scalars_finite_cancellation_nan_and_underflow_are_bounded() {
 
 #[test]
 fn map_odd_argument_count_is_an_arity_error() {
-    let result = Expr::call("map", vec![Expr::Constant(Value::String("k".into()))], Placement::Value);
-    assert!(matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments"));
+    let result = Expr::call(
+        "map",
+        vec![Expr::Constant(Value::String("k".into()))],
+        Placement::Value,
+    );
+    assert!(
+        matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments")
+    );
     assert!(Expr::call("map", vec![], Placement::Value).is_ok());
-    assert!(Expr::call("map", vec![Expr::Constant(Value::String("k".into())), Expr::Constant(Value::Integer(1))], Placement::Value).is_ok());
+    assert!(Expr::call(
+        "map",
+        vec![
+            Expr::Constant(Value::String("k".into())),
+            Expr::Constant(Value::Integer(1))
+        ],
+        Placement::Value
+    )
+    .is_ok());
+}
+
+#[test]
+fn numeric_scalar_recorded_integer_forms() {
+    let values = array(vec![
+        Value::Integer(7),
+        Value::Integer(2),
+        Value::Integer(5),
+    ]);
+    for (name, expected) in [("minimum", 2), ("maximum", 7)] {
+        assert_eq!(both(name, std::slice::from_ref(&values)), int(expected));
+        assert_eq!(both(name, &[int(7), int(2)]), int(expected));
+    }
+    assert_eq!(both("sum", &[values]), int(14));
+    assert_eq!(both("negate", &[int(7)]), int(-7));
+}
+
+#[test]
+fn numeric_scalar_unobserved_inputs_are_refused() {
+    for name in ["minimum", "maximum", "sum"] {
+        assert!(is_unobserved(&strict(name, &[array(vec![])])));
+        assert!(is_unobserved(&strict(name, &[array(vec![Value::Null])])));
+    }
+    assert!(is_unobserved(&strict(
+        "sum",
+        &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])]
+    )));
+    assert!(is_unobserved(&strict("negate", &[int(i64::MIN)])));
+    assert!(is_unobserved(&strict("negate", &[text("x")])));
+}
+
+#[test]
+fn numeric_scalar_pict_rows() {
+    let cases = [
+        ("minimum", "array", "integers"),
+        ("minimum", "variadic", "integers"),
+        ("maximum", "array", "integers"),
+        ("maximum", "variadic", "integers"),
+        ("sum", "array", "integers"),
+        ("negate", "scalar", "integers"),
+        ("maximum", "array", "empty"),
+        ("sum", "array", "empty"),
+        ("sum", "array", "overflow"),
+        ("minimum", "array", "wrong_type"),
+        ("minimum", "variadic", "overflow"),
+        ("sum", "array", "wrong_type"),
+        ("negate", "scalar", "overflow"),
+        ("minimum", "array", "empty"),
+        ("maximum", "variadic", "wrong_type"),
+        ("negate", "scalar", "wrong_type"),
+        ("maximum", "variadic", "overflow"),
+    ];
+    for (name, shape, input) in cases {
+        let values = match input {
+            "integers" => vec![Value::Integer(7), Value::Integer(2)],
+            "empty" => vec![],
+            "wrong_type" => vec![Value::Null, Value::Integer(2)],
+            "overflow" => vec![Value::Integer(i64::MAX), Value::Integer(1)],
+            _ => unreachable!(),
+        };
+        let args = match shape {
+            "array" => vec![array(values)],
+            "variadic" => values.into_iter().map(Eval::Value).collect(),
+            "scalar" if input == "integers" => vec![int(7)],
+            "scalar" if input == "overflow" => vec![int(i64::MIN)],
+            "scalar" => vec![null()],
+            _ => unreachable!(),
+        };
+        let actual = strict(name, &args);
+        if input == "empty"
+            || input == "wrong_type"
+            || (input == "overflow" && (name == "sum" || name == "negate"))
+        {
+            assert!(is_unobserved(&actual), "{name} {shape} {input}: {actual:?}");
+        } else {
+            let expected = match (name, input) {
+                ("minimum", "integers") => 2,
+                ("maximum", "integers") => 7,
+                ("minimum", "overflow") => 1,
+                ("maximum", "overflow") => i64::MAX,
+                ("sum", "integers") => 9,
+                ("negate", "integers") => -7,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, int(expected), "{name} {shape} {input}");
+        }
+    }
+}
+
+#[test]
+fn empty_signature_at_least_arity_is_bounded() {
+    for name in ["minimum", "maximum"] {
+        assert!(
+            matches!(
+                Expr::call(name, vec![], Placement::Value),
+                Err(ExprError::Invalid(_))
+            ),
+            "{name}"
+        );
+    }
+    for function in FUNCTIONS
+        .iter()
+        .filter(|f| matches!(f.arity, Arity::AtLeast(_)))
+    {
+        let Arity::AtLeast(minimum) = function.arity else {
+            unreachable!()
+        };
+        if minimum > 0 {
+            assert!(
+                Expr::call(
+                    function.name,
+                    vec![Expr::Constant(Value::Integer(1)); minimum - 1],
+                    Placement::Value
+                )
+                .is_err(),
+                "{}",
+                function.name
+            );
+        }
+    }
+}
+
+#[test]
+fn arity_review_pict_rows() {
+    let rows = [
+        ("minimum", 0, false),
+        ("maximum", 0, false),
+        ("minimum", 0, true),
+        ("maximum", 0, true),
+        ("map", 0, false),
+        ("concat", 2, false),
+        ("minimum", 1, true),
+        ("map", 1, false),
+        ("maximum", 2, true),
+        ("maximum", 1, true),
+        ("concat", 0, true),
+        ("minimum", 2, true),
+        ("concat", 1, false),
+        ("map", 2, true),
+    ];
+    for (name, count, condition) in rows {
+        let placement = if condition {
+            Placement::Condition
+        } else {
+            Placement::Value
+        };
+        let result = Expr::call(
+            name,
+            vec![Expr::Constant(Value::Integer(1)); count],
+            placement,
+        );
+        if condition {
+            assert!(
+                matches!(result, Err(ExprError::Unsupported(_))),
+                "{name} {count}"
+            );
+        } else if (name == "minimum" || name == "maximum") && count == 0 {
+            assert!(
+                matches!(result, Err(ExprError::Invalid(_))),
+                "{name} {count}: {result:?}"
+            );
+        } else if (name == "map" && count % 2 == 1) || (name == "concat" && count < 2) {
+            assert!(
+                matches!(result, Err(ExprError::Arity(_))),
+                "{name} {count}: {result:?}"
+            );
+        } else {
+            assert!(result.is_ok(), "{name} {count}: {result:?}");
+        }
+    }
 }

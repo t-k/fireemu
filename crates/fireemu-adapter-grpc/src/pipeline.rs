@@ -4930,6 +4930,132 @@ mod tests {
         );
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_literal_refusal_boundary_cases() {
+        use pb::value::ValueType as V;
+        const ROWS: &str = r#"Family	Transport	Profile	Position	Conflict
+vector	rest	strict	direct	none
+vector	grpc	strict	where	none
+type_tag	rest	strict	nested	none
+type_tag	grpc	strict	function	none
+reference	rest	strict	direct	none
+reference	grpc	strict	direct	foreign
+vector	rest	emulator	function	arity
+type_tag	grpc	strict	function	unknown
+vector	grpc	emulator	nested	foreign
+reference	grpc	strict	nested	arity
+type_tag	rest	emulator	direct	unknown
+reference	rest	emulator	where	foreign
+type_tag	grpc	strict	direct	arity
+reference	rest	strict	where	unknown
+vector	rest	strict	nested	unknown
+type_tag	grpc	strict	where	foreign
+type_tag	rest	emulator	where	arity
+reference	rest	emulator	function	none
+vector	grpc	emulator	function	foreign"#;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [family, transport, profile, position, conflict] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let policy = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let literal = match *family {
+                "vector" => tagged_literal(
+                    value(V::StringValue("__vector__".to_owned())),
+                    vec![value(V::IntegerValue(1))],
+                    false,
+                ),
+                "type_tag" => tagged_literal(
+                    value(V::IntegerValue(7)),
+                    vec![value(V::DoubleValue(1.0))],
+                    false,
+                ),
+                "reference" => value(V::ReferenceValue("garbage".to_owned())),
+                _ => unreachable!(),
+            };
+            let mut operand = match *position {
+                "nested" => value(V::ArrayValue(pb::ArrayValue {
+                    values: vec![literal],
+                })),
+                "function" => value(V::FunctionValue(pb::Function {
+                    name: "equal".to_owned(),
+                    args: vec![value(V::FieldReferenceValue("i".to_owned())), literal],
+                    ..Default::default()
+                })),
+                _ => literal,
+            };
+            if *conflict == "arity" || *conflict == "unknown" {
+                let name = if *conflict == "arity" {
+                    "equal"
+                } else {
+                    "unknown_function"
+                };
+                operand = value(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![operand],
+                    ..Default::default()
+                }));
+            }
+            if *conflict == "foreign" {
+                let foreign = value(V::ReferenceValue(
+                    "projects/q/databases/db/documents/c/d".to_owned(),
+                ));
+                assert_eq!(
+                    reference_outside(&foreign, "projects/p/databases/db/documents")
+                        .unwrap()
+                        .code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+            let error = if *position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![operand],
+                        ..Default::default()
+                    },
+                    policy,
+                )
+                .unwrap_err()
+            } else {
+                decode_operand_tree(&operand, policy).unwrap_err()
+            };
+            if *conflict == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            }
+            if *conflict == "arity" {
+                assert!(error.message().contains("argument(s)"), "{line}: {error:?}");
+            }
+            let gate = if *profile == "strict" {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    None,
+                    "projects/p/databases/db".to_owned(),
+                )
+            } else {
+                crate::pipeline_shape::RefusalGate::Open
+            };
+            let gated = gate.answer(error.clone());
+            if *profile == "strict" {
+                assert_eq!(
+                    gated.code(),
+                    tonic::Code::Unimplemented,
+                    "{transport}: {line}"
+                );
+            } else {
+                assert_eq!(gated.code(), error.code(), "{transport}: {line}");
+            }
+        }
+    }
+
     fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
         use pb::value::ValueType as V;
         let map = pb::Value {

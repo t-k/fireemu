@@ -30,8 +30,15 @@ jobs:
         run: pnpm -C conformance install --frozen-lockfile
       - name: Exercise PID namespace and detached timeout
         run: |
+          set +e
           set -o pipefail
           sudo env PATH="$PATH" HOME="$HOME" node conformance/src/rtdb-namespace-probe.mjs --out probe-evidence/namespace 2>&1 | tee probe-evidence/probe.log
+          probe_status=${PIPESTATUS[0]}
+          set -e
+          if test -f probe-evidence/namespace/receipt.json; then
+            jq -c '{ok, launcherIdentity, identity, innerPid, remaining, outcome, namespace: .summary.namespace, fatal: .summary.fatal, observed: .summary.observed, commandCount: (.summary.runs[0].commands | length), commandExit: .summary.runs[0].commands[0].exitCode, later, cleanupUnverified}' probe-evidence/namespace/receipt.json
+          fi
+          exit "$probe_status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

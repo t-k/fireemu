@@ -5,17 +5,51 @@ on:
 permissions:
   contents: read
 jobs:
-  test:
+  replay:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 2076670b793d72ca8720ff3657b16b99a30cebb7
           fetch-depth: 0
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          tool: cargo-nextest@0.9.143
-      - run: |
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: .ci-helper
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Build exact source and replay both profiles
+        run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = 2076670b793d72ca8720ff3657b16b99a30cebb7
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(autogen_document_id_uses_request_runtime) | test(coalesce_skips_failing_constant_but_validates_static_errors) | test(captured_generic_expressions_preserve_typed_results)'
+          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
+          pnpm -C conformance install --frozen-lockfile
+          cargo build -p fireemu --locked
+          mkdir /tmp/generic-evidence
+          git rev-parse HEAD > /tmp/generic-evidence/source.txt
+          sha256sum target/debug/fireemu > /tmp/generic-evidence/binary.sha256
+          node .ci-helper/.github/temporary/prepare_generic_requests.mjs
+          cp /tmp/generic-request-programs.json /tmp/generic-evidence/programs.json
+          cp .ci-helper/.github/temporary/generic_expected.json /tmp/generic-expected.json
+          for profile in strict emulator; do
+            if test "$profile" = strict; then config=conformance/fs-ent-pipeline.fireemu.json; else config=conformance/fs-ent-pipeline.emulator.fireemu.json; fi
+            sudo unshare --net -- env PATH="$PATH" HOME="$HOME" sh -c '
+              ip link set lo up
+              exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS FIREEMU_SANDBOX_LANE=fs-ent-pipeline FS_QUERY_INDEX_IN=/tmp/generic-request-programs.json FS_QUERY_INDEX_OUT="/tmp/generic-evidence/$5.json" FS_QUERY_INDEX_RUN="$4" "$3" exec --config "$6" --project fireemu-oracle-query --only firestore --firestore-port 0 --http-port 0 --storage-port 0 --ui-port 0 --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local
+            ' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" "$GITHUB_RUN_ID" "$profile" "$config" 2>&1 | tee "/tmp/generic-evidence/$profile.log"
+          done
+          python3 .ci-helper/.github/temporary/compare_generic_actual.py
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: generic-positive-local-actual
+          path: /tmp/generic-evidence/
+          if-no-files-found: warn

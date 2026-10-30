@@ -4766,6 +4766,94 @@ fn with_code(mut status: Status, code: &str) -> Status {
 mod tests {
 
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_map_refusal_precedence_cases() {
+        use serde_json::json;
+        const ROWS: &str = r"Operation	Key	Later	Profile
+odd_map	valid	none	strict
+odd_map	unknown	none	strict
+add_fields_map	double	empty_select	strict
+add_fields_map	double	invalid_limit	emulator
+add_fields_map	valid	empty_select	strict
+add_fields_map	unknown	empty_select	strict
+odd_map	unknown	invalid_limit	emulator
+odd_map	double	none	emulator
+odd_map	valid	empty_select	emulator
+add_fields_map	valid	invalid_limit	strict
+add_fields_map	unknown	none	strict";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [operation, key, later, profile] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let mode = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let key_value = match *key {
+                "valid" => json!({"stringValue":"k"}),
+                "double" => json!({"doubleValue":1.5}),
+                "unknown" => json!({"functionValue":{"name":"unknown_function","args":[]}}),
+                _ => unreachable!(),
+            };
+            let args = if *operation == "odd_map" {
+                vec![key_value]
+            } else {
+                vec![key_value, json!({"fieldReferenceValue":"i"})]
+            };
+            let map = json!({"functionValue":{"name":"map","args":args}});
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *operation == "odd_map" {
+                stages.push(json!({"name":"select","args":[{"mapValue":{"fields":{"v":map}}}]}));
+            } else {
+                stages
+                    .push(json!({"name":"add_fields","args":[{"mapValue":{"fields":{"a":map}}}]}));
+            }
+            match *later {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}))
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let result = compile_pipeline_in_order(&request, &parent, mode, None);
+            let error = result.unwrap_err();
+            if *operation == "odd_map" {
+                assert_eq!(
+                    error.message(),
+                    "'map' function must have an even number of arguments",
+                    "{line}"
+                );
+            } else if *key == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            } else if *later == "invalid_limit" {
+                assert!(error.message().contains("limit"), "{line}: {error:?}");
+            } else if *key == "double" {
+                assert_eq!(
+                    error.message(),
+                    "map key must be of type STRING, given type is DOUBLE",
+                    "{line}"
+                );
+            } else {
+                assert!(error.message().contains("select"), "{line}: {error:?}");
+            }
+            if mode == Unrecorded::Refuse {
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, database.to_owned());
+                assert_eq!(
+                    gate.answer(error).code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn recorded_map_add_fields_refusal_precedes_empty_select() {
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
         let (requests, order) =

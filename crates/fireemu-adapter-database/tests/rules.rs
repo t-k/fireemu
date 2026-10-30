@@ -15,6 +15,21 @@ use fireemu_adapter_database::rest::{
 const NOW: i64 = 1_792_464_733_000;
 const LATER: i64 = NOW + 1_234;
 
+#[test]
+fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
+    let mut database = db();
+    let owner = [("Authorization", "Bearer owner")];
+    let valid = r#"{"rules":{".read":true}}"#;
+    assert_eq!(call(&mut database, "PUT", "/.settings/rules.json", &owner, valid).0, 200);
+    let invalid = "{\"rules\":{\n\"z\":{\".read\":\"!data.val()\"},\n\"a\":{\".write\":\"!data.val()\"}\n}}";
+    let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", &owner, invalid);
+    assert_eq!(status, 400);
+    let first = body.find("2:").expect("first diagnostic");
+    let second = body.find("3:").expect("second diagnostic");
+    assert!(first < second, "{body}");
+    assert_eq!(call(&mut database, "GET", "/.settings/rules.json", &owner, "").1, valid);
+}
+
 fn db() -> Database {
     Database::new(RestOptions::default(), 7)
 }

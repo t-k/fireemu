@@ -4214,3 +4214,58 @@ fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
         );
     }
 }
+
+#[test]
+fn observed_generic_sequence_pict_rows() {
+    let rows = [
+        ("reverse", "string", "strict"),
+        ("reverse", "bytes", "strict"),
+        ("reverse", "array", "strict"),
+        ("length", "string", "strict"),
+        ("length", "bytes", "strict"),
+        ("length", "array", "strict"),
+        ("length", "map", "strict"),
+        ("length", "vector", "strict"),
+        ("reverse", "string", "emulator"),
+        ("length", "vector", "emulator"),
+        ("reverse", "array", "emulator"),
+        ("length", "bytes", "emulator"),
+        ("length", "map", "emulator"),
+    ];
+    for (name, kind, profile) in rows {
+        let (input, length, reversed) = match kind {
+            "string" => (text("abc"), 3, text("cba")),
+            "bytes" => (bytes(b"abc"), 3, bytes(b"cba")),
+            "array" => (
+                array(vec![Value::Integer(1), Value::Integer(2)]),
+                2,
+                array(vec![Value::Integer(2), Value::Integer(1)]),
+            ),
+            "map" => (
+                Eval::Value(Value::Map(
+                    [("answer".to_owned(), Value::Integer(7))]
+                        .into_iter()
+                        .collect(),
+                )),
+                1,
+                Eval::Absent,
+            ),
+            "vector" => (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2, Eval::Absent),
+            _ => unreachable!(),
+        };
+        let actual = if profile == "strict" {
+            strict(name, &[input])
+        } else {
+            emulator(name, &[input])
+        };
+        assert_eq!(
+            actual,
+            if name == "length" {
+                int(length)
+            } else {
+                reversed
+            },
+            "{name} {kind} {profile}"
+        );
+    }
+}

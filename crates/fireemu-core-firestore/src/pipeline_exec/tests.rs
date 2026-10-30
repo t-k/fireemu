@@ -277,7 +277,7 @@ fn call_refuses_unknown_misplaced_and_misarity_functions() {
         ("parent", vec![field("a"), field("b")]),
     ] {
         assert!(
-            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Invalid(m)) if m.contains(name)),
+            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Arity(m)) if m.contains(name)),
             "{name}/{}",
             args.len()
         );

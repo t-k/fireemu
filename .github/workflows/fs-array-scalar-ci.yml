@@ -11,22 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 960a1290aa6ba66f9c49cdc08f3189e8ae7f6d11
+          ref: 4f4eb004d3c3ff20a69a3831d685c632dc81550b
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 960a1290aa6ba66f9c49cdc08f3189e8ae7f6d11
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_infinite_vectors_and_documents_root_preserve_types) | test(generated_infinity_reference_projection_cases) | test(stored_reference_requires_document_below_documents_root) | test(vector_dimension_limit_and_nan_components_reject_the_whole_commit) | test(vector_in_array_keeps_unobserved_components_refused) | test(strict_refuses_references_outside_or_too_deep) | test(recorded_tagged_literals_preserve_wire_shapes) | test(captured_array_and_like_expressions_preserve_typed_results) | test(array_variables_shadow_and_index_without_changing_row_fields) | test(rand_advances_per_request_and_skipped_lazy_branch_does_not_draw) | test(like_wildcards_escapes_and_dynamic_pattern) | test(expression_requests_do_not_advance_sample_seed_stream) | test(array_filter_keeps_true_values_and_skips_false_and_null) | test(array_filter_nested_scope_and_empty_shadow) | test(like_without_wildcards_matches_literal_equality) | test(array_scalar_recorded_arity_messages) | test(generated_comparison_arity_and_precedence_cases) | test(valid_where_equal_retains_field_filter_pushdown) | test(vector_in_array_preserves_dimension_order) | test(where_is_type_keeps_static_type_validation) | test(strict_answers_recorded_arity_and_refuses_unobserved_shapes) | test(current_document_returns_fields_and_document_metadata) | test(recorded_arity_metadata_formats_document_and_comparison_signatures) | test(the_differential_corpus_holds_both_profiles_to_their_rules) | test(observed_internal_fixtures_and_pict_cases)'
-      - name: Measure O5 recorded corpus and preserve actual debt
-        env:
-          REGENERATE_O5_DEBT: /tmp/array-scalar-o5-debt.json
-          DUMP_REPLAY_DIFFS: /tmp/array-scalar-o5-diff
-        run: cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(the_pipeline_corpus_replays_as_production_answered)'
-      - name: Save O5 actual results
+          test "$(git rev-parse HEAD)" = 4f4eb004d3c3ff20a69a3831d685c632dc81550b
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
+      - name: Clippy changed crates
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: array-scalar-o5-actual
-          path: /tmp/array-scalar-o5-*
-          if-no-files-found: warn
+        run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings

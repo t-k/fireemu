@@ -1,0 +1,16 @@
+name: fs-document-expressions-ci
+on:
+  push:
+    branches: [work/fs-document-expressions-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 868214060dde8e6776e613ada3ab1e279efcac5c
+      - run: |
+          test "$(git rev-parse HEAD)" = 868214060dde8e6776e613ada3ab1e279efcac5c
+          cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked

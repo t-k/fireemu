@@ -16,6 +16,79 @@ const NOW: i64 = 1_792_464_733_000;
 const LATER: i64 = NOW + 1_234;
 
 #[test]
+fn rules_diagnostics_generated_combinations_preserve_atomic_install() {
+    for line in include_str!("fixtures/rules-multi-diagnostics.tsv")
+        .lines()
+        .skip(1)
+    {
+        let fields: Vec<_> = line.trim_end_matches('\r').split('\t').collect();
+        let [errors, location, structure, baseline] = fields.as_slice() else {
+            panic!("invalid generated row: {line}");
+        };
+        let mut database = db();
+        let owner = [("Authorization", "Bearer owner")];
+        let old = if *baseline == "allow" {
+            r#"{"rules":{".read":true}}"#
+        } else {
+            r#"{"rules":{".read":false}}"#
+        };
+        assert_eq!(
+            call(&mut database, "PUT", "/.settings/rules.json", &owner, old).0,
+            200
+        );
+        let expr = if *errors == "none" {
+            "true"
+        } else {
+            "!data.val()"
+        };
+        let second = if *errors == "multiple" {
+            "!data.val()"
+        } else {
+            "true"
+        };
+        let (first_key, second_key) = if *location == "reversed" {
+            ("z", "a")
+        } else {
+            ("a", "z")
+        };
+        let children =
+            format!(r#""{first_key}":{{".read":"{expr}"}},"{second_key}":{{".write":"{second}"}}"#);
+        let input = if *structure == "malformed" {
+            "{invalid".to_owned()
+        } else if *location == "wildcard" {
+            format!(r#"{{"rules":{{"$id":{{{children}}}}}}}"#)
+        } else {
+            format!(r#"{{"rules":{{{children}}}}}"#)
+        };
+        let (status, body) = call(
+            &mut database,
+            "PUT",
+            "/.settings/rules.json",
+            &owner,
+            &input,
+        );
+        if *structure == "valid" && *errors == "none" {
+            assert_eq!(status, 200, "{line}");
+        } else {
+            assert_eq!(status, 400, "{line}");
+            if *structure == "valid" {
+                let expected = if *errors == "multiple" { 2 } else { 1 };
+                assert_eq!(
+                    body.matches("only operates on booleans").count(),
+                    expected,
+                    "{line}"
+                );
+            }
+            assert_eq!(
+                call(&mut database, "GET", "/.settings/rules.json", &owner, "").1,
+                old,
+                "{line}"
+            );
+        }
+    }
+}
+
+#[test]
 fn rules_put_marks_truncated_diagnostics() {
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];
@@ -24,7 +97,13 @@ fn rules_put_marks_truncated_diagnostics() {
         .collect::<Vec<_>>()
         .join(",");
     let input = format!(r#"{{"rules":{{{nodes}}}}}"#);
-    let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", &owner, &input);
+    let (status, body) = call(
+        &mut database,
+        "PUT",
+        "/.settings/rules.json",
+        &owner,
+        &input,
+    );
     assert_eq!(status, 400);
     assert_eq!(body.matches("only operates on booleans").count(), 64);
     assert!(body.contains("Additional diagnostics were truncated."));
@@ -35,14 +114,27 @@ fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];
     let valid = r#"{"rules":{".read":true}}"#;
-    assert_eq!(call(&mut database, "PUT", "/.settings/rules.json", &owner, valid).0, 200);
-    let invalid = "{\"rules\":{\n\"z\":{\".read\":\"!data.val()\"},\n\"a\":{\".write\":\"!data.val()\"}\n}}";
-    let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", &owner, invalid);
+    assert_eq!(
+        call(&mut database, "PUT", "/.settings/rules.json", &owner, valid).0,
+        200
+    );
+    let invalid =
+        "{\"rules\":{\n\"z\":{\".read\":\"!data.val()\"},\n\"a\":{\".write\":\"!data.val()\"}\n}}";
+    let (status, body) = call(
+        &mut database,
+        "PUT",
+        "/.settings/rules.json",
+        &owner,
+        invalid,
+    );
     assert_eq!(status, 400);
     let first = body.find("2:").expect("first diagnostic");
     let second = body.find("3:").expect("second diagnostic");
     assert!(first < second, "{body}");
-    assert_eq!(call(&mut database, "GET", "/.settings/rules.json", &owner, "").1, valid);
+    assert_eq!(
+        call(&mut database, "GET", "/.settings/rules.json", &owner, "").1,
+        valid
+    );
 }
 
 fn db() -> Database {

@@ -19,6 +19,7 @@
 //! [`EvalError::Invalid`].
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::ids::DocumentId;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -1372,6 +1373,9 @@ fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
     let [Eval::Value(Value::Reference(name)), Eval::Value(Value::String(id))] = args else {
         return generic_unobserved("replace_document_id");
     };
+    if DocumentId::try_new(id.clone()).is_err() {
+        return generic_unobserved("replace_document_id");
+    }
     let Some(path) = DocumentPath::from_resource_name(name) else {
         return generic_unobserved("replace_document_id");
     };

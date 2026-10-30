@@ -6078,6 +6078,25 @@ vector	grpc	emulator	function	foreign";
                 ),
                 Eval::Value(Value::Integer(7))
             );
+            let array = value(V::ArrayValue(pb::ArrayValue {
+                values: vec![int(1)],
+            }));
+            let skipped = decode_operand_tree(
+                &call(
+                    "coalesce",
+                    vec![int(7), call("offset", vec![array, int(5)])],
+                ),
+                mode,
+            )
+            .unwrap();
+            assert_eq!(
+                skipped.eval_in_with_runtime(
+                    &Row::derived(std::collections::BTreeMap::default()),
+                    mode,
+                    RuntimeContext::default()
+                ),
+                Eval::Value(Value::Integer(7))
+            );
             assert!(decode_operand_tree(
                 &call("coalesce", vec![int(7), call("unknown_function", vec![])]),
                 mode

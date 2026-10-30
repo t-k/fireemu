@@ -11,22 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: dfb755d5ba0807e79761d60769dfb9b37abe457f
+          ref: 1160955cd985c1dd350f41af8e03871db0bd0ed5
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = dfb755d5ba0807e79761d60769dfb9b37abe457f
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(array_transform_element_alias_validation_and_priority) | test(strict_refuses_document_functions_of_a_root) | test(the_round_four_checks_hold_in_every_position) | test(type_keys_references_and_the_official_order_of_literal_checks) | test(recorded_infinite_vectors_and_documents_root_preserve_types) | test(rand_advances_per_request_and_skipped_lazy_branch_does_not_draw) | test(array_callbacks_preserve_order_and_transform_length)'
-      - name: Measure corpus after alias validation
-        env:
-          REGENERATE_O5_DEBT: /tmp/array-scalar-o5-debt.json
-          DUMP_REPLAY_DIFFS: /tmp/array-scalar-o5-diff
-        run: cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(the_pipeline_corpus_replays_as_production_answered)'
-      - name: Save O5 actual results
+          test "$(git rev-parse HEAD)" = 1160955cd985c1dd350f41af8e03871db0bd0ed5
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(array_transform_element_alias_validation_and_priority) | test(strict_refuses_document_functions_of_a_root) | test(the_round_four_checks_hold_in_every_position) | test(type_keys_references_and_the_official_order_of_literal_checks) | test(recorded_infinite_vectors_and_documents_root_preserve_types) | test(rand_advances_per_request_and_skipped_lazy_branch_does_not_draw) | test(array_callbacks_preserve_order_and_transform_length) | test(the_pipeline_corpus_replays_as_production_answered) | test(current_document_returns_fields_and_document_metadata) | test(like_wildcards_escapes_and_dynamic_pattern)'
+      - name: Clippy changed crates
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: array-scalar-alias-actual
-          path: /tmp/array-scalar-o5-*
-          if-no-files-found: warn
+        run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings

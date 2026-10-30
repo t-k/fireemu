@@ -650,10 +650,10 @@ fn argument_counts_are_refused_in_the_words_production_used() {
         refusal("round", 3),
         arity("The function 'round' does not accept 3 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).")
     );
-    // `ltrim` and `rtrim` have no recorded signature: fireemu's own words.
+    // Production records both overload signatures for `ltrim` and `rtrim`.
     for name in ["ltrim", "rtrim"] {
-        assert!(matches!(refusal(name, 0), ExprError::Invalid(_)), "{name}");
-        assert!(matches!(refusal(name, 3), ExprError::Invalid(_)), "{name}");
+        assert!(matches!(refusal(name, 0), ExprError::Arity(_)), "{name}");
+        assert!(matches!(refusal(name, 3), ExprError::Arity(_)), "{name}");
         assert!(Expr::call(
             name,
             vec![Expr::Constant(Value::Integer(1))],

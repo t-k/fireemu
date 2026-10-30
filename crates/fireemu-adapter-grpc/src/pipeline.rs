@@ -3054,20 +3054,29 @@ fn decode_condition(
             "where expression is unsupported locally",
         ));
     };
-    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) || !def.signature.is_empty() {
+    if !def.returns_boolean
+        || !matches!(def.arity, Arity::Exact(2))
+        || (!def.signature.is_empty()
+            && !matches!(
+                def.name,
+                "equal"
+                    | "not_equal"
+                    | "less_than"
+                    | "less_than_or_equal"
+                    | "greater_than"
+                    | "greater_than_or_equal"
+            ))
+    {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.
         return Ok((decode_operand(condition, unrecorded)?, None));
     }
-    // Every boolean function of the table is a comparison of two arguments; the wording is
-    // the finite subset's.
-    if def.arity != Arity::Exact(function.args.len()) {
-        return Err(own_text(
-            format!("{} requires exactly two arguments", def.name),
-            unrecorded,
-        ));
-    }
+    // Check the outer call before decoding operands, using the same registry as value calls.
+    let placeholders =
+        vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); function.args.len()];
+    Expr::call(def.name, placeholders, Placement::Condition)
+        .map_err(|error| expr_status(error, unrecorded))?;
     // Options are ignored by the official emulator and unobserved in production, as above.
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
         return Err(Status::unimplemented(format!(
@@ -4761,6 +4770,163 @@ mod tests {
                 true,
             );
             assert!(decode_operand_tree(&wire, Unrecorded::Refuse).is_err());
+        }
+    }
+
+    #[test]
+    fn generated_comparison_arity_and_precedence_cases() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("equal", "where", 0, "valid", "strict"),
+            ("equal", "where", 1, "unknown", "strict"),
+            ("equal", "select", 1, "valid", "strict"),
+            ("less_than", "select", 0, "valid", "strict"),
+            ("equal", "where", 2, "valid", "emulator"),
+            ("equal", "select", 3, "unknown", "emulator"),
+            ("less_than", "where", 0, "unknown", "emulator"),
+            ("less_than", "select", 2, "unknown", "strict"),
+            ("less_than", "where", 3, "valid", "strict"),
+            ("less_than", "select", 1, "unknown", "emulator"),
+        ];
+        for (name, position, count, operand, profile) in cases {
+            let valid = || pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            let mut args = vec![valid(); count];
+            if let Some(first) = args.first_mut() {
+                *first = if operand == "unknown" {
+                    pb::Value {
+                        value_type: Some(V::FunctionValue(pb::Function {
+                            name: "not_a_registered_function".to_owned(),
+                            ..Default::default()
+                        })),
+                    }
+                } else {
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    }
+                };
+            }
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = if position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![wire],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .map(|_| ())
+            } else {
+                decode_operand_tree(&wire, mode).map(|_| ())
+            };
+            if count != 2 {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    tonic::Code::InvalidArgument,
+                    "{name} {position} {count} {profile}"
+                );
+                assert_eq!(error.message(), format!("The function '{name}(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" }));
+            } else if operand == "unknown" {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn where_is_type_keeps_static_type_validation() {
+        use pb::value::ValueType as V;
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        let bogus = || pb::Value {
+            value_type: Some(V::StringValue("bogus".to_owned())),
+        };
+        let variable = || pb::Value {
+            value_type: Some(V::VariableReferenceValue("v".to_owned())),
+        };
+        let unknown = || pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "not_a_registered_function".to_owned(),
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (args, code, text) in [
+                (
+                    vec![field(), bogus()],
+                    tonic::Code::InvalidArgument,
+                    "argument 'type'",
+                ),
+                (
+                    vec![field(), variable()],
+                    tonic::Code::Unimplemented,
+                    "variable and pipeline",
+                ),
+                (
+                    vec![unknown(), bogus()],
+                    tonic::Code::Unimplemented,
+                    "not_a_registered_function",
+                ),
+            ] {
+                let condition = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "is_type".to_owned(),
+                        args,
+                        ..Default::default()
+                    })),
+                };
+                let stage = pb::pipeline::Stage {
+                    name: "where".to_owned(),
+                    args: vec![condition],
+                    ..Default::default()
+                };
+                let error = decode_condition(&stage, mode).unwrap_err();
+                assert_eq!(error.code(), code);
+                assert!(error.message().contains(text), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn valid_where_equal_retains_field_filter_pushdown() {
+        use pb::value::ValueType as V;
+        let condition = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    },
+                    pb::Value {
+                        value_type: Some(V::IntegerValue(1)),
+                    },
+                ],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stage = pb::pipeline::Stage {
+                name: "where".to_owned(),
+                args: vec![condition.clone()],
+                ..Default::default()
+            };
+            assert!(decode_condition(&stage, mode).unwrap().1.is_some());
         }
     }
 

@@ -1375,12 +1375,7 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
         }
     }
 }
-/// The adapter's `where` decoder treats a function without a signature as a comparison of two
-/// operands only when it returns a boolean and takes exactly two arguments, and as a value of
-/// another kind otherwise. The table keeps those two conditions interchangeable: a function
-/// without a signature that takes exactly two arguments is a boolean comparison, and one that
-/// returns a boolean takes exactly two. So the first `||` of the adapter's test in
-/// `decode_condition` can be an `&&` without changing any answer (an equivalent mutant).
+/// Registry entries without recorded signatures still retain the legacy boolean/arity relation.
 #[test]
 fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_arguments() {
     for function in FUNCTIONS.iter().filter(|f| f.signature.is_empty()) {

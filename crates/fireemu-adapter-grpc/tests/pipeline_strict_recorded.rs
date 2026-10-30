@@ -860,25 +860,19 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
 }
 
 #[test]
-fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
+fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
     check(vec![
         Case {
             label: "equal()",
             stages: vec![select(func("equal", vec![]))],
-            strict: None,
-            emulator: (
-                400,
-                "function \"equal\" takes 2 argument(s), got 0 argument(s)",
-            ),
+            strict: Some((400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."),
         },
         Case {
             label: "document_id()",
             stages: vec![select(func("document_id", vec![]))],
-            strict: None,
-            emulator: (
-                400,
-                "function \"document_id\" takes 1 argument(s), got 0 argument(s)",
-            ),
+            strict: Some((400, "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided."),
         },
         Case {
             label: "map(\"k\")",
@@ -890,7 +884,7 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
             label: "where(equal(i))",
             stages: vec![stage("where", vec![func("equal", vec![field("i")])])],
             strict: None,
-            emulator: (400, "equal requires exactly two arguments"),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."),
         },
         Case {
             label: "select {} then where(equal())",
@@ -898,10 +892,8 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
                 stage("select", vec![map(vec![])]),
                 stage("where", vec![func("equal", vec![])]),
             ],
-            strict: None,
-            // The official emulator answers the argument count first; the emulator profile
-            // answers the empty select (a text difference, both refuse).
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."),
         },
         // The official emulator ignores function options; production has not answered them.
         Case {
@@ -1476,7 +1468,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
             label: "equal(vector of integers): the argument count first",
             stages: vec![select(func("equal", vec![vec_int()]))],
             strict: None,
-            emulator: (400, "function \"equal\" takes 2 argument(s), got 1 argument(s)"),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."),
         },
         Case {
             label: "{__x__: field, a: vector of integers}: the reserved key first",

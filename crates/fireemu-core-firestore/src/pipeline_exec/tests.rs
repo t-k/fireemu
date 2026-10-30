@@ -49,6 +49,71 @@ fn unobserved(e: &Eval) -> bool {
 }
 
 #[test]
+fn recorded_arity_metadata_formats_document_and_comparison_signatures() {
+    let cases = [
+        ("equal", "equal(x: any, y: any): boolean", 2),
+        ("not_equal", "not_equal(x: any, y: any): boolean", 2),
+        ("less_than", "less_than(x: any, y: any): boolean", 2),
+        (
+            "less_than_or_equal",
+            "less_than_or_equal(x: any, y: any): boolean",
+            2,
+        ),
+        ("greater_than", "greater_than(x: any, y: any): boolean", 2),
+        (
+            "greater_than_or_equal",
+            "greater_than_or_equal(x: any, y: any): boolean",
+            2,
+        ),
+        (
+            "document_id",
+            "document_id(ref: document_reference): any",
+            1,
+        ),
+        (
+            "collection_id",
+            "collection_id(ref: document_reference): string",
+            1,
+        ),
+        (
+            "parent",
+            "parent(ref: document_reference): document_reference?",
+            1,
+        ),
+    ];
+    for (name, signature, count) in cases {
+        let expected = format!(
+            "The function '{signature}' takes [{count}..{count}] argument(s), but 0 were provided."
+        );
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err(),
+            ExprError::Arity(expected)
+        );
+    }
+    for name in ["ltrim", "rtrim"] {
+        let expected = format!("The function '{name}' does not accept 0 argument(s). Valid options are:\n- {name}[T: string | bytes](value: T): T with [1..1] argument(s).\n- {name}[T: string | bytes](value: T, to_trim: T): T with [2..2] argument(s).");
+        assert_eq!(
+            Expr::call(name, vec![], Placement::Value).unwrap_err(),
+            ExprError::Arity(expected)
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn comparison_arity_uses_supplied_count(count in 0usize..12) {
+        let args = vec![Expr::Constant(Value::Null); count];
+        let result = Expr::call("equal", args, Placement::Value);
+        if count == 2 {
+            prop_assert!(result.is_ok());
+        } else {
+            let expected = format!("The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" });
+            prop_assert_eq!(result.unwrap_err(), ExprError::Arity(expected));
+        }
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn table_lists_exactly_the_recorded_functions() {
     let names: Vec<_> = FUNCTIONS.iter().map(|f| f.name).collect();
@@ -212,7 +277,7 @@ fn call_refuses_unknown_misplaced_and_misarity_functions() {
         ("parent", vec![field("a"), field("b")]),
     ] {
         assert!(
-            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Invalid(m)) if m.contains(name)),
+            matches!(Expr::call(name, args.clone(), Placement::Value), Err(ExprError::Arity(m)) if m.contains(name)),
             "{name}/{}",
             args.len()
         );

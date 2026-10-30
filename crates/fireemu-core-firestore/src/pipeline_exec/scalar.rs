@@ -20,8 +20,8 @@
 //! Rust regex engine; general RE2 equivalence beyond the recorded cases is not established.
 
 use super::{
-    first_error, type_name, Arity, Context, Eval, EvalError, Function, RegexError, RegexOperation,
-    RegexResult, Unrecorded, ZoneError, ZoneOperation, ZoneResult,
+    first_error, type_name, Arity, Context, Eval, EvalError, Function, NumberSum, RegexError,
+    RegexOperation, RegexResult, Unrecorded, ZoneError, ZoneOperation, ZoneResult,
 };
 use crate::value::{Timestamp, Value};
 
@@ -2100,15 +2100,14 @@ fn extrema(name: &'static str, args: &[Eval], _cx: Context<'_>, maximum: bool) -
             .collect(),
         _ => return unobserved(name, "unrecorded argument shape"),
     };
-    if values.len()
-        != if args.len() == 1 {
-            values.len()
-        } else {
-            args.len()
-        }
-        || values.is_empty()
-        || values.iter().any(|v| !matches!(v, Value::Integer(_)))
-    {
+    let values = values
+        .into_iter()
+        .filter(|value| !matches!(value, Value::Null))
+        .collect::<Vec<_>>();
+    if values.iter().any(|value| {
+        !matches!(value, Value::Integer(_))
+            && !matches!(value, Value::Double(number) if number.is_finite())
+    }) {
         return unobserved(name, "unrecorded input values");
     }
     let selected = if maximum {
@@ -2116,7 +2115,10 @@ fn extrema(name: &'static str, args: &[Eval], _cx: Context<'_>, maximum: bool) -
     } else {
         values.into_iter().min_by(|a, b| a.canonical_cmp(b))
     };
-    Eval::Value(selected.expect("nonempty values").clone())
+    selected.map_or_else(
+        || Eval::Value(Value::Null),
+        |value| Eval::Value(value.clone()),
+    )
 }
 
 fn eval_sum(args: &[Eval], _cx: Context<'_>) -> Eval {
@@ -2126,20 +2128,21 @@ fn eval_sum(args: &[Eval], _cx: Context<'_>) -> Eval {
     let [Eval::Value(Value::Array(values))] = args else {
         return unobserved("sum", "unrecorded argument shape");
     };
-    if values.is_empty() {
-        return unobserved("sum", "empty array");
-    }
-    let mut total = 0_i64;
+    let mut total = NumberSum::Nothing;
     for value in values {
-        let Value::Integer(value) = value else {
+        if matches!(value, Value::Double(number) if !number.is_finite()) {
             return unobserved("sum", "unrecorded input values");
-        };
-        let Some(sum) = total.checked_add(*value) else {
+        }
+        let Ok(sum) = total.add(value) else {
             return unobserved("sum", "integer overflow");
         };
         total = sum;
     }
-    integer(total)
+    match total {
+        NumberSum::Nothing => Eval::Value(Value::Null),
+        NumberSum::Integer(value) => integer(value),
+        NumberSum::Double(value) => double(value),
+    }
 }
 
 fn eval_negate(args: &[Eval], _cx: Context<'_>) -> Eval {
@@ -2150,6 +2153,7 @@ fn eval_negate(args: &[Eval], _cx: Context<'_>) -> Eval {
         [Eval::Value(Value::Integer(value))] => value
             .checked_neg()
             .map_or_else(|| unobserved("negate", "integer overflow"), integer),
+        [Eval::Value(Value::Double(value))] if value.is_finite() => double(-value),
         _ => unobserved("negate", "unrecorded input values"),
     }
 }

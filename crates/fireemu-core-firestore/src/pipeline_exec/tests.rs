@@ -1081,11 +1081,9 @@ fn select_aliases_are_field_paths() {
     assert_eq!(out, vec![expected]);
 }
 
-/// A nested alias whose value is missing: the official emulator keeps its parents as empty maps
-/// (`{a.b.c: missing}` gives `{a: {b: {}}}`, and a sibling alias fills the same parent), which
-/// production has not answered, so strict refuses it as unobserved.
+/// A missing nested alias retains its parent maps in both profiles, as recorded in production.
 #[test]
-fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profile() {
+fn a_nested_alias_of_a_missing_value_keeps_its_parents_in_both_profiles() {
     type Aliases = Vec<(FieldPath, Expr)>;
     let input = vec![row("c/x", &[("top", s("t"))])];
     let map = |entries: &[(&str, Value)]| {
@@ -1112,7 +1110,6 @@ fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profil
         (vec![(alias("`a.b`"), field("missing"))], vec![]),
     ];
     for (aliases, expected) in cases {
-        let nested = aliases.iter().any(|(a, _)| a.segments().len() > 1);
         let out = execute_in(
             vec![Stage::select(aliases.clone())],
             input.clone(),
@@ -1123,26 +1120,13 @@ fn a_nested_alias_of_a_missing_value_keeps_its_parents_under_the_emulator_profil
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v))
             .collect();
-        assert_eq!(out, vec![expected], "{aliases:?}");
+        assert_eq!(out, vec![expected.clone()], "{aliases:?}");
         let strict = execute_in(
             vec![Stage::select(aliases.clone())],
             input.clone(),
             Unrecorded::Refuse,
         );
-        if nested {
-            assert!(
-                matches!(
-                    strict,
-                    Err(EvalError::Unobserved {
-                        function: "select",
-                        ..
-                    })
-                ),
-                "{aliases:?} {strict:?}"
-            );
-        } else {
-            assert!(strict.is_ok(), "{aliases:?} {strict:?}");
-        }
+        assert_eq!(strict, Ok(vec![expected]), "{aliases:?}");
     }
 }
 

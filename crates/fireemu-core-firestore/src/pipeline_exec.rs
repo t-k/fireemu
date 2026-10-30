@@ -2461,15 +2461,8 @@ impl Cursor {
                         match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent if alias.segments().len() > 1 => {
-                                // The official emulator keeps the parents of a nested alias
-                                // whose value is missing as empty maps; production has not
-                                // answered one (PX1d round 5 sweep, g20261021-02669).
-                                if self.unrecorded == Unrecorded::Refuse {
-                                    return Err(EvalError::Unobserved {
-                                        function: "select",
-                                        reason: "a nested alias of a missing value",
-                                    });
-                                }
+                                // Production and the official emulator retain parent maps
+                                // for the recorded missing nested SELECT aliases.
                                 set_parents(&mut fields, alias);
                             }
                             Eval::Absent => {}

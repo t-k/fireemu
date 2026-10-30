@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 52f7c6245d6a4a3ddc9335689cdabed4274791b3
+          ref: e17693eece432de903c0040cbc306305993694bd
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 52f7c6245d6a4a3ddc9335689cdabed4274791b3
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(captured_array_and_like_expressions_preserve_typed_results)'
+          test "$(git rev-parse HEAD)" = e17693eece432de903c0040cbc306305993694bd
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked -E 'test(captured_array_and_like_expressions_preserve_typed_results) | test(array_variables_shadow_and_index_without_changing_row_fields) | test(rand_advances_per_request_and_skipped_lazy_branch_does_not_draw) | test(like_wildcards_escapes_and_dynamic_pattern) | test(expression_requests_do_not_advance_sample_seed_stream) | test(array_filter_keeps_true_values_and_skips_false_and_null)'

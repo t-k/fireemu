@@ -5,25 +5,21 @@ on:
 permissions:
   contents: read
 jobs:
-  replay:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2076670b793d72ca8720ff3657b16b99a30cebb7
+          ref: 49fa0aecfb68a35b44420a87e113a91145ed4688
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - name: Capture existing replay debts
+      - name: Run affected crates
         run: |
-          test "$(git rev-parse HEAD)" = 2076670b793d72ca8720ff3657b16b99a30cebb7
-          REGENERATE_O5_DEBT=/tmp/generic-o5.json cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(the_pipeline_corpus_replays_as_production_answered)'
-      - name: Preserve captured debts
+          test "$(git rev-parse HEAD)" = 49fa0aecfb68a35b44420a87e113a91145ed4688
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast
+      - name: Clippy affected crates
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: generic-o5-replay
-          path: /tmp/generic-o5.json
-          if-no-files-found: warn
+        run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings

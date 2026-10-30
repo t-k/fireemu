@@ -4671,6 +4671,99 @@ fn with_code(mut status: Status, code: &str) -> Status {
 mod tests {
     use super::*;
 
+    fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
+        use pb::value::ValueType as V;
+        let map = pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [
+                    ("__type__".to_owned(), tag),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        };
+        if in_array {
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![map] })),
+            }
+        } else {
+            map
+        }
+    }
+
+    #[test]
+    fn recorded_tagged_literals_preserve_wire_shapes() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("unknown", "double", "strict", "map", "valid"),
+            ("unknown", "integer", "strict", "map", "valid"),
+            ("vector", "double", "strict", "array", "valid"),
+            ("vector", "integer", "strict", "array", "invalid"),
+            ("unknown", "double", "emulator", "map", "valid"),
+            ("unknown", "integer", "emulator", "array", "invalid"),
+            ("vector", "double", "emulator", "map", "invalid"),
+        ];
+        for (kind, number, profile, context, validity) in cases {
+            let tag = if kind == "unknown" && validity == "invalid" {
+                V::IntegerValue(7)
+            } else {
+                V::StringValue(if kind == "vector" { "__vector__" } else { "x" }.to_owned())
+            };
+            let number = if number == "integer" {
+                V::IntegerValue(1)
+            } else {
+                V::DoubleValue(1.0)
+            };
+            let values =
+                if kind == "vector" && validity == "invalid" && matches!(number, V::DoubleValue(_))
+                {
+                    vec![]
+                } else {
+                    vec![pb::Value {
+                        value_type: Some(number),
+                    }]
+                };
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(tag),
+                },
+                values,
+                context == "array",
+            );
+            let profile = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&wire, profile);
+            if validity == "valid" {
+                let Expr::Constant(value) = result.unwrap() else {
+                    panic!("expected constant")
+                };
+                assert_eq!(crate::encode::encode_value(&value), wire);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unknown_tag_preserves_ordered_integer_values(tag in "[a-z]{1,8}", numbers in proptest::collection::vec(-1000i64..1000, 0..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::IntegerValue(*n)) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue(tag)) }, values, false);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn function_depth_tracks_each_branch(depth in 0_usize..45, width in 1_usize..5) {

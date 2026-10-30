@@ -1417,12 +1417,12 @@ async function observe(run, entry, context) {
 
 export function judge(comparison, observations, context) {
   // The historical closure retains its v0.35 custody and claims. R21 uses the separately
-  // recorded v0.38.1 release expectation without rewriting that provenance.
+  // recorded v0.39 release expectation without rewriting that provenance.
   const expectedPath =
     comparison.path === "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json" &&
     comparison.kind === "fs-ent-pipeline-comparison-v1" &&
     isDeepStrictEqual(comparison.runIds, ["R21"])
-      ? "conformance/fs-ent-pipeline-release-v0381.json"
+      ? "conformance/fs-ent-pipeline-release-v039.json"
       : comparison.path;
   const expected = context.readJson(expectedPath);
   if (comparison.kind === "fs-data-write-integrated-regression") {

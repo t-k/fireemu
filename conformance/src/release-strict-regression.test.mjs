@@ -2710,6 +2710,29 @@ test("R21 uses the v0.38.1 complete reviewed strict baseline", () => {
     assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
   }
   assert.deepEqual(current.summary, { MATCH: 1771, MISMATCH: 166, INDETERMINATE: 12, UNKNOWN: 2 });
+});
+
+test("R21 v0.39 preserves the baseline except for three recorded missing aliases", () => {
+  const previous = readJson("conformance/fs-ent-pipeline-release-v0381.json");
+  const current = readJson("conformance/fs-ent-pipeline-release-v039.json");
+  const expected = ["one", "deep", "sibling"].map(
+    (suffix) => `fs-ent-pipeline/o5/appendix#proposed-missing-dotted-${suffix}`,
+  );
+  const before = new Map(previous.rows.map((row) => [row.row, row]));
+  const after = new Map(current.rows.map((row) => [row.row, row]));
+  assert.equal(before.size, 1951);
+  assert.equal(after.size, 1951);
+  assert.equal(current.fixtureSha256, previous.fixtureSha256);
+  assert.deepEqual([...after.keys()].toSorted(), [...before.keys()].toSorted());
+  const changed = [...after.keys()].filter(
+    (id) => JSON.stringify(before.get(id)) !== JSON.stringify(after.get(id)),
+  );
+  assert.deepEqual(changed.toSorted(), expected.toSorted());
+  for (const id of changed) {
+    assert.equal(before.get(id).status, "MISMATCH");
+    assert.deepEqual(after.get(id), { row: id, status: "MATCH" });
+  }
+  assert.deepEqual(current.summary, { MATCH: 1774, MISMATCH: 163, INDETERMINATE: 12, UNKNOWN: 2 });
   const comparison = {
     path: "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json",
     kind: current.kind,
@@ -2726,13 +2749,13 @@ test("R21 uses the v0.38.1 complete reviewed strict baseline", () => {
         {
           ...context,
           readJson: (path) => {
-            if (path === "conformance/fs-ent-pipeline-release-v0381.json")
-              throw new Error("missing v0381 snapshot");
+            if (path === "conformance/fs-ent-pipeline-release-v039.json")
+              throw new Error("missing v039 snapshot");
             return readJson(path);
           },
         },
       ),
-    /missing v0381 snapshot/,
+    /missing v039 snapshot/,
   );
   for (const mutate of [
     (x) => {

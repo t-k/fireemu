@@ -110,6 +110,38 @@ fn rules_put_marks_truncated_diagnostics() {
 }
 
 #[test]
+fn rules_put_bounds_empty_node_traversal() {
+    let mut database = db();
+    let owner = [("Authorization", "Bearer owner")];
+    let nodes = (0..4100)
+        .map(|i| format!(r#""n{i:04}":{{}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let input = format!(r#"{{"rules":{{".read":"!data.val()",{nodes}}}}}"#);
+    let (status, body) = call(
+        &mut database,
+        "PUT",
+        "/.settings/rules.json",
+        &owner,
+        &input,
+    );
+    assert_eq!(status, 400);
+    assert!(body.contains("only operates on booleans"));
+    assert!(body.contains("Additional diagnostics were truncated."));
+}
+
+#[test]
+fn rules_diagnostics_keep_wildcard_scope_across_siblings() {
+    let mut database = db();
+    let owner = [("Authorization", "Bearer owner")];
+    let input = r#"{"rules":{"$outer":{"a":{"$inner":{".read":"$inner == 'x' && $outer == 'y'"}},"b":{".read":"$outer == 'x'",".write":"!data.val()"}},"z":{".read":"!data.val()"}}}"#;
+    let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", &owner, input);
+    assert_eq!(status, 400);
+    assert_eq!(body.matches("only operates on booleans").count(), 2);
+    assert!(!body.contains("Unknown variable"), "{body}");
+}
+
+#[test]
 fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
     let mut database = db();
     let owner = [("Authorization", "Bearer owner")];

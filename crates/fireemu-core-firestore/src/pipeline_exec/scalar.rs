@@ -454,17 +454,44 @@ pub(super) const ABS: Function = function(
     &[],
     eval_abs,
 );
-pub(super) const MINIMUM: Function =
-    function("minimum", Arity::AtLeast(1), false, "", &[], |args, cx| {
-        extrema("minimum", args, cx, false)
-    });
-pub(super) const MAXIMUM: Function =
-    function("maximum", Arity::AtLeast(1), false, "", &[], |args, cx| {
-        extrema("maximum", args, cx, true)
-    });
-pub(super) const SUM: Function = function("sum", Arity::Exact(1), false, "", &[], eval_sum);
-pub(super) const NEGATE: Function =
-    function("negate", Arity::Exact(1), false, "", &[], eval_negate);
+pub(super) const MINIMUM: Function = function(
+    "minimum",
+    Arity::AtLeast(1),
+    false,
+    "",
+    &[
+        ("minimum(input: array[any?]): any?", 1, 1),
+        ("minimum(x: any?*): any?", 2, usize::MAX),
+    ],
+    |args, cx| extrema("minimum", args, cx, false),
+);
+pub(super) const MAXIMUM: Function = function(
+    "maximum",
+    Arity::AtLeast(1),
+    false,
+    "",
+    &[
+        ("maximum(input: array[any?]): any?", 1, 1),
+        ("maximum(x: any?*): any?", 2, usize::MAX),
+    ],
+    |args, cx| extrema("maximum", args, cx, true),
+);
+pub(super) const SUM: Function = function(
+    "sum",
+    Arity::Exact(1),
+    false,
+    "sum(x: array[any]): number",
+    &[],
+    eval_sum,
+);
+pub(super) const NEGATE: Function = function(
+    "negate",
+    Arity::Exact(1),
+    false,
+    "negate[T <: number](x: T): T",
+    &[],
+    eval_negate,
+);
 
 pub(super) const ROUND: Function = function(
     "round",

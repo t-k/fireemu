@@ -5037,6 +5037,23 @@ add_fields_map	unknown	none	strict";
             let actual =
                 compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
                     .unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(actual.clone())
+                    .code(),
+                tonic::Code::Unimplemented,
+                "unrecorded {id}"
+            );
+            let ordinary = compile_pipeline_in_order(
+                &request,
+                &parent,
+                Unrecorded::OfficialEmulator,
+                Some(&order),
+            )
+            .unwrap_err();
+            if ordinary.code() != tonic::Code::InvalidArgument || ordinary.message() != expected {
+                failures.push(format!("{id} emulator: {ordinary:?}"));
+            }
             for (transport, shape) in [
                 ("rest", shape_of_json(body, &order)),
                 ("grpc", shape_of_request(&request)),
@@ -5050,6 +5067,36 @@ add_fields_map	unknown	none	strict";
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn registered_function_arity_unrecorded_shapes_remain_refused() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for (name, count) in [("sum", 2), ("coalesce", 1), ("autogen_document_id", 2)] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![
+                        pb::Value {
+                            value_type: Some(V::IntegerValue(1))
+                        };
+                        count
+                    ],
+                    ..Default::default()
+                })),
+            };
+            let error = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            let answer = RefusalGate::Recorded(None, String::new()).answer(error);
+            assert_eq!(answer.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                decode_operand_tree(&wire, Unrecorded::OfficialEmulator)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
     }
 
     #[test]

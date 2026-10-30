@@ -10,6 +10,7 @@ cases = [
     ('foreign_reference', 'crates/fireemu-adapter-grpc/src/pipeline.rs', '(!inside || elements > MAX_PATH_ELEMENTS || reserved).then(|| {', '(!inside && false || elements > MAX_PATH_ELEMENTS || reserved).then(|| {', 'literal_refusal_preserves_precedence_gate_and_utf16_index'),
     ('garbage_prepass', 'crates/fireemu-adapter-grpc/src/pipeline.rs', 'if !name.starts_with("projects/") {', 'if false && !name.starts_with("projects/") {', 'recorded_literal_refusal_gate_matrix'),
     ('outer_arity', 'crates/fireemu-adapter-grpc/src/pipeline.rs', 'Expr::call(&function.name, placeholders, Placement::Value)\n                .map_err(|e| expr_status(e, unrecorded))?;', 'let _ = Expr::call(&function.name, placeholders, Placement::Value);', 'literal_refusal_preserves_precedence_gate_and_utf16_index'),
+    ('utf16_path', 'crates/fireemu-adapter-grpc/src/pipeline.rs', '    collection: bool,\n) -> Option<String> {\n    let units = |text: &str| text.encode_utf16().count();', '    collection: bool,\n) -> Option<String> {\n    let units = |text: &str| text.len();', 'literal_refusal_preserves_precedence_gate_and_utf16_index'),
 ]
 out = pathlib.Path('/tmp/literal-mutants'); out.mkdir(exist_ok=True)
 results = []

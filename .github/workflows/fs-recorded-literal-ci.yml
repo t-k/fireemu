@@ -7,11 +7,11 @@ permissions:
 jobs:
   mutation:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 0bf021a55a7f4c46d52599ac50383401a73c1fbc
+          ref: 892b0fd9c9ec1928711348fc1f302f767346c2be
           fetch-depth: 0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -21,15 +21,15 @@ jobs:
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - name: Verify source and generic gRPC gate mutation
+      - name: Verify exact source and run mutations
         run: |
-          test "$(git rev-parse HEAD)" = 0bf021a55a7f4c46d52599ac50383401a73c1fbc
+          test "$(git rev-parse HEAD)" = 892b0fd9c9ec1928711348fc1f302f767346c2be
           test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .ci-helper/.github/temporary/grpc_generic_mutation.py
+          python3 .ci-helper/.github/temporary/literal_mutations.py
       - name: Preserve mutation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: literal-grpc-generic-mutation
-          path: /tmp/grpc-generic-mutant/
+          name: recorded-literal-mutations-final
+          path: /tmp/literal-mutants/
           if-no-files-found: warn

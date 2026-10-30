@@ -404,10 +404,80 @@ test("the namespace probe refuses signals without the full owned process identit
 test("the probe requires matching inherited pipe identities", async () => {
   const { sameInheritedPipe } = await import("./rtdb-namespace-probe.mjs");
   assert.equal(sameInheritedPipe("pipe:[123]", "pipe:[123]"), true);
+  assert.equal(sameInheritedPipe("socket:[123]", "socket:[123]"), true);
   for (const [a, b] of [
     ["pipe:[123]", "pipe:[456]"],
+    ["socket:[123]", "socket:[456]"],
+    ["pipe:[123]", "socket:[123]"],
     ["/dev/null", "/dev/null"],
     [undefined, undefined],
   ])
     assert.equal(sameInheritedPipe(a, b), false);
 });
+
+test(
+  "actual Node stderr inheritance uses the same anonymous stream",
+  { skip: process.platform !== "linux" },
+  async () => {
+    const { spawn, spawnSync } = await import("node:child_process");
+    const { sameInheritedPipe } = await import("./rtdb-namespace-probe.mjs");
+    const code = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)','rtdb-stdio-owned'],{detached:true,stdio:['ignore','ignore','inherit']}); console.log(child.pid); setInterval(()=>{},1000);`;
+    const parent = spawn(process.execPath, ["-e", code], { stdio: ["ignore", "pipe", "pipe"] });
+    let pid, identity;
+    try {
+      const data = await Promise.race([
+        new Promise((resolve) => parent.stdout.once("data", resolve)),
+        new Promise((_, reject) => setTimeout(() => reject(Error("child startup timeout")), 3000)),
+      ]);
+      pid = Number(String(data).trim());
+      identity = spawnSync(
+        "/bin/ps",
+        ["-p", String(pid), "-o", "lstart=", "-o", "comm=", "-o", "args="],
+        { encoding: "utf8" },
+      ).stdout;
+      assert.match(identity, /rtdb-stdio-owned/);
+      const { readlinkSync } = await import("node:fs");
+      const parentFd = readlinkSync(`/proc/${parent.pid}/fd/2`);
+      const childFd = readlinkSync(`/proc/${pid}/fd/2`);
+      assert.equal(sameInheritedPipe(parentFd, childFd), true, `${parentFd} ${childFd}`);
+    } finally {
+      const status =
+        pid &&
+        spawnSync("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "comm=", "-o", "args="], {
+          encoding: "utf8",
+        }).stdout;
+      if (identity && status === identity && status.includes("rtdb-stdio-owned")) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+      parent.kill("SIGKILL");
+      parent.stdout.destroy();
+      parent.stderr.destroy();
+    }
+  },
+);
+
+test(
+  "generated descriptor combinations preserve the exact stream witness",
+  { skip: !process.env.RTDB_DESCRIPTOR_ROWS },
+  async () => {
+    const { sameInheritedPipe } = await import("./rtdb-namespace-probe.mjs");
+    const lines = readFileSync(process.env.RTDB_DESCRIPTOR_ROWS, "utf8")
+      .trim()
+      .split("\n")
+      .slice(1);
+    assert.equal(lines.length, 8);
+    for (const line of lines) {
+      const [kind, match, observed] = line.split("\t");
+      const left =
+        observed === "yes" ? (kind === "file" ? "/dev/null" : `${kind}:[123]`) : undefined;
+      const right = match === "yes" ? left : `${kind}:[456]`;
+      assert.equal(
+        sameInheritedPipe(left, right),
+        kind !== "file" && match === "yes" && observed === "yes",
+        line,
+      );
+    }
+  },
+);

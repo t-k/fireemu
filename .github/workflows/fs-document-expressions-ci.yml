@@ -11,11 +11,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
       - run: |
           test "$(git rev-parse HEAD)" = 6bccb15bb22818384d7d11f82c6e74dc81c11b5e
           cargo fmt --all -- --check
-          cargo test -p fireemu-core-firestore --locked
-          cargo test -p fireemu-adapter-grpc --locked
+          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked
           cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
       - name: mutation checks
         shell: bash

@@ -420,6 +420,8 @@ jobs:
           # The AUTH-TENANT-BLOCKING blocking fixture's Functions dependencies, served by the daemon.
           npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund
           node --test conformance/src/rtdb-release-replay.test.mjs conformance/src/integration-v0.8.0-regression.test.mjs conformance/src/release-strict-regression.test.mjs conformance/src/release-openssl.test.mjs
+      - name: verify RTDB namespace timeout cleanup
+        run: sudo env PATH="$PATH" HOME="$HOME" node conformance/src/rtdb-namespace-probe.mjs --out strict-namespace-probe
       - name: pinned OpenSSL for the frozen federation certificate fixtures
         run: |
           sh npm/scripts/install-federation-openssl.sh "$RUNNER_TEMP/fireemu-federation-openssl"
@@ -430,7 +432,7 @@ jobs:
           UV_OFFLINE: "1"
           UV_PYTHON_DOWNLOADS: never
         run: |
-          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$FIREEMU_BIN" \
+          sudo unshare --net --pid --fork --mount-proc --kill-child -- env PATH="$PATH" HOME="$HOME" FIREEMU_BIN="$FIREEMU_BIN" \
             FIREEMU_NODE="$FIREEMU_NODE" FIREEMU_FEDERATION_OPENSSL_DIR="$FIREEMU_FEDERATION_OPENSSL_DIR" UV_OFFLINE="$UV_OFFLINE" UV_PYTHON_DOWNLOADS="$UV_PYTHON_DOWNLOADS" \
             sh -c 'ip link set lo up && exec setpriv --reuid="$1" --regid="$2" --init-groups -- \
               node conformance/src/release-strict-regression.mjs --out strict-regression --dist npm/dist' \
@@ -439,7 +441,9 @@ jobs:
         if: always()
         with:
           name: strict-regression
-          path: strict-regression
+          path: |
+            strict-regression
+            strict-namespace-probe
           if-no-files-found: warn
 
   publish:

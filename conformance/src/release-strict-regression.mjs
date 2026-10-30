@@ -669,6 +669,13 @@ export function forbiddenEnvironment(env) {
     .toSorted();
 }
 
+/** RTDB replay is safe only in the release job's dedicated PID namespace. */
+export function rtdbNamespaceError(platform, pid, procSelf) {
+  if (platform !== "linux" || pid !== 1 || procSelf !== "/proc/1")
+    return "RTDB release replay requires Linux PID 1 with its own proc mount";
+  return undefined;
+}
+
 /** Fails when any production endpoint answers: the run needs a network with loopback only. */
 export async function assertNoOutboundNetwork(fetchImpl, origins = PRODUCTION_ORIGINS) {
   const reached = [];
@@ -1306,7 +1313,14 @@ function killGroup(pid, signal) {
 }
 
 /** Runs one command in its own process group, with a deadline, logging to `logPath`. */
-async function runCommand(argv, env, cwd, logPath, timeoutMs = COMMAND_TIMEOUT_MS) {
+async function runCommand(
+  argv,
+  env,
+  cwd,
+  logPath,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+  boundedTimeout = false,
+) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
     throw new Error("positive safe command timeout required");
   const started = Date.now();
@@ -1326,6 +1340,10 @@ async function runCommand(argv, env, cwd, logPath, timeoutMs = COMMAND_TIMEOUT_M
   const timer = setTimeout(() => {
     timedOut = true;
     killGroup(child.pid, "SIGKILL");
+    if (boundedTimeout) {
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }
   }, timeoutMs);
   const exitCode = await new Promise((done) => {
     child.once("error", (error) => {
@@ -1381,7 +1399,14 @@ export async function runEntry(run, context) {
       env.PATH = `${dirname(context.functionsNode)}:${env.PATH}`;
     }
     const logPath = join(context.out, "logs", `${run.id}-${index + 1}-${command.mode}.log`);
-    const result = await runCommand(argv, env, ROOT, logPath, command.timeoutMs);
+    const result = await runCommand(
+      argv,
+      env,
+      ROOT,
+      logPath,
+      command.timeoutMs,
+      run.kind === "rtdb-production-comparison-v1",
+    );
     outputs.push(result.output);
     record.commands.push({
       mode: command.mode,
@@ -1395,6 +1420,10 @@ export async function runEntry(run, context) {
         `${command.mode} exited ${result.exitCode}, expected ${command.expectedExitCodes.join(" or ")}`,
       );
     }
+    if (result.exitCode === "timeout" && run.kind === "rtdb-production-comparison-v1") {
+      record.fatalTimeout = true;
+      break;
+    }
     if (command.mode === "local-child") {
       const runDir = lastJsonLine(result.output)?.runDir;
       if (
@@ -1407,7 +1436,8 @@ export async function runEntry(run, context) {
       values.runDir = resolve(runDir);
     }
   }
-  const leftovers = leftoverProcesses(context.binary);
+  const leftovers =
+    run.kind === "rtdb-production-comparison-v1" ? [] : leftoverProcesses(context.binary);
   for (const pid of leftovers) {
     try {
       process.kill(pid, "SIGKILL");
@@ -1497,9 +1527,13 @@ export function judge(comparison, observations, context) {
       R27: "functions",
     };
     return judgeRtdbExport(
-      names[comparison.runIds[0]],
+      comparison.runIds[0] === "R22" &&
+        comparison.path === `${RTDB_EVIDENCE}RTDB-rest-v033-comparison.json`
+        ? "rest-v033"
+        : names[comparison.runIds[0]],
       observations[comparison.runIds[0]],
       context.binarySha256,
+      expected,
     );
   }
   if (comparison.kind === "fs-data-write-integrated-regression") {
@@ -1554,6 +1588,26 @@ export function exportCopies(comparisons, runs) {
     }));
 }
 
+/** Persist the final outcome before the namespace process exits. */
+export async function writeReleaseSummary(out, summary) {
+  await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+}
+
+/** A timed-out producer may have left a truncated export; preserve the failure instead. */
+export async function observeUnlessFatal(entry, observeEntry) {
+  if (entry.record.fatalTimeout) return undefined;
+  return observeEntry();
+}
+
+/** Run sequentially and stop immediately after an RTDB timeout. */
+export async function runUntilFatal(runs, execute) {
+  for (const run of runs) {
+    const entry = await execute(run);
+    if (entry.record.fatalTimeout) return true;
+  }
+  return false;
+}
+
 const annotate = (title, message) => {
   const clean = (text) =>
     String(text).replaceAll("%", "%25").replaceAll("\r", "").replaceAll("\n", " ");
@@ -1570,6 +1624,14 @@ async function main() {
   const binary = realpathSync(resolve(binaryPath));
   const notPackaged = packagedRunnerError(binary);
   if (notPackaged) throw new Error(notPackaged);
+  let procSelf;
+  try {
+    procSelf = realpathSync("/proc/self");
+  } catch {
+    /* No usable proc mount. */
+  }
+  const namespaceError = rtdbNamespaceError(process.platform, process.pid, procSelf);
+  if (namespaceError) throw new Error(namespaceError);
   await assertNoOutboundNetwork(fetch);
   const out = resolve(args.out);
   await rm(out, { recursive: true, force: true });
@@ -1605,32 +1667,39 @@ async function main() {
     comparisons: [],
   };
   const observations = {};
+  let fatalTimeout = false;
   if (plan.errors.length === 0) {
-    for (const run of RUNS) {
+    fatalTimeout = await runUntilFatal(RUNS, async (run) => {
       console.log(`== ${run.id} ${run.kind}${run.part ? ` (${run.part})` : ""}`);
       const entry = await runEntry(run, context);
-      observations[run.id] = await observe(run, entry, context);
+      observations[run.id] = await observeUnlessFatal(entry, () => observe(run, entry, context));
       if (run.id === "R10") entry.record.rawLocalResultDigests = observations.R10.raw;
       summary.runs.push(entry.record);
       console.log(
         `   ${entry.record.commands.map((c) => `${c.mode}=${c.exitCode} (${Math.round(c.ms / 1000)} s)`).join(", ")}`,
       );
-    }
-    for (const comparison of plan.comparisons) {
-      const differences = judge(comparison, observations, context);
-      summary.comparisons.push({ ...comparison, differences });
-    }
-    for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
-      if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
-    }
+      return entry;
+    });
+    if (!fatalTimeout)
+      for (const comparison of plan.comparisons) {
+        const differences = judge(comparison, observations, context);
+        summary.comparisons.push({ ...comparison, differences });
+      }
+    if (!fatalTimeout)
+      for (const { from, to } of exportCopies(plan.comparisons, RUNS)) {
+        if (existsSync(join(out, from))) await copyFile(join(out, from), join(out, to));
+      }
   }
-  const expectedRaw = context.readJson(
-    "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
-  ).current.rawLocalResultDigests.strict;
-  summary.reportOnly = {
-    fsDataWriteRawResultsEqualLane:
-      observations.R10 && isDeepStrictEqual(observations.R10.raw, expectedRaw.lane ?? expectedRaw),
-  };
+  if (!fatalTimeout) {
+    const expectedRaw = context.readJson(
+      "spec/compatibility/closure/evidence/integration-v0.8.0/FS-DATA-WRITE-regression.json",
+    ).current.rawLocalResultDigests.strict;
+    summary.reportOnly = {
+      fsDataWriteRawResultsEqualLane:
+        observations.R10 &&
+        isDeepStrictEqual(observations.R10.raw, expectedRaw.lane ?? expectedRaw),
+    };
+  }
   const failures = [
     ...plan.errors.map((error) => ["coverage", error]),
     ...summary.runs.flatMap((run) => run.errors.map((error) => [run.id, error])),
@@ -1639,7 +1708,7 @@ async function main() {
     ),
   ];
   summary.result = failures.length === 0 ? "PASS" : "FAIL";
-  await writeFile(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  await writeReleaseSummary(out, summary);
   for (const [title, message] of failures.slice(0, MAX_ANNOTATIONS)) annotate(title, message);
   for (const comparison of summary.comparisons) {
     console.log(
@@ -1651,5 +1720,5 @@ async function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exitCode = await main();
+  process.exit(await main());
 }

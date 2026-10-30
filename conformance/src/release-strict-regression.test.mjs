@@ -3003,3 +3003,294 @@ test("RTDB entry timeout stops its owned native child", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("each REST history binds its own fixture identity and recomputes local payloads", () => {
+  const oldPath = "spec/compatibility/closure/evidence/RTDB-rest-comparison.json";
+  const newPath = "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json";
+  const current = readJson(newPath);
+  const observation = {
+    R22: { campaign: "rest", binarySha256: BINARY, match: true, result: current },
+  };
+  const cmp = (path) => ({ path, kind: "rtdb-production-comparison-v1", runIds: ["R22"] });
+  const context = { readJson, binarySha256: BINARY };
+  for (const path of [oldPath, newPath])
+    assert.deepEqual(judge(cmp(path), observation, context), []);
+  const substituted = { ...context, readJson: () => readJson(newPath) };
+  assert.notDeepEqual(judge(cmp(oldPath), observation, substituted), []);
+  const corrupt = clone(observation);
+  corrupt.R22.result.rows[0].local = { status: 599, bodyText: "corrupt", etag: "wrong" };
+  for (const path of [oldPath, newPath])
+    assert.notDeepEqual(judge(cmp(path), corrupt, context), []);
+});
+
+test("local timeout returns while namespace teardown remains responsible for detached children", async () => {
+  const { chmodSync } = await import("node:fs");
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-detached-"));
+  let pid;
+  const identity = () =>
+    spawnSync("/bin/ps", ["-p", String(pid), "-o", "comm=", "-o", "args="], { encoding: "utf8" })
+      .stdout;
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fake = join(dir, "node");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nconst fs = require('node:fs');\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'rtdb-owned-child-marker'], {stdio: 'ignore', detached: true});\nfs.writeFileSync(process.env.RTDB_CHILD_PID, String(child.pid));\nsetInterval(() => {}, 1000);\n`,
+    );
+    chmodSync(fake, 0o700);
+    const run = clone(RUNS.find((entry) => entry.id === "R23"));
+    run.commands[0].timeoutMs = 500;
+    const result = await runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, RTDB_CHILD_PID: join(dir, "pid") },
+    });
+    pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    assert.equal(result.record.fatalTimeout, true);
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  } finally {
+    if (!pid && existsSync(join(dir, "pid"))) pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    if (pid && identity()?.includes("rtdb-owned-child-marker")) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("local successful producer leaves detached cleanup to the namespace", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-leak-"));
+  let pid;
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fake = join(dir, "node");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nconst fs = require('node:fs');\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'rtdb-owned-leak-marker'], {stdio: 'ignore', detached: true});\nfs.writeFileSync(process.env.RTDB_CHILD_PID, String(child.pid));\nsetTimeout(() => process.exit(0), 350);\n`,
+    );
+    chmodSync(fake, 0o700);
+    const run = clone(RUNS.find((entry) => entry.id === "R23"));
+    run.commands[0].timeoutMs = 2000;
+    const result = await runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, RTDB_CHILD_PID: join(dir, "pid") },
+    });
+    pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    assert.deepEqual(result.record.errors, []);
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  } finally {
+    if (!pid && existsSync(join(dir, "pid"))) pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    const status =
+      pid &&
+      spawnSync("/bin/ps", ["-p", String(pid), "-o", "comm=", "-o", "args="], { encoding: "utf8" })
+        .stdout;
+    if (status?.includes("rtdb-owned-leak-marker")) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("RTDB timeout remains bounded when a detached child retains the log pipe", async () => {
+  const { chmodSync } = await import("node:fs");
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-pipe-"));
+  let pid;
+  let pending;
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fake = join(dir, "node");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nconst { spawn } = require('node:child_process');\nconst fs = require('node:fs');\nconst child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'rtdb-owned-pipe-marker'], {stdio: ['ignore', 'ignore', 'inherit'], detached: true});\nfs.writeFileSync(process.env.RTDB_CHILD_PID, String(child.pid));\nsetInterval(() => {}, 1000);\n`,
+    );
+    chmodSync(fake, 0o700);
+    const run = clone(RUNS.find((entry) => entry.id === "R23"));
+    run.commands[0].timeoutMs = 300;
+    pending = runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, RTDB_CHILD_PID: join(dir, "pid") },
+    });
+    const result = await Promise.race([pending, delay(1200).then(() => undefined)]);
+    pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    assert.ok(result, "producer timeout did not close the inherited pipe within the bound");
+    assert.ok(result.record.errors.some((error) => error.includes("timeout")));
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  } finally {
+    if (!pid && existsSync(join(dir, "pid"))) pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+    const status =
+      pid &&
+      spawnSync("/bin/ps", ["-p", String(pid), "-o", "comm=", "-o", "args="], { encoding: "utf8" })
+        .stdout;
+    if (status?.includes("rtdb-owned-pipe-marker")) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+    if (pending) await pending;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("strict RTDB execution requires the real Linux PID 1 proc namespace", async () => {
+  const { rtdbNamespaceError } = await import("./release-strict-regression.mjs");
+  assert.equal(rtdbNamespaceError("linux", 1, "/proc/1"), undefined);
+  for (const [platform, pid, proc] of [
+    ["darwin", 1, "/proc/1"],
+    ["linux", 2, "/proc/1"],
+    ["linux", 1, "/proc/12"],
+    ["linux", 1, undefined],
+  ])
+    assert.ok(rtdbNamespaceError(platform, pid, proc));
+});
+
+test("an RTDB command timeout prevents later commands in the entry", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-fatal-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fake = join(dir, "node");
+    writeFileSync(
+      fake,
+      `#!${process.execPath}\nif (process.argv.includes("smoke")) process.exit(0);\nsetInterval(() => {}, 1000);\n`,
+    );
+    chmodSync(fake, 0o700);
+    const run = clone(RUNS.find((entry) => entry.id === "R22"));
+    run.commands[0].timeoutMs = 200;
+    const result = await runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir },
+    });
+    assert.equal(result.record.commands.length, 1);
+    assert.equal(result.record.commands[0].exitCode, "timeout");
+    assert.equal(result.record.fatalTimeout, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fatal RTDB timeout prevents every later run", async () => {
+  const { runUntilFatal } = await import("./release-strict-regression.mjs");
+  const seen = [];
+  const fatal = await runUntilFatal([{ id: "R22" }, { id: "R23" }], async (run) => {
+    seen.push(run.id);
+    return { record: { fatalTimeout: true } };
+  });
+  assert.equal(fatal, true);
+  assert.deepEqual(seen, ["R22"]);
+});
+
+test("strict production runs inside the kernel PID namespace", () => {
+  const job = strictProductionJob();
+  assert.ok(job.includes("unshare --net --pid --fork --mount-proc --kill-child"));
+  assert.ok(job.includes("exec setpriv"));
+  assert.ok(
+    job.indexOf("node conformance/src/rtdb-namespace-probe.mjs --out strict-namespace-probe") > 0,
+  );
+  assert.ok(
+    job.indexOf("node conformance/src/rtdb-namespace-probe.mjs --out strict-namespace-probe") <
+      job.indexOf("unshare --net --pid --fork"),
+  );
+  assert.ok(job.includes("strict-namespace-probe"));
+});
+
+test("real strict entry refuses before spawning a producer outside the namespace", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-guard-"));
+  try {
+    const binary = join(dir, "fireemu");
+    mkdirSync(join(dir, "runner-node"));
+    writeFileSync(join(dir, "runner-node", "index.mjs"), "");
+    writeFileSync(
+      binary,
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(join(dir, "launched"))}, 'bad');\n`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [repo("conformance/src/release-strict-regression.mjs"), "--out", join(dir, "out")],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: dir,
+          FIREEMU_BIN: binary,
+          FIREEMU_NODE: process.execPath,
+          RTDB_ALLOW_UNSAFE: "1",
+        },
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires Linux PID 1/);
+    assert.equal(existsSync(join(dir, "launched")), false);
+    assert.equal(existsSync(join(dir, "out")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the timeout failure receipt is retained before namespace exit", async () => {
+  const { writeReleaseSummary } = await import("./release-strict-regression.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-summary-"));
+  try {
+    const summary = { result: "FAIL", runs: [{ id: "R22", fatalTimeout: true }] };
+    await writeReleaseSummary(dir, summary);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "summary.json"), "utf8")), summary);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  "generated namespace and timeout combinations agree with the gate",
+  { skip: !process.env.RTDB_LIFECYCLE_PICT_ROWS },
+  async () => {
+    const { rtdbNamespaceError, runUntilFatal } = await import("./release-strict-regression.mjs");
+    const lines = readFileSync(process.env.RTDB_LIFECYCLE_PICT_ROWS, "utf8")
+      .trim()
+      .split("\n")
+      .slice(1);
+    assert.equal(lines.length, 10);
+    for (const line of lines) {
+      const [namespace, outcome, pipe] = line.split("\t");
+      const platform = namespace === "wrong_os" ? "darwin" : "linux";
+      const pid = namespace === "wrong_pid" ? 2 : 1;
+      const proc = namespace === "wrong_proc" ? "/proc/2" : "/proc/1";
+      assert.equal(
+        rtdbNamespaceError(platform, pid, proc) === undefined,
+        namespace === "valid",
+        line,
+      );
+      const seen = [];
+      const fatal = await runUntilFatal([{ id: "first" }, { id: "later" }], async (run) => {
+        seen.push(run.id);
+        return { record: { fatalTimeout: run.id === "first" && outcome === "timeout" } };
+      });
+      assert.equal(fatal, outcome === "timeout", line);
+      assert.equal(seen.includes("later"), outcome === "success", line);
+      assert.ok(["ordinary", "inherited"].includes(pipe), line);
+    }
+  },
+);
+
+test("a timed-out RTDB entry does not parse a partial export before writing failure", async () => {
+  const { observeUnlessFatal } = await import("./release-strict-regression.mjs");
+  let called = false;
+  const result = await observeUnlessFatal({ record: { fatalTimeout: true } }, async () => {
+    called = true;
+    throw Error("partial export");
+  });
+  assert.equal(result, undefined);
+  assert.equal(called, false);
+});

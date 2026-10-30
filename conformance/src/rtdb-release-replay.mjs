@@ -9,6 +9,7 @@ import { summarize as summarizeResidual } from "../../tools/sdk-smoke-database/r
 import { summarize as summarizeS5 } from "../../tools/sdk-smoke-database/rtdb-s5-fixture.mjs";
 import { comparison as compareAuth } from "../../tools/sdk-smoke-database/cv11-fixture.mjs";
 import { judgeCaptured } from "../../tools/sdk-smoke-database/cv07-ondisconnect.mjs";
+import { judgeRow, judgeM14, localRequests } from "../../tools/sdk-smoke-database/rest-replay.mjs";
 import { compareRecordings, readFrames } from "./rtdb-functions/compare-local.mjs";
 
 const T = "tools/sdk-smoke-database";
@@ -57,7 +58,7 @@ export function campaignPlan(name, binary, out) {
     argv.push("--modules", resolve(T, "node_modules"));
   return { campaign, argv };
 }
-export function judgeExport(name, observed, binarySha256) {
+export function judgeExport(name, observed, binarySha256, expected) {
   if (
     !Object.hasOwn(names, name) ||
     !observed ||
@@ -67,6 +68,15 @@ export function judgeExport(name, observed, binarySha256) {
     observed.match !== true
   )
     return ["RTDB replay missing, failed, or bound to the wrong campaign or binary"];
+  if (names[name] === "rest") {
+    const history =
+      expected ??
+      json(
+        `spec/compatibility/closure/evidence/${name === "rest-old" ? "RTDB-rest-comparison.json" : "RTDB-rest-v033-comparison.json"}`,
+      );
+    if (!judgeRest(name, history, observed.result).match)
+      return ["RTDB REST recorded fixture or local response differs"];
+  }
   return [];
 }
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -175,28 +185,106 @@ export function runtimeResources(
   ];
   return Object.fromEntries(paths.map((path) => [path, digestFile(join(root, path))]));
 }
+export function judgeRest(name, expected, observed) {
+  try {
+    const file = `${T}/fixtures/production-rest.json`;
+    const production = json(file);
+    const fixtureIdentity = {
+      observedAt: production.observedAt,
+      corpusSha256: production.source.corpusSha256,
+    };
+    const historical =
+      name === "rest-old"
+        ? expected.fixture?.path === file && expected.fixture?.sha256 === digestFile(file)
+        : name === "rest-v033" && isDeepStrictEqual(expected.fixture, fixtureIdentity);
+    if (
+      expected.kind !== "rtdb-production-comparison-v1" ||
+      expected.parent !== "RTDB" ||
+      expected.comparison !== "rest" ||
+      !historical ||
+      !isDeepStrictEqual(observed.fixture, fixtureIdentity)
+    )
+      return { match: false };
+    const requests = localRequests(production);
+    const rows = production.rounds.flatMap((round) => round.rows);
+    const expectedSummary = {
+      rows: 124,
+      m14Rows: 48,
+      verdicts: name === "rest-old" ? { MATCH: 120, KNOWN_DIFFERENCE: 4 } : { MATCH: 124 },
+      m14Verdicts: { MATCH: 48 },
+      pass: true,
+    };
+    if (!isDeepStrictEqual(expected.summary, expectedSummary)) return { match: false };
+    const expectedKnown = new Set([
+      "1:patch-update-nested-and-add",
+      "1:query-get-1",
+      "2:patch-update-nested-and-add",
+      "2:query-get-1",
+    ]);
+    if (expected.rows?.length !== requests.length || expected.m14?.length !== production.m14.length)
+      return { match: false };
+    for (const [i, row] of expected.rows.entries()) {
+      const request = requests[i];
+      const known = name === "rest-old" && expectedKnown.has(`${request.round}:${request.id}`);
+      if (
+        row.round !== request.round ||
+        row.id !== request.id ||
+        row.verdict !== (known ? "KNOWN_DIFFERENCE" : "MATCH") ||
+        (known && !isDeepStrictEqual(row.differences, ["raw-key-order"]))
+      )
+        return { match: false };
+    }
+    for (const [i, row] of expected.m14.entries()) {
+      const recorded = production.m14[i];
+      if (
+        row.round !== recorded.round ||
+        row.expressionIndex !== recorded.expressionIndex ||
+        row.context !== recorded.context ||
+        row.verdict !== "MATCH"
+      )
+        return { match: false };
+    }
+    if (
+      rows.length !== 124 ||
+      requests.length !== rows.length ||
+      observed.rows?.length !== rows.length ||
+      production.m14.length !== 48 ||
+      observed.m14?.length !== production.m14.length
+    )
+      return { match: false };
+    const results = rows.map((row, i) => {
+      const request = requests[i],
+        captured = observed.rows[i];
+      if (captured.round !== request.round || captured.id !== row.id || request.id !== row.id)
+        throw Error("REST row identity mismatch");
+      return judgeRow(request.round, row, captured.local, request);
+    });
+    const m14 = production.m14.map((row, i) => {
+      const captured = observed.m14[i];
+      if (
+        captured.round !== row.round ||
+        captured.expressionIndex !== row.expressionIndex ||
+        captured.context !== row.context
+      )
+        throw Error("M14 row identity mismatch");
+      return judgeM14(row, captured.local);
+    });
+    return {
+      match: [...results, ...m14].every((row) => row.verdict === "MATCH"),
+      rows: results,
+      m14,
+    };
+  } catch {
+    return { match: false };
+  }
+}
 export function adjudicate(campaign, out) {
   if (campaign === "smoke")
     return { match: true, basis: "official emulator CRUD smoke, not production evidence" };
   if (campaign === "rest") {
     const result = json(join(out, "comparison.json"));
     const expected = json("spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json");
-    const all = [result.rows, result.m14];
-    const keys = (rows, fields) => rows?.map((row) => fields.map((field) => row[field]));
-    const identities =
-      isDeepStrictEqual(keys(result.rows, ["round", "id"]), keys(expected.rows, ["round", "id"])) &&
-      isDeepStrictEqual(
-        keys(result.m14, ["round", "expressionIndex", "context"]),
-        keys(expected.m14, ["round", "expressionIndex", "context"]),
-      );
-    return {
-      match:
-        identities &&
-        all[0]?.length === 124 &&
-        all[1]?.length === 48 &&
-        all.every((rows) => rows.every((row) => row.verdict === "MATCH")),
-      result,
-    };
+    return { ...judgeRest("rest-v033", expected, result), result };
   }
   if (campaign === "ondisconnect") {
     const result = judgeCaptured(

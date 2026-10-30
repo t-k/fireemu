@@ -22,16 +22,16 @@ test("each comparison resolves to its actual local producer and installed binary
 });
 test("result binding and verdict reject missing, changed or mismatched observations", () => {
   const hash = "a".repeat(64);
-  const good = { campaign: "rest", binarySha256: hash, match: true };
-  assert.deepEqual(judgeExport("rest-old", good, hash), []);
+  const good = { campaign: "auth", binarySha256: hash, match: true };
+  assert.deepEqual(judgeExport("auth", good, hash), []);
   for (const bad of [
     undefined,
     {},
     { ...good, match: false },
     { ...good, binarySha256: "b".repeat(64) },
-    { ...good, campaign: "auth" },
+    { ...good, campaign: "rest" },
   ])
-    assert.notDeepEqual(judgeExport("rest-old", bad, hash), []);
+    assert.notDeepEqual(judgeExport("auth", bad, hash), []);
 });
 test(
   "PICT generated runner and binary failures cannot pass",
@@ -43,6 +43,14 @@ test(
       .slice(1)
       .map((line) => line.split("\t"));
     assert.equal(rows.length, 31);
+    const rest = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
+          import.meta.url,
+        ),
+      ),
+    );
     for (const [name, runner, binary, result] of rows) {
       const expected = runner === "correct" && binary === "correct" && result === "match";
       const planned = campaignPlan(name, "/installed/fireemu", "/output");
@@ -55,6 +63,7 @@ test(
               campaign: runner === "correct" ? campaign : "wrong",
               binarySha256: binary === "correct" ? "a".repeat(64) : "b".repeat(64),
               match: result === "match",
+              result: rest,
             },
         "a".repeat(64),
       );
@@ -97,6 +106,17 @@ test("REST adjudication refuses substituted or missing recorded rows", async () 
     const save = () => writeFileSync(join(dir, "comparison.json"), JSON.stringify(evidence));
     save();
     assert.equal(adjudicate("rest", dir).match, true);
+    evidence.rows[0].local = { status: 599, bodyText: "corrupt local content", etag: "wrong" };
+    save();
+    assert.equal(adjudicate("rest", dir).match, false);
+    evidence.rows[0] = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
+          import.meta.url,
+        ),
+      ),
+    ).rows[0];
     evidence.rows[0].id = "wrong";
     save();
     assert.equal(adjudicate("rest", dir).match, false);
@@ -309,3 +329,44 @@ test(
     }
   },
 );
+
+test("REST exports reject altered local bytes and a substituted historical fixture", () => {
+  const expected = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/RTDB-rest-comparison.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  const current = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  const hash = "a".repeat(64);
+  const observed = { campaign: "rest", binarySha256: hash, match: true, result: current };
+  assert.deepEqual(judgeExport("rest-old", observed, hash, expected), []);
+  const changed = structuredClone(observed);
+  changed.result.rows[0].local = { status: 599, bodyText: "corrupt local content", etag: "wrong" };
+  assert.notDeepEqual(judgeExport("rest-old", changed, hash, expected), []);
+  const alteredM14 = structuredClone(observed);
+  alteredM14.result.m14[0].local.bodyText = "corrupt";
+  assert.notDeepEqual(judgeExport("rest-old", alteredM14, hash, expected), []);
+  const wrongSummary = structuredClone(expected);
+  wrongSummary.summary.verdicts.MATCH = 121;
+  assert.notDeepEqual(judgeExport("rest-old", observed, hash, wrongSummary), []);
+  const wrongHistory = structuredClone(expected);
+  wrongHistory.rows[0].verdict = "KNOWN_DIFFERENCE";
+  assert.notDeepEqual(judgeExport("rest-old", observed, hash, wrongHistory), []);
+  const wrongCurrent = structuredClone(current);
+  wrongCurrent.rows[0].id = "other";
+  assert.notDeepEqual(judgeExport("rest-v033", observed, hash, wrongCurrent), []);
+  const wrongFixture = structuredClone(expected);
+  wrongFixture.fixture.sha256 = "b".repeat(64);
+  assert.notDeepEqual(judgeExport("rest-old", observed, hash, wrongFixture), []);
+  assert.notDeepEqual(judgeExport("rest-v033", observed, hash, expected), []);
+});

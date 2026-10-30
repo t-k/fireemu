@@ -10,7 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 868214060dde8e6776e613ada3ab1e279efcac5c
+          ref: df1837a9909c03593c9557e3bb48cef4f92a77fb
       - run: |
-          test "$(git rev-parse HEAD)" = 868214060dde8e6776e613ada3ab1e279efcac5c
-          cargo test -p fireemu-core-firestore current_document_returns_fields_and_document_metadata --locked
+          test "$(git rev-parse HEAD)" = df1837a9909c03593c9557e3bb48cef4f92a77fb
+          cargo fmt --all -- --check
+          cargo test -p fireemu-core-firestore --locked
+          cargo test -p fireemu-adapter-grpc --test pipeline_differential --locked
+          cargo test -p fireemu-adapter-grpc --test pipeline_replay --locked
+          cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings

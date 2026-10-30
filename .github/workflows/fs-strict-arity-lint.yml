@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ca83dcd8a2a24cc3f62e63bcfcea04820f21d5d0
+          ref: 74d326432b443af2557a11fb22195218ce460285
       - run: |
-          test "$(git rev-parse HEAD)" = ca83dcd8a2a24cc3f62e63bcfcea04820f21d5d0
+          test "$(git rev-parse HEAD)" = 74d326432b443af2557a11fb22195218ce460285
           cargo fmt --all -- --check
           cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings

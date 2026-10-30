@@ -24,6 +24,7 @@ jobs:
         with:
           toolchain: stable
           targets: aarch64-unknown-linux-musl
+      - run: rustup target add aarch64-unknown-linux-musl
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --target aarch64-unknown-linux-musl
   windows-release:
     runs-on: windows-latest
@@ -35,6 +36,7 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-pc-windows-gnu
+      - run: rustup target add x86_64-pc-windows-gnu
       - run: cargo check --release -p fireemu --target x86_64-pc-windows-gnu
         env:
           RUSTFLAGS: -D warnings

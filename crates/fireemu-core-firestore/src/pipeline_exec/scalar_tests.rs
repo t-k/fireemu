@@ -4004,8 +4004,7 @@ fn numeric_scalar_pict_rows() {
                 continue;
             }
             let expected = match (name, input) {
-                (_, "wrong_type") => 2,
-                ("minimum", "integers") => 2,
+                (_, "wrong_type") | ("minimum", "integers") => 2,
                 ("maximum", "integers") => 7,
                 ("minimum", "overflow") => 1,
                 ("maximum", "overflow") => i64::MAX,
@@ -4431,16 +4430,12 @@ fn numeric_scalar_domain_pict_rows() {
             (_, "empty") => null(),
             ("minimum", "doubles") => dbl(2.0),
             ("maximum", "doubles") => dbl(7.5),
-            ("sum", "doubles") => dbl(9.5),
+            ("sum", "doubles" | "mixed") => dbl(9.5),
             ("negate", "doubles") => dbl(-7.5),
             ("minimum", "mixed") => dbl(2.5),
-            ("maximum", "mixed") => int(7),
-            ("sum", "mixed") => dbl(9.5),
             ("minimum", "overflow") => int(1),
             ("maximum", "overflow") => int(i64::MAX),
-            ("minimum" | "sum", "null" | "nonnumeric") => int(2),
-            ("maximum", "null") => int(2),
-            ("minimum", _) => int(2),
+            ("sum", "null" | "nonnumeric") | ("maximum", "null") | ("minimum", _) => int(2),
             ("maximum", _) => int(7),
             ("sum", "integers") => int(9),
             ("negate", "integers") => int(-7),

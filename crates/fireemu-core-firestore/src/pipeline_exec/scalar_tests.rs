@@ -3939,7 +3939,7 @@ fn numeric_scalar_recorded_integer_forms() {
         Value::Integer(5),
     ]);
     for (name, expected) in [("minimum", 2), ("maximum", 7)] {
-        assert_eq!(both(name, &[values.clone()]), int(expected));
+        assert_eq!(both(name, std::slice::from_ref(&values)), int(expected));
         assert_eq!(both(name, &[int(7), int(2)]), int(expected));
     }
     assert_eq!(both("sum", &[values]), int(14));

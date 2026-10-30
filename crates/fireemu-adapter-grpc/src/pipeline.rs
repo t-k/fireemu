@@ -5938,6 +5938,30 @@ vector	grpc	emulator	function	foreign";
         }
     }
 
+    #[test]
+    fn numeric_scalar_unobserved_arity_keeps_profile_boundary() {
+        use pb::value::ValueType as V;
+        for name in ["minimum", "maximum", "sum", "negate"] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![],
+                    ..Default::default()
+                })),
+            };
+            for (mode, code) in [
+                (Unrecorded::Refuse, tonic::Code::Unimplemented),
+                (Unrecorded::OfficialEmulator, tonic::Code::InvalidArgument),
+            ] {
+                assert_eq!(
+                    decode_operand_tree(&wire, mode).unwrap_err().code(),
+                    code,
+                    "{name}"
+                );
+            }
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {

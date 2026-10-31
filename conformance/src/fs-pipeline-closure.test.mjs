@@ -325,13 +325,10 @@ test("finite contract adjudications preserve their declared finite outcomes", ()
       assert.equal(proof.binarySha256, cohort.binarySha256);
       assert.equal(proof.binarySha256, finalComparison.artifactSha256);
       assert.equal(proof.sourceCommit, cohort.sourceCommit);
-      assert.equal(
-        proof.fixtureSha256,
-        sha256("conformance/fixtures/fs-native-positive/production.json"),
-      );
+      assert.equal(proof.fixtureSha256, sha256("conformance/fs-native-positive/production.json"));
       assert.equal(
         proof.requestCorpusSha256,
-        sha256("conformance/fixtures/fs-native-positive/program.json"),
+        sha256("conformance/fs-native-positive/program.json"),
       );
       assert.equal(proof.typedFieldComparisons, 296);
       assert.equal(proof.localReplays.length, 8);

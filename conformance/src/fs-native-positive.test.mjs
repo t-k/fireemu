@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
+import { readAllFixtures } from "./fixtures.mjs";
 import {
   programs,
   producerInputs,
@@ -15,9 +16,18 @@ import {
 import { toGrpcMessage } from "./fs-ent-pipeline/harness.mjs";
 import { badDigests } from "./fs-pipeline-closure.test.mjs";
 const fixture = JSON.parse(
-  readFileSync(new URL("../fixtures/fs-native-positive/production.json", import.meta.url)),
+  readFileSync(new URL("../fs-native-positive/production.json", import.meta.url)),
 );
 const recorded = Object.values(fixture.programs)[0];
+test("native positive corpus is outside the generic fixture tree", async () => {
+  const fixtures = await readAllFixtures();
+  assert.ok(fixtures.size > 0);
+  assert.equal(
+    [...fixtures.keys()].some((id) => id.startsWith("fs-native-positive/")),
+    false,
+  );
+});
+
 const sourceCommit = "a".repeat(40),
   binarySha256 = "b".repeat(64),
   namespace = "projects/demo-local/databases/entpipe1";
@@ -284,7 +294,7 @@ test("pure export hashes the installed binary, every raw session, fixture and po
 });
 test("every PICT row drives its selected profile and transport through the real comparator", () => {
   const lines = readFileSync(
-    new URL("../fixtures/fs-native-positive/native-positive.tsv", import.meta.url),
+    new URL("../fs-native-positive/native-positive.tsv", import.meta.url),
     "utf8",
   )
     .trim()

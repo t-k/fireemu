@@ -3402,7 +3402,10 @@ impl Accumulator {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep accumulator dispatch and its row evaluation together"
+    )]
     fn add(
         &self,
         running: &mut Running,

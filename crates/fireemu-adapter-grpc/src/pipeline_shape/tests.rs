@@ -664,3 +664,46 @@ proptest! {
         prop_assert_ne!(shape.as_deref(), Some(GRPC_SELECT_WIDTH_KEY));
     }
 }
+
+#[test]
+fn unknown_candidate_gate_preserves_exact_fallback_status() {
+    use std::error::Error as _;
+    let mut original = Status::with_details(
+        tonic::Code::Unimplemented,
+        "original refusal",
+        vec![1, 2, 3].into(),
+    );
+    original
+        .metadata_mut()
+        .insert("fireemu-code", "FS_PIPE_INVALID".parse().unwrap());
+    let candidate = unknown_candidate(
+        original.clone(),
+        "The function 'nope_fn' does not exist.".to_owned(),
+    );
+    for gate in [
+        RefusalGate::Recorded(None, DB.to_owned()),
+        RefusalGate::Ordinary(None, DB.to_owned()),
+    ] {
+        let answer = gate.answer(candidate.clone());
+        assert_eq!(answer.code(), original.code());
+        assert_eq!(answer.message(), original.message());
+        assert_eq!(answer.details(), original.details());
+        assert_eq!(answer.metadata(), original.metadata());
+        assert!(answer.source().is_none());
+    }
+    let known = recorded()
+        .iter()
+        .find(|(_, texts)| texts.contains("The function 'nope_fn' does not exist."))
+        .map(|(shape, _)| shape.clone())
+        .unwrap();
+    for gate in [
+        RefusalGate::Recorded(Some(known.clone()), DB.to_owned()),
+        RefusalGate::Ordinary(Some(known.clone()), DB.to_owned()),
+    ] {
+        let answer = gate.answer(candidate.clone());
+        assert_eq!(answer.code(), tonic::Code::InvalidArgument);
+        assert_eq!(answer.message(), "The function 'nope_fn' does not exist.");
+        assert!(answer.details().is_empty());
+        assert!(answer.source().is_none());
+    }
+}

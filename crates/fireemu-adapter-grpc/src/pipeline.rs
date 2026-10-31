@@ -5004,6 +5004,110 @@ add_fields_map	unknown	none	strict";
     }
 
     #[test]
+    fn generated_unknown_function_boundaries_remain_bounded() {
+        use crate::pipeline_shape::RefusalGate;
+        use serde_json::json;
+        const ROWS: &str = r"Name	Placement	Competing
+plain	select	none
+plain	where	empty_select
+plain	nested	none
+plain	add_fields	invalid_limit
+plain	select	outer_arity
+titlecase	select	none
+uppercase	select	none
+unknown	select	none
+known_unimplemented	select	none
+known_unimplemented	where	outer_arity
+unknown	nested	invalid_limit
+uppercase	add_fields	outer_arity
+known_unimplemented	nested	empty_select
+uppercase	nested	outer_arity
+titlecase	where	outer_arity
+uppercase	select	empty_select
+unknown	where	outer_arity
+uppercase	select	invalid_limit
+uppercase	where	invalid_limit
+titlecase	nested	empty_select
+titlecase	add_fields	invalid_limit
+unknown	add_fields	empty_select
+known_unimplemented	add_fields	none
+known_unimplemented	add_fields	invalid_limit
+plain	where	none";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [name_class, placement, competing] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let name = match *name_class {
+                "plain" => "nope_fn",
+                "titlecase" => "Equal",
+                "uppercase" => "AND",
+                "unknown" => "fresh_unknown",
+                "known_unimplemented" => "geo_distance",
+                _ => unreachable!(),
+            };
+            let unknown = json!({"functionValue":{"name":name,"args":[]}});
+            let mut expression = unknown;
+            if *placement == "nested" {
+                let mut args = vec![expression];
+                if *competing != "outer_arity" {
+                    args.push(json!({"fieldReferenceValue":"i"}));
+                }
+                expression = json!({"functionValue":{"name":"equal","args":args}});
+            }
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *placement == "where" {
+                stages.push(json!({"name":"where","args":[expression]}));
+            } else {
+                let mut fields = serde_json::Map::new();
+                fields.insert("a".to_owned(), expression);
+                if *competing == "outer_arity" && *placement != "nested" {
+                    fields.insert(
+                        "b".to_owned(),
+                        json!({"functionValue":{"name":"add","args":[]}}),
+                    );
+                }
+                let stage = if *placement == "add_fields" {
+                    "add_fields"
+                } else {
+                    "select"
+                };
+                stages.push(json!({"name":stage,"args":[{"mapValue":{"fields":fields}}]}));
+            }
+            match *competing {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}))
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let strict =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, None).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(strict)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{line}"
+            );
+            let ordinary =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::OfficialEmulator, None)
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    ordinary.code(),
+                    tonic::Code::Unimplemented | tonic::Code::InvalidArgument
+                ),
+                "{line}: {ordinary:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries() {
         use crate::pipeline_shape::RefusalGate;
         use pb::value::ValueType as V;

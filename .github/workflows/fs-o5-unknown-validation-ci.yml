@@ -1,0 +1,21 @@
+name: fs-o5-unknown-validation-ci
+on:
+  push:
+    branches: [work/fs-o5-unknown-validation-ci]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: f16d6ef9216a709fe180fdee8264f71c05ff48e1
+          fetch-depth: 0
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = f16d6ef9216a709fe180fdee8264f71c05ff48e1
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_unknown_function_refusals_follow_shape_gate)'

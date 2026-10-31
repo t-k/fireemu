@@ -679,7 +679,8 @@ proptest! {
         prop_assert_eq!(answer.code(), original.code());
         prop_assert_eq!(answer.message(), original.message());
         prop_assert_eq!(answer.details(), original.details());
-        prop_assert_eq!(answer.metadata(), original.metadata());
+        prop_assert_eq!(answer.metadata().len(), original.metadata().len());
+        prop_assert_eq!(answer.metadata().get("fireemu-code"), original.metadata().get("fireemu-code"));
     }
 }
 

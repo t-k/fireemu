@@ -10,8 +10,10 @@ out = pathlib.Path('/tmp/fs-r21-mutants')
 out.mkdir(exist_ok=False)
 adapter = root / 'crates/fireemu-adapter-grpc/src/pipeline.rs'
 core = root / 'crates/fireemu-core-firestore/src/pipeline_exec.rs'
-original = {p: p.read_text() for p in (adapter, core)}
-expr = 'test(recorded_sort_and_accumulator_unknown_candidates) | test(nested_sum_uses_actual_row_type) | test(nested_sum_long_requires_admission) | test(admitted_nested_sum_evaluates_child_once) | test(nested_sum_admission_requires_recorded_shape_and_strict_profile) | test(generated_refusal_partition_table)'
+rest = root / 'crates/fireemu-adapter-grpc/src/rest/mod.rs'
+service = root / 'crates/fireemu-adapter-grpc/src/service.rs'
+original = {p: p.read_text() for p in (adapter, core, rest, service)}
+expr = 'test(recorded_sort_and_accumulator_unknown_candidates) | test(nested_sum_uses_actual_row_type) | test(nested_sum_long_requires_admission) | test(admitted_nested_sum_evaluates_child_once) | test(nested_sum_admission_requires_recorded_shape_in_both_profiles) | test(nested_sum_recorded_grpc_error_is_admitted_in_both_profiles) | test(the_pipeline_corpus_replays_as_production_answered) | test(generated_refusal_partition_table)'
 command = ['cargo', 'nextest', 'run', '--manifest-path', 'Cargo.toml', '--locked', '--profile', 'pr', '-p', 'fireemu-core-firestore', '-p', 'fireemu-adapter-grpc', '-E', expr]
 cases = [
     ('baseline', None, None, None, 0),
@@ -22,6 +24,8 @@ cases = [
     ('optin-always', core, 'if recorded_nested_sum_wrong_type\n', 'if true\n', 100),
     ('wrong-input-type', core, 'matches!(arg, Eval::Value(Value::Integer(_)))', 'matches!(arg, Eval::Value(Value::Double(_)))', 100),
     ('child-evaluated-twice', core, 'let arg = args[0].eval_at(row, unrecorded, false, runtime);', 'let _ = args[0].eval_at(row, unrecorded, false, runtime);\n                let arg = args[0].eval_at(row, unrecorded, false, runtime);', 100),
+    ('ordinary-rest-disabled', rest, 'if aggregate_only\n', 'if false && aggregate_only\n', 100),
+    ('ordinary-grpc-disabled', service, 'if matches!(\n                            compiled.stages.as_slice(),', 'if false && matches!(\n                            compiled.stages.as_slice(),', 100),
 ]
 results = []
 try:

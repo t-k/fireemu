@@ -1252,8 +1252,6 @@ impl tokio_stream::Stream for AggregationResponseStream {
     }
 }
 
-/// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
-/// the REST route).
 // The native recording covers only this direct, integer-argument gRPC shape.
 // Called after the usual validation and only on the corresponding compiler refusal.
 fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
@@ -1325,6 +1323,8 @@ fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -
         && error.message() == format!("function {:?} is unsupported locally", function.name)
 }
 
+/// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
+/// the REST route).
 pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     if let Ok(value) = canonical.parse() {
         error.metadata_mut().insert("fireemu-pipeline", value);
@@ -2042,6 +2042,84 @@ mod tests {
     use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
+
+    fn bit_request(first: i64, second: i64) -> pb::ExecutePipelineRequest {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"bit_left_shift","args":[{"integerValue":first.to_string()},{"integerValue":second.to_string()}]
+            }}}}}]}
+        ]}}});
+        crate::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn recorded_bit_shape_depends_on_types_not_integer_values(first in proptest::prelude::any::<i64>(), second in proptest::prelude::any::<i64>()) {
+            let request = bit_request(first, second);
+            let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+            proptest::prop_assert!(recorded_bit_internal(&request, &error));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::invalid_argument("earlier refusal")));
+        }
+    }
+
+    #[test]
+    fn recorded_bit_shape_rejects_unobserved_request_neighbors() {
+        let request = bit_request(5, 1);
+        let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+        assert!(recorded_bit_internal(&request, &error));
+        let mut neighbors = Vec::new();
+        let mut changed = request.clone();
+        changed.auto_commit_transaction = true;
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        pipeline
+            .options
+            .insert("x".to_owned(), pb::Value::default());
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let stages = &mut pipeline.pipeline.as_mut().unwrap().stages;
+        stages.push(pb::pipeline::Stage {
+            name: "limit".to_owned(),
+            args: vec![],
+            options: std::collections::HashMap::new(),
+        });
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+        let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type else {
+            unreachable!()
+        };
+        let Some(pb::value::ValueType::FunctionValue(function)) =
+            &mut map.fields.get_mut("value").unwrap().value_type
+        else {
+            unreachable!()
+        };
+        function.args[0].value_type = Some(pb::value::ValueType::StringValue("5".to_owned()));
+        neighbors.push(changed);
+        for changed in neighbors {
+            assert!(!recorded_bit_internal(&changed, &error));
+        }
+    }
 
     fn test_gateway() -> Gateway {
         Gateway {

@@ -330,7 +330,10 @@ test("finite contract adjudications preserve their declared finite outcomes", ()
         sha256("conformance/fixtures/fs-native-positive/program.json"),
       );
       assert.equal(proof.typedFieldComparisons, 296);
-      assert.equal(proof.localReplaySha256.length, 8);
+      assert.equal(proof.localReplays.length, 8);
+      assert.equal(proof.productionJournals.length, 3);
+      for (const row of [...proof.productionJournals, ...proof.localReplays])
+        assert.match(row.sha256, /^[a-f0-9]{64}$/);
       assert.equal(proof.proofs.length, 216);
       assert.equal(proof.productionMetadata.length, 54);
       assert.equal(proof.localMetadata.length, 216);

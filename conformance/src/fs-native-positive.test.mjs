@@ -13,6 +13,7 @@ import {
   POLICY,
 } from "./fs-ent-pipeline/native-positive.mjs";
 import { toGrpcMessage } from "./fs-ent-pipeline/harness.mjs";
+import { badDigests } from "./fs-pipeline-closure.test.mjs";
 const fixture = JSON.parse(
   readFileSync(new URL("../fixtures/fs-native-positive/production.json", import.meta.url)),
 );
@@ -245,7 +246,22 @@ test("pure export hashes the installed binary, every raw session, fixture and po
     writeFileSync(path, JSON.stringify(manifest));
     const evidence = await exportEvidence({ binary, manifest: path, out });
     assert.equal(evidence.binarySha256, hash);
-    assert.equal(evidence.localReplaySha256.length, 8);
+    assert.deepEqual(badDigests(evidence), [], "export obeys the existing generic digest contract");
+    assert.equal(evidence.localReplays.length, 8);
+    assert.deepEqual(
+      evidence.localReplays.map((row) => row.sha256),
+      manifest.runs.map((row) => row.sha256),
+    );
+    assert.deepEqual(
+      evidence.localReplays.map((row) => row.invocationReceiptSha256),
+      manifest.runs.map((row) => row.invocationSha256),
+    );
+    assert.deepEqual(
+      evidence.productionJournals,
+      fixture.provenance.productionJournalSha256.map((sha256) => ({ sha256 })),
+    );
+    assert.equal(Object.hasOwn(evidence, "localReplaySha256"), false);
+    assert.equal(Object.hasOwn(evidence, "productionJournalSha256"), false);
     assert.match(evidence.fixtureSha256, /^[a-f0-9]{64}$/);
     assert.match(evidence.policySha256, /^[a-f0-9]{64}$/);
     assert.equal(evidence.decision, "ACCEPTED_FINITE_VALUE_AND_SHAPE_CONTRACT");

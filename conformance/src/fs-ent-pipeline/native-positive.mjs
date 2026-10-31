@@ -284,14 +284,14 @@ export async function exportEvidence({ binary, manifest, out }) {
   assert.equal(m.binarySha256, binarySha256, "installed binary");
   assert.equal(m.runs.length, 8, "eight files");
   const runs = [],
-    localReplaySha256 = [];
+    localReplays = [];
   for (const descriptor of m.runs) {
     const captured = await boundedJSON(descriptor.path, 1048576);
     assert.equal(digest(captured.bytes), descriptor.sha256, "local raw hash");
     const receipt = await boundedJSON(descriptor.invocationPath, 65536);
     assert.equal(digest(receipt.bytes), descriptor.invocationSha256, "producer receipt hash");
     runs.push({ ...descriptor, invocation: receipt.value, replay: captured.value });
-    localReplaySha256.push({
+    localReplays.push({
       profile: descriptor.profile,
       transport: descriptor.transport,
       round: descriptor.round,
@@ -303,12 +303,12 @@ export async function exportEvidence({ binary, manifest, out }) {
     ...compareReplays(runs, { sourceCommit: m.sourceCommit, binarySha256 }),
     decision: "ACCEPTED_FINITE_VALUE_AND_SHAPE_CONTRACT",
     parentClosureClaimed: false,
-    productionJournalSha256: fixture.provenance.productionJournalSha256,
+    productionJournals: fixture.provenance.productionJournalSha256.map((sha256) => ({ sha256 })),
     fixtureSha256: digest(fixtureBytes),
     requestCorpusSha256: digest(programBytes),
     policySha256: digest(JSON.stringify(POLICY)),
     manifestSha256: digest(entry.bytes),
-    localReplaySha256,
+    localReplays,
   };
   await writeFile(out, JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
   return result;

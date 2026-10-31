@@ -4536,10 +4536,7 @@ fn numeric_scalar_native_domain_and_boundaries() {
 }
 
 #[test]
-fn sum_scalar_reports_recorded_long_type() {
-    assert_eq!(
-        strict("sum", &[int(7)]),
-        wrong("array_sum", "Array", "LONG")
-    );
+fn sum_scalar_preserves_unrecorded_long_type() {
+    assert!(is_unobserved(&strict("sum", &[int(7)])));
     assert_eq!(strict("sum", &[array(vec![Value::Integer(7)])]), int(7));
 }

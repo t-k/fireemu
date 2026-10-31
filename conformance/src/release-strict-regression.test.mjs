@@ -3025,7 +3025,6 @@ test("each REST history binds its own fixture identity and recomputes local payl
 
 test("local timeout returns while namespace teardown remains responsible for detached children", async () => {
   const { chmodSync } = await import("node:fs");
-  const { setTimeout: delay } = await import("node:timers/promises");
   const dir = mkdtempSync(join(tmpdir(), "fireemu-rtdb-detached-"));
   let pid;
   const identity = () =>

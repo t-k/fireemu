@@ -2783,7 +2783,7 @@
       "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
       "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
       "comparisonPath": "conformance/fs-ent-pipeline-v041-comparison.json",
-      "comparisonSha256": "f556c686eb2797383432aef7c0e81e23686c899267f2fb062d061635dcf71dca",
+      "comparisonSha256": "6c1825ed8fc702772b99d88a66506299f9f7946c9154da7d5d9b79234fa981f8",
       "rawSummary": {
         "MATCH": 1906,
         "MISMATCH": 26,
@@ -2796,7 +2796,10 @@
       "o6OwnerDecision": "docs.local/instructions/owner-decisions.md (2114, 2117)",
       "additionalReplaysPath": "conformance/fs-ent-pipeline-v041-additional-adjudication.json",
       "additionalReplaysSha256": "1c21272316f9f0dc91cb6cb813008d57809f98079b07917cfaf6a71cb3c7f622",
-      "additionalReplayOwnerDecision": "docs.local/instructions/owner-decisions.md (2119)"
+      "additionalReplayOwnerDecision": "docs.local/instructions/owner-decisions.md (2119)",
+      "originalComparisonExportSha256": "f556c686eb2797383432aef7c0e81e23686c899267f2fb062d061635dcf71dca",
+      "nativePositiveOriginalExportSha256": "92b6ae7e6233a1d4c9f72e19d4f46b8205bdacfbb7f9c89aeedd6b4705df0e2e",
+      "publicRepresentation": "Repository JSON formatting only; all parsed exported values are unchanged."
     }
   },
   "finiteContractEvidence": [
@@ -2823,7 +2826,7 @@
     {
       "kind": "native-positive",
       "path": "conformance/fs-ent-pipeline-native-positive-adjudication.json",
-      "sha256": "92b6ae7e6233a1d4c9f72e19d4f46b8205bdacfbb7f9c89aeedd6b4705df0e2e",
+      "sha256": "96860b7debed4f8e5853cc5266c88a1e465cef88351365d0686fa5b71ddc09f4",
       "ownerDecision": "docs.local/instructions/owner-decisions.md (2116)",
       "scope": "Twenty-seven recorded native corpus recipe IDs and 37 typed fields: 296 finite value/shape comparisons across both profiles and transports in two rounds. Absolute time and production random sequences remain unclaimed."
     }

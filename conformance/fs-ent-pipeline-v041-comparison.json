@@ -6643,9 +6643,7 @@
     {
       "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now",
       "status": "MISMATCH",
-      "differences": [
-        "body.0.results.0.fields.v.integerValue"
-      ]
+      "differences": ["body.0.results.0.fields.v.integerValue"]
     },
     {
       "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-unit-month",

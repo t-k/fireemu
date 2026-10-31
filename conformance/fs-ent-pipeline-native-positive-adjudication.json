@@ -8,14 +8,8 @@
     "contract": "FINITE_VALUE_AND_SHAPE_ONLY",
     "productionRounds": 2,
     "localRounds": 2,
-    "profiles": [
-      "strict",
-      "emulator"
-    ],
-    "transports": [
-      "grpc",
-      "rest"
-    ],
+    "profiles": ["strict", "emulator"],
+    "transports": ["grpc", "rest"],
     "typedFieldsPerRound": 37,
     "reference": "Complete canonical database prefix with a resource boundary only; no embedded or partial prefix replacement.",
     "autogen": "Twenty ASCII alphanumeric characters; the two local rounds differ per profile/transport. No entropy, uniqueness or distribution claim.",

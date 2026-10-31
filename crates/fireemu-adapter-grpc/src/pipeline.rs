@@ -6629,6 +6629,50 @@ vector	grpc	emulator	function	foreign";
     }
 
     #[test]
+    fn candidate_shape_eligibility_bounds_nested_function_options() {
+        use pb::value::ValueType as V;
+        let request = |depth| {
+            let mut value = pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            for _ in 0..depth {
+                value = pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("x".to_owned(), value)].into_iter().collect(),
+                    })),
+                };
+            }
+            let function = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "unknown".to_owned(),
+                    args: vec![],
+                    options: [("x".to_owned(), value)].into_iter().collect(),
+                })),
+            };
+            pb::ExecutePipelineRequest {
+                pipeline_type: Some(
+                    pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        pb::StructuredPipeline {
+                            pipeline: Some(pb::Pipeline {
+                                stages: vec![pb::pipeline::Stage {
+                                    args: vec![function],
+                                    ..Default::default()
+                                }],
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+                ..Default::default()
+            }
+        };
+        assert!(candidate_shape_eligible(&request(8)));
+        let deep = request(120);
+        assert!(validate_function_depth(&deep).is_ok());
+        assert!(!candidate_shape_eligible(&deep));
+    }
+
+    #[test]
     fn function_depth_reaches_arrays_and_nested_pipelines() {
         use pb::value::ValueType as V;
         let mut value = pb::Value {

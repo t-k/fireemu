@@ -1496,12 +1496,12 @@ fn generated_context_and_bit_boundaries_use_real_routes() {
         if *context == "nested" {
             expression = json!({"functionValue":{"name":"array","args":[expression]}});
         }
-        let stage = if *context == "where" {
+        let pipeline_step = if *context == "where" {
             json!({"name":"where","args":[expression]})
         } else {
             json!({"name":"select","args":[{"mapValue":{"fields":{"value":expression}}}]})
         };
-        let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/positive"}]},stage]}}});
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/positive"}]},pipeline_step]}}});
         let strict = *profile == "strict";
         let state = state(strict);
         let code = if *transport == "grpc" {

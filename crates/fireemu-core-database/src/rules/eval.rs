@@ -740,9 +740,9 @@ fn text(value: &Value<'_>) -> Option<String> {
 #[allow(clippy::float_cmp)]
 fn equal(l: &Value<'_>, r: &Value<'_>) -> Option<bool> {
     Some(match (l, r) {
-        (Value::Snapshot(_), Value::Snapshot(_))
-        | (Value::Auth(_), Value::Auth(_))
-        | (Value::Query, Value::Query) => return None,
+        (Value::Snapshot(_), Value::Snapshot(_)) | (Value::Query, Value::Query) => return None,
+        // Every root auth value in one evaluation comes from the same scope.
+        (Value::Auth(_), Value::Auth(_)) => true,
         (Value::Null | Value::AuthEmpty, Value::Null | Value::AuthEmpty) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Num(a), Value::Num(b)) => a == b,

@@ -309,3 +309,95 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
     );
     assert!(listed > 0);
 }
+
+#[test]
+fn recorded_root_auth_identity_and_rejected_install_cells() {
+    use fireemu_adapter_database::rest::Credentials;
+
+    let table = include_str!("fixtures/rules-identity.pict.tsv");
+    for row in table.lines().skip(1) {
+        let fields: Vec<_> = row.split('\t').collect();
+        assert_eq!(fields.len(), 3);
+        let [profile, expression, stage] = [fields[0], fields[1], fields[2]];
+        let mut db = Database::new(
+            RestOptions {
+                credentials: Credentials {
+                    strict: profile == "strict",
+                    ..Credentials::default()
+                },
+                ..RestOptions::default()
+            },
+            1,
+        );
+        let prefix = "p".repeat(26);
+        let path = format!("/{prefix}/probe.json?ns=c");
+        let settings = "/.settings/rules.json?ns=c";
+        assert_eq!(status(&mut db, "PUT", &path, true, r#"{"v":1}"#).0, 200);
+        let make_rules = |value: serde_json::Value| {
+            format!(
+                r#"{{"rules":{{".read":false,".write":false,"{prefix}":{{"probe":{{".read":{value}}}}}}}}}"#
+            )
+        };
+        let previous = make_rules(serde_json::json!(true));
+        assert_eq!(status(&mut db, "PUT", settings, true, &previous).0, 200);
+        let value = match expression {
+            "false" => serde_json::json!(false),
+            "true" => serde_json::json!(true),
+            "auth" => serde_json::json!("auth != null && auth.uid == 'synthetic-user'"),
+            "auth_equality" => {
+                serde_json::json!("auth != null && auth.uid == 'synthetic-user' && auth == auth")
+            }
+            "data_equality" => serde_json::json!("data == data"),
+            "query_equality" => serde_json::json!("query == query"),
+            "data_inequality" => serde_json::json!("data != root"),
+            _ => panic!("unknown expression: {expression}"),
+        };
+        let rules = make_rules(value);
+        let (load, body) = status(&mut db, "PUT", settings, true, &rules);
+        let rejected = matches!(
+            expression,
+            "data_equality" | "query_equality" | "data_inequality"
+        );
+        assert_eq!(load, if rejected { 400 } else { 200 }, "{row}");
+        if rejected {
+            let error = if expression == "data_inequality" {
+                "1:88: Invalid != expression: left operand is not a number, boolean, string, or null.\n"
+            } else {
+                "1:88: Invalid == expression: left operand is not a number, boolean, string, null.\n"
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"error":error}),
+                "{row}"
+            );
+        }
+        if stage == "readback" {
+            assert_eq!(
+                status(&mut db, "GET", settings, true, ""),
+                (200, if rejected { previous } else { rules }),
+                "{row}"
+            );
+        }
+        if stage == "data_read" {
+            let auth = matches!(expression, "auth" | "auth_equality");
+            let target = if auth {
+                format!("{path}&auth_variable_override=%7B%22uid%22%3A%22synthetic-user%22%7D")
+            } else {
+                path
+            };
+            for _ in 0..2 {
+                let (code, body) = status(&mut db, "GET", &target, auth, "");
+                assert_eq!(code, if expression == "false" { 401 } else { 200 }, "{row}");
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                    if expression == "false" {
+                        serde_json::json!({"error":"Permission denied"})
+                    } else {
+                        serde_json::json!({"v":1})
+                    },
+                    "{row}"
+                );
+            }
+        }
+    }
+}

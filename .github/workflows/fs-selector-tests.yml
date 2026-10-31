@@ -70,7 +70,7 @@ jobs:
           printf '%s\n' "$(git rev-parse HEAD)" > "$OUTPUT_DIR/source.sha"
           { rustc --version --verbose; cargo --version; cargo nextest --version; } > "$OUTPUT_DIR/toolchain.txt" 2>&1
           set +e
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(service::tests::pipeline_exec_tests::selector_tests::)' > "$OUTPUT_DIR/nextest.log" 2>&1
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(service::tests::pipeline_exec_tests::selector_tests::)' > "$OUTPUT_DIR/nextest.log" 2>&1
           rc=$?
           set -e
           printf '%s\n' "$rc" > "$OUTPUT_DIR/nextest.exit"

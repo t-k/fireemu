@@ -5548,7 +5548,7 @@ nested	unknown	multiple	long	ordinary
     }
 
     #[test]
-    fn nested_sum_admission_requires_recorded_shape_and_strict_profile() {
+    fn nested_sum_admission_requires_recorded_shape_in_both_profiles() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
         let (requests, order) =
@@ -5573,7 +5573,7 @@ nested	unknown	multiple	long	ordinary
         let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
         let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned());
         assert!(recorded_nested_sum_admitted(&rest, Unrecorded::Refuse));
-        assert!(!recorded_nested_sum_admitted(
+        assert!(recorded_nested_sum_admitted(
             &rest,
             Unrecorded::OfficialEmulator
         ));

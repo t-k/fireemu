@@ -4790,7 +4790,7 @@ pub fn documents_input(
     names: &[String],
     guard: crate::rules::ReadGuard<'_>,
 ) -> Result<Vec<pb::RunQueryResponse>, Status> {
-    documents_input_selected(local, database, names, guard, None)
+    documents_input_selected(local, database, names, guard, None).map(|(responses, _)| responses)
 }
 
 /// Reads document inputs through the existing selected-snapshot transaction machinery.
@@ -4800,7 +4800,7 @@ pub fn documents_input_selected(
     names: &[String],
     guard: crate::rules::ReadGuard<'_>,
     selector: Option<pb::batch_get_documents_request::ConsistencySelector>,
-) -> Result<Vec<pb::RunQueryResponse>, Status> {
+) -> Result<(Vec<pb::RunQueryResponse>, Vec<u8>), Status> {
     let outcome = local.batch_get_documents(
         &pb::BatchGetDocumentsRequest {
             database: database.to_owned(),
@@ -4829,7 +4829,7 @@ pub fn documents_input_selected(
             ..Default::default()
         });
     }
-    Ok(responses)
+    Ok((responses, outcome.transaction))
 }
 
 /// Reads every live document of the requested database from one latest snapshot.

@@ -678,23 +678,46 @@ impl Firestore for GatewayService {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
-        // Preserve the common compiler's refusal for REST and other entrypoints. Only this
-        // gRPC route admits the observed existing-transaction/read-time document reads.
+        // Keep the common compiler's refusal for REST and other entrypoints. The local
+        // gRPC documents route resolves its selector through BatchGetDocuments instead.
         let mut compiler_request = request.get_ref().clone();
-        if !compiler_request.auto_commit_transaction
+        if matches!(
+            compiler_request.consistency_selector,
+            Some(
+                pb::execute_pipeline_request::ConsistencySelector::Transaction(_)
+                    | pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_)
+            )
+        ) || (!compiler_request.auto_commit_transaction
             && matches!(
                 compiler_request.consistency_selector,
-                Some(
-                    pb::execute_pipeline_request::ConsistencySelector::Transaction(_)
-                        | pb::execute_pipeline_request::ConsistencySelector::ReadTime(_)
-                )
-            )
+                Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                    _
+                ))
+            ))
         {
             compiler_request.consistency_selector = None;
+            compiler_request.auto_commit_transaction = false;
         }
         let correlated_binding =
             crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
         let answer = |error: Status| {
+            if request.get_ref().auto_commit_transaction
+                && request.get_ref().consistency_selector.is_none()
+                && error.code() == tonic::Code::InvalidArgument
+                && error.message()
+                    == "auto_commit_transaction requires a transaction or new_transaction consistency selector"
+            {
+                // The native gRPC auto-alone refusal carries this resource-independent ErrorInfo.
+                return crate::production_status::from_json_details(
+                    tonic::Code::InvalidArgument,
+                    "'auto_commit_transaction' must be used with a transaction.",
+                    &serde_json::json!([{
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "AUTO_COMMIT_REQUIRES_TRANSACTION",
+                        "domain": "firestore.googleapis.com"
+                    }]),
+                );
+            }
             if registry_unrecorded
                 == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
                 && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
@@ -851,6 +874,9 @@ impl Firestore for GatewayService {
                     .ok_or_else(|| Status::internal("local backend disappeared"))?,
                 &compiled.stages,
             );
+            let mut transaction = Vec::new();
+            let mut rollback = None;
+            let mut auto_commit = None;
             let input: BoxStream<pb::RunQueryResponse> = if compiled.database {
                 let local = self
                     .local_backend()
@@ -869,6 +895,16 @@ impl Firestore for GatewayService {
                     .cloned()
                     .ok_or_else(|| Status::internal("local backend disappeared"))?;
                 let database = request.get_ref().database.clone();
+                let creates_transaction = matches!(
+                    request.get_ref().consistency_selector,
+                    Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_))
+                );
+                let existing = match &request.get_ref().consistency_selector {
+                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
+                        Some(token.clone())
+                    }
+                    _ => None,
+                };
                 let selector = match &request.get_ref().consistency_selector {
                     Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
                         Some(
@@ -877,24 +913,66 @@ impl Firestore for GatewayService {
                             ),
                         )
                     }
+                    Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(
+                        options,
+                    )) => Some(
+                        pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                            options.clone(),
+                        ),
+                    ),
                     Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(time)) => {
                         Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(*time))
                     }
-                    Some(_) => {
-                        return Err(Status::unimplemented(
-                            "new pipeline transactions are unsupported locally",
-                        ))
-                    }
                     None => None,
                 };
-                let responses =
-                    blocking_read(local, self.rules.clone(), caller, move |local, guard| {
-                        crate::pipeline::documents_input_selected(
-                            local, &database, &names, guard, selector,
-                        )
-                    })
-                    .await
-                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                let guard_local = local.clone();
+                let guard_database = database.clone();
+                #[cfg(test)]
+                let first_query_page_ready = self.first_query_page_ready.clone();
+                let (responses, new_transaction, abandonment) = blocking_read(
+                    local.clone(),
+                    self.rules.clone(),
+                    caller,
+                    move |local, guard| {
+                        let (responses, token) = crate::pipeline::documents_input_selected(
+                            local,
+                            &guard_database,
+                            &names,
+                            guard,
+                            selector,
+                        )?;
+                        // The blocking result owns a newly minted token before an await can
+                        // discard it. Existing caller tokens are never abandoned on drop.
+                        let rollback = creates_transaction.then(|| QueryTransactionGuard {
+                            local: guard_local,
+                            database: guard_database,
+                            transaction: token.clone(),
+                        });
+                        #[cfg(test)]
+                        if let Some(ready) = first_query_page_ready {
+                            ready();
+                        }
+                        Ok((responses, token, rollback))
+                    },
+                )
+                .await
+                .map_err(|error| {
+                    // Token authentication and lifecycle errors already come from the shared
+                    // transaction machinery, rather than a pipeline expression refusal.
+                    let error = if creates_transaction || existing.is_some() {
+                        error
+                    } else {
+                        gate.answer(error)
+                    };
+                    pipeline_status(error, &canonical)
+                })?;
+                rollback = abandonment;
+                if request.get_ref().auto_commit_transaction {
+                    let token = existing.unwrap_or(new_transaction);
+                    auto_commit = Some((local, database, token));
+                } else {
+                    transaction = new_transaction;
+                }
                 Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
             } else {
                 self.scan_ordered_input(caller, &compiled.input)
@@ -929,13 +1007,10 @@ impl Firestore for GatewayService {
             if admitted {
                 cursor = cursor.with_recorded_nested_sum_wrong_type();
             }
-            return Ok(Response::new(Box::pin(PipelineResponseStream::running(
-                input,
-                cursor,
-                canonical,
-                gate,
-                numeric_scope,
-            ))));
+            let stream =
+                PipelineResponseStream::running(input, cursor, canonical, gate, numeric_scope)
+                    .with_transaction(transaction, rollback, auto_commit);
+            return Ok(Response::new(Box::pin(stream)));
         }
         let mut status = Status::unimplemented(format!(
             "FS-PIPE-RPC-1 strict-validation-only: the pipeline is valid ({}) but pipelines are not executed locally",
@@ -1480,6 +1555,10 @@ struct PipelineResponseStream {
     /// Answers ready to be sent: finished batches, then a refusal or the empty answer.
     ready: std::collections::VecDeque<Result<pb::ExecutePipelineResponse, Status>>,
     done: bool,
+    transaction: Vec<u8>,
+    rollback: Option<QueryTransactionGuard>,
+    auto_commit: Option<(Arc<LocalBackend>, String, Vec<u8>)>,
+    commit_task: Option<tokio::task::JoinHandle<Result<(), Status>>>,
 }
 
 impl PipelineResponseStream {
@@ -1499,6 +1578,10 @@ impl PipelineResponseStream {
             batcher: crate::pipeline::ResultBatcher::default(),
             ready: std::collections::VecDeque::new(),
             done: false,
+            transaction: Vec::new(),
+            rollback: None,
+            auto_commit: None,
+            commit_task: None,
         }
     }
 
@@ -1521,11 +1604,28 @@ impl PipelineResponseStream {
             batcher: crate::pipeline::ResultBatcher::default(),
             ready: std::collections::VecDeque::new(),
             done: false,
+            transaction: Vec::new(),
+            rollback: None,
+            auto_commit: None,
+            commit_task: None,
         }
     }
 
-    fn response(&self, results: Vec<pb::Document>) -> pb::ExecutePipelineResponse {
+    fn with_transaction(
+        mut self,
+        transaction: Vec<u8>,
+        rollback: Option<QueryTransactionGuard>,
+        auto_commit: Option<(Arc<LocalBackend>, String, Vec<u8>)>,
+    ) -> Self {
+        self.transaction = transaction;
+        self.rollback = rollback;
+        self.auto_commit = auto_commit;
+        self
+    }
+
+    fn response(&mut self, results: Vec<pb::Document>) -> pb::ExecutePipelineResponse {
         pb::ExecutePipelineResponse {
+            transaction: std::mem::take(&mut self.transaction),
             results,
             execution_time: self.read_time,
             ..Default::default()
@@ -1564,7 +1664,28 @@ impl PipelineResponseStream {
         match self.cursor.finish() {
             Ok(rows) => {
                 self.absorb(&rows);
-                self.flush();
+                if let Some((local, database, transaction)) = self.auto_commit.take() {
+                    let mut rollback = self.rollback.take();
+                    self.commit_task = Some(tokio::task::spawn_blocking(move || {
+                        let result = local
+                            .commit(&pb::CommitRequest {
+                                database,
+                                transaction,
+                                ..Default::default()
+                            })
+                            .map(|_| ());
+                        if result.is_ok() {
+                            if let Some(guard) = rollback.as_mut() {
+                                guard.transaction.clear();
+                            }
+                        }
+                        // A dropped receiver cannot leak the owned new token on failure.
+                        drop(rollback);
+                        result
+                    }));
+                } else {
+                    self.flush();
+                }
             }
             Err(error) => self.refuse(crate::pipeline::eval_status(&error)),
         }
@@ -1622,7 +1743,31 @@ impl tokio_stream::Stream for PipelineResponseStream {
         use std::task::Poll;
         let this = self.get_mut();
         loop {
+            if let Some(task) = this.commit_task.as_mut() {
+                match std::future::Future::poll(std::pin::Pin::new(task), cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(result) => {
+                        this.commit_task = None;
+                        match result {
+                            Ok(Ok(())) => this.flush(),
+                            Ok(Err(error)) => this.queue_refusal(error),
+                            Err(error) => this.queue_refusal(Status::internal(format!(
+                                "Firestore blocking task failed: {error}"
+                            ))),
+                        }
+                    }
+                }
+            }
             if let Some(item) = this.ready.pop_front() {
+                // Enqueueing is not delivery: tonic must poll the token-bearing response.
+                if item
+                    .as_ref()
+                    .is_ok_and(|response| !response.transaction.is_empty())
+                {
+                    if let Some(mut guard) = this.rollback.take() {
+                        guard.transaction.clear();
+                    }
+                }
                 return Poll::Ready(Some(item));
             }
             if this.done {

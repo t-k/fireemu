@@ -1750,7 +1750,8 @@ impl RestState {
                 gate.clone()
             } else {
                 crate::pipeline_shape::RefusalGate::Recorded(
-                    if crate::pipeline_shape::candidate_json_eligible(wire_body)
+                    if aggregate_only
+                        && crate::pipeline_shape::candidate_json_eligible(wire_body)
                         && crate::pipeline::candidate_shape_eligible(&request)
                     {
                         crate::pipeline_shape::shape_of_json(wire_body, key_order)

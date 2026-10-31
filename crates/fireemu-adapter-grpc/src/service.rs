@@ -907,7 +907,11 @@ impl Firestore for GatewayService {
                     gate.clone()
                 } else {
                     crate::pipeline_shape::RefusalGate::Recorded(
-                        if crate::pipeline::candidate_shape_eligible(request.get_ref()) {
+                        if matches!(
+                            compiled.stages.as_slice(),
+                            [fireemu_core_firestore::pipeline_exec::Stage::Aggregate { .. }]
+                        ) && crate::pipeline::candidate_shape_eligible(request.get_ref())
+                        {
                             crate::pipeline_shape::shape_of_request(request.get_ref())
                         } else {
                             None

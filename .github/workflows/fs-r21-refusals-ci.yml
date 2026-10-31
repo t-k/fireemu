@@ -11,8 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: cc0a6862b
+          ref: cc0a6862b5e4302c1d617ea8fb5c0f68935461d6
       - name: Record failing tests with memory limit
         run: |
-          test "$(git rev-parse HEAD)" = $(git rev-parse cc0a6862b)
+          test "$(git rev-parse HEAD)" = $(git rev-parse cc0a6862b5e4302c1d617ea8fb5c0f68935461d6)
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= cargo test --locked --manifest-path crates/fireemu-adapter-grpc/Cargo.toml recorded_sort_and_accumulator_unknown_candidates -- --nocapture

@@ -1,0 +1,1441 @@
+[
+  {
+    "id": "fs-ent-pipeline/native-functions-20261031",
+    "seed": [
+      [
+        "positive/d1",
+        {
+          "n": {
+            "integerValue": "1"
+          }
+        }
+      ]
+    ],
+    "steps": [
+      {
+        "id": "minimum-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "7"
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      },
+                                      {
+                                        "integerValue": "5"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "minimum-variadic",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "integerValue": "7"
+                                },
+                                {
+                                  "integerValue": "2"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "maximum-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "7"
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      },
+                                      {
+                                        "integerValue": "5"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "maximum-variadic",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "integerValue": "7"
+                                },
+                                {
+                                  "integerValue": "2"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "sum-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "sum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "7"
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      },
+                                      {
+                                        "integerValue": "5"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "negate-int",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "negate",
+                              "args": [
+                                {
+                                  "integerValue": "7"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "cmp-int",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "cmp",
+                              "args": [
+                                {
+                                  "integerValue": "2"
+                                },
+                                {
+                                  "integerValue": "7"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "storage-size-string",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "storage_size",
+                              "args": [
+                                {
+                                  "stringValue": "abc"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "coalesce-null-string",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "coalesce",
+                              "args": [
+                                {
+                                  "nullValue": null
+                                },
+                                {
+                                  "stringValue": "fallback"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "namespace-reference",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "namespace",
+                              "args": [
+                                {
+                                  "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "has-ancestor-reference",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "has_ancestor",
+                              "args": [
+                                {
+                                  "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1/children/c1"
+                                },
+                                {
+                                  "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "reference-slice",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "reference_slice",
+                              "args": [
+                                {
+                                  "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1/children/c1"
+                                },
+                                {
+                                  "integerValue": "0"
+                                },
+                                {
+                                  "integerValue": "1"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "autogen-document-id",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "autogen_document_id"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "replace-document-id",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "replace_document_id",
+                              "args": [
+                                {
+                                  "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1"
+                                },
+                                {
+                                  "stringValue": "d2"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "get-field-map",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "get_field",
+                              "args": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "answer": {
+                                        "integerValue": "7"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "stringValue": "answer"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "offset-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "offset",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "10"
+                                      },
+                                      {
+                                        "integerValue": "20"
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "integerValue": "1"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "reverse-string",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "reverse",
+                              "args": [
+                                {
+                                  "stringValue": "abc"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "reverse-bytes",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "reverse",
+                              "args": [
+                                {
+                                  "bytesValue": "YWJj"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "reverse-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "reverse",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "1"
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "length-string",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "length",
+                              "args": [
+                                {
+                                  "stringValue": "abc"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "length-bytes",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "length",
+                              "args": [
+                                {
+                                  "bytesValue": "YWJj"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "length-array",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "length",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "1"
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "length-map",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "length",
+                              "args": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "answer": {
+                                        "integerValue": "7"
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "length-vector",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "length",
+                              "args": [
+                                {
+                                  "mapValue": {
+                                    "fields": {
+                                      "__type__": {
+                                        "stringValue": "__vector__"
+                                      },
+                                      "value": {
+                                        "arrayValue": {
+                                          "values": [
+                                            {
+                                              "doubleValue": 1
+                                            },
+                                            {
+                                              "doubleValue": 2
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "string-concat",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "value": {
+                            "functionValue": {
+                              "name": "string_concat",
+                              "args": [
+                                {
+                                  "stringValue": "ab"
+                                },
+                                {
+                                  "stringValue": "cd"
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "numeric-finite-mixed",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "min_array_double": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "doubleValue": 7.5
+                                      },
+                                      {
+                                        "doubleValue": 2
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "max_array_double": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "doubleValue": 7.5
+                                      },
+                                      {
+                                        "doubleValue": 2
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "min_variadic_mixed": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "integerValue": "7"
+                                },
+                                {
+                                  "doubleValue": 2.5
+                                }
+                              ]
+                            }
+                          },
+                          "max_variadic_mixed": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "integerValue": "7"
+                                },
+                                {
+                                  "doubleValue": 2.5
+                                }
+                              ]
+                            }
+                          },
+                          "sum_mixed_double": {
+                            "functionValue": {
+                              "name": "sum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "integerValue": "10"
+                                      },
+                                      {
+                                        "doubleValue": 20.5
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "negate_double": {
+                            "functionValue": {
+                              "name": "negate",
+                              "args": [
+                                {
+                                  "doubleValue": 2.5
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "numeric-null-absent",
+        "transport": "grpc",
+        "rpc": "executePipeline",
+        "body": {
+          "structuredPipeline": {
+            "pipeline": {
+              "stages": [
+                {
+                  "name": "collection",
+                  "args": [
+                    {
+                      "referenceValue": "/positive"
+                    }
+                  ]
+                },
+                {
+                  "name": "select",
+                  "args": [
+                    {
+                      "mapValue": {
+                        "fields": {
+                          "min_array_null": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "nullValue": null
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "max_array_null": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "nullValue": null
+                                      },
+                                      {
+                                        "integerValue": "7"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "min_variadic_absent": {
+                            "functionValue": {
+                              "name": "minimum",
+                              "args": [
+                                {
+                                  "fieldReferenceValue": "missing"
+                                },
+                                {
+                                  "integerValue": "2"
+                                }
+                              ]
+                            }
+                          },
+                          "max_variadic_absent": {
+                            "functionValue": {
+                              "name": "maximum",
+                              "args": [
+                                {
+                                  "fieldReferenceValue": "missing"
+                                },
+                                {
+                                  "integerValue": "7"
+                                }
+                              ]
+                            }
+                          },
+                          "sum_ignore_nonnumeric": {
+                            "functionValue": {
+                              "name": "sum",
+                              "args": [
+                                {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "nullValue": null
+                                      },
+                                      {
+                                        "integerValue": "2"
+                                      },
+                                      {
+                                        "stringValue": "x"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "sum_empty": {
+                            "functionValue": {
+                              "name": "sum",
+                              "args": [
+                                {
+                                  "arrayValue": {}
+                                }
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+]

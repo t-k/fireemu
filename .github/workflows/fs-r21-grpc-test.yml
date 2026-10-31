@@ -1,0 +1,19 @@
+name: fs-r21 grpc service regression
+on:
+  push:
+    branches: [work/fs-r21-refusals-ci]
+    paths: [.github/workflows/fs-r21-grpc-test.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4070258627daf4113aecbf49b2e6a69c6d60b7a5
+      - name: Run grpc service test under memory limit
+        run: |
+          test "$(git rev-parse HEAD)" = 4070258627daf4113aecbf49b2e6a69c6d60b7a5
+          sudo systemd-run --scope --unit=fs-r21-grpc-test -p MemoryMax=6442450944 -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-grpc-test.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo test --manifest-path Cargo.toml --locked -p fireemu-adapter-grpc nested_sum_recorded_grpc_error_is_admitted_in_both_profiles -- --nocapture'

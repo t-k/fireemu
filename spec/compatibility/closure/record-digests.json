@@ -19,6 +19,7 @@
     "conformance/fs-ent-pipeline-production.json": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
     "conformance/fs-ent-pipeline-sample-adjudication.json": "8f25887df568b0a07b68b2018596f9095c190ac5e1d773e55d0cea7dfedc97fe",
     "conformance/fs-ent-pipeline-scalar-subquery-adjudication.json": "050ac6e5afd2cc4172cee4690c4a7e61d2a0a0b004b1a96758c0845a71b1155c",
+    "conformance/fs-ent-pipeline-v041-additional-adjudication.json": "1c21272316f9f0dc91cb6cb813008d57809f98079b07917cfaf6a71cb3c7f622",
     "conformance/fs-ent-pipeline-v041-comparison.json": "f556c686eb2797383432aef7c0e81e23686c899267f2fb062d061635dcf71dca",
     "conformance/fs-ent-text-production.json": "f43c5ed2fbd98ecde6f1709195581383387e06a1f873ada91601f9b5683325eb",
     "conformance/fs-ent-text-refusal-requests.json": "c258f9ed2a567e15cd95e46d4d029b6fc1e20d51723aa5bcb93b2420b1f725d5",

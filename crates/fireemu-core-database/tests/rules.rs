@@ -1202,3 +1202,28 @@ fn auth_root_identity_matches_the_recorded_read() {
     .unwrap();
     assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+
+    #[test]
+    fn root_auth_identity_through_rules_for_varied_claims(
+        uid in "[a-zA-Z0-9]{1,20}",
+        score in proptest::prelude::any::<i32>(),
+        enabled in proptest::prelude::any::<bool>(),
+    ) {
+        let tree = seed();
+        let auth = j(serde_json::json!({"uid": uid, "score": score, "enabled": enabled}));
+        let requester = Requester { auth: &auth, now: 0 };
+        let guard = Rules::compile(&read_rule_at_t("auth != null && auth == auth")).unwrap();
+        let negated = Rules::compile(&read_rule_at_t("auth != null && !(auth == auth)")).unwrap();
+        proptest::prop_assert!(guard.can_read(tree.root(), &p("/t"), None, &requester));
+        proptest::prop_assert!(!negated.can_read(tree.root(), &p("/t"), None, &requester));
+
+        let anonymous = Json::Null;
+        let requester = Requester { auth: &anonymous, now: 0 };
+        let null_control = Rules::compile(&read_rule_at_t("auth == null && auth == auth")).unwrap();
+        proptest::prop_assert!(null_control.can_read(tree.root(), &p("/t"), None, &requester));
+        proptest::prop_assert!(!guard.can_read(tree.root(), &p("/t"), None, &requester));
+    }
+}

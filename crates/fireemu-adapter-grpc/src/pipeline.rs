@@ -5463,7 +5463,7 @@ plain	where	none";
             let options = if arguments == "options" {
                 std::collections::HashMap::from([("x".to_owned(), pb::Value::default())])
             } else {
-                Default::default()
+                std::collections::HashMap::default()
             };
             let value = pb::Value {
                 value_type: Some(V::FunctionValue(pb::Function {
@@ -5549,7 +5549,7 @@ plain	where	none";
                 value_type: Some(V::FunctionValue(pb::Function {
                     name: "row".to_owned(),
                     args: vec![],
-                    options: Default::default(),
+                    options: std::collections::HashMap::default(),
                 })),
             };
             let error = decode_operand_tree(&value, mode).unwrap_err();

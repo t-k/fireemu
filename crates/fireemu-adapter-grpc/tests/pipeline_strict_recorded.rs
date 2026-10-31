@@ -891,7 +891,7 @@ fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
             strict: Some((400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.")),
             emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."),
         },
-        // The official emulator ignores function options; production has not answered them.
+        // The recorded document_id option shape is accepted; other option shapes remain unobserved.
         Case {
             label: "document_id with options",
             stages: vec![select(json!({ "functionValue": {
@@ -899,7 +899,7 @@ fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
                 "args": [field("__name__")],
                 "options": { "x": int(1) },
             } }))],
-            strict: None,
+            strict: Some((200, "")),
             emulator: (200, ""),
         },
         Case {
@@ -946,8 +946,7 @@ fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
 
 #[test]
 fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
-    // N76 records a map key refusal before an empty select. Other cases below retain their
-    // unrecorded validation-order boundaries.
+    // N76, N78, N15 and N14 record these validation priorities; other boundaries remain unobserved.
     let empty = || stage("select", vec![map(vec![])]);
     let double = json!({ "doubleValue": 1.5 });
     check(vec![
@@ -972,7 +971,10 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 select(func("document_id", vec![double.clone()])),
                 stage("limit", vec![string("x")]),
             ],
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
@@ -987,7 +989,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -1002,7 +1004,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {

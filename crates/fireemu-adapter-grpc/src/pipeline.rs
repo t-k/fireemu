@@ -1182,7 +1182,8 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     let aliases = select_wire_order(order, position);
-                    match decode_select(stage, unrecorded, aliases) {
+                    let recorded_docid_options = position == 1 && pipeline.stages.len() == 2;
+                    match decode_select(stage, unrecorded, aliases, recorded_docid_options) {
                         Ok((aliases, keeps_name)) => {
                             stages.push(Stage::Select {
                                 aliases,
@@ -1394,6 +1395,38 @@ pub fn compile_pipeline_in_order(
         }
         Ok(())
     })();
+    // A later stage refusal was recorded ahead of a constant document_id type failure.
+    // Inspect only the next stage, then let the existing shape/text gate admit the candidate.
+    let compiled = match compiled {
+        Err(error)
+            if unrecorded == Unrecorded::Refuse
+                && error.code() == tonic::Code::InvalidArgument
+                && error.message().starts_with(
+                    "The function document_id(...) requires `Reference` but got `",
+                )
+                && failed_at == 1
+                && pipeline.stages.len() == 3 =>
+        {
+            let mut later = None;
+            let checked = check_unrun_alias_stage(
+                &pipeline.stages[2],
+                &mut later,
+                Unrecorded::OfficialEmulator,
+            );
+            let candidate = checked
+                .err()
+                .or(later)
+                .filter(|status| status.code() == tonic::Code::InvalidArgument);
+            match candidate {
+                Some(candidate) => Err(crate::pipeline_shape::unknown_candidate(
+                    error,
+                    candidate.message().to_owned(),
+                )),
+                None => Err(error),
+            }
+        }
+        result => result,
+    };
     // Under the emulator profile a stage fireemu cannot decode (an unsupported function, say) is
     // refused after the argument checks of the stages behind it, as a stage it does not run is:
     // the official emulator checks every stage's arguments before running any. Strict answers
@@ -3432,6 +3465,39 @@ fn decode_condition(
     Ok((condition, pushdown))
 }
 
+// Production recorded this typed option on a direct document-name projection.
+fn is_recorded_docid_options(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    let Some(V::FunctionValue(function)) = &value.value_type else {
+        return false;
+    };
+    function.name == "document_id"
+        && matches!(function.args.as_slice(), [pb::Value { value_type: Some(V::FieldReferenceValue(name)) }] if name == "__name__")
+        && function.options.len() == 1
+        && matches!(
+            function.options.get("x"),
+            Some(pb::Value {
+                value_type: Some(V::IntegerValue(_))
+            })
+        )
+}
+
+fn decode_select_operand(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+    recorded_options: bool,
+) -> Result<Expr, Status> {
+    if unrecorded == Unrecorded::Refuse && recorded_options && is_recorded_docid_options(value) {
+        let mut normalized = value.clone();
+        if let Some(pb::value::ValueType::FunctionValue(function)) = &mut normalized.value_type {
+            function.options.clear();
+        }
+        decode_operand_tree(&normalized, unrecorded)
+    } else {
+        decode_operand_tree(value, unrecorded)
+    }
+}
+
 /// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
 /// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
 /// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
@@ -3442,6 +3508,7 @@ fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
     wire_order: Option<&[String]>,
+    recorded_docid_options: bool,
 ) -> Result<(Vec<(FieldPath, Expr)>, bool), Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
@@ -3488,7 +3555,11 @@ fn decode_select(
     let mut exprs = Vec::with_capacity(entries.len());
     let mut empty_key = None;
     for (_, value) in &entries {
-        match decode_operand_tree(value, unrecorded) {
+        match decode_select_operand(
+            value,
+            unrecorded,
+            recorded_docid_options && entries.len() == 1,
+        ) {
             Ok(expr) => exprs.push(expr),
             Err(error) if error.message() == EMPTY_LITERAL_KEY => {
                 empty_key.get_or_insert(error);
@@ -5684,6 +5755,22 @@ plain	where	none";
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn document_id_recorded_option_matches_integer_type_not_literal(value in proptest::prelude::any::<i64>()) {
+            let wire = pb::Value { value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                name: "document_id".to_owned(),
+                args: vec![pb::Value { value_type: Some(pb::value::ValueType::FieldReferenceValue("__name__".to_owned())) }],
+                options: std::collections::HashMap::from([("x".to_owned(), pb::Value { value_type: Some(pb::value::ValueType::IntegerValue(value)) })]),
+            })) };
+            proptest::prop_assert!(is_recorded_docid_options(&wire));
+            let mut changed = wire.clone();
+            let Some(pb::value::ValueType::FunctionValue(function)) = &mut changed.value_type else { unreachable!() };
+            function.options.insert("other".to_owned(), pb::Value::default());
+            proptest::prop_assert!(!is_recorded_docid_options(&changed));
+        }
     }
 
     #[test]
@@ -8261,7 +8348,7 @@ vector	grpc	emulator	function	foreign";
             ..Default::default()
         };
         let overlap = |order: Option<&[String]>| {
-            decode_select(&stage, Unrecorded::OfficialEmulator, order)
+            decode_select(&stage, Unrecorded::OfficialEmulator, order, false)
                 .unwrap_err()
                 .details()
                 .to_vec()
@@ -8841,7 +8928,7 @@ vector	grpc	emulator	function	foreign";
                 let rotation = usize::try_from(shuffle % u64::try_from(entries.len()).unwrap()).unwrap();
                 entries.rotate_left(rotation);
                 let (aliases, keeps_name) =
-                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None).unwrap();
+                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None, false).unwrap();
                 prop_assert_eq!(keeps_name, identity);
                 let mut set: Vec<String> = aliases.iter().map(|(path, _)| path.canonical()).collect();
                 set.sort();
@@ -8858,6 +8945,7 @@ vector	grpc	emulator	function	foreign";
                     &select(&[("__name__", &source)]),
                     Unrecorded::OfficialEmulator,
                     None,
+                    false,
                 ).unwrap_err();
                 prop_assert_eq!(refused.code(), tonic::Code::InvalidArgument);
                 prop_assert!(refused.message().contains("can not be overwritten"));
@@ -8877,7 +8965,7 @@ vector	grpc	emulator	function	foreign";
                 vec![("__name__", "__name__"), ("nm", "__name__")],
             ] {
                 let (_, keeps_name) =
-                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap();
+                    decode_select(&select(&entries), Unrecorded::Refuse, None, false).unwrap();
                 assert!(keeps_name, "{entries:?}");
             }
             for entries in [
@@ -8891,7 +8979,7 @@ vector	grpc	emulator	function	foreign";
                 vec![("__name__", "__name__"), ("__name__.x", "n")],
             ] {
                 let refused =
-                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap_err();
+                    decode_select(&select(&entries), Unrecorded::Refuse, None, false).unwrap_err();
                 assert_eq!(refused.code(), tonic::Code::Unimplemented, "{entries:?}");
             }
         }

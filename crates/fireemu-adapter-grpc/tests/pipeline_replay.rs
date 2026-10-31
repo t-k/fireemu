@@ -1083,13 +1083,22 @@ fn validate_o5_pin(row: &O5Difference) {
             "unknown row: {}",
             row.row
         );
-        assert_eq!(row.strict["status"], 501, "strict debt: {}", row.row);
-        assert_eq!(
-            row.strict["body"][0]["error"]["status"], "UNIMPLEMENTED",
-            "strict debt: {}",
-            row.row
-        );
-        assert_ne!(row.strict, row.production, "stale strict debt: {}", row.row);
+        if row.strict == row.production {
+            assert!(
+                row.emulator
+                    .as_ref()
+                    .is_some_and(|answer| answer != &row.production),
+                "matched strict row must retain emulator debt: {}",
+                row.row
+            );
+        } else {
+            assert_eq!(row.strict["status"], 501, "strict debt: {}", row.row);
+            assert_eq!(
+                row.strict["body"][0]["error"]["status"], "UNIMPLEMENTED",
+                "strict debt: {}",
+                row.row
+            );
+        }
     }
     if let Some(emulator) = &row.emulator {
         assert_ne!(
@@ -1100,8 +1109,13 @@ fn validate_o5_pin(row: &O5Difference) {
     }
 }
 
-fn o5_pinned_match_valid(row: &str, strict: bool, matches: bool) -> bool {
-    matches == (strict && row == O5_INTERNAL_ROW)
+fn o5_pinned_match_valid(row: &O5Difference, strict: bool, matches: bool) -> bool {
+    let pinned = if strict {
+        Some(&row.strict)
+    } else {
+        row.emulator.as_ref()
+    };
+    matches == pinned.is_some_and(|answer| answer == &row.production)
 }
 
 fn o8a_internal_binding_valid(row: &str, production: &Value) -> bool {
@@ -2038,7 +2052,7 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                                 "strict={strict} {row}: pinned local debt answer changed: {got}"
                             ));
                         }
-                        if !o5_pinned_match_valid(&row, strict, matches) {
+                        if !o5_pinned_match_valid(debt, strict, matches) {
                             failures
                                 .push(format!("strict={strict} {row}: debt match status changed"));
                         }
@@ -2283,20 +2297,28 @@ fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     validate_o5_pin(&ordinary);
     let stale = O5Difference {
         strict: ordinary.production.clone(),
+        emulator: None,
         ..ordinary.clone()
     };
     assert!(std::panic::catch_unwind(|| validate_o5_pin(&stale)).is_err());
-    assert!(o5_pinned_match_valid(O5_INTERNAL_ROW, true, true));
-    assert!(!o5_pinned_match_valid(O5_INTERNAL_ROW, false, true));
+    assert!(o5_pinned_match_valid(&unknown, true, true));
+    assert!(!o5_pinned_match_valid(&unknown, false, true));
+    let matched = rows
+        .iter()
+        .find(|row| row.row.ends_with("#fn-make_struct"))
+        .unwrap();
+    validate_o5_pin(matched);
+    assert!(o5_pinned_match_valid(matched, true, true));
+    assert!(!o5_pinned_match_valid(matched, false, true));
     let reference = rows
         .iter()
         .find(|row| row.row == O5_REFERENCE_ENV_ROW)
         .unwrap();
     validate_o5_pin(reference);
-    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, true, true));
-    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, false, true));
-    assert!(!o5_pinned_match_valid(&ordinary.row, true, true));
-    assert!(!o5_pinned_match_valid(&ordinary.row, false, true));
+    assert!(!o5_pinned_match_valid(reference, true, true));
+    assert!(!o5_pinned_match_valid(reference, false, true));
+    assert!(!o5_pinned_match_valid(&ordinary, true, true));
+    assert!(!o5_pinned_match_valid(&ordinary, false, true));
     for row in O8A_INTERNAL_ROWS {
         assert!(o8a_internal_binding_valid(row, &recorded_internal_answer()));
         assert!(!o8a_internal_binding_valid(row, &json!({"status":500})));

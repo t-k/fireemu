@@ -1210,10 +1210,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 14, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 7, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            9,
+            2,
             "finite emulator debt inventory"
         );
     }
@@ -1618,21 +1618,37 @@ fn recorded_unknown_after_empty_select_matches_both_profiles() {
 
 #[test]
 fn unrecorded_unknown_candidates_keep_original_refusal_bodies() {
-    for name in ["geo_distance"] {
-        let step = format!("fn-{name}");
-        let message = format!("function {name:?} is unsupported locally");
-        for strict in [true, false] {
-            for grpc in [false, true] {
-                let (status, body) = internal_case(strict, "o5/function-names", &step, grpc);
-                assert_eq!(status, 501, "{name} strict={strict} grpc={grpc}: {body}");
-                if grpc {
-                    assert_eq!(body["grpcMessage"], message, "{name}");
-                } else {
-                    assert_eq!(body[0]["error"]["message"], message, "{name}");
-                    assert_eq!(body[0]["error"]["status"], "UNIMPLEMENTED", "{name}");
-                }
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let name = "fresh_unknown_neighbor";
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/positive"}]},
+        {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{"name":name,"args":[]}}}}}]}
+    ]}}});
+    let expected = format!("function {name:?} is unsupported locally");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for strict in [true, false] {
+        let s = state(strict);
+        let (status, rest) = call(&s, "POST", &format!("{DOCS}:executePipeline"), &body);
+        assert_eq!(status, 501);
+        assert_eq!(rest[0]["error"]["message"], expected);
+        let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap();
+        let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+        let error = rt.block_on(async {
+            match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                Err(error) => error,
+                Ok(_) => panic!("unexpectedly accepted unknown function"),
             }
-        }
+        });
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert_eq!(error.message(), expected);
     }
 }
 

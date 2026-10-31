@@ -2500,7 +2500,11 @@ fn decode_operand_tree_in(
                         return Err(crate::pipeline_shape::unknown_candidate(fallback, text));
                     }
                 }
-                return Err(unknown_function_status(&function.name, unrecorded, fallback));
+                return Err(unknown_function_status(
+                    &function.name,
+                    unrecorded,
+                    fallback,
+                ));
             }
             // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
@@ -5420,6 +5424,65 @@ plain	where	none";
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    #[test]
+    fn observed_suggestion_neighbors_keep_the_original_fallback() {
+        use crate::pipeline_shape::{unknown_candidate_text, RefusalGate};
+        use pb::value::ValueType as V;
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (name, args, options) in [
+                (
+                    "row",
+                    vec![pb::Value::default()],
+                    std::collections::HashMap::new(),
+                ),
+                (
+                    "count",
+                    vec![pb::Value::default()],
+                    std::collections::HashMap::new(),
+                ),
+                ("Row", vec![], std::collections::HashMap::new()),
+                ("fresh_neighbor", vec![], std::collections::HashMap::new()),
+                (
+                    "row",
+                    vec![],
+                    std::collections::HashMap::from([("x".to_owned(), pb::Value::default())]),
+                ),
+            ] {
+                let value = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: name.to_owned(),
+                        args,
+                        options,
+                    })),
+                };
+                let error = decode_operand_tree(&value, mode).unwrap_err();
+                let original = format!("function {name:?} is unsupported locally");
+                let gate = if mode == Unrecorded::Refuse {
+                    RefusalGate::Recorded(None, String::new())
+                } else {
+                    RefusalGate::Ordinary(None, String::new())
+                };
+                let answer = gate.answer(error);
+                assert_eq!(answer.code(), tonic::Code::Unimplemented);
+                assert_eq!(answer.message(), original);
+            }
+            let value = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "row".to_owned(),
+                    args: vec![],
+                    options: Default::default(),
+                })),
+            };
+            let error = decode_operand_tree(&value, mode).unwrap_err();
+            assert_eq!(
+                unknown_candidate_text(&error),
+                Some("The function 'row' does not exist, did you mean 'pow'?")
+            );
+            let answer = RefusalGate::Ordinary(None, String::new()).answer(error);
+            assert_eq!(answer.message(), "function \"row\" is unsupported locally");
+        }
+    }
+
     proptest::proptest! {
         #[test]
         fn observed_suggestion_targets_are_catalogued_without_becoming_aliases(
@@ -5492,29 +5555,31 @@ plain	where	none";
                 .as_str()
                 .unwrap();
             for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
-            let actual = compile_pipeline_in_order(&request, &parent, mode, Some(&order))
-                .unwrap_err();
-            let gate = |shape| if mode == Unrecorded::Refuse {
-                RefusalGate::Recorded(shape, database.to_owned())
-            } else {
-                RefusalGate::Ordinary(shape, database.to_owned())
-            };
-            let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
-            if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
-                failures.push(format!("{id} rest: {rest:?}"));
-            }
-            let grpc_shape = shape_of_request(&request);
-            let expected_code = if grpc_shape.is_some() {
-                tonic::Code::InvalidArgument
-            } else {
-                tonic::Code::Unimplemented
-            };
-            let grpc = gate(grpc_shape).answer(actual);
-            if grpc.code() != expected_code
-                || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
-            {
-                failures.push(format!("{id} grpc: {grpc:?}"));
-            }
+                let actual =
+                    compile_pipeline_in_order(&request, &parent, mode, Some(&order)).unwrap_err();
+                let gate = |shape| {
+                    if mode == Unrecorded::Refuse {
+                        RefusalGate::Recorded(shape, database.to_owned())
+                    } else {
+                        RefusalGate::Ordinary(shape, database.to_owned())
+                    }
+                };
+                let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
+                if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                    failures.push(format!("{id} rest: {rest:?}"));
+                }
+                let grpc_shape = shape_of_request(&request);
+                let expected_code = if grpc_shape.is_some() {
+                    tonic::Code::InvalidArgument
+                } else {
+                    tonic::Code::Unimplemented
+                };
+                let grpc = gate(grpc_shape).answer(actual);
+                if grpc.code() != expected_code
+                    || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+                {
+                    failures.push(format!("{id} grpc: {grpc:?}"));
+                }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

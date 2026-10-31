@@ -5,18 +5,20 @@ on:
 permissions:
   contents: read
 jobs:
-  red:
+  verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: e3266ecf13897781892ed79525622384be25977b
-      - name: Record failing tests with memory limit
+          ref: 495decbb5407174701c29fc808906fa76f467906
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - name: Run affected crates and clippy under memory limit
         run: |
-          test "$(git rev-parse HEAD)" = $(git rev-parse e3266ecf13897781892ed79525622384be25977b)
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= cargo test --locked --manifest-path crates/fireemu-adapter-grpc/Cargo.toml recorded_sort_and_accumulator_unknown_candidates -- --nocapture
-      - name: Record scalar failing test with memory limit
-        if: always()
-        run: |
-          sudo systemd-run --scope --unit=fs-r21-scalar-red -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-scalar-red.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo test --locked --manifest-path crates/fireemu-core-firestore/Cargo.toml nested_sum_uses_actual_row_type -- --nocapture'
+          test "$(git rev-parse HEAD)" = 495decbb5407174701c29fc808906fa76f467906
+          test -z "$(git status --porcelain)"
+          sudo systemd-run --scope --unit=fs-r21-verify -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'set -e; systemctl show fs-r21-verify.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; cargo nextest run --manifest-path Cargo.toml --locked --profile pr -p fireemu-core-firestore -p fireemu-adapter-grpc; cargo clippy --manifest-path Cargo.toml --locked -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features -- -D warnings'
+          test "$(git rev-parse HEAD)" = 495decbb5407174701c29fc808906fa76f467906
+          test -z "$(git status --porcelain)"

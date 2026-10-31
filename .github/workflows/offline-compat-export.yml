@@ -1,0 +1,59 @@
+name: v041 source-bound transaction debug binary
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Version-bumped frozen source commit SHA
+        required: true
+        type: string
+      version:
+        description: Expected workspace version
+        default: 0.41.0
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  txn_binary:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify clean immutable source and no UI bundle
+        shell: bash
+        run: |
+          [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          test -z "$(git status --porcelain)"
+          test ! -e target
+          test ! -e ui/dist/index.html
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Build and capture source-bound debug artifact
+        env:
+          OUT: ${{ runner.temp }}/v041-txn-debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$OUT"
+          mkdir -m 700 "$OUT"
+          echo IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbAo6ICIke0VYUEVDVEVEX1NPVVJDRTo/fSIgIiR7RVhQRUNURURfVkVSU0lPTjo/fSIgIiR7UlVOTkVSX1RFTVA6P30iICIke09VVDo/fSIKW1sgIiRFWFBFQ1RFRF9TT1VSQ0UiID1+IF5bMC05YS1mXXs0MH0kIF1dClsgIiRFWFBFQ1RFRF9WRVJTSU9OIiA9IDAuNDEuMCBdCnJvb3Q9JChnaXQgcmV2LXBhcnNlIC0tc2hvdy10b3BsZXZlbCkKWyAiJChwd2QgLVApIiA9ICIkKGNkICIkcm9vdCIgJiYgcHdkIC1QKSIgXQpbICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiIF0KWyAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluKSIgXQpbICEgLWUgdGFyZ2V0IF0gJiYgWyAhIC1lIHVpL2Rpc3QvaW5kZXguaHRtbCBdClsgIiQocHl0aG9uMyAtYyAnaW1wb3J0IHRvbWxsaWI7cHJpbnQodG9tbGxpYi5sb2FkKG9wZW4oIkNhcmdvLnRvbWwiLCJyYiIpKVsid29ya3NwYWNlIl1bInBhY2thZ2UiXVsidmVyc2lvbiJdKScpIiA9ICIkRVhQRUNURURfVkVSU0lPTiIgXQpjZz0kKGF3ayAtRjogJyQxPT0iMCIge3ByaW50ICQzfScgL3Byb2Mvc2VsZi9jZ3JvdXApCmNhdCAiL3N5cy9mcy9jZ3JvdXAke2NnfS9tZW1vcnkubWF4IiA+ICIkT1VUL21lbW9yeS5tYXgiCmNhdCAiL3N5cy9mcy9jZ3JvdXAke2NnfS9tZW1vcnkuc3dhcC5tYXgiID4gIiRPVVQvbWVtb3J5LnN3YXAubWF4IgpbICIkKGNhdCAiJE9VVC9tZW1vcnkubWF4IikiID0gNjQ0MjQ1MDk0NCBdICYmIFsgIiQoY2F0ICIkT1VUL21lbW9yeS5zd2FwLm1heCIpIiA9IDAgXQpnaXQgcmV2LXBhcnNlIEhFQUQgPiAiJE9VVC9zb3VyY2UtY29tbWl0LnR4dCIKZ2l0IHJldi1wYXJzZSBIRUFEXnt0cmVlfSA+ICIkT1VUL3NvdXJjZS10cmVlLnR4dCIKcnVzdGMgLS12ZXJzaW9uIC0tdmVyYm9zZSA+ICIkT1VUL3J1c3RjLnR4dCIKY2FyZ28gLS12ZXJzaW9uID4gIiRPVVQvY2FyZ28udHh0IgpmaW5kIHVpIC1uYW1lIGluZGV4Lmh0bWwgLXBhdGggJyovZGlzdC8qJyAtcHJpbnQgPiAiJE9VVC91aS1kaXN0LWluZGV4LWJlZm9yZS50eHQiCnRlc3QgISAtcyAiJE9VVC91aS1kaXN0LWluZGV4LWJlZm9yZS50eHQiCmdpdCBscy1maWxlcyAteiB8IHhhcmdzIC0wIHNoYTI1NnN1bSA+ICIkT1VUL2lucHV0cy5zaGEyNTYiCnRhcmdldD0iJFJVTk5FUl9URU1QL3YwNDEtdHhuLWRlYnVnLWV4Y2x1c2l2ZS10YXJnZXQiClsgISAtZSAiJHRhcmdldCIgXQpwcmludGYgJyVzXG4nIGNhcmdvIGJ1aWxkIC0tbWFuaWZlc3QtcGF0aCAiJHJvb3QvQ2FyZ28udG9tbCIgLS1sb2NrZWQgLXAgZmlyZWVtdSAtLWJpbiBmaXJlZW11ID4gIiRPVVQvYWN0dWFsLWNvbW1hbmQudHh0IgpDQVJHT19UQVJHRVRfRElSPSIkdGFyZ2V0IiBDQVJHT19JTkNSRU1FTlRBTD0wIENBUkdPX0JVSUxEX0pPQlM9MiBSVVNUQ19XUkFQUEVSPSBjYXJnbyBidWlsZCAtLW1hbmlmZXN0LXBhdGggIiRyb290L0NhcmdvLnRvbWwiIC0tbG9ja2VkIC1wIGZpcmVlbXUgLS1iaW4gZmlyZWVtdSA+ICIkT1VUL2J1aWxkLmxvZyIgMj4mMQpzaGEyNTZzdW0gIiR0YXJnZXQvZGVidWcvZmlyZWVtdSIgIiR0YXJnZXQvZGVidWcvZmlyZWVtdS5kIiA+ICIkT1VUL29yaWdpbmFsLXNoYTI1NnN1bXMiCmNwICIkdGFyZ2V0L2RlYnVnL2ZpcmVlbXUiICIkdGFyZ2V0L2RlYnVnL2ZpcmVlbXUuZCIgIiRPVVQvIgpjbXAgIiR0YXJnZXQvZGVidWcvZmlyZWVtdSIgIiRPVVQvZmlyZWVtdSIgJiYgY21wICIkdGFyZ2V0L2RlYnVnL2ZpcmVlbXUuZCIgIiRPVVQvZmlyZWVtdS5kIgoiJE9VVC9maXJlZW11IiAtLXZlcnNpb24gPiAiJE9VVC92ZXJzaW9uLnR4dCIKZ3JlcCAtRnggImZpcmVlbXUgJEVYUEVDVEVEX1ZFUlNJT04iICIkT1VUL3ZlcnNpb24udHh0IgpzZXQgK2UKIiRPVVQvZmlyZWVtdSIgZG9jdG9yID4gIiRPVVQvZG9jdG9yLnR4dCIgMj4mMQpkb2N0b3Jfc3RhdHVzPSQ/CnNldCAtZQpwcmludGYgJyVzXG4nICIkZG9jdG9yX3N0YXR1cyIgPiAiJE9VVC9kb2N0b3IuZXhpdCIKZ3JlcCAtRSAndWkgYnVuZGxlW1s6c3BhY2U6XV0rbm90IGJ1bmRsZWQgXChwbGFjZWhvbGRlciBwYWdlXCknICIkT1VUL2RvY3Rvci50eHQiCnByaW50ZiAnJXNcbicgZmFsc2UgPiAiJE9VVC91aS1idW5kbGVkLnR4dCIKc2hhMjU2c3VtIC1jICIkT1VUL2lucHV0cy5zaGEyNTYiID4gIiRPVVQvaW5wdXQtcmVjaGVjay5sb2ciClsgIiQoZ2l0IHJldi1wYXJzZSBIRUFEKSIgPSAiJEVYUEVDVEVEX1NPVVJDRSIgXSAmJiBbIC16ICIkKGdpdCBzdGF0dXMgLS1wb3JjZWxhaW4pIiBdICYmIFsgISAtZSB1aS9kaXN0L2luZGV4Lmh0bWwgXQooY2QgIiRPVVQiICYmIHNoYTI1NnN1bSBmaXJlZW11IGZpcmVlbXUuZCBidWlsZC5sb2cgc291cmNlLWNvbW1pdC50eHQgc291cmNlLXRyZWUudHh0IGFjdHVhbC1jb21tYW5kLnR4dCB2ZXJzaW9uLnR4dCBkb2N0b3IudHh0IHVpLWJ1bmRsZWQudHh0ID4gU0hBMjU2U1VNUykK | base64 -d > "$OUT/driver.sh"
+          sudo systemd-run --scope --quiet -p MemoryMax=6442450944 -p MemorySwapMax=0 \
+            setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups -- \
+            env PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" OUT="$OUT" EXPECTED_SOURCE="$EXPECTED_SOURCE" EXPECTED_VERSION="$EXPECTED_VERSION" \
+            CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 RUSTC_WRAPPER= bash "$OUT/driver.sh"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v041-txn-linux-arm64-debug
+          path: ${{ runner.temp }}/v041-txn-debug
+          if-no-files-found: warn

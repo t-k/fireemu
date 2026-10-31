@@ -726,7 +726,16 @@ impl Firestore for GatewayService {
             };
             let compiled =
                 crate::pipeline::compile_pipeline(&compiler_request, &parent, unrecorded)
-                    .map_err(|error| pipeline_status(answer(error), &canonical))?;
+                    .map_err(|error| {
+                        if self.gateway.production_refusals()
+                            && recorded_bit_internal(request.get_ref(), &error)
+                        {
+                            eprintln!("[firestore] pipeline: recorded integer bit function returned an internal error");
+                            Status::internal("An internal error occurred.")
+                        } else {
+                            pipeline_status(answer(error), &canonical)
+                        }
+                    })?;
             if request.get_ref().consistency_selector.is_some()
                 && (compiled.documents.is_none()
                     || !compiled.unions.is_empty()
@@ -1245,6 +1254,77 @@ impl tokio_stream::Stream for AggregationResponseStream {
 
 /// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
 /// the REST route).
+// The native recording covers only this direct, integer-argument gRPC shape.
+// Called after the usual validation and only on the corresponding compiler refusal.
+fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::{execute_pipeline_request::PipelineType, value::ValueType as V};
+    if request.auto_commit_transaction
+        || request.request_options.is_some()
+        || request.consistency_selector.is_some()
+        || error.code() != tonic::Code::Unimplemented
+    {
+        return false;
+    }
+    let Some(PipelineType::StructuredPipeline(structured)) = &request.pipeline_type else {
+        return false;
+    };
+    if !structured.options.is_empty() {
+        return false;
+    }
+    let Some(pipeline) = &structured.pipeline else {
+        return false;
+    };
+    let [collection, select] = pipeline.stages.as_slice() else {
+        return false;
+    };
+    if collection.name != "collection"
+        || !collection.options.is_empty()
+        || select.name != "select"
+        || !select.options.is_empty()
+    {
+        return false;
+    }
+    let [pb::Value {
+        value_type: Some(V::ReferenceValue(path)),
+    }] = collection.args.as_slice()
+    else {
+        return false;
+    };
+    if !path
+        .strip_prefix('/')
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    {
+        return false;
+    }
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = select.args.as_slice()
+    else {
+        return false;
+    };
+    if map.fields.len() != 1 {
+        return false;
+    }
+    let Some(pb::Value {
+        value_type: Some(V::FunctionValue(function)),
+    }) = map.fields.get("value")
+    else {
+        return false;
+    };
+    let count = match function.name.as_str() {
+        "bit_not" => 1,
+        "bit_left_shift" | "bit_right_shift" => 2,
+        _ => return false,
+    };
+    function.options.is_empty()
+        && function.args.len() == count
+        && function
+            .args
+            .iter()
+            .all(|value| matches!(value.value_type, Some(V::IntegerValue(_))))
+        && error.message() == format!("function {:?} is unsupported locally", function.name)
+}
+
 pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
     if let Ok(value) = canonical.parse() {
         error.metadata_mut().insert("fireemu-pipeline", value);

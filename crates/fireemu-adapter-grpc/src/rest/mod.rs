@@ -1733,6 +1733,10 @@ impl RestState {
                 ))
                 .code()
                 == tonic::Code::InvalidArgument;
+        let aggregate_only = matches!(
+            compiled.stages.as_slice(),
+            [fireemu_core_firestore::pipeline_exec::Stage::Aggregate { .. }]
+        );
         let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
             compiled.stages,
             unrecorded,
@@ -1741,7 +1745,22 @@ impl RestState {
         if recorded_select_first {
             cursor = cursor.with_recorded_select_first_wrong_type();
         }
-        if crate::pipeline::recorded_nested_sum_admitted(&gate, unrecorded) {
+        let admission_gate =
+            if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+                gate.clone()
+            } else {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    if crate::pipeline_shape::candidate_json_eligible(wire_body)
+                        && crate::pipeline::candidate_shape_eligible(&request)
+                    {
+                        crate::pipeline_shape::shape_of_json(wire_body, key_order)
+                    } else {
+                        None
+                    },
+                    database.to_owned(),
+                )
+            };
+        if crate::pipeline::recorded_nested_sum_admitted(&admission_gate, unrecorded) {
             cursor = cursor.with_recorded_nested_sum_wrong_type();
         }
         let mut rows = Vec::new();

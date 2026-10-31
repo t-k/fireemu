@@ -2081,10 +2081,9 @@ pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
 /// Admits the recorded nested sum type refusal only for its recorded request shape.
 pub(crate) fn recorded_nested_sum_admitted(
     gate: &crate::pipeline_shape::RefusalGate,
-    unrecorded: Unrecorded,
+    _unrecorded: Unrecorded,
 ) -> bool {
-    unrecorded == Unrecorded::Refuse
-        && matches!(gate, crate::pipeline_shape::RefusalGate::Recorded(..))
+    matches!(gate, crate::pipeline_shape::RefusalGate::Recorded(..))
         && gate
             .answer(eval_status(&pipeline_exec::EvalError::WrongType {
                 function: "array_sum",

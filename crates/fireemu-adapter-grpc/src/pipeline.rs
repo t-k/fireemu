@@ -5665,6 +5665,81 @@ plain	where	none";
     }
 
     #[test]
+    fn recorded_context_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-names", "fn-bit_not"),
+            ("function-names", "fn-bit_left_shift"),
+            ("function-names", "fn-bit_right_shift"),
+            ("function-names", "fn-document_matches"),
+            ("function-names", "fn-matches"),
+            ("function-names", "fn-geo_distance"),
+            ("function-names", "fn-score"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let actual =
+                    compile_pipeline_in_order(&request, &parent, mode, Some(&order)).unwrap_err();
+                let gate = |shape| {
+                    if mode == Unrecorded::Refuse {
+                        RefusalGate::Recorded(shape, database.to_owned())
+                    } else {
+                        RefusalGate::Ordinary(shape, database.to_owned())
+                    }
+                };
+                let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
+                if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                    failures.push(format!("{id} rest: {rest:?}"));
+                }
+                let grpc_shape = shape_of_request(&request);
+                let expected_code = if grpc_shape.is_some() {
+                    tonic::Code::InvalidArgument
+                } else {
+                    tonic::Code::Unimplemented
+                };
+                let grpc = gate(grpc_shape).answer(actual);
+                if grpc.code() != expected_code
+                    || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+                {
+                    failures.push(format!("{id} grpc: {grpc:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn recorded_registered_function_arities_match_both_transports() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

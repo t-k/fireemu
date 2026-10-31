@@ -3402,6 +3402,7 @@ impl Accumulator {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn add(
         &self,
         running: &mut Running,

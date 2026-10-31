@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 9b2fb3ea13f8c6ee3d87fe85e50dc533b286ed1c
+          ref: f2d35ca358fe6c03b58402b241e099f1006063f8
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -24,13 +24,13 @@ jobs:
           tool: cargo-nextest@0.9.143
       - name: Run baseline, no-op and targeted mutants
         run: |
-          test "$(git rev-parse HEAD)" = 9b2fb3ea13f8c6ee3d87fe85e50dc533b286ed1c
+          test "$(git rev-parse HEAD)" = f2d35ca358fe6c03b58402b241e099f1006063f8
           test -z "$(git status --porcelain --untracked-files=no)"
           sudo systemd-run --scope --unit=fs-r21-mutants -p MemoryMax=6442450944 -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-mutants.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec python3 .ci-helper/.github/temporary/fs-r21-mutants.py'
           test -z "$(git status --porcelain --untracked-files=no)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: fs-r21-mutants
+          name: fs-r21-mutants-v2
           path: /tmp/fs-r21-mutants
           if-no-files-found: warn

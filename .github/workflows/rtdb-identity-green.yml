@@ -1,0 +1,32 @@
+name: rtdb-identity-green
+on:
+  push:
+    branches: [work/rtdb-rules-identity-ci]
+permissions:
+  contents: read
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 307504ea6
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Confirm focused regressions under capped build
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 307504ea6
+          mkdir /tmp/rtdb-green
+          git rev-parse HEAD > /tmp/rtdb-green/source.txt
+          set +e
+          sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" sh -c 'cgroup=$(awk -F: '\''$1 == "0" {print $3}'\'' /proc/self/cgroup); cat "/sys/fs/cgroup$cgroup/memory.max" "/sys/fs/cgroup$cgroup/memory.swap.max" > /tmp/rtdb-green/cgroup.txt; test "$(cat "/sys/fs/cgroup$cgroup/memory.max")" = 6442450944; test "$(cat "/sys/fs/cgroup$cgroup/memory.swap.max")" = 0; cargo test -p fireemu-core-database --test rules auth_root_identity_matches_the_recorded_read --locked -j 2 && cargo test -p fireemu-adapter-database --test rules_cells recorded_root_auth_identity_and_rejected_install_cells --locked -j 2' > /tmp/rtdb-green/output.txt 2>&1
+          status=$?
+          set -e
+          echo "$status" > /tmp/rtdb-green/status.txt
+          test "$status" = 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rtdb-identity-green
+          path: /tmp/rtdb-green/

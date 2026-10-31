@@ -1699,14 +1699,10 @@ fn generated_remaining_recorded_boundaries_use_real_routes() {
         };
         let expected = match (*family, *shape, *profile, *transport) {
             ("docid_options", "observed", _, _) | ("reference", "nearby", _, _) => 200,
-            ("docid_options", "nearby", "strict", _)
-            | ("docid_order", "nearby", "strict", _)
-            | ("error_info", "nearby", "strict", _)
+            ("docid_options" | "docid_order" | "error_info", "nearby", "strict", _)
             | ("error_info", "competing", "strict", "grpc") => 501,
             ("docid_options", "competing", "ordinary", _)
-            | ("docid_order", _, _, _)
-            | ("reference", _, _, _)
-            | ("error_info", _, _, _) => 400,
+            | ("docid_order" | "reference" | "error_info", _, _, _) => 400,
             _ => panic!("unexpected PICT row {line}"),
         };
         assert_eq!(status, expected, "{line}");

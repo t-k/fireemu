@@ -11,13 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2e4cd020453a21e036e4c2ec0e8c805b7f4a1345
+          ref: f06dee765904322ef1adf2594f67242e55db3857
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - name: Run affected crates
         run: |
-          test "$(git rev-parse HEAD)" = 2e4cd020453a21e036e4c2ec0e8c805b7f4a1345
+          test "$(git rev-parse HEAD)" = f06dee765904322ef1adf2594f67242e55db3857
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(unrecorded_candidate_preserves_arbitrary_ordinary_fallback)'
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo clippy -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings

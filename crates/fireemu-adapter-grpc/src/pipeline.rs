@@ -2263,6 +2263,24 @@ fn decode_subcollection_array(nested: &pb::Pipeline) -> Result<Expr, Status> {
     })
 }
 
+/// Computes a candidate refusal; strict admission still requires the recorded shape and text.
+fn unknown_function_status(name: &str, unrecorded: Unrecorded, ordinary: Status) -> Status {
+    if unrecorded != Unrecorded::Refuse {
+        return ordinary;
+    }
+    let bytes = name.as_bytes();
+    let lowercase = name.to_ascii_lowercase();
+    let titlecase = bytes.first().is_some_and(u8::is_ascii_uppercase)
+        && bytes[1..].iter().all(|byte| !byte.is_ascii_uppercase());
+    if titlecase && pipeline_exec::function(&lowercase).is_some() {
+        Status::invalid_argument(format!(
+            "The function '{name}' does not exist, did you mean '{lowercase}'?"
+        ))
+    } else {
+        Status::invalid_argument(format!("The function '{name}' does not exist."))
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn decode_operand_tree_in(
     value: &pb::Value,
@@ -2312,10 +2330,14 @@ fn decode_operand_tree_in(
                 return Err(recorded_internal("array_reverse requires an argument"));
             }
             if pipeline_exec::function(&function.name).is_none() {
-                return Err(Status::unimplemented(format!(
-                    "function {:?} is unsupported locally",
-                    function.name
-                )));
+                return Err(unknown_function_status(
+                    &function.name,
+                    unrecorded,
+                    Status::unimplemented(format!(
+                        "function {:?} is unsupported locally",
+                        function.name
+                    )),
+                ));
             }
             // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
@@ -3160,8 +3182,10 @@ fn decode_condition(
         return Ok((decode_operand(condition, unrecorded)?, None));
     };
     let Some(def) = pipeline_exec::function(&function.name) else {
-        return Err(Status::unimplemented(
-            "where expression is unsupported locally",
+        return Err(unknown_function_status(
+            &function.name,
+            unrecorded,
+            Status::unimplemented("where expression is unsupported locally"),
         ));
     };
     if !def.returns_boolean
@@ -4977,6 +5001,52 @@ add_fields_map	unknown	none	strict";
             assert_eq!(grpc.code(), tonic::Code::InvalidArgument, "gRPC {id}");
             assert_eq!(grpc.message(), expected, "gRPC {id}");
         }
+    }
+
+    #[test]
+    fn unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for name in [
+            "fresh_unknown",
+            "geo_distance",
+            "EQUAL",
+            "EqUal",
+            "未知",
+            "x'quoted",
+        ] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![],
+                    ..Default::default()
+                })),
+            };
+            let candidate = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, String::new())
+                    .answer(candidate)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{name}"
+            );
+            let ordinary = decode_operand_tree(&wire, Unrecorded::OfficialEmulator).unwrap_err();
+            assert_eq!(ordinary.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                ordinary.message(),
+                format!("function {name:?} is unsupported locally")
+            );
+        }
+        assert_eq!(
+            unknown_function_status("AND", Unrecorded::Refuse, Status::unimplemented("unused"))
+                .message(),
+            "The function 'AND' does not exist."
+        );
+        assert_eq!(
+            unknown_function_status("Equal", Unrecorded::Refuse, Status::unimplemented("unused"))
+                .message(),
+            "The function 'Equal' does not exist, did you mean 'equal'?"
+        );
     }
 
     #[test]

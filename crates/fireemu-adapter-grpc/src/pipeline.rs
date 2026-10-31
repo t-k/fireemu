@@ -5458,6 +5458,82 @@ plain	where	none";
     }
 
     #[test]
+    fn generated_refusal_partition_table() {
+        use serde_json::json;
+        const ROWS: &str = r"Position	Name	Args	Input	Profile
+sort	unknown	one	long	strict
+accumulator	unknown	one	long	strict
+nested	known	one	long	strict
+nested	known	one	empty	strict
+nested	known	one	array	ordinary
+sort	unknown	multiple	empty	ordinary
+nested	unknown	zero	array	strict
+accumulator	known	zero	long	ordinary
+sort	known	multiple	array	strict
+sort	unknown	zero	empty	ordinary
+accumulator	known	multiple	empty	ordinary
+accumulator	unknown	multiple	array	ordinary
+nested	unknown	multiple	long	ordinary
+";
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [position, name, arity, input, profile] = cells.as_slice() else {
+                panic!("bad row: {line}")
+            };
+            let mode = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let argument = match *input {
+                "long" => json!({"integerValue":"7"}),
+                "array" => json!({"arrayValue":{"values":[{"integerValue":"7"}]}}),
+                "empty" => json!({"fieldReferenceValue":"n"}),
+                _ => panic!("bad input: {line}"),
+            };
+            let count = match *arity {
+                "zero" => 0,
+                "one" => 1,
+                "multiple" => 2,
+                _ => panic!("bad arity: {line}"),
+            };
+            let function = json!({"functionValue":{"name": if *name == "unknown" { "nope" } else { "sum" }, "args": vec![argument; count]}});
+            let stage = match *position {
+                "sort" => {
+                    json!({"name":"sort","args":[{"mapValue":{"fields":{"direction":{"stringValue":"ascending"},"expression":function}}}]})
+                }
+                "accumulator" => {
+                    json!({"name":"aggregate","args":[{"mapValue":{"fields":{"s":function}}},{"mapValue":{}}]})
+                }
+                "nested" => {
+                    json!({"name":"aggregate","args":[{"mapValue":{"fields":{"s":{"functionValue":{"name":"sum","args":[function]}}}}},{"mapValue":{}}]})
+                }
+                _ => panic!("bad position: {line}"),
+            };
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/c"}]},stage]}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let result = compile_pipeline_in_order(&request, &parent, mode, None);
+            assert_eq!(
+                result.is_ok(),
+                *name == "known" && count == 1,
+                "{line}: {result:?}"
+            );
+            if *name == "unknown" {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    crate::pipeline_shape::RefusalGate::Recorded(None, database.to_owned())
+                        .answer(error)
+                        .code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn nested_sum_admission_requires_recorded_shape_and_strict_profile() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

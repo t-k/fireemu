@@ -698,7 +698,7 @@ impl Firestore for GatewayService {
             if registry_unrecorded
                 == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
                 && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
-                && crate::pipeline::validate_function_depth(&compiler_request).is_ok()
+                && crate::pipeline::candidate_shape_eligible(request.get_ref())
             {
                 crate::pipeline_shape::RefusalGate::Ordinary(
                     crate::pipeline_shape::shape_of_request(request.get_ref()),

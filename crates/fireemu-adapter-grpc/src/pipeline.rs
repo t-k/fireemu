@@ -86,6 +86,79 @@ pub(crate) fn validate_function_depth(request: &pb::ExecutePipelineRequest) -> R
     Ok(())
 }
 
+/// Bounds recursive shape inspection only when an ordinary-profile candidate needs it.
+pub(crate) fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> bool {
+    enum Node<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Stage(&'a pb::pipeline::Stage),
+        Value(&'a pb::Value),
+    }
+    const MAX_DEPTH: usize = 100;
+    const MAX_NODES: usize = 32_768;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return true;
+    };
+    let mut stack = Vec::new();
+    let mut seen = 0_usize;
+    macro_rules! push {
+        ($node:expr, $depth:expr) => {{
+            if seen + stack.len() >= MAX_NODES {
+                return false;
+            }
+            stack.push(($node, $depth));
+        }};
+    }
+    if let Some(pipeline) = &structured.pipeline {
+        push!(Node::Pipeline(pipeline), 0);
+    }
+    for value in structured.options.values() {
+        push!(Node::Value(value), 0);
+    }
+    while let Some((node, depth)) = stack.pop() {
+        seen += 1;
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let next = depth + 1;
+        match node {
+            Node::Pipeline(pipeline) => {
+                for stage in &pipeline.stages {
+                    push!(Node::Stage(stage), next);
+                }
+            }
+            Node::Stage(stage) => {
+                for value in stage.args.iter().chain(stage.options.values()) {
+                    push!(Node::Value(value), next);
+                }
+            }
+            Node::Value(value) => match &value.value_type {
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    for value in &array.values {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    for value in map.fields.values() {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::FunctionValue(function)) => {
+                    for value in function.args.iter().chain(function.options.values()) {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::PipelineValue(pipeline)) => {
+                    push!(Node::Pipeline(pipeline), next)
+                }
+                _ => {}
+            },
+        }
+    }
+    validate_function_depth(request).is_ok()
+}
+
 /// Production's scalar-subquery cardinality refusal.
 pub(crate) const SCALAR_MULTIPLE_RESULTS: &str = "Subpipeline returned multiple results.";
 
@@ -6628,11 +6701,6 @@ vector	grpc	emulator	function	foreign";
         }
     }
 
-    // Baseline reproducer: the existing function-depth guard does not bound map nesting.
-    fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> bool {
-        validate_function_depth(request).is_ok()
-    }
-
     #[test]
     fn candidate_shape_eligibility_bounds_nested_function_options() {
         use pb::value::ValueType as V;
@@ -6675,6 +6743,26 @@ vector	grpc	emulator	function	foreign";
         let deep = request(120);
         assert!(validate_function_depth(&deep).is_ok());
         assert!(!candidate_shape_eligible(&deep));
+        let mut wide = request(0);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            &mut wide.pipeline_type
+        else {
+            unreachable!()
+        };
+        structured.options.insert(
+            "x".to_owned(),
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue {
+                    values: vec![
+                        pb::Value {
+                            value_type: Some(V::NullValue(0))
+                        };
+                        32_768
+                    ],
+                })),
+            },
+        );
+        assert!(!candidate_shape_eligible(&wide));
     }
 
     #[test]

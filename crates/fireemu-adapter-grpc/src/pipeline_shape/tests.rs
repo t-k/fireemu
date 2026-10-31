@@ -746,3 +746,15 @@ fn unknown_candidate_gate_preserves_exact_fallback_status() {
         assert!(answer.source().is_none());
     }
 }
+
+#[test]
+fn candidate_json_eligibility_bounds_depth_and_width() {
+    assert!(candidate_json_eligible(&json!({"a":[1,2,3]})));
+    let mut deep = json!(1);
+    for _ in 0..120 {
+        deep = json!({"x":deep});
+    }
+    assert!(!candidate_json_eligible(&deep));
+    let wide = Value::Array(vec![Value::Null; 32_768]);
+    assert!(!candidate_json_eligible(&wide));
+}

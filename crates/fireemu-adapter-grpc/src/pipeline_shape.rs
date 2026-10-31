@@ -54,6 +54,36 @@ fn unknown_carrier(status: &Status) -> Option<&UnknownCandidate> {
     status.source()?.downcast_ref::<UnknownCandidate>()
 }
 
+/// Prevents ordinary candidate shape inspection from recursing into unbounded JSON.
+pub(crate) fn candidate_json_eligible(body: &Value) -> bool {
+    const MAX_DEPTH: usize = 100;
+    const MAX_NODES: usize = 32_768;
+    let mut stack = vec![(body, 0_usize)];
+    let mut seen = 0_usize;
+    while let Some((value, depth)) = stack.pop() {
+        seen += 1;
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        match value {
+            Value::Array(values) => {
+                if values.len() > MAX_NODES.saturating_sub(seen + stack.len()) {
+                    return false;
+                }
+                stack.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            Value::Object(values) => {
+                if values.len() > MAX_NODES.saturating_sub(seen + stack.len()) {
+                    return false;
+                }
+                stack.extend(values.values().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
 pub(crate) fn unknown_candidate(fallback: Status, text: String) -> Status {
     let mut outer = fallback.clone();
     outer.set_source(std::sync::Arc::new(UnknownCandidate { fallback, text }));

@@ -1644,7 +1644,8 @@ impl RestState {
         let answer = |error: Status| {
             if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
                 && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
-                && crate::pipeline::validate_function_depth(&request).is_ok()
+                && crate::pipeline::candidate_shape_eligible(&request)
+                && crate::pipeline_shape::candidate_json_eligible(wire_body)
             {
                 crate::pipeline_shape::RefusalGate::Ordinary(
                     crate::pipeline_shape::shape_of_json(wire_body, key_order),

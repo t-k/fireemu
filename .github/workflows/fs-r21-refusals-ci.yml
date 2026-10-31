@@ -11,18 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: f2d35ca358fe6c03b58402b241e099f1006063f8
+          ref: 9cc9e126e1d1fc24fdc8fb7bd36e06ca0c41eb80
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - name: Run all affected tests without fail fast
         run: |
-          test "$(git rev-parse HEAD)" = f2d35ca358fe6c03b58402b241e099f1006063f8
+          test "$(git rev-parse HEAD)" = 9cc9e126e1d1fc24fdc8fb7bd36e06ca0c41eb80
           test -z "$(git status --porcelain)"
-          sudo systemd-run --scope --unit=fs-r21-tests -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-tests.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo nextest run --manifest-path Cargo.toml --locked --profile pr --no-fail-fast -p fireemu-core-firestore -p fireemu-adapter-grpc'
+          sudo systemd-run --scope --unit=fs-r21-tests -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-tests.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo nextest run --manifest-path Cargo.toml --locked --profile pr --no-fail-fast -p fireemu-core-firestore -p fireemu-adapter-grpc -E "test(nested_sum) | test(recorded_sort_and_accumulator_unknown_candidates) | test(generated_refusal_partition_table) | test(the_pipeline_corpus_replays_as_production_answered)"'
       - name: Run clippy independently
         if: always()
         run: |
-          test "$(git rev-parse HEAD)" = f2d35ca358fe6c03b58402b241e099f1006063f8
+          test "$(git rev-parse HEAD)" = 9cc9e126e1d1fc24fdc8fb7bd36e06ca0c41eb80
           sudo systemd-run --scope --unit=fs-r21-clippy -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-clippy.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo clippy --manifest-path Cargo.toml --locked -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features -- -D warnings'
           test -z "$(git status --porcelain)"

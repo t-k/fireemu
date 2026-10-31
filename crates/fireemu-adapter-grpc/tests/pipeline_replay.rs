@@ -924,7 +924,7 @@ fn recorded_empty_reference_environment_matches(local: &Value, production: &Valu
     }
     fn offset(resource: &str) -> Option<usize> {
         let empty = resource.find("//")?;
-        Some(resource[..empty + 1].encode_utf16().count())
+        Some(resource[..=empty].encode_utf16().count())
     }
     let Some(local_text) = local.pointer("/0/error/message").and_then(Value::as_str) else {
         return false;
@@ -1698,16 +1698,15 @@ fn generated_remaining_recorded_boundaries_use_real_routes() {
             }
         };
         let expected = match (*family, *shape, *profile, *transport) {
-            ("docid_options", "observed", _, _) => 200,
-            ("docid_options", "nearby", "strict", _) => 501,
-            ("docid_options", "competing", "ordinary", _) => 400,
-            ("docid_order", "nearby", "strict", _) => 501,
-            ("docid_order", _, _, _) => 400,
-            ("reference", "nearby", _, _) => 200,
-            ("reference", _, _, _) => 400,
-            ("error_info", "nearby", "strict", _)
+            ("docid_options", "observed", _, _) | ("reference", "nearby", _, _) => 200,
+            ("docid_options", "nearby", "strict", _)
+            | ("docid_order", "nearby", "strict", _)
+            | ("error_info", "nearby", "strict", _)
             | ("error_info", "competing", "strict", "grpc") => 501,
-            ("error_info", _, _, _) => 400,
+            ("docid_options", "competing", "ordinary", _)
+            | ("docid_order", _, _, _)
+            | ("reference", _, _, _)
+            | ("error_info", _, _, _) => 400,
             _ => panic!("unexpected PICT row {line}"),
         };
         assert_eq!(status, expected, "{line}");
@@ -1719,7 +1718,7 @@ fn recorded_empty_reference_index_tracks_each_actual_resource() {
     fn check(message: &str) {
         let resource = message.split('"').nth(1).unwrap();
         let empty = resource.find("//").unwrap();
-        let expected = resource[..empty + 1].encode_utf16().count();
+        let expected = resource[..=empty].encode_utf16().count();
         assert!(
             message.ends_with(&format!("lacks a resource id at index {expected}.")),
             "{message}"
@@ -1850,7 +1849,7 @@ fn document_id_unrecorded_option_shapes_remain_closed() {
             "argument" => function["args"][0] = json!({"fieldReferenceValue":"other"}),
             "extra_alias" => {
                 body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
-                    ["fields"]["w"] = json!({"integerValue":"1"})
+                    ["fields"]["w"] = json!({"integerValue":"1"});
             }
             _ => body["structuredPipeline"]["pipeline"]["stages"]
                 .as_array_mut()

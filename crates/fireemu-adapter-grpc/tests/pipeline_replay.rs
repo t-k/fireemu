@@ -2291,7 +2291,7 @@ fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     }
     let ordinary = rows
         .iter()
-        .find(|row| row.row != O5_INTERNAL_ROW)
+        .find(|row| row.row != O5_INTERNAL_ROW && row.strict != row.production)
         .unwrap()
         .clone();
     validate_o5_pin(&ordinary);

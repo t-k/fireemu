@@ -5394,6 +5394,85 @@ plain	where	none";
     }
 
     #[test]
+    fn recorded_suggestion_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-names", "fn-count"),
+            ("function-names", "fn-count_if"),
+            ("function-names", "fn-count_distinct"),
+            ("function-names", "fn-average"),
+            ("function-names", "fn-first"),
+            ("function-names", "fn-last"),
+            ("function-names", "fn-array_agg"),
+            ("function-names", "fn-array_agg_distinct"),
+            ("function-names", "fn-row"),
+            ("function-names", "fn-struct_get"),
+            ("function-names", "fn-switch"),
+            ("function-names", "fn-mask"),
+            ("function-names", "fn-opaque_document_id"),
+            ("function-names", "fn-search_field"),
+            ("function-names", "fn-to_row_id"),
+            ("function-names", "fn-manhattan_distance"),
+            ("function-names", "fn-eq_any"),
+            ("function-names", "fn-is_null"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &order), database.to_owned())
+                .answer(actual.clone());
+            if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                failures.push(format!("{id} rest: {rest:?}"));
+            }
+            let grpc_shape = shape_of_request(&request);
+            let expected_code = if grpc_shape.is_some() {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            };
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(actual);
+            if grpc.code() != expected_code
+                || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+            {
+                failures.push(format!("{id} grpc: {grpc:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn recorded_registered_function_arities_match_both_transports() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

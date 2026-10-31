@@ -1707,11 +1707,40 @@ impl RestState {
         };
         // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);
+        let recorded_select_first = unrecorded
+            == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+            && compiled.stages.len() == 1
+            && matches!(compiled.stages.first(), Some(fireemu_core_firestore::pipeline_exec::Stage::Select { aliases, .. }) if aliases.len() == 3)
+            && key_order
+                .keys("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields")
+                .is_some_and(|keys| {
+                    wire_body
+                        .pointer("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields")
+                        .and_then(Value::as_object)
+                        .is_some_and(|fields| {
+                            keys.len() == 3
+                                && keys.len() == fields.len()
+                                && keys.iter().all(|key| fields.contains_key(key))
+                        })
+                })
+            && gate
+                .answer(crate::pipeline::eval_status(
+                    &fireemu_core_firestore::pipeline_exec::EvalError::WrongType {
+                        function: "collection_id",
+                        expected: "Reference",
+                        got: "STRING",
+                    },
+                ))
+                .code()
+                == tonic::Code::InvalidArgument;
         let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
             compiled.stages,
             unrecorded,
             runtime,
         );
+        if recorded_select_first {
+            cursor = cursor.with_recorded_select_first_wrong_type();
+        }
         let mut rows = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {

@@ -732,6 +732,10 @@ impl Firestore for GatewayService {
                         {
                             eprintln!("[firestore] pipeline: recorded integer bit function returned an internal error");
                             Status::internal("An internal error occurred.")
+                        } else if self.gateway.production_refusals()
+                            && recorded_geo_select(request.get_ref(), &error)
+                        {
+                            Status::invalid_argument("The 'geo_distance' function can only be used in the search(...) stage.")
                         } else {
                             pipeline_status(answer(error), &canonical)
                         }
@@ -1252,61 +1256,78 @@ impl tokio_stream::Stream for AggregationResponseStream {
     }
 }
 
-// The native recording covers only this direct, integer-argument gRPC shape.
+// Native validation recordings cover only this direct single-field gRPC shape.
 // Called after the usual validation and only on the corresponding compiler refusal.
-fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+fn recorded_native_function<'a>(
+    request: &'a pb::ExecutePipelineRequest,
+    error: &Status,
+) -> Option<&'a pb::Function> {
     use pb::{execute_pipeline_request::PipelineType, value::ValueType as V};
     if request.auto_commit_transaction
         || request.request_options.is_some()
         || request.consistency_selector.is_some()
         || error.code() != tonic::Code::Unimplemented
     {
-        return false;
+        return None;
     }
     let Some(PipelineType::StructuredPipeline(structured)) = &request.pipeline_type else {
-        return false;
+        return None;
     };
     if !structured.options.is_empty() {
-        return false;
+        return None;
     }
     let Some(pipeline) = &structured.pipeline else {
-        return false;
+        return None;
     };
     let [collection, select] = pipeline.stages.as_slice() else {
-        return false;
+        return None;
     };
     if collection.name != "collection"
         || !collection.options.is_empty()
         || select.name != "select"
         || !select.options.is_empty()
     {
-        return false;
+        return None;
     }
     let [pb::Value {
         value_type: Some(V::ReferenceValue(path)),
     }] = collection.args.as_slice()
     else {
-        return false;
+        return None;
     };
     if !path
         .strip_prefix('/')
         .is_some_and(|name| !name.is_empty() && !name.contains('/'))
     {
-        return false;
+        return None;
     }
     let [pb::Value {
         value_type: Some(V::MapValue(map)),
     }] = select.args.as_slice()
     else {
-        return false;
+        return None;
     };
     if map.fields.len() != 1 {
-        return false;
+        return None;
     }
     let Some(pb::Value {
         value_type: Some(V::FunctionValue(function)),
     }) = map.fields.get("value")
     else {
+        return None;
+    };
+    if function.options.is_empty()
+        && error.message() == format!("function {:?} is unsupported locally", function.name)
+    {
+        Some(function)
+    } else {
+        None
+    }
+}
+
+fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::value::ValueType as V;
+    let Some(function) = recorded_native_function(request, error) else {
         return false;
     };
     let count = match function.name.as_str() {
@@ -1314,13 +1335,25 @@ fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -
         "bit_left_shift" | "bit_right_shift" => 2,
         _ => return false,
     };
-    function.options.is_empty()
-        && function.args.len() == count
+    function.args.len() == count
         && function
             .args
             .iter()
             .all(|value| matches!(value.value_type, Some(V::IntegerValue(_))))
-        && error.message() == format!("function {:?} is unsupported locally", function.name)
+}
+
+fn recorded_geo_select(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::value::ValueType as V;
+    let Some(function) = recorded_native_function(request, error) else {
+        return false;
+    };
+    function.name == "geo_distance"
+        && function.args.len() == 2
+        && function.args.iter().all(|value| {
+            matches!(&value.value_type,
+            Some(V::GeoPointValue(point)) if (-90.0..=90.0).contains(&point.latitude)
+                && (-180.0..=180.0).contains(&point.longitude))
+        })
 }
 
 /// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
@@ -2042,6 +2075,64 @@ mod tests {
     use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
+
+    fn geo_request(latitude: f64, longitude: f64) -> pb::ExecutePipelineRequest {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"geo_distance","args":[{"geoPointValue":{}},{"geoPointValue":{"latitude":latitude,"longitude":longitude}}]
+            }}}}}]}
+        ]}}});
+        crate::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn recorded_geo_shape_accepts_valid_coordinates_without_fixing_values(lat in -90i32..=90, lon in -180i32..=180) {
+            let request = geo_request(f64::from(lat), f64::from(lon));
+            let error = Status::unimplemented("function \"geo_distance\" is unsupported locally");
+            proptest::prop_assert!(recorded_geo_select(&request, &error));
+            proptest::prop_assert!(!recorded_geo_select(&request, &Status::invalid_argument(error.message())));
+        }
+    }
+
+    #[test]
+    fn recorded_geo_shape_rejects_invalid_coordinates() {
+        let error = Status::unimplemented("function \"geo_distance\" is unsupported locally");
+        let original = geo_request(0.0, 0.0);
+        assert!(recorded_geo_select(&original, &error));
+        for latitude in [true, false] {
+            let mut request = original.clone();
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+                &mut request.pipeline_type
+            else {
+                unreachable!()
+            };
+            let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+            let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type else {
+                unreachable!()
+            };
+            let Some(pb::value::ValueType::FunctionValue(function)) =
+                &mut map.fields.get_mut("value").unwrap().value_type
+            else {
+                unreachable!()
+            };
+            let Some(pb::value::ValueType::GeoPointValue(point)) = &mut function.args[1].value_type
+            else {
+                unreachable!()
+            };
+            if latitude {
+                point.latitude = 91.0;
+            } else {
+                point.longitude = 181.0;
+            }
+            assert!(!recorded_geo_select(&request, &error));
+        }
+    }
 
     fn bit_request(first: i64, second: i64) -> pb::ExecutePipelineRequest {
         let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[

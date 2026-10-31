@@ -208,6 +208,45 @@ fn stages_may_repeat_and_come_in_any_order() {
 }
 
 #[test]
+fn ordered_select_first_refusal_is_default_off_and_type_bounded() {
+    let call = |name| Expr::call("collection_id", vec![field(name)], Placement::Value).unwrap();
+    let stage = Stage::select(vec![
+        (alias("v"), call("first")),
+        (alias("w"), call("second")),
+    ]);
+    let row = doc(
+        "x",
+        &[
+            ("first", Value::String("a".into())),
+            ("second", Value::String("b".into())),
+        ],
+    );
+    let mut default = Cursor::new(vec![stage.clone()]);
+    assert!(matches!(
+        default.push(row.clone()),
+        Err(EvalError::Unobserved { .. })
+    ));
+    let mut admitted = Cursor::new(vec![stage.clone()]).with_recorded_select_first_wrong_type();
+    assert!(matches!(
+        admitted.push(row),
+        Err(EvalError::WrongType {
+            function: "collection_id",
+            expected: "Reference",
+            got: "STRING"
+        })
+    ));
+    let changed = doc(
+        "x",
+        &[("first", int(7)), ("second", Value::String("b".into()))],
+    );
+    let mut admitted = Cursor::new(vec![stage]).with_recorded_select_first_wrong_type();
+    assert!(matches!(
+        admitted.push(changed),
+        Err(EvalError::Unobserved { .. })
+    ));
+}
+
+#[test]
 fn a_select_drops_the_name_and_times_unless_it_kept_the_name() {
     let times = RowTimes {
         created: Timestamp::new(1, 0).unwrap(),

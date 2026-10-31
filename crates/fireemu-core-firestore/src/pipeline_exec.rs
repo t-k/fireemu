@@ -2628,6 +2628,7 @@ pub struct Cursor {
     runtime: RuntimeContext,
     state: Vec<StageState>,
     sample_rng: Vec<Option<SplitMix64>>,
+    recorded_select_first_wrong_type: bool,
 }
 
 impl Cursor {
@@ -2688,7 +2689,15 @@ impl Cursor {
             runtime,
             state,
             sample_rng,
+            recorded_select_first_wrong_type: false,
         }
+    }
+
+    /// Enables the recorded ordered SELECT refusal after adapter shape and wire-order admission.
+    #[must_use]
+    pub fn with_recorded_select_first_wrong_type(mut self) -> Self {
+        self.recorded_select_first_wrong_type = true;
+        self
     }
 
     /// Whether no later row can produce output: a limit before the first blocking stage is used
@@ -2935,12 +2944,24 @@ impl Cursor {
                             }
                             Eval::Absent => {}
                             Eval::Error(error) => {
-                                refused = first_refusal(
-                                    refused.as_ref(),
-                                    error,
-                                    self.unrecorded,
-                                    "select",
-                                )?;
+                                let recorded_first = self.recorded_select_first_wrong_type
+                                    && matches!(
+                                        refused.as_ref(),
+                                        Some(EvalError::WrongType {
+                                            function: "collection_id",
+                                            expected: "Reference",
+                                            got: "STRING"
+                                        })
+                                    )
+                                    && !matches!(error, EvalError::Unobserved { .. });
+                                if !recorded_first {
+                                    refused = first_refusal(
+                                        refused.as_ref(),
+                                        error,
+                                        self.unrecorded,
+                                        "select",
+                                    )?;
+                                }
                             }
                         }
                     }

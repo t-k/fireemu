@@ -150,7 +150,7 @@ pub(crate) fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> 
                     }
                 }
                 Some(pb::value::ValueType::PipelineValue(pipeline)) => {
-                    push!(Node::Pipeline(pipeline), next)
+                    push!(Node::Pipeline(pipeline), next);
                 }
                 _ => {}
             },
@@ -5215,7 +5215,7 @@ plain	where	none";
             match *competing {
                 "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
                 "invalid_limit" => {
-                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}))
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
                 }
                 _ => {}
             }

@@ -167,16 +167,15 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
         )
     };
     check(vec![
-        // Production recorded the unknown function before the empty select (O-4); fireemu
-        // cannot tell it from a function it does not run, so strict refuses it.
+        // Recorded request shapes answer the unknown function before later errors.
         Case {
             label: "select {} then where(nope_fn(n))",
             stages: vec![
                 empty(),
                 stage("where", vec![func("nope_fn", vec![field("n")])]),
             ],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "select {} then where(unregistered_probe(\"a\"))",
@@ -199,17 +198,14 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
         Case {
             label: "add_fields {a: nope_fn()} then select {}",
             stages: vec![add_unknown(), empty()],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "add_fields {a: nope_fn()} then limit(\"x\")",
             stages: vec![add_unknown(), stage("limit", vec![string("x")])],
-            strict: None,
-            emulator: (
-                400,
-                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
-            ),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "add_fields {a: nope_fn()} then a one-argument aggregate",
@@ -220,8 +216,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                     vec![map(vec![("c", func("count", vec![field("n")]))])],
                 ),
             ],
-            strict: None,
-            emulator: (400, AGGREGATE_ARITY),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "sort then limit(\"x\")",

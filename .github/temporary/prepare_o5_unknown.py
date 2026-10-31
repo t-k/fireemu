@@ -10,4 +10,7 @@ for original in raw['programs']:
  if steps:
   programs.append({**original,'steps':steps+[{**step,'id':step['id']+'-grpc','transport':'grpc'} for step in steps]})
 assert sum(len(p['steps']) for p in programs)==70
+original=next(p for p in raw['programs'] if p['id']=='fs-ent-pipeline/o4/stages')
+step=next(s for s in original['steps'] if s['id']=='select-empty-then-unknown-function')
+programs.append({**original,'steps':[step,{**step,'id':step['id']+'-grpc','transport':'grpc'}]})
 Path('/tmp/o5-unknown-programs.json').write_text(json.dumps(programs))

@@ -641,10 +641,6 @@ fn satisfies_in(
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
-        "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
-    ),
-    (
         "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
         "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
     ),
@@ -2243,15 +2239,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 stale.push(json!({"row": known, "reason": reason}));
                 continue;
             };
-            let pinned = if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
-                && !strict
-            {
-                got["status"] == 400
-                    && got["body"][0]["error"]["message"]
-                        == "The 'select(...)' stage requires at least one field."
-            } else {
-                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED"
-            };
+            let pinned =
+                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED";
             if !pinned {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }

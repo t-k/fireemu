@@ -14,7 +14,7 @@ cargo test -p fireemu-core-database --test rules auth_root_identity_matches_the_
 cp crates/fireemu-core-database/src/rules/eval.rs "$out/eval-original.rs"
 python3 - <<'PY'
 p='crates/fireemu-core-database/src/rules/eval.rs'
-s=open(p).read(); old='(Value::Auth(_), Value::Auth(_)) => true,'; assert s.count(old)==1; open(p,'w').write(s.replace(old,'(Value::Auth(_), Value::Auth(_)) => false,'))
+s=open(p).read(); old='(Value::Auth(_), Value::Auth(_))'; assert s.count(old)==1; open(p,'w').write(s.replace(old,'(Value::Query, Value::Auth(_))'))
 PY
 set +e
 cargo test -p fireemu-core-database --test rules auth_root_identity_matches_the_recorded_read --locked -j 2 > "$out/mutant.log" 2>&1

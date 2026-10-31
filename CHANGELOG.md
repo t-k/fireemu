@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-10-31
+
 ### Added
 
 - Firestore Enterprise pipelines evaluate additional supported array, map, numeric and generic scalar expressions, including recorded integer, finite-double and mixed numeric forms. Recorded reference, string, byte and array results retain their value types; unsupported shapes remain refused.
@@ -17,6 +19,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Pipeline argument-count, unknown-function and suggestion diagnostics match additional recorded request shapes. Suggestions remain error messages and do not introduce function aliases. Unrecorded arguments, options and contexts retain their existing fallback behavior.
 - Strict native gRPC reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`, with a fixed explanation in the console. This establishes finite error compatibility; successful bit-operation semantics remain unverified.
+- Recorded document-ID options, validation priority and the ordered REST `collection_id` type error now retain their production responses, including structured `ErrorInfo`. The captured native `geo_distance` select call returns its search-only diagnostic; geo search remains outside this claim.
 - Realtime Database Rules compare the root authentication value equal to itself, matching the recorded production case. This does not change snapshot or query identity semantics.
 
 ## [0.40.0] - 2026-10-31
@@ -1100,7 +1103,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/t-k/fireemu/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/t-k/fireemu/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/t-k/fireemu/compare/v0.38.1...v0.39.0
 [0.38.1]: https://github.com/t-k/fireemu/compare/v0.38.0...v0.38.1

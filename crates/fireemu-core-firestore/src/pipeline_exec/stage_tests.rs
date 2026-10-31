@@ -2581,9 +2581,9 @@ proptest! {
         cursor.push(doc("one", &[("n", int(value))])).unwrap();
         let result = cursor.finish();
         if admitted {
-            prop_assert!(matches!(result, Err(EvalError::WrongType { function: "array_sum", expected: "Array", got: "LONG" })));
+            prop_assert!(matches!(result, Err(EvalError::WrongType { function: "array_sum", expected: "Array", got: "LONG" })), "expected recorded type refusal");
         } else {
-            prop_assert!(matches!(result, Err(EvalError::Unobserved { function: "sum", .. })));
+            prop_assert!(matches!(result, Err(EvalError::Unobserved { function: "sum", .. })), "expected unobserved fallback");
         }
     }
 }

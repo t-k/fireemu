@@ -2116,6 +2116,41 @@ mod tests {
         };
         function.args[0].value_type = Some(pb::value::ValueType::StringValue("5".to_owned()));
         neighbors.push(changed);
+        for mutation in ["arity", "options", "alias", "stage_options"] {
+            let mut changed = request.clone();
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+                &mut changed.pipeline_type
+            else {
+                unreachable!()
+            };
+            let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+            if mutation == "stage_options" {
+                select.options.insert("x".to_owned(), pb::Value::default());
+            } else {
+                let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type
+                else {
+                    unreachable!()
+                };
+                if mutation == "alias" {
+                    let value = map.fields.remove("value").unwrap();
+                    map.fields.insert("other".to_owned(), value);
+                } else {
+                    let Some(pb::value::ValueType::FunctionValue(function)) =
+                        &mut map.fields.get_mut("value").unwrap().value_type
+                    else {
+                        unreachable!()
+                    };
+                    if mutation == "arity" {
+                        function.args.pop();
+                    } else {
+                        function
+                            .options
+                            .insert("x".to_owned(), pb::Value::default());
+                    }
+                }
+            }
+            neighbors.push(changed);
+        }
         for changed in neighbors {
             assert!(!recorded_bit_internal(&changed, &error));
         }

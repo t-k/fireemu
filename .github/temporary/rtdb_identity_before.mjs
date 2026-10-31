@@ -15,7 +15,7 @@ for (const [id, value] of cases) {
   const load = await put(rulesUrl,rules);
   const readback = await req(rulesUrl);
   const reads = [];
-  if(load.status === 200) for(let i=0;i<2;i++) reads.push(await req(path + (id[0] === 'A' ? '&auth_variable_override=' + encodeURIComponent(JSON.stringify({uid})) : '')));
+  if(load.status === 200) for(let i=0;i<2;i++) reads.push(await req(path + (id[0] === 'A' ? '&auth=owner&auth_variable_override=' + encodeURIComponent(JSON.stringify({uid})) : '')));
   rows.push({id,load,readback,reads});
 }
 writeFileSync(process.argv[2], JSON.stringify(rows,null,2)+'\n', {flag:'wx'});

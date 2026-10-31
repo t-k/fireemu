@@ -2063,7 +2063,8 @@ mod tests {
             let request = bit_request(first, second);
             let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
             proptest::prop_assert!(recorded_bit_internal(&request, &error));
-            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::invalid_argument("earlier refusal")));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::invalid_argument("function \"bit_left_shift\" is unsupported locally")));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::unimplemented("earlier refusal")));
         }
     }
 

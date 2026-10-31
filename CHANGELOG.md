@@ -8,6 +8,16 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- Firestore Enterprise pipelines evaluate additional supported array, map, numeric and generic scalar expressions, including recorded integer, finite-double and mixed numeric forms. Recorded reference, string, byte and array results retain their value types; unsupported shapes remain refused.
+- Production comparison tooling can replay the registered Realtime Database campaigns against an installed binary and compare an additional finite native pipeline corpus across both profiles and transports. These checks retain the original pipeline corpus denominator and distinguish recorded parity from unobserved behavior.
+
+### Fixed
+
+- Pipeline argument-count, unknown-function and suggestion diagnostics match additional recorded request shapes. Suggestions remain error messages and do not introduce function aliases. Unrecorded arguments, options and contexts retain their existing fallback behavior.
+- Realtime Database Rules compare the root authentication value equal to itself, matching the recorded production case. This does not change snapshot or query identity semantics.
+
 ## [0.40.0] - 2026-10-31
 
 ### Added

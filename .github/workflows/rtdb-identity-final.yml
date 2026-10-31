@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 01b8e66b050e1ebdd59c095fb5bd86763aedc5c9
+          ref: e973b98c0124aededd0fa107e38ea94f34eee25b
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
@@ -25,7 +25,7 @@ jobs:
       - name: Verify exact source under cgroup cap
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 01b8e66b050e1ebdd59c095fb5bd86763aedc5c9
+          test "$(git rev-parse HEAD)" = e973b98c0124aededd0fa107e38ea94f34eee25b
           mkdir /tmp/rtdb-verify
           git rev-parse HEAD > /tmp/rtdb-verify/source.txt
           sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" bash .ci-helper/.github/temporary/rtdb_verify.sh

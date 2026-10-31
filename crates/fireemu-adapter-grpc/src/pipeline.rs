@@ -324,7 +324,48 @@ pub fn validate_pipeline(
         ));
     };
     let mut specs = Vec::with_capacity(pipeline.stages.len());
-    for stage in &pipeline.stages {
+    let mut earlier_unknown = None;
+    for (position, stage) in pipeline.stages.iter().enumerate() {
+        // A direct unknown operand in the first add_fields precedes a later aggregate's
+        // argument-count error in the recorded request. Keep the candidate shallow: the
+        // function-depth check has not run yet, and the outer gate still admits only a
+        // recorded whole-request shape and computed text.
+        if unrecorded == Unrecorded::Refuse
+            && position == 1
+            && pipeline
+                .stages
+                .first()
+                .is_some_and(|first| first.name == "collection")
+            && stage.name == "add_fields"
+            && stage.options.is_empty()
+            && stage.args.len() == 1
+        {
+            if let Some(fields) = stage
+                .args
+                .first()
+                .and_then(map_fields)
+                .filter(|fields| fields.len() == 1)
+            {
+                let (alias, value) = fields.iter().next().expect("one field");
+                if parse_alias(alias).is_ok() {
+                    if let Some(pb::value::ValueType::FunctionValue(function)) = &value.value_type {
+                        if function.args.is_empty()
+                            && function.options.is_empty()
+                            && pipeline_exec::function(&function.name).is_none()
+                        {
+                            earlier_unknown = Some(unknown_function_status(
+                                &function.name,
+                                unrecorded,
+                                Status::unimplemented(format!(
+                                    "function {:?} is unsupported locally",
+                                    function.name
+                                )),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let args = stage
             .args
             .iter()
@@ -376,7 +417,20 @@ pub fn validate_pipeline(
         ));
     }
     // Production's arity text of the stages with a signature comes before the registry's own.
-    if let Some(error) = pipeline.stages.iter().find_map(stage_arity_error) {
+    if let Some((position, error)) = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .find_map(|(position, stage)| stage_arity_error(stage).map(|error| (position, error)))
+    {
+        if position == 2
+            && pipeline.stages[position].name == "aggregate"
+            && pipeline.stages[position].args.len() != 2
+        {
+            if let Some(candidate) = earlier_unknown {
+                return Err(with_code(candidate, "FS_PIPE_INVALID"));
+            }
+        }
         return Err(with_code(error, "FS_PIPE_INVALID"));
     }
     canonicalize(&specs).map_err(|e| {

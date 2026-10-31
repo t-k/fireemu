@@ -1448,6 +1448,25 @@ fn internal_case_at(
 }
 
 #[test]
+fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
+    let message = "The function 'nope_fn' does not exist.";
+    for step in [
+        "add-fields-unknown-then-aggregate-one",
+        "add-fields-unknown-then-limit-string",
+    ] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(true, "o5/stage-order", step, grpc);
+            assert_eq!(status, 400, "{step} grpc={grpc}: {body}");
+            if grpc {
+                assert_eq!(body["grpcMessage"], message, "{step}");
+            } else {
+                assert_eq!(body[0]["error"]["message"], message, "{step}");
+            }
+        }
+    }
+}
+
+#[test]
 fn observed_internal_fixtures_and_pict_cases() {
     let fixture = read("fs-ent-pipeline-production.json");
     let mut failures = Vec::new();

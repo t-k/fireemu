@@ -86,6 +86,79 @@ pub(crate) fn validate_function_depth(request: &pb::ExecutePipelineRequest) -> R
     Ok(())
 }
 
+/// Bounds recursive shape inspection only when an ordinary-profile candidate needs it.
+pub(crate) fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> bool {
+    enum Node<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Stage(&'a pb::pipeline::Stage),
+        Value(&'a pb::Value),
+    }
+    const MAX_DEPTH: usize = 100;
+    const MAX_NODES: usize = 32_768;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return true;
+    };
+    let mut stack = Vec::new();
+    let mut seen = 0_usize;
+    macro_rules! push {
+        ($node:expr, $depth:expr) => {{
+            if seen + stack.len() >= MAX_NODES {
+                return false;
+            }
+            stack.push(($node, $depth));
+        }};
+    }
+    if let Some(pipeline) = &structured.pipeline {
+        push!(Node::Pipeline(pipeline), 0);
+    }
+    for value in structured.options.values() {
+        push!(Node::Value(value), 0);
+    }
+    while let Some((node, depth)) = stack.pop() {
+        seen += 1;
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let next = depth + 1;
+        match node {
+            Node::Pipeline(pipeline) => {
+                for stage in &pipeline.stages {
+                    push!(Node::Stage(stage), next);
+                }
+            }
+            Node::Stage(stage) => {
+                for value in stage.args.iter().chain(stage.options.values()) {
+                    push!(Node::Value(value), next);
+                }
+            }
+            Node::Value(value) => match &value.value_type {
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    for value in &array.values {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    for value in map.fields.values() {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::FunctionValue(function)) => {
+                    for value in function.args.iter().chain(function.options.values()) {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::PipelineValue(pipeline)) => {
+                    push!(Node::Pipeline(pipeline), next);
+                }
+                _ => {}
+            },
+        }
+    }
+    validate_function_depth(request).is_ok()
+}
+
 /// Production's scalar-subquery cardinality refusal.
 pub(crate) const SCALAR_MULTIPLE_RESULTS: &str = "Subpipeline returned multiple results.";
 
@@ -324,7 +397,47 @@ pub fn validate_pipeline(
         ));
     };
     let mut specs = Vec::with_capacity(pipeline.stages.len());
-    for stage in &pipeline.stages {
+    let mut earlier_unknown = None;
+    for (position, stage) in pipeline.stages.iter().enumerate() {
+        // A direct unknown operand in the first add_fields precedes a later aggregate's
+        // argument-count error in the recorded request. Keep the candidate shallow: the
+        // function-depth check has not run yet, and the outer gate still admits only a
+        // recorded whole-request shape and computed text.
+        if position == 1
+            && pipeline
+                .stages
+                .first()
+                .is_some_and(|first| first.name == "collection")
+            && stage.name == "add_fields"
+            && stage.options.is_empty()
+            && stage.args.len() == 1
+        {
+            if let Some(fields) = stage
+                .args
+                .first()
+                .and_then(map_fields)
+                .filter(|fields| fields.len() == 1)
+            {
+                let (alias, value) = fields.iter().next().expect("one field");
+                if parse_alias(alias).is_ok() {
+                    if let Some(pb::value::ValueType::FunctionValue(function)) = &value.value_type {
+                        if function.args.is_empty()
+                            && function.options.is_empty()
+                            && pipeline_exec::function(&function.name).is_none()
+                        {
+                            earlier_unknown = Some(unknown_function_status(
+                                &function.name,
+                                unrecorded,
+                                Status::unimplemented(format!(
+                                    "function {:?} is unsupported locally",
+                                    function.name
+                                )),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let args = stage
             .args
             .iter()
@@ -376,7 +489,25 @@ pub fn validate_pipeline(
         ));
     }
     // Production's arity text of the stages with a signature comes before the registry's own.
-    if let Some(error) = pipeline.stages.iter().find_map(stage_arity_error) {
+    if let Some((position, error)) = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .find_map(|(position, stage)| stage_arity_error(stage).map(|error| (position, error)))
+    {
+        if position == 2
+            && pipeline.stages[position].name == "aggregate"
+            && pipeline.stages[position].args.len() != 2
+        {
+            if let Some(candidate) = earlier_unknown {
+                if let Some(text) = crate::pipeline_shape::unknown_candidate_text(&candidate) {
+                    return Err(crate::pipeline_shape::unknown_candidate(
+                        with_code(error, "FS_PIPE_INVALID"),
+                        text.to_owned(),
+                    ));
+                }
+            }
+        }
         return Err(with_code(error, "FS_PIPE_INVALID"));
     }
     canonicalize(&specs).map_err(|e| {
@@ -1268,6 +1399,11 @@ pub fn compile_pipeline_in_order(
     // the official emulator checks every stage's arguments before running any. Strict answers
     // the first refusal (no later check answers past a constant that fails; ruling of
     // 2026-10-21).
+    let unknown_text = compiled
+        .as_ref()
+        .err()
+        .and_then(crate::pipeline_shape::unknown_candidate_text)
+        .map(str::to_owned);
     let compiled = match compiled {
         Err(error)
             if error.code() == tonic::Code::Unimplemented
@@ -1297,7 +1433,7 @@ pub fn compile_pipeline_in_order(
     // Under strict, the request's shape then decides which refusal is answered (`pipeline_shape`).
     // A negative `limit` or `offset` is checked after the empty map (the official emulator
     // 1.22.0; PX1d r5 review S2), a string one before it (O-4).
-    match (compiled, deferred) {
+    let selected = match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
@@ -1316,7 +1452,11 @@ pub fn compile_pipeline_in_order(
         }
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
-    }?;
+    };
+    selected.map_err(|error| match unknown_text {
+        Some(text) => crate::pipeline_shape::retain_unknown_candidate(error, &text),
+        None => error,
+    })?;
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -2263,6 +2403,20 @@ fn decode_subcollection_array(nested: &pb::Pipeline) -> Result<Expr, Status> {
     })
 }
 
+/// Computes a candidate refusal; strict admission still requires the recorded shape and text.
+fn unknown_function_status(name: &str, _unrecorded: Unrecorded, ordinary: Status) -> Status {
+    let bytes = name.as_bytes();
+    let lowercase = name.to_ascii_lowercase();
+    let titlecase = bytes.first().is_some_and(u8::is_ascii_uppercase)
+        && bytes[1..].iter().all(|byte| !byte.is_ascii_uppercase());
+    let text = if titlecase && pipeline_exec::function(&lowercase).is_some() {
+        format!("The function '{name}' does not exist, did you mean '{lowercase}'?")
+    } else {
+        format!("The function '{name}' does not exist.")
+    };
+    crate::pipeline_shape::unknown_candidate(ordinary, text)
+}
+
 #[allow(clippy::too_many_lines)]
 fn decode_operand_tree_in(
     value: &pb::Value,
@@ -2312,10 +2466,14 @@ fn decode_operand_tree_in(
                 return Err(recorded_internal("array_reverse requires an argument"));
             }
             if pipeline_exec::function(&function.name).is_none() {
-                return Err(Status::unimplemented(format!(
-                    "function {:?} is unsupported locally",
-                    function.name
-                )));
+                return Err(unknown_function_status(
+                    &function.name,
+                    unrecorded,
+                    Status::unimplemented(format!(
+                        "function {:?} is unsupported locally",
+                        function.name
+                    )),
+                ));
             }
             // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
@@ -3160,8 +3318,10 @@ fn decode_condition(
         return Ok((decode_operand(condition, unrecorded)?, None));
     };
     let Some(def) = pipeline_exec::function(&function.name) else {
-        return Err(Status::unimplemented(
-            "where expression is unsupported locally",
+        return Err(unknown_function_status(
+            &function.name,
+            unrecorded,
+            Status::unimplemented("where expression is unsupported locally"),
         ));
     };
     if !def.returns_boolean
@@ -4980,6 +5140,260 @@ add_fields_map	unknown	none	strict";
     }
 
     #[test]
+    fn generated_unknown_function_boundaries_remain_bounded() {
+        use crate::pipeline_shape::RefusalGate;
+        use serde_json::json;
+        const ROWS: &str = r"Name	Placement	Competing
+plain	select	none
+plain	where	empty_select
+plain	nested	none
+plain	add_fields	invalid_limit
+plain	select	outer_arity
+titlecase	select	none
+uppercase	select	none
+unknown	select	none
+known_unimplemented	select	none
+known_unimplemented	where	outer_arity
+unknown	nested	invalid_limit
+uppercase	add_fields	outer_arity
+known_unimplemented	nested	empty_select
+uppercase	nested	outer_arity
+titlecase	where	outer_arity
+uppercase	select	empty_select
+unknown	where	outer_arity
+uppercase	select	invalid_limit
+uppercase	where	invalid_limit
+titlecase	nested	empty_select
+titlecase	add_fields	invalid_limit
+unknown	add_fields	empty_select
+known_unimplemented	add_fields	none
+known_unimplemented	add_fields	invalid_limit
+plain	where	none";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [name_class, placement, competing] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let name = match *name_class {
+                "plain" => "nope_fn",
+                "titlecase" => "Equal",
+                "uppercase" => "AND",
+                "unknown" => "fresh_unknown",
+                "known_unimplemented" => "geo_distance",
+                _ => unreachable!(),
+            };
+            let unknown = json!({"functionValue":{"name":name,"args":[]}});
+            let mut expression = unknown;
+            if *placement == "nested" {
+                let mut args = vec![expression];
+                if *competing != "outer_arity" {
+                    args.push(json!({"fieldReferenceValue":"i"}));
+                }
+                expression = json!({"functionValue":{"name":"equal","args":args}});
+            }
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *placement == "where" {
+                stages.push(json!({"name":"where","args":[expression]}));
+            } else {
+                let mut fields = serde_json::Map::new();
+                fields.insert("a".to_owned(), expression);
+                if *competing == "outer_arity" && *placement != "nested" {
+                    fields.insert(
+                        "b".to_owned(),
+                        json!({"functionValue":{"name":"add","args":[]}}),
+                    );
+                }
+                let stage = if *placement == "add_fields" {
+                    "add_fields"
+                } else {
+                    "select"
+                };
+                stages.push(json!({"name":stage,"args":[{"mapValue":{"fields":fields}}]}));
+            }
+            match *competing {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let strict =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, None).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(strict)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{line}"
+            );
+            let ordinary =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::OfficialEmulator, None)
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    ordinary.code(),
+                    tonic::Code::Unimplemented | tonic::Code::InvalidArgument
+                ),
+                "{line}: {ordinary:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for name in [
+            "fresh_unknown",
+            "geo_distance",
+            "EQUAL",
+            "EqUal",
+            "未知",
+            "x'quoted",
+        ] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![],
+                    ..Default::default()
+                })),
+            };
+            let candidate = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, String::new())
+                    .answer(candidate)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{name}"
+            );
+            let ordinary = decode_operand_tree(&wire, Unrecorded::OfficialEmulator).unwrap_err();
+            assert_eq!(ordinary.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                ordinary.message(),
+                format!("function {name:?} is unsupported locally")
+            );
+        }
+        assert_eq!(
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "AND",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
+            "The function 'AND' does not exist."
+        );
+        assert_eq!(
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "Equal",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
+            "The function 'Equal' does not exist, did you mean 'equal'?"
+        );
+    }
+
+    #[test]
+    fn recorded_unknown_function_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-order", "select-unknown-function"),
+            ("function-order", "select-empty-name"),
+            ("function-order", "select-capitalized-name"),
+            ("function-order", "where-unknown-then-select-empty"),
+            ("function-order", "select-unknown-before-arity"),
+            ("function-order", "unknown-as-first-argument"),
+            ("stage-order", "add-fields-unknown-then-select-empty"),
+            ("stage-order", "add-fields-unknown-then-limit-string"),
+            ("stage-order", "add-fields-unknown-then-aggregate-one"),
+            ("function-names", "fn-make_struct"),
+            ("function-names", "fn-logical_or"),
+            ("function-names", "fn-u2d"),
+            ("function-names", "fn-u2b"),
+            ("function-names", "fn-u2a"),
+            ("function-names", "fn-u2f"),
+            ("function-names", "fn-u25"),
+            ("function-names", "fn-u7e"),
+            ("function-names", "fn-u3c-3c"),
+            ("function-names", "fn-u3e-3e"),
+            ("function-names", "fn-u3c"),
+            ("function-names", "fn-u3c-3d"),
+            ("function-names", "fn-u3d-3d"),
+            ("function-names", "fn-u21-3d"),
+            ("function-names", "fn-u3e"),
+            ("function-names", "fn-u3e-3d"),
+            ("function-names", "fn-orders_after"),
+            ("function-names", "fn-list_shredded_fields"),
+            ("function-names", "fn-error"),
+            ("function-names", "fn-u41-4e-44"),
+            ("function-names", "fn-u4f-52"),
+            ("function-names", "fn-u58-4f-52"),
+            ("function-names", "fn-u4e-4f-54"),
+            ("function-names", "fn-snippet"),
+            ("function-names", "fn-between"),
+            ("function-names", "fn-is_nan"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &order), database.to_owned())
+                .answer(actual.clone());
+            if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                failures.push(format!("{id} rest: {rest:?}"));
+            }
+            let grpc_shape = shape_of_request(&request);
+            let expected_code = if grpc_shape.is_some() {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            };
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(actual);
+            if grpc.code() != expected_code
+                || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+            {
+                failures.push(format!("{id} grpc: {grpc:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn recorded_registered_function_arities_match_both_transports() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
@@ -6285,6 +6699,70 @@ vector	grpc	emulator	function	foreign";
             let result = validate_function_depth(&request);
             proptest::prop_assert_eq!(result.is_err(), depth > 32);
         }
+    }
+
+    #[test]
+    fn candidate_shape_eligibility_bounds_nested_function_options() {
+        use pb::value::ValueType as V;
+        let request = |depth| {
+            let mut value = pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            for _ in 0..depth {
+                value = pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("x".to_owned(), value)].into_iter().collect(),
+                    })),
+                };
+            }
+            let function = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "unknown".to_owned(),
+                    args: vec![],
+                    options: [("x".to_owned(), value)].into_iter().collect(),
+                })),
+            };
+            pb::ExecutePipelineRequest {
+                pipeline_type: Some(
+                    pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        pb::StructuredPipeline {
+                            pipeline: Some(pb::Pipeline {
+                                stages: vec![pb::pipeline::Stage {
+                                    args: vec![function],
+                                    ..Default::default()
+                                }],
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+                ..Default::default()
+            }
+        };
+        assert!(candidate_shape_eligible(&request(8)));
+        let deep = request(120);
+        assert!(validate_function_depth(&deep).is_ok());
+        assert!(!candidate_shape_eligible(&deep));
+        let mut wide = request(0);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            &mut wide.pipeline_type
+        else {
+            unreachable!()
+        };
+        structured.options.insert(
+            "x".to_owned(),
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue {
+                    values: vec![
+                        pb::Value {
+                            value_type: Some(V::NullValue(0))
+                        };
+                        32_768
+                    ],
+                })),
+            },
+        );
+        assert!(!candidate_shape_eligible(&wide));
     }
 
     #[test]

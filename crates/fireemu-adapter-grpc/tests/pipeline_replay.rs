@@ -641,10 +641,6 @@ fn satisfies_in(
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
 const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
     (
-        "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
-        "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
-    ),
-    (
         "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
         "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
     ),
@@ -1214,10 +1210,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 67, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 32, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            62,
+            27,
             "finite emulator debt inventory"
         );
     }
@@ -1445,6 +1441,171 @@ fn internal_case_at(
             json!({"grpcMessage": error.message()}),
         ),
     }
+}
+
+#[test]
+fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
+    let message = "The function 'nope_fn' does not exist.";
+    for step in [
+        "add-fields-unknown-then-aggregate-one",
+        "add-fields-unknown-then-limit-string",
+    ] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(true, "o5/stage-order", step, grpc);
+            assert_eq!(status, 400, "{step} grpc={grpc}: {body}");
+            if grpc {
+                assert_eq!(body["grpcMessage"], message, "{step}");
+            } else {
+                assert_eq!(body[0]["error"]["message"], message, "{step}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_unknown_after_empty_select_matches_both_profiles() {
+    let expected = "The function 'nope_fn' does not exist.";
+    for strict in [true, false] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(
+                strict,
+                "o4/stages",
+                "select-empty-then-unknown-function",
+                grpc,
+            );
+            assert_eq!(status, 400, "strict={strict} grpc={grpc}: {body}");
+            let message = if grpc {
+                &body["grpcMessage"]
+            } else {
+                &body[0]["error"]["message"]
+            };
+            assert_eq!(message, expected, "strict={strict} grpc={grpc}");
+        }
+    }
+}
+
+#[test]
+fn unrecorded_unknown_candidates_keep_original_refusal_bodies() {
+    for name in ["row", "geo_distance"] {
+        let step = format!("fn-{name}");
+        let message = format!("function {name:?} is unsupported locally");
+        for strict in [true, false] {
+            for grpc in [false, true] {
+                let (status, body) = internal_case(strict, "o5/function-names", &step, grpc);
+                assert_eq!(status, 501, "{name} strict={strict} grpc={grpc}: {body}");
+                if grpc {
+                    assert_eq!(body["grpcMessage"], message, "{name}");
+                } else {
+                    assert_eq!(body[0]["error"]["message"], message, "{name}");
+                    assert_eq!(body[0]["error"]["status"], "UNIMPLEMENTED", "{name}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_unknown_refusals_match_both_profiles_and_transports() {
+    let cases = [
+        (
+            "o5/function-order",
+            "select-unknown-function",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/function-order",
+            "select-capitalized-name",
+            "The function 'Equal' does not exist, did you mean 'equal'?",
+        ),
+        (
+            "o5/function-order",
+            "where-unknown-then-select-empty",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/stage-order",
+            "add-fields-unknown-then-aggregate-one",
+            "The function 'nope_fn' does not exist.",
+        ),
+    ];
+    for (family, step, expected) in cases {
+        for strict in [true, false] {
+            for grpc in [false, true] {
+                let (status, body) = internal_case(strict, family, step, grpc);
+                assert_eq!(status, 400, "{step} strict={strict} grpc={grpc}: {body}");
+                let message = if grpc {
+                    &body["grpcMessage"]
+                } else {
+                    &body[0]["error"]["message"]
+                };
+                assert_eq!(message, expected, "{step} strict={strict} grpc={grpc}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
+    let requests = read("fs-ent-pipeline-requests.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|program| program["id"] == "fs-ent-pipeline/o5/stage-order")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "add-fields-unknown-then-aggregate-one")
+        .unwrap();
+    let base = fill(&step["body"]);
+    let mut unrecorded_name = base.clone();
+    unrecorded_name["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+        ["fields"]["a"]["functionValue"]["name"] = json!("geo_distance");
+    let mut invalid_input = base.clone();
+    invalid_input["structuredPipeline"]["pipeline"]["stages"][0]["args"][0] =
+        json!({"stringValue":"bad"});
+    let mut outer_arity = base.clone();
+    outer_arity["structuredPipeline"]["pipeline"]["stages"][1]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"integerValue":"1"}));
+    for (name, body) in [
+        ("known unsupported", unrecorded_name.clone()),
+        ("invalid input", invalid_input),
+        ("outer arity", outer_arity),
+    ] {
+        let (status, answer) = call(
+            &state(true),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_eq!(status, 501, "{name}: {answer}");
+    }
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &base,
+    );
+    assert_eq!(status, 400, "emulator: {answer}");
+    assert_eq!(
+        answer[0]["error"]["message"],
+        "The function 'nope_fn' does not exist."
+    );
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &unrecorded_name,
+    );
+    assert_eq!(status, 400, "unrecorded emulator: {answer}");
+    assert!(answer[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("aggregate"));
 }
 
 #[test]
@@ -2078,15 +2239,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 stale.push(json!({"row": known, "reason": reason}));
                 continue;
             };
-            let pinned = if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
-                && !strict
-            {
-                got["status"] == 400
-                    && got["body"][0]["error"]["message"]
-                        == "The 'select(...)' stage requires at least one field."
-            } else {
-                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED"
-            };
+            let pinned =
+                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED";
             if !pinned {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }

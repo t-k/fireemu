@@ -431,7 +431,11 @@ async fn selector_evaluation_error_does_not_commit_or_abandon_existing_token() {
             value(pb::value::ValueType::MapValue(pb::MapValue {
                 fields: [(
                     "bad".to_owned(),
-                    function("array_length", vec![field_ref("v")]),
+                    value(pb::value::ValueType::FunctionValue(pb::Function {
+                        name: "array_length".to_owned(),
+                        args: vec![field_ref("v")],
+                        ..Default::default()
+                    })),
                 )]
                 .into_iter()
                 .collect(),

@@ -1,0 +1,7 @@
+Transport	Profile	Fault
+grpc	strict	none
+rest	emulator	none
+grpc	strict	type
+rest	strict	missing
+grpc	emulator	metadata
+rest	emulator	autogen

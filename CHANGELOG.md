@@ -17,7 +17,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- Pipeline argument-count, unknown-function and suggestion diagnostics match additional recorded request shapes. Suggestions remain error messages and do not introduce function aliases. Unrecorded arguments, options and contexts retain their existing fallback behavior.
+- Pipeline argument-count, unknown-function and suggestion diagnostics match additional recorded request shapes. Suggestions remain error messages and do not introduce function aliases. Unrecorded arguments, options and contexts retain their existing fallback behavior. The recorded nested aggregate scalar `sum` call on an integer returns its `array_sum` Array-versus-LONG diagnostic in both profiles.
 - Strict native gRPC reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`, with a fixed explanation in the console. This establishes finite error compatibility; successful bit-operation semantics remain unverified.
 - Recorded document-ID options, validation priority and the ordered REST `collection_id` type error now retain their production responses, including structured `ErrorInfo`. The captured native `geo_distance` select call returns its search-only diagnostic; geo search remains outside this claim.
 - Realtime Database Rules compare the root authentication value equal to itself, matching the recorded production case. This does not change snapshot or query identity semantics.

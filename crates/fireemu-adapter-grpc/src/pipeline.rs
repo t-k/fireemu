@@ -5422,6 +5422,59 @@ plain	where	none";
     }
 
     #[test]
+    fn recorded_sort_and_accumulator_unknown_candidates() {
+        use crate::pipeline_shape::{shape_of_json, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for (program, id) in [
+            (
+                "fs-ent-pipeline/o6/sort-wire-errors",
+                "expression-unknown-fn",
+            ),
+            ("fs-ent-pipeline/o7/aggregate-args", "accumulator-unknown"),
+        ] {
+            let (p, entry) = requests["programs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, entry)| entry["id"] == program)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let candidate =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            let answer =
+                RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                    .answer(candidate.clone());
+            assert_eq!(answer.code(), tonic::Code::InvalidArgument, "{id}");
+            assert_eq!(
+                answer.message(),
+                "The function 'nope' does not exist, did you mean 'nor'?",
+                "{id}"
+            );
+            assert_eq!(
+                RefusalGate::Ordinary(None, database.to_owned())
+                    .answer(candidate)
+                    .code(),
+                tonic::Code::Unimplemented
+            );
+        }
+    }
+
+    #[test]
     fn recorded_unknown_function_refusals_follow_shape_gate() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

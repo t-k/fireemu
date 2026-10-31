@@ -4534,3 +4534,12 @@ fn numeric_scalar_native_domain_and_boundaries() {
         assert_eq!(both(name, std::slice::from_ref(&error)), error);
     }
 }
+
+#[test]
+fn sum_scalar_reports_recorded_long_type() {
+    assert_eq!(
+        strict("sum", &[int(7)]),
+        wrong("array_sum", "Array", "LONG")
+    );
+    assert_eq!(strict("sum", &[array(vec![Value::Integer(7)])]), int(7));
+}

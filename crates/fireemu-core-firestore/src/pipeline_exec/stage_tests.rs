@@ -2527,3 +2527,35 @@ fn aggregate_five_seeded_pict_rows() {
         );
     }
 }
+
+#[test]
+fn nested_sum_uses_actual_row_type() {
+    let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
+    let stage = Stage::Aggregate {
+        accumulators: vec![(
+            "s".to_owned(),
+            Accumulator {
+                kind: AccumulatorKind::Sum,
+                argument: Some(nested),
+            },
+        )],
+        groups: vec![],
+    };
+    let error = execute_rows_in(
+        vec![stage.clone()],
+        vec![doc("one", &[("n", int(7))])],
+        Unrecorded::Refuse,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "The function array_sum(...) requires `Array` but got `LONG`."
+    );
+    assert!(execute_rows_in(vec![stage.clone()], vec![], Unrecorded::Refuse).is_ok());
+    assert!(execute_rows_in(
+        vec![stage],
+        vec![doc("one", &[("n", Value::Array(vec![int(7)]))])],
+        Unrecorded::Refuse
+    )
+    .is_ok());
+}

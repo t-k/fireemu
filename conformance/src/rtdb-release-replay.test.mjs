@@ -10,6 +10,7 @@ test("each comparison resolves to its actual local producer and installed binary
     const plan = campaignPlan(name, "/installed/fireemu", "/output");
     assert.ok(plan, name);
     assert.ok(plan.argv.includes("/installed/fireemu"), name);
+    assert.ok(plan.argv[1].startsWith(fileURLToPath(new URL("../../", import.meta.url))), name);
     assert.ok(plan.argv.includes("local") || name === "functions", name);
   }
   assert.equal(campaignPlan("unknown", "/installed/fireemu", "/output"), undefined);
@@ -19,6 +20,15 @@ test("each comparison resolves to its actual local producer and installed binary
     campaignPlan("rest-old", "/installed/fireemu", "/output"),
     campaignPlan("rest-v033", "/installed/fireemu", "/output"),
   );
+});
+test("campaign plans preserve caller-supplied binary and output paths", () => {
+  for (let i = 0; i < 128; i++) {
+    const binary = `relative binary ${i}`;
+    const output = `relative output ${i}`;
+    const plan = campaignPlan("rest-v033", binary, output);
+    assert.equal(plan.argv[plan.argv.indexOf("--fireemu") + 1], binary);
+    assert.equal(plan.argv[plan.argv.indexOf("--out") + 1], output);
+  }
 });
 test("result binding and verdict reject missing, changed or mismatched observations", () => {
   const hash = "a".repeat(64);
@@ -82,7 +92,7 @@ test("the actual Web and Admin CRUD smoke runs through the installed binary", ()
     "database",
     "--",
     process.execPath,
-    "tools/sdk-smoke-database/run.mjs",
+    fileURLToPath(new URL("../../tools/sdk-smoke-database/run.mjs", import.meta.url)),
     "--only",
     "crud",
   ]);
@@ -298,7 +308,7 @@ test(
     const script = fileURLToPath(new URL("./rtdb-release-replay.mjs", import.meta.url));
     try {
       for (const [mode, body, expected] of [
-        ["ok", "", 0],
+        ["ok", "require('node:fs').writeFileSync(process.env.RTDB_TEST_CWD, process.cwd())", 0],
         ["fail", "process.exit(7)", 2],
         ["changed", "require('node:fs').appendFileSync(process.argv[1], ' ')", 2],
       ]) {
@@ -312,17 +322,28 @@ test(
             "local",
             "smoke",
             "--fireemu",
-            binary,
+            "./binary",
             "--out",
-            join(dir, mode),
+            mode,
             "--export",
-            output,
+            `${mode}.json`,
           ],
-          { encoding: "utf8", timeout: 5000 },
+          {
+            encoding: "utf8",
+            timeout: 5000,
+            cwd: dir,
+            env: { ...process.env, RTDB_TEST_CWD: join(dir, "cwd") },
+          },
         );
         assert.equal(result.status, expected, result.stderr);
         assert.equal(existsSync(output), expected === 0, mode);
-        if (expected === 0) assert.equal(JSON.parse(readFileSync(output)).match, true);
+        if (expected === 0) {
+          assert.equal(JSON.parse(readFileSync(output)).match, true);
+          assert.equal(
+            readFileSync(join(dir, "cwd"), "utf8"),
+            fileURLToPath(new URL("../../", import.meta.url)).replace(/\/$/, ""),
+          );
+        }
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

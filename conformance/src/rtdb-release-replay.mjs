@@ -12,6 +12,8 @@ import { judgeCaptured } from "../../tools/sdk-smoke-database/cv07-ondisconnect.
 import { judgeRow, judgeM14, localRequests } from "../../tools/sdk-smoke-database/rest-replay.mjs";
 import { compareRecordings, readFrames } from "./rtdb-functions/compare-local.mjs";
 
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const repo = (path) => resolve(ROOT, path);
 const T = "tools/sdk-smoke-database";
 const names = {
   "rest-old": "rest",
@@ -45,17 +47,17 @@ export function campaignPlan(name, binary, out) {
         "database",
         "--",
         process.execPath,
-        `${T}/run.mjs`,
+        repo(`${T}/run.mjs`),
         "--only",
         "crud",
       ],
     };
-  const argv = [process.execPath, scripts[campaign]];
+  const argv = [process.execPath, repo(scripts[campaign])];
   if (campaign !== "functions") argv.push("local");
   argv.push("--fireemu", binary, "--out", out);
   if (["residual", "s5", "functions"].includes(campaign)) argv.push("--profile", "strict");
   if (["ondisconnect", "auth", "residual", "s5"].includes(campaign))
-    argv.push("--modules", resolve(T, "node_modules"));
+    argv.push("--modules", repo(`${T}/node_modules`));
   return { campaign, argv };
 }
 export function judgeExport(name, observed, binarySha256, expected) {
@@ -72,7 +74,9 @@ export function judgeExport(name, observed, binarySha256, expected) {
     const history =
       expected ??
       json(
-        `spec/compatibility/closure/evidence/${name === "rest-old" ? "RTDB-rest-comparison.json" : "RTDB-rest-v033-comparison.json"}`,
+        repo(
+          `spec/compatibility/closure/evidence/${name === "rest-old" ? "RTDB-rest-comparison.json" : "RTDB-rest-v033-comparison.json"}`,
+        ),
       );
     if (!judgeRest(name, history, observed.result).match)
       return ["RTDB REST recorded fixture or local response differs"];
@@ -80,7 +84,7 @@ export function judgeExport(name, observed, binarySha256, expected) {
   return [];
 }
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
-const fixture = (name) => json(join(T, "fixtures", name));
+const fixture = (name) => json(repo(`${T}/fixtures/${name}`));
 const digestFile = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 export function sourceResources(campaign) {
   const paths = {
@@ -140,12 +144,12 @@ export function sourceResources(campaign) {
     "conformance/src/rtdb-functions/firebase.json",
   ];
   return Object.fromEntries(
-    [...new Set([...paths, ...shared])].map((path) => [path, digestFile(path)]),
+    [...new Set([...paths, ...shared])].map((path) => [path, digestFile(repo(path))]),
   );
 }
 export function runtimeResources(
   campaign,
-  root = campaign === "functions" ? "conformance/src/rtdb-functions/fixtures" : T,
+  root = repo(campaign === "functions" ? "conformance/src/rtdb-functions/fixtures" : T),
 ) {
   if (campaign === "functions") {
     for (const [name, version] of [
@@ -188,14 +192,14 @@ export function runtimeResources(
 export function judgeRest(name, expected, observed) {
   try {
     const file = `${T}/fixtures/production-rest.json`;
-    const production = json(file);
+    const production = json(repo(file));
     const fixtureIdentity = {
       observedAt: production.observedAt,
       corpusSha256: production.source.corpusSha256,
     };
     const historical =
       name === "rest-old"
-        ? expected.fixture?.path === file && expected.fixture?.sha256 === digestFile(file)
+        ? expected.fixture?.path === file && expected.fixture?.sha256 === digestFile(repo(file))
         : name === "rest-v033" && isDeepStrictEqual(expected.fixture, fixtureIdentity);
     if (
       expected.kind !== "rtdb-production-comparison-v1" ||
@@ -283,7 +287,9 @@ export function adjudicate(campaign, out) {
     return { match: true, basis: "official emulator CRUD smoke, not production evidence" };
   if (campaign === "rest") {
     const result = json(join(out, "comparison.json"));
-    const expected = json("spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json");
+    const expected = json(
+      repo("spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json"),
+    );
     return { ...judgeRest("rest-v033", expected, result), result };
   }
   if (campaign === "ondisconnect") {
@@ -329,7 +335,7 @@ export function adjudicate(campaign, out) {
   }
   if (campaign === "functions") {
     const production = json(
-      "conformance/src/rtdb-functions/recorded/production-rtdb-triggers.json",
+      repo("conformance/src/rtdb-functions/recorded/production-rtdb-triggers.json"),
     ).frames.map(({ n: _n, step: _step, ...frame }) => frame);
     const result = compareRecordings({ production, local: readFrames(join(out, "frames.jsonl")) });
     const writes = json(join(out, "writes.json"));
@@ -362,21 +368,27 @@ async function main(argv) {
   )
     throw Error("usage: local <campaign> --fireemu <binary> --out <new dir> --export <file>");
   const binary = realpathSync(resolve(option("--fireemu")));
-  const plan = campaignPlan(name, binary, resolve(option("--out")));
+  const output = resolve(option("--out"));
+  const exportPath = resolve(option("--export"));
+  const plan = campaignPlan(name, binary, output);
   if (!plan) throw Error("unknown RTDB campaign");
   const binarySha256 = digestFile(binary);
   const resources = runtimeResources(plan.campaign);
   const sources = sourceResources(plan.campaign);
-  const child = spawnSync(plan.argv[0], plan.argv.slice(1), { stdio: "inherit", env: process.env });
+  const child = spawnSync(plan.argv[0], plan.argv.slice(1), {
+    cwd: ROOT,
+    stdio: "inherit",
+    env: process.env,
+  });
   if (child.status !== 0) throw Error(`RTDB producer exited ${child.status ?? child.signal}`);
   if (digestFile(binary) !== binarySha256) throw Error("RTDB binary changed during replay");
   if (!isDeepStrictEqual(sourceResources(plan.campaign), sources))
     throw Error("RTDB sources changed during replay");
   if (!isDeepStrictEqual(runtimeResources(plan.campaign), resources))
     throw Error("RTDB SDK resources changed during replay");
-  const verdict = adjudicate(plan.campaign, resolve(option("--out")));
+  const verdict = adjudicate(plan.campaign, output);
   writeFileSync(
-    option("--export"),
+    exportPath,
     `${JSON.stringify({ campaign: plan.campaign, binarySha256, resources, sources, ...verdict }, null, 2)}\n`,
     { flag: "wx" },
   );

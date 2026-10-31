@@ -706,6 +706,30 @@ fn unknown_candidate_gate_preserves_exact_fallback_status() {
     assert_eq!(ordinary.code(), tonic::Code::InvalidArgument);
     assert_eq!(ordinary.message(), "original stage arity");
     assert!(ordinary.source().is_none());
+    let mut sourced = Status::with_details(
+        tonic::Code::Unimplemented,
+        "original with source",
+        vec![4, 5].into(),
+    );
+    sourced
+        .metadata_mut()
+        .insert("fireemu-code", "FS_PIPE_DECODE".parse().unwrap());
+    sourced.set_source(std::sync::Arc::new(std::io::Error::other(
+        "original source",
+    )));
+    let candidate = unknown_candidate(
+        sourced.clone(),
+        "The function 'nope_fn' does not exist.".to_owned(),
+    );
+    let answer = RefusalGate::Ordinary(None, DB.to_owned()).answer(candidate);
+    assert_eq!(answer.code(), sourced.code());
+    assert_eq!(answer.message(), sourced.message());
+    assert_eq!(answer.details(), sourced.details());
+    assert_eq!(
+        answer.metadata().get("fireemu-code"),
+        sourced.metadata().get("fireemu-code")
+    );
+    assert_eq!(answer.source().unwrap().to_string(), "original source");
     let known = recorded()
         .iter()
         .find(|(_, texts)| texts.contains("The function 'nope_fn' does not exist."))

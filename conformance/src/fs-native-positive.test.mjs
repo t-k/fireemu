@@ -319,3 +319,42 @@ test("producer receipts bind the namespace, loopback target, seed, config and un
     assert.throws(() => compareReplays(runs, { sourceCommit, binarySha256 }), undefined, fault);
   }
 });
+
+// The manifest is a set of identified sessions: its enumeration order has no contract meaning.
+test("generated manifest permutations preserve the complete finite verdict", () => {
+  const original = sessions();
+  const before = JSON.stringify(original);
+  const canonicalVerdict = (value) => {
+    const key = (row) => [row.profile, row.transport, row.round, row.id].join("/");
+    const order = (rows) => [...rows].sort((a, b) => key(a).localeCompare(key(b)));
+    return {
+      ...value,
+      proofs: order(value.proofs),
+      localMetadata: order(value.localMetadata),
+    };
+  };
+  const expected = canonicalVerdict(compareReplays(original, { sourceCommit, binarySha256 }));
+  const seen = new Set();
+  for (let seed = 1; seed <= 16; seed++) {
+    let state = seed;
+    const permutation = original.map((_, index) => index);
+    for (let end = permutation.length - 1; end > 0; end--) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      const index = state % (end + 1);
+      [permutation[end], permutation[index]] = [permutation[index], permutation[end]];
+    }
+    seen.add(permutation.join(","));
+    const shuffled = permutation.map((index) => original[index]);
+    assert.doesNotThrow(
+      () => {
+        assert.deepEqual(
+          canonicalVerdict(compareReplays(shuffled, { sourceCommit, binarySha256 })),
+          expected,
+        );
+      },
+      `manifest permutation seed=${seed} order=${permutation.join(",")}`,
+    );
+  }
+  assert.equal(seen.size, 16, "all fixed generator seeds exercise distinct permutations");
+  assert.equal(JSON.stringify(original), before, "the generator and comparison preserve inputs");
+});

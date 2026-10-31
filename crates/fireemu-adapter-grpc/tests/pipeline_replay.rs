@@ -1463,6 +1463,60 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn recorded_bit_integer_grpc_refusals_are_internal_only_in_strict() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (name, args) in [
+        ("bit_not", vec![json!({"integerValue":"5"})]),
+        (
+            "bit_left_shift",
+            vec![json!({"integerValue":"5"}), json!({"integerValue":"1"})],
+        ),
+        (
+            "bit_right_shift",
+            vec![json!({"integerValue":"8"}), json!({"integerValue":"1"})],
+        ),
+    ] {
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{"name":name,"args":args}}}}}]}
+        ]}}});
+        for strict in [true, false] {
+            let s = state(strict);
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+            let error = rt.block_on(async {
+                match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("unexpectedly accepted {name}"),
+                }
+            });
+            assert_eq!(
+                error.code(),
+                if strict {
+                    tonic::Code::Internal
+                } else {
+                    tonic::Code::Unimplemented
+                },
+                "{name}"
+            );
+            if strict {
+                assert!(!error.message().contains("projects/"));
+                assert!(!error.message().contains("Bearer"));
+            }
+        }
+    }
+}
+
+#[test]
 fn recorded_unknown_after_empty_select_matches_both_profiles() {
     let expected = "The function 'nope_fn' does not exist.";
     for strict in [true, false] {

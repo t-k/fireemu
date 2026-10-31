@@ -1,0 +1,71 @@
+{
+  "provenance": {
+    "kind": "sanitized finite production observations",
+    "sourceSha256": "b956880a56a8c846b084eff5c4e40263dfed1786ffbef287ce354fc4cd1c2cc1",
+    "prefix": "pppppppppppppppppppppppppp",
+    "note": "Synthetic prefix preserves source diagnostic column; auth UID is synthetic. Rejected loads leave the previous C1 rules installed."
+  },
+  "cases": [
+    {
+      "id": "C0",
+      "expression": false,
+      "loadStatus": 200,
+      "error": null,
+      "readStatus": [
+        401,
+        401
+      ]
+    },
+    {
+      "id": "C1",
+      "expression": true,
+      "loadStatus": 200,
+      "error": null,
+      "readStatus": [
+        200,
+        200
+      ]
+    },
+    {
+      "id": "I0",
+      "expression": "data == data",
+      "loadStatus": 400,
+      "error": "1:88: Invalid == expression: left operand is not a number, boolean, string, null.\n",
+      "readStatus": []
+    },
+    {
+      "id": "I1",
+      "expression": "query == query",
+      "loadStatus": 400,
+      "error": "1:88: Invalid == expression: left operand is not a number, boolean, string, null.\n",
+      "readStatus": []
+    },
+    {
+      "id": "D1",
+      "expression": "data != root",
+      "loadStatus": 400,
+      "error": "1:88: Invalid != expression: left operand is not a number, boolean, string, or null.\n",
+      "readStatus": []
+    },
+    {
+      "id": "A0",
+      "expression": "auth != null && auth.uid == 'synthetic-user'",
+      "loadStatus": 200,
+      "error": null,
+      "readStatus": [
+        200,
+        200
+      ]
+    },
+    {
+      "id": "A1",
+      "expression": "auth != null && auth.uid == 'synthetic-user' && auth == auth",
+      "loadStatus": 200,
+      "error": null,
+      "readStatus": [
+        200,
+        200
+      ]
+    }
+  ]
+}

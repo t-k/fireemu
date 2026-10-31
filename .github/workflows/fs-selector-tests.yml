@@ -1,0 +1,100 @@
+name: Firestore selector contract tests
+on:
+  push:
+    branches: [work/fs-selector-red-ci]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full lowercase 40-character commit SHA
+        required: true
+        type: string
+
+permissions: {contents: read}
+
+jobs:
+  selector-contract:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/work/fs-selector-red-ci'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARGET_SOURCE_SHA: ${{ inputs.source_sha }}
+      CARGO_BUILD_JOBS: "2"
+      CARGO_TARGET_DIR: target/normal
+      RUSTC_WRAPPER: ""
+    steps:
+      - name: Validate source SHA
+        id: source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be 40 lowercase hex characters" >&2; exit 2; }
+          printf 'sha=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with: {toolchain: "1.94.0"}
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with: {tool: cargo-nextest@0.9.143}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          shared-key: pr-normal
+          workspaces: . -> target/normal
+          cache-bin: "false"
+          save-if: "false"
+      - name: Run selector tests in a capped scope
+        shell: bash
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/selector-contract
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          RUNNER_UID="$(id -u)"; RUNNER_GID="$(id -g)"
+          DRIVER="$RUNNER_TEMP/selector-driver.sh"
+          cat > "$DRIVER" <<'DRIVER'
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          test "$(id -u)" = "$RUNNER_UID" && test "$(id -g)" = "$RUNNER_GID"
+          test "$(git rev-parse HEAD)" = "$TARGET_SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cg="/sys/fs/cgroup$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)"
+          cat "$cg/memory.max" > "$OUTPUT_DIR/memory.max"
+          cat "$cg/memory.swap.max" > "$OUTPUT_DIR/memory.swap.max"
+          cat "$cg/memory.current" > "$OUTPUT_DIR/memory.current.before"
+          test "$(cat "$OUTPUT_DIR/memory.max")" = 6442450944
+          test "$(cat "$OUTPUT_DIR/memory.swap.max")" = 0
+          printf '%s\n' "$(git rev-parse HEAD)" > "$OUTPUT_DIR/source.sha"
+          { rustc --version --verbose; cargo --version; cargo nextest --version; } > "$OUTPUT_DIR/toolchain.txt" 2>&1
+          set +e
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(service::tests::pipeline_exec_tests::selector_tests::)' > "$OUTPUT_DIR/nextest.log" 2>&1
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$OUTPUT_DIR/nextest.exit"
+          cat "$cg/memory.current" > "$OUTPUT_DIR/memory.current.after"
+          cat "$cg/memory.events" > "$OUTPUT_DIR/memory.events"
+          git status --porcelain=v1 --untracked-files=all > "$OUTPUT_DIR/source-status.after"
+          test ! -s "$OUTPUT_DIR/source-status.after"
+          tail -n 100 "$OUTPUT_DIR/nextest.log"
+          exit "$rc"
+          DRIVER
+          set +e
+          sudo systemd-run --scope --quiet -p MemoryMax=6442450944 -p MemorySwapMax=0 \
+            setpriv --reuid="$RUNNER_UID" --regid="$RUNNER_GID" --init-groups -- \
+            env PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" OUTPUT_DIR="$OUTPUT_DIR" \
+              TARGET_SOURCE_SHA="$TARGET_SOURCE_SHA" RUNNER_UID="$RUNNER_UID" RUNNER_GID="$RUNNER_GID" \
+              CARGO_BUILD_JOBS=2 RUSTC_WRAPPER= CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target/normal" bash "$DRIVER"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$OUTPUT_DIR/scope.exit"
+          exit "$rc"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fs-selector-contract-${{ github.run_id }}
+          path: ${{ runner.temp }}/selector-contract
+          if-no-files-found: warn
+          retention-days: 7

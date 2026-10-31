@@ -1,0 +1,36 @@
+name: fs-r21 targeted mutation checks
+on:
+  push:
+    branches: [work/fs-r21-refusals-ci]
+    paths: [.github/workflows/fs-r21-mutants.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 9b2fb3ea13f8c6ee3d87fe85e50dc533b286ed1c
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-helper
+          persist-credentials: false
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - name: Run baseline, no-op and targeted mutants
+        run: |
+          test "$(git rev-parse HEAD)" = 9b2fb3ea13f8c6ee3d87fe85e50dc533b286ed1c
+          test -z "$(git status --porcelain --untracked-files=no)"
+          sudo systemd-run --scope --unit=fs-r21-mutants -p MemoryMax=6442450944 -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-mutants.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec python3 .ci-helper/.github/temporary/fs-r21-mutants.py'
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fs-r21-mutants
+          path: /tmp/fs-r21-mutants
+          if-no-files-found: warn

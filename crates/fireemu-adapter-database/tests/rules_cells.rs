@@ -267,7 +267,10 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
             texts(&row["error"]),
             statuses(&row["cells"]),
         );
-        let expected = match row.get("fireemu") {
+        let expected = match row
+            .get("fireemu")
+            .filter(|_| row["fireemu_current"] != "official")
+        {
             None => jar.clone(),
             Some(fireemu) => {
                 listed += 1;

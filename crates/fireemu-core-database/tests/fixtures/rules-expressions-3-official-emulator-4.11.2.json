@@ -61435,7 +61435,8 @@
   "load": 200,
   "error": null,
   "read": 200,
-  "fireemu": "denies"
+  "fireemu": "denies",
+  "fireemu_current": "official"
  },
  {
   "expr": "auth.token.missing || data.child('arr').val()",
@@ -100342,7 +100343,8 @@
   "load": 200,
   "error": null,
   "read": 200,
-  "fireemu": "denies"
+  "fireemu": "denies",
+  "fireemu_current": "official"
  },
  {
   "expr": "!(auth == auth)",
@@ -100364,7 +100366,8 @@
   "load": 200,
   "error": null,
   "read": 200,
-  "fireemu": "denies"
+  "fireemu": "denies",
+  "fireemu_current": "official"
  },
  {
   "expr": "auth === auth",
@@ -100372,7 +100375,8 @@
   "load": 200,
   "error": null,
   "read": 200,
-  "fireemu": "denies"
+  "fireemu": "denies",
+  "fireemu_current": "official"
  },
  {
   "expr": "!(auth === auth)",

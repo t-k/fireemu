@@ -174,9 +174,10 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         let expr = entry["expr"].as_str().unwrap();
         assert!(Rules::compile(&read_rule_at_t(expr)).is_err(), "{entry}");
     }
-    let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
-        .into_iter()
-        .partition(|entry| entry.get("fireemu").is_some());
+    let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
+        corpus.into_iter().partition(|entry| {
+            entry.get("fireemu").is_some() && entry["fireemu_current"] != "official"
+        });
     assert!(agreeing.len() > 1200 && denied.len() > 200);
     // Both refuse it; the official emulator places the error of an expression that spans a
     // line break elsewhere on the line.

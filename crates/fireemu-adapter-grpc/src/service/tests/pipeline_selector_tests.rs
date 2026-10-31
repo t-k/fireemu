@@ -566,3 +566,47 @@ async fn selector_new_token_is_only_on_the_first_result_batch() {
     assert!(rows.iter().all(|r| r.execution_time.is_some()));
     rollback(&backend, rows[0].transaction.clone()).unwrap();
 }
+
+#[tokio::test]
+async fn selector_queued_announcement_keeps_guard_until_polled() {
+    for poll in [false, true] {
+        let (_, backend) = fixture("strict");
+        let token = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: DATABASE.to_owned(),
+                options: Some(new_options("ro")),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut stream = PipelineResponseStream::new(
+            Box::pin(tokio_stream::empty()),
+            fireemu_core_firestore::pipeline_exec::Cursor::new(Vec::new()),
+        )
+        .with_transaction(
+            token.clone(),
+            Some(QueryTransactionGuard {
+                local: backend.clone(),
+                database: DATABASE.to_owned(),
+                transaction: token.clone(),
+            }),
+            None,
+        );
+        stream.flush();
+        assert_eq!(stream.ready.len(), 1);
+        assert_eq!(transaction_stats(&backend).active, 1);
+        if poll {
+            assert_eq!(stream.next().await.unwrap().unwrap().transaction, token);
+        }
+        drop(stream);
+        if poll {
+            assert!(read_token(&backend, &token).is_ok());
+            rollback(&backend, token).unwrap();
+        } else {
+            assert_eq!(transaction_stats(&backend).active, 0);
+            assert_eq!(
+                read_token(&backend, &token).unwrap_err().code(),
+                tonic::Code::Aborted
+            );
+        }
+    }
+}

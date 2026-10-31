@@ -665,6 +665,24 @@ proptest! {
     }
 }
 
+proptest! {
+    #[test]
+    fn unrecorded_candidate_preserves_arbitrary_ordinary_fallback(
+        message in "[a-zA-Z0-9 _-]{0,64}",
+        details in proptest::collection::vec(any::<u8>(), 0..64),
+        metadata in "[a-z0-9_-]{1,32}",
+    ) {
+        let mut original = Status::with_details(tonic::Code::Unimplemented, message, details.into());
+        original.metadata_mut().insert("fireemu-code", metadata.parse().unwrap());
+        let candidate = unknown_candidate(original.clone(), "unrecorded candidate".to_owned());
+        let answer = RefusalGate::Ordinary(None, DB.to_owned()).answer(candidate);
+        prop_assert_eq!(answer.code(), original.code());
+        prop_assert_eq!(answer.message(), original.message());
+        prop_assert_eq!(answer.details(), original.details());
+        prop_assert_eq!(answer.metadata(), original.metadata());
+    }
+}
+
 #[test]
 fn unknown_candidate_gate_preserves_exact_fallback_status() {
     use std::error::Error as _;

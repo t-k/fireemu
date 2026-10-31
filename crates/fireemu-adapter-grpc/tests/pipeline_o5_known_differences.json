@@ -25,19 +25,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#select-unknown-function",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -66,19 +66,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#select-empty-name",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -107,19 +107,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#select-capitalized-name",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"Equal\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'Equal' does not exist, did you mean 'equal'?",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -148,19 +148,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#where-unknown-then-select-empty",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "where expression is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -189,19 +189,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#select-unknown-before-arity",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -230,19 +230,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-order#unknown-as-first-argument",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -271,19 +271,19 @@
       ],
       "status": 400
     },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-select-empty",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -312,19 +312,19 @@
       ],
       "status": 400
     },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-limit-string",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"nope_fn\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -353,19 +353,19 @@
       ],
       "status": 400
     },
-    "reason": "The emulator selects a different validation error through its deferred-error and finite-subset path; exact local and production answers remain different, without an official-emulator parity claim.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/stage-order#add-fields-unknown-then-aggregate-one",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "Stage 'aggregate(accumulators: Map[FieldPath, Expr], groups: Map[FieldPath, Expr])' takes [2..2] argument(s), received 1.; production has not refused a request of this shape with this text, so this refusal is not observed locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'nope_fn' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -458,19 +458,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-make_struct",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"make_struct\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'make_struct' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -868,19 +868,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-logical_or",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"logical_or\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'logical_or' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -909,19 +909,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u2d",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"-\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '-' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -950,19 +950,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u2b",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"+\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '+' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -991,19 +991,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u2a",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"*\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '*' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1032,19 +1032,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u2f",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"/\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '/' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1073,19 +1073,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u25",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"%\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '%' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1155,19 +1155,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u7e",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"~\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '~' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1237,19 +1237,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3c-3c",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"<<\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '<<' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1319,19 +1319,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3e-3e",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \">>\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '>>' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1360,19 +1360,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3c",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"<\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '<' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1401,19 +1401,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3c-3d",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"<=\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '<=' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1442,19 +1442,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3d-3d",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"==\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '==' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1483,19 +1483,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u21-3d",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"!=\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '!=' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1524,19 +1524,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3e",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \">\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '>' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1565,19 +1565,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u3e-3d",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \">=\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function '>=' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1606,19 +1606,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-orders_after",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"orders_after\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'orders_after' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1647,19 +1647,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-list_shredded_fields",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"list_shredded_fields\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'list_shredded_fields' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1688,19 +1688,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-error",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"error\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'error' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1729,19 +1729,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u41-4e-44",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"AND\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'AND' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1770,19 +1770,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u4f-52",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"OR\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'OR' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1811,19 +1811,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u58-4f-52",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"XOR\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'XOR' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -1852,19 +1852,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-u4e-4f-54",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"NOT\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'NOT' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -2139,19 +2139,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-snippet",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"snippet\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'snippet' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -2344,19 +2344,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-between",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"between\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'between' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {
@@ -2426,19 +2426,19 @@
       ],
       "status": 400
     },
-    "reason": "The finite strict decoder/function/stage subset returns UNIMPLEMENTED for this measured request; any emulator difference is pinned separately.",
+    "reason": "Strict answers the recorded refusal; the emulator profile retains a different local refusal.",
     "row": "fs-ent-pipeline/o5/function-names#fn-is_nan",
     "strict": {
       "body": [
         {
           "error": {
-            "code": 501,
-            "message": "function \"is_nan\" is unsupported locally",
-            "status": "UNIMPLEMENTED"
+            "code": 400,
+            "message": "The function 'is_nan' does not exist.",
+            "status": "INVALID_ARGUMENT"
           }
         }
       ],
-      "status": 501
+      "status": 400
     }
   },
   {

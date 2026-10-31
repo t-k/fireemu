@@ -5458,6 +5458,48 @@ plain	where	none";
     }
 
     #[test]
+    fn nested_sum_admission_requires_recorded_shape_and_strict_profile() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let (p, program) = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p["id"] == "fs-ent-pipeline/o7/aggregate-args")
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s["id"] == "nested-aggregate")
+            .unwrap();
+        let body = &step["body"];
+        let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+        let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+        let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned());
+        assert!(recorded_nested_sum_admitted(&rest, Unrecorded::Refuse));
+        assert!(!recorded_nested_sum_admitted(
+            &rest,
+            Unrecorded::OfficialEmulator
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Recorded(None, database.to_owned()),
+            Unrecorded::Refuse
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Open,
+            Unrecorded::Refuse
+        ));
+        let grpc = RefusalGate::Recorded(shape_of_request(&request), database.to_owned());
+        assert!(recorded_nested_sum_admitted(&grpc, Unrecorded::Refuse));
+    }
+
+    #[test]
     fn recorded_sort_and_accumulator_unknown_candidates() {
         use crate::pipeline_shape::{shape_of_json, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

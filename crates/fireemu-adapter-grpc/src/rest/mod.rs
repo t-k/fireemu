@@ -1741,6 +1741,9 @@ impl RestState {
         if recorded_select_first {
             cursor = cursor.with_recorded_select_first_wrong_type();
         }
+        if crate::pipeline::recorded_nested_sum_admitted(&gate, unrecorded) {
+            cursor = cursor.with_recorded_nested_sum_wrong_type();
+        }
         let mut rows = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {

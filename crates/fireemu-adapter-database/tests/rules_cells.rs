@@ -267,10 +267,14 @@ fn every_recorded_expression_is_judged_as_the_official_emulator_in_every_cell() 
             texts(&row["error"]),
             statuses(&row["cells"]),
         );
-        let expected = match row
-            .get("fireemu")
-            .filter(|_| row["fireemu_current"] != "official")
-        {
+        let current = row.get("fireemu_current");
+        let expected = match current
+            .and_then(serde_json::Value::as_object)
+            .map(|_| &row["fireemu_current"])
+            .or_else(|| {
+                row.get("fireemu")
+                    .filter(|_| current != Some(&serde_json::json!("official")))
+            }) {
             None => jar.clone(),
             Some(fireemu) => {
                 listed += 1;

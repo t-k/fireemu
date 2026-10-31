@@ -16,3 +16,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = $(git rev-parse cc0a6862b5e4302c1d617ea8fb5c0f68935461d6)
           sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= cargo test --locked --manifest-path crates/fireemu-adapter-grpc/Cargo.toml recorded_sort_and_accumulator_unknown_candidates -- --nocapture
+      - name: Record scalar failing test with memory limit
+        if: always()
+        run: |
+          sudo systemd-run --scope --unit=fs-r21-scalar-red -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-scalar-red.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo test --locked --manifest-path crates/fireemu-core-firestore/Cargo.toml sum_scalar_reports_recorded_long_type -- --nocapture'

@@ -2410,11 +2410,35 @@ fn unknown_function_status(name: &str, _unrecorded: Unrecorded, ordinary: Status
     let titlecase = bytes.first().is_some_and(u8::is_ascii_uppercase)
         && bytes[1..].iter().all(|byte| !byte.is_ascii_uppercase());
     let text = if titlecase && pipeline_exec::function(&lowercase).is_some() {
-        format!("The function '{name}' does not exist, did you mean '{lowercase}'?")
+        unknown_function_suggestion_text(name, &lowercase)
     } else {
         format!("The function '{name}' does not exist.")
     };
     crate::pipeline_shape::unknown_candidate(ordinary, text)
+}
+
+fn unknown_function_suggestion_text(name: &str, suggestion: &str) -> String {
+    format!("The function '{name}' does not exist, did you mean '{suggestion}'?")
+}
+
+// Observed validation hints only; these names are not executable aliases.
+fn observed_scalar_suggestion(name: &str) -> Option<&str> {
+    if accumulator_kind(name).is_some() {
+        return Some(name);
+    }
+    Some(match name {
+        "row" => "pow",
+        "struct_get" => "array_get",
+        "switch" => "switch_on",
+        "mask" => "last",
+        "opaque_document_id" => "replace_document_id",
+        "search_field" => "get_field",
+        "to_row_id" => "to_lower",
+        "manhattan_distance" => "euclidean_distance",
+        "eq_any" => "equal",
+        "is_null" => "if_null",
+        _ => return None,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2466,14 +2490,17 @@ fn decode_operand_tree_in(
                 return Err(recorded_internal("array_reverse requires an argument"));
             }
             if pipeline_exec::function(&function.name).is_none() {
-                return Err(unknown_function_status(
-                    &function.name,
-                    unrecorded,
-                    Status::unimplemented(format!(
-                        "function {:?} is unsupported locally",
-                        function.name
-                    )),
+                let fallback = Status::unimplemented(format!(
+                    "function {:?} is unsupported locally",
+                    function.name
                 ));
+                if function.args.is_empty() && function.options.is_empty() {
+                    if let Some(suggestion) = observed_scalar_suggestion(&function.name) {
+                        let text = unknown_function_suggestion_text(&function.name, suggestion);
+                        return Err(crate::pipeline_shape::unknown_candidate(fallback, text));
+                    }
+                }
+                return Err(unknown_function_status(&function.name, unrecorded, fallback));
             }
             // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
@@ -5393,6 +5420,22 @@ plain	where	none";
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    proptest::proptest! {
+        #[test]
+        fn observed_suggestion_targets_are_catalogued_without_becoming_aliases(
+            name in proptest::sample::select(vec![
+                "count", "count_if", "count_distinct", "average", "first", "last",
+                "array_agg", "array_agg_distinct", "row", "struct_get", "switch", "mask",
+                "opaque_document_id", "search_field", "to_row_id", "manhattan_distance",
+                "eq_any", "is_null",
+            ])
+        ) {
+            let target = observed_scalar_suggestion(name).unwrap();
+            proptest::prop_assert!(pipeline_exec::function(target).is_some() || accumulator_kind(target).is_some());
+            proptest::prop_assert!(pipeline_exec::function(name).is_none());
+        }
+    }
+
     #[test]
     fn recorded_suggestion_refusals_follow_shape_gate() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
@@ -5448,11 +5491,15 @@ plain	where	none";
                 ["message"]
                 .as_str()
                 .unwrap();
-            let actual =
-                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
-                    .unwrap_err();
-            let rest = RefusalGate::Recorded(shape_of_json(body, &order), database.to_owned())
-                .answer(actual.clone());
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let actual = compile_pipeline_in_order(&request, &parent, mode, Some(&order))
+                .unwrap_err();
+            let gate = |shape| if mode == Unrecorded::Refuse {
+                RefusalGate::Recorded(shape, database.to_owned())
+            } else {
+                RefusalGate::Ordinary(shape, database.to_owned())
+            };
+            let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
             if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
                 failures.push(format!("{id} rest: {rest:?}"));
             }
@@ -5462,11 +5509,12 @@ plain	where	none";
             } else {
                 tonic::Code::Unimplemented
             };
-            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(actual);
+            let grpc = gate(grpc_shape).answer(actual);
             if grpc.code() != expected_code
                 || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
             {
                 failures.push(format!("{id} grpc: {grpc:?}"));
+            }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));

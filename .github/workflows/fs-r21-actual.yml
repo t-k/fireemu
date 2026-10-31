@@ -1,0 +1,111 @@
+name: v041 build and R21 private candidate
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Final full source commit SHA
+        required: true
+        type: string
+      version:
+        description: Expected workspace version
+        required: true
+        default: 0.41.0
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      binary_sha: ${{ steps.custody.outputs.binary_sha }}
+    env:
+      EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+      RUSTC_WRAPPER: ''
+      SOURCE_DATE_EPOCH: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: pnpm -C ui install --frozen-lockfile && pnpm -C ui build
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Materialize reviewed driver
+        run: echo IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbAo6ICIke0VYUEVDVEVEX1NPVVJDRTo/fSIgIiR7RVhQRUNURURfVkVSU0lPTjo/fSIgIiR7Q1VTVE9EWTo/fSIKW1sgIiRFWFBFQ1RFRF9TT1VSQ0UiID1+IF5bMC05YS1mXXs0MH0kIF1dClsgIiQoZ2l0IHJldi1wYXJzZSBIRUFEKSIgPSAiJEVYUEVDVEVEX1NPVVJDRSIgXQpbIC16ICIkKGdpdCBzdGF0dXMgLS1wb3JjZWxhaW4gLS11bnRyYWNrZWQtZmlsZXM9bm8pIiBdCnJvb3Q9JChnaXQgcmV2LXBhcnNlIC0tc2hvdy10b3BsZXZlbCkKWyAiJChwd2QgLVApIiA9ICIkKGNkICIkcm9vdCIgJiYgcHdkIC1QKSIgXQp2ZXJzaW9uPSQocHl0aG9uMyAtYyAnaW1wb3J0IHRvbWxsaWI7cHJpbnQodG9tbGxpYi5sb2FkKG9wZW4oIkNhcmdvLnRvbWwiLCJyYiIpKVsid29ya3NwYWNlIl1bInBhY2thZ2UiXVsidmVyc2lvbiJdKScpClsgIiR2ZXJzaW9uIiA9ICIkRVhQRUNURURfVkVSU0lPTiIgXQpjYXNlICIkezE6LX0iIGluCiBidWlsZCkKICBta2RpciAtcCAiJENVU1RPRFkiCiAgdGVzdCAhIC1lICIkQ1VTVE9EWS9maXJlZW11IgogIGNnPSQoYXdrIC1GOiAnJDE9PSIwIiB7cHJpbnQgJDN9JyAvcHJvYy9zZWxmL2Nncm91cCkKICBjYXQgIi9zeXMvZnMvY2dyb3VwJHtjZ30vbWVtb3J5Lm1heCIgPiAiJENVU1RPRFkvbWVtb3J5Lm1heCIKICBjYXQgIi9zeXMvZnMvY2dyb3VwJHtjZ30vbWVtb3J5LnN3YXAubWF4IiA+ICIkQ1VTVE9EWS9tZW1vcnkuc3dhcC5tYXgiCiAgWyAiJChjYXQgIiRDVVNUT0RZL21lbW9yeS5tYXgiKSIgPSA2NDQyNDUwOTQ0IF0KICBbICIkKGNhdCAiJENVU1RPRFkvbWVtb3J5LnN3YXAubWF4IikiID0gMCBdCiAgZ2l0IHJldi1wYXJzZSBIRUFEID4gIiRDVVNUT0RZL3NvdXJjZS5zaGEiCiAgZ2l0IHJldi1wYXJzZSBIRUFEXnt0cmVlfSA+ICIkQ1VTVE9EWS90cmVlLnNoYSIKICBmaW5kIHVpL2Rpc3QgLXR5cGUgZiAtcHJpbnQwIHwgc29ydCAteiB8IHhhcmdzIC0wIHNoYTI1NnN1bSA+ICIkQ1VTVE9EWS91aS1zaGEyNTZzdW1zIgogIHJ1c3RjIC0tdmVyc2lvbiAtLXZlcmJvc2UgPiAiJENVU1RPRFkvcnVzdGMudHh0IgogIGNhcmdvIC0tdmVyc2lvbiA+ICIkQ1VTVE9EWS9jYXJnby50eHQiCiAgbm9kZSAtLXZlcnNpb24gPiAiJENVU1RPRFkvbm9kZS12ZXJzaW9uLnR4dCIKICB0YXJnZXQ9IiRyb290L3RhcmdldCIKICBbICEgLWUgIiR0YXJnZXQiIF0KICBleHBvcnQgUlVTVEZMQUdTPSItLXJlbWFwLXBhdGgtcHJlZml4PSRyb290PS9zcmMgLS1yZW1hcC1wYXRoLXByZWZpeD0vaG9tZS9ydW5uZXIvLmNhcmdvPS9jYXJnbyAtRCB3YXJuaW5ncyIKICBleHBvcnQgU09VUkNFX0RBVEVfRVBPQ0g9MAogIHByaW50ZiAnJXNcbicgIiRSVVNURkxBR1MiID4gIiRDVVNUT0RZL3J1c3RmbGFncy50eHQiCiAgcHJpbnRmICclc1xuJyAiJFNPVVJDRV9EQVRFX0VQT0NIIiA+ICIkQ1VTVE9EWS9zb3VyY2UtZGF0ZS1lcG9jaC50eHQiCiAgdGVzdCAtZiB1aS9kaXN0L2luZGV4Lmh0bWwKICBSVVNUQ19XUkFQUEVSPSBjYXJnbyBidWlsZCAtLXJlbGVhc2UgLS1sb2NrZWQgLXAgZmlyZWVtdSAtLWJpbiBmaXJlZW11IC0tdGFyZ2V0IHg4Nl82NC11bmtub3duLWxpbnV4LW11c2wgLS1tYW5pZmVzdC1wYXRoICIkcm9vdC9DYXJnby50b21sIiAtLXRhcmdldC1kaXIgIiR0YXJnZXQiID4gIiRDVVNUT0RZL2J1aWxkLmxvZyIgMj4mMQogIGNwICIkdGFyZ2V0L3g4Nl82NC11bmtub3duLWxpbnV4LW11c2wvcmVsZWFzZS9maXJlZW11IiAiJENVU1RPRFkvZmlyZWVtdSIKICBjbXAgIiR0YXJnZXQveDg2XzY0LXVua25vd24tbGludXgtbXVzbC9yZWxlYXNlL2ZpcmVlbXUiICIkQ1VTVE9EWS9maXJlZW11IgogIHNoYTI1NnN1bSAiJENVU1RPRFkvZmlyZWVtdSIgfCBhd2sgJ3twcmludCAkMX0nID4gIiRDVVNUT0RZL2JpbmFyeS5zaGEiCiAgIiRDVVNUT0RZL2ZpcmVlbXUiIC0tdmVyc2lvbiA+ICIkQ1VTVE9EWS92ZXJzaW9uLnR4dCIKICBbICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiIF0gJiYgWyAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluIC0tdW50cmFja2VkLWZpbGVzPW5vKSIgXQogIDs7CiByMjEpCiAgOiAiJHtGSVJFRU1VX0JJTjo/fSIgIiR7RVhQRUNURURfQklOQVJZX1NIQTo/fSIgIiR7T1VUOj99IgogIFsgIiQoc2hhMjU2c3VtICIkRklSRUVNVV9CSU4iIHwgYXdrICd7cHJpbnQgJDF9JykiID0gIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiBdCiAgWyAiJChnaXQgcmV2LXBhcnNlIEhFQURee3RyZWV9KSIgPSAiJChjYXQgIiRDVVNUT0RZL3RyZWUuc2hhIikiIF0KICBbICIkKGNhdCAiJENVU1RPRFkvc291cmNlLnNoYSIpIiA9ICIkRVhQRUNURURfU09VUkNFIiBdCiAgbWtkaXIgLXAgIiRPVVQiCiAgY2c9JChhd2sgLUY6ICckMT09IjAiIHtwcmludCAkM30nIC9wcm9jL3NlbGYvY2dyb3VwKQogIGNhdCAiL3N5cy9mcy9jZ3JvdXAke2NnfS9tZW1vcnkubWF4IiA+ICIkT1VUL21lbW9yeS5tYXgiCiAgY2F0ICIvc3lzL2ZzL2Nncm91cCR7Y2d9L21lbW9yeS5zd2FwLm1heCIgPiAiJE9VVC9tZW1vcnkuc3dhcC5tYXgiCiAgWyAiJChjYXQgIiRPVVQvbWVtb3J5Lm1heCIpIiA9IDY0NDI0NTA5NDQgXSAmJiBbICIkKGNhdCAiJE9VVC9tZW1vcnkuc3dhcC5tYXgiKSIgPSAwIF0KICBbICIkJCIgPSAxIF0gfHwgeyBlY2hvICdSMjEgbXVzdCBiZSBQSUQgMSBpbiBpc29sYXRlZCBuYW1lc3BhY2UnID4mMjsgZXhpdCAxOyB9CiAgcmVhZGxpbmsgL3Byb2Mvc2VsZi9ucy9uZXQgPiAiJE9VVC9uZXR3b3JrLW5hbWVzcGFjZS50eHQiCiAgcHJpbnRmICclc1xuJyAiJEVYUEVDVEVEX1NPVVJDRSIgPiAiJE9VVC9zb3VyY2Uuc2hhIgogIHByaW50ZiAnJXNcbicgIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiA+ICIkT1VUL2JpbmFyeS5zaGEiCiAgbm9kZSAtLXZlcnNpb24gPiAiJE9VVC9ub2RlLXZlcnNpb24udHh0IgogIGV4cG9ydCBGSVJFRU1VX1NBTkRCT1hfTEFORT1mcy1lbnQtcGlwZWxpbmUKICBzZXQgK2UKICBub2RlIGNvbmZvcm1hbmNlL3NyYy9mcy1xdWVyeS1pbmRleC9ydW4ubWpzIGNoZWNrID4gIiRPVVQvY2hlY2subG9nIiAyPiYxCiAgc3RhdHVzPSQ/CiAgc2V0IC1lCiAgcHJpbnRmICclc1xuJyAiJHN0YXR1cyIgPiAiJE9VVC9jaGVjay5leGl0IgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9maXJlZW11Lmpzb24gIiRPVVQvZmlyZWVtdS5qc29uIgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9jb21wYXJpc29uLmpzb24gIiRPVVQvY29tcGFyaXNvbi5qc29uIgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9wcm9ncmFtcy5qc29uICIkT1VUL3Byb2dyYW1zLmpzb24iCiAgbm9kZSBjb25mb3JtYW5jZS9zcmMvZnMtcXVlcnktaW5kZXgvcnVuLm1qcyBleHBvcnQtY29tcGFyaXNvbiAiJE9VVC9iYXNlbGluZS1jYW5kaWRhdGUuanNvbiIgPiAiJE9VVC9leHBvcnQubG9nIiAyPiYxCiAgbm9kZSAtICIkT1VUL2NvbXBhcmlzb24uanNvbiIgIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiAiJE9VVC9zdW1tYXJ5Lmpzb24iIDw8J05PREUnCmNvbnN0IGZzPXJlcXVpcmUoJ2ZzJyk7Y29uc3QgW3Asc2hhLG91dF09cHJvY2Vzcy5hcmd2LnNsaWNlKDIpLGM9SlNPTi5wYXJzZShmcy5yZWFkRmlsZVN5bmMocCkpOwppZihjLmFydGlmYWN0U2hhMjU2IT09c2hhIHx8IGMucm93cy5sZW5ndGghPT0xOTUxIHx8IG5ldyBTZXQoYy5yb3dzLm1hcCh4PT54LnJvdykpLnNpemUhPT0xOTUxIHx8IGMub3JwaGFucy5sZW5ndGggfHwgYy5mYWlsdXJlcy5sZW5ndGgpIHByb2Nlc3MuZXhpdCgxKTsKZnMud3JpdGVGaWxlU3luYyhvdXQsSlNPTi5zdHJpbmdpZnkoe3N1bW1hcnk6Yy5zdW1tYXJ5LG9ycGhhbnM6Yy5vcnBoYW5zLGZhaWx1cmVzOmMuZmFpbHVyZXMscm93czpjLnJvd3MubGVuZ3RoLGFydGlmYWN0U2hhMjU2OmMuYXJ0aWZhY3RTaGEyNTZ9LG51bGwsMikrJ1xuJyk7Ck5PREUKICBzaGEyNTZzdW0gIiRPVVQiLyouanNvbiA+ICIkT1VUL3NoYTI1NnN1bXMiCiAgWyAiJChzaGEyNTZzdW0gIiRGSVJFRU1VX0JJTiIgfCBhd2sgJ3twcmludCAkMX0nKSIgPSAiJEVYUEVDVEVEX0JJTkFSWV9TSEEiIF0KICBbICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiIF0gJiYgWyAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluIC0tdW50cmFja2VkLWZpbGVzPW5vKSIgXQogIFsgIiRzdGF0dXMiIC1lcSAwIF0gfHwgWyAiJHN0YXR1cyIgLWVxIDEgXQogIDs7CiAqKSBlY2hvICd1c2FnZTogYnVpbGQtcjIxLWRyaXZlci5zaCBidWlsZHxyMjEnID4mMjsgZXhpdCAyOzsKZXNhYwo= | base64 -d > "$RUNNER_TEMP/build-r21-driver.sh"
+      - name: Build source-bound binary under memory cap
+        id: custody
+        env:
+          CUSTODY: ${{ runner.temp }}/v041-custody
+        shell: bash
+        run: |
+          mkdir -p "$CUSTODY"
+          sudo systemd-run --scope --quiet -p MemoryMax=6442450944 -p MemorySwapMax=0 \
+            setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups -- env PATH="$PATH" HOME="$HOME" RUNNER_TEMP="$RUNNER_TEMP" CUSTODY="$CUSTODY" EXPECTED_SOURCE="$EXPECTED_SOURCE" EXPECTED_VERSION="$EXPECTED_VERSION" RUSTC_WRAPPER= \
+            bash "$RUNNER_TEMP/build-r21-driver.sh" build
+          echo "binary_sha=$(cat "$CUSTODY/binary.sha")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v041-build-custody
+          path: ${{ runner.temp }}/v041-custody
+          if-no-files-found: error
+  r21:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+      EXPECTED_BINARY_SHA: ${{ needs.build.outputs.binary_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: v041-build-custody
+          path: ${{ runner.temp }}/v041-custody
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.14.0
+      - run: pnpm -C conformance install --frozen-lockfile
+      - name: Materialize reviewed driver
+        run: echo IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbAo6ICIke0VYUEVDVEVEX1NPVVJDRTo/fSIgIiR7RVhQRUNURURfVkVSU0lPTjo/fSIgIiR7Q1VTVE9EWTo/fSIKW1sgIiRFWFBFQ1RFRF9TT1VSQ0UiID1+IF5bMC05YS1mXXs0MH0kIF1dClsgIiQoZ2l0IHJldi1wYXJzZSBIRUFEKSIgPSAiJEVYUEVDVEVEX1NPVVJDRSIgXQpbIC16ICIkKGdpdCBzdGF0dXMgLS1wb3JjZWxhaW4gLS11bnRyYWNrZWQtZmlsZXM9bm8pIiBdCnJvb3Q9JChnaXQgcmV2LXBhcnNlIC0tc2hvdy10b3BsZXZlbCkKWyAiJChwd2QgLVApIiA9ICIkKGNkICIkcm9vdCIgJiYgcHdkIC1QKSIgXQp2ZXJzaW9uPSQocHl0aG9uMyAtYyAnaW1wb3J0IHRvbWxsaWI7cHJpbnQodG9tbGxpYi5sb2FkKG9wZW4oIkNhcmdvLnRvbWwiLCJyYiIpKVsid29ya3NwYWNlIl1bInBhY2thZ2UiXVsidmVyc2lvbiJdKScpClsgIiR2ZXJzaW9uIiA9ICIkRVhQRUNURURfVkVSU0lPTiIgXQpjYXNlICIkezE6LX0iIGluCiBidWlsZCkKICBta2RpciAtcCAiJENVU1RPRFkiCiAgdGVzdCAhIC1lICIkQ1VTVE9EWS9maXJlZW11IgogIGNnPSQoYXdrIC1GOiAnJDE9PSIwIiB7cHJpbnQgJDN9JyAvcHJvYy9zZWxmL2Nncm91cCkKICBjYXQgIi9zeXMvZnMvY2dyb3VwJHtjZ30vbWVtb3J5Lm1heCIgPiAiJENVU1RPRFkvbWVtb3J5Lm1heCIKICBjYXQgIi9zeXMvZnMvY2dyb3VwJHtjZ30vbWVtb3J5LnN3YXAubWF4IiA+ICIkQ1VTVE9EWS9tZW1vcnkuc3dhcC5tYXgiCiAgWyAiJChjYXQgIiRDVVNUT0RZL21lbW9yeS5tYXgiKSIgPSA2NDQyNDUwOTQ0IF0KICBbICIkKGNhdCAiJENVU1RPRFkvbWVtb3J5LnN3YXAubWF4IikiID0gMCBdCiAgZ2l0IHJldi1wYXJzZSBIRUFEID4gIiRDVVNUT0RZL3NvdXJjZS5zaGEiCiAgZ2l0IHJldi1wYXJzZSBIRUFEXnt0cmVlfSA+ICIkQ1VTVE9EWS90cmVlLnNoYSIKICBmaW5kIHVpL2Rpc3QgLXR5cGUgZiAtcHJpbnQwIHwgc29ydCAteiB8IHhhcmdzIC0wIHNoYTI1NnN1bSA+ICIkQ1VTVE9EWS91aS1zaGEyNTZzdW1zIgogIHJ1c3RjIC0tdmVyc2lvbiAtLXZlcmJvc2UgPiAiJENVU1RPRFkvcnVzdGMudHh0IgogIGNhcmdvIC0tdmVyc2lvbiA+ICIkQ1VTVE9EWS9jYXJnby50eHQiCiAgbm9kZSAtLXZlcnNpb24gPiAiJENVU1RPRFkvbm9kZS12ZXJzaW9uLnR4dCIKICB0YXJnZXQ9IiRyb290L3RhcmdldCIKICBbICEgLWUgIiR0YXJnZXQiIF0KICBleHBvcnQgUlVTVEZMQUdTPSItLXJlbWFwLXBhdGgtcHJlZml4PSRyb290PS9zcmMgLS1yZW1hcC1wYXRoLXByZWZpeD0vaG9tZS9ydW5uZXIvLmNhcmdvPS9jYXJnbyAtRCB3YXJuaW5ncyIKICBleHBvcnQgU09VUkNFX0RBVEVfRVBPQ0g9MAogIHByaW50ZiAnJXNcbicgIiRSVVNURkxBR1MiID4gIiRDVVNUT0RZL3J1c3RmbGFncy50eHQiCiAgcHJpbnRmICclc1xuJyAiJFNPVVJDRV9EQVRFX0VQT0NIIiA+ICIkQ1VTVE9EWS9zb3VyY2UtZGF0ZS1lcG9jaC50eHQiCiAgdGVzdCAtZiB1aS9kaXN0L2luZGV4Lmh0bWwKICBSVVNUQ19XUkFQUEVSPSBjYXJnbyBidWlsZCAtLXJlbGVhc2UgLS1sb2NrZWQgLXAgZmlyZWVtdSAtLWJpbiBmaXJlZW11IC0tdGFyZ2V0IHg4Nl82NC11bmtub3duLWxpbnV4LW11c2wgLS1tYW5pZmVzdC1wYXRoICIkcm9vdC9DYXJnby50b21sIiAtLXRhcmdldC1kaXIgIiR0YXJnZXQiID4gIiRDVVNUT0RZL2J1aWxkLmxvZyIgMj4mMQogIGNwICIkdGFyZ2V0L3g4Nl82NC11bmtub3duLWxpbnV4LW11c2wvcmVsZWFzZS9maXJlZW11IiAiJENVU1RPRFkvZmlyZWVtdSIKICBjbXAgIiR0YXJnZXQveDg2XzY0LXVua25vd24tbGludXgtbXVzbC9yZWxlYXNlL2ZpcmVlbXUiICIkQ1VTVE9EWS9maXJlZW11IgogIHNoYTI1NnN1bSAiJENVU1RPRFkvZmlyZWVtdSIgfCBhd2sgJ3twcmludCAkMX0nID4gIiRDVVNUT0RZL2JpbmFyeS5zaGEiCiAgIiRDVVNUT0RZL2ZpcmVlbXUiIC0tdmVyc2lvbiA+ICIkQ1VTVE9EWS92ZXJzaW9uLnR4dCIKICBbICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiIF0gJiYgWyAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluIC0tdW50cmFja2VkLWZpbGVzPW5vKSIgXQogIDs7CiByMjEpCiAgOiAiJHtGSVJFRU1VX0JJTjo/fSIgIiR7RVhQRUNURURfQklOQVJZX1NIQTo/fSIgIiR7T1VUOj99IgogIFsgIiQoc2hhMjU2c3VtICIkRklSRUVNVV9CSU4iIHwgYXdrICd7cHJpbnQgJDF9JykiID0gIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiBdCiAgWyAiJChnaXQgcmV2LXBhcnNlIEhFQURee3RyZWV9KSIgPSAiJChjYXQgIiRDVVNUT0RZL3RyZWUuc2hhIikiIF0KICBbICIkKGNhdCAiJENVU1RPRFkvc291cmNlLnNoYSIpIiA9ICIkRVhQRUNURURfU09VUkNFIiBdCiAgbWtkaXIgLXAgIiRPVVQiCiAgY2c9JChhd2sgLUY6ICckMT09IjAiIHtwcmludCAkM30nIC9wcm9jL3NlbGYvY2dyb3VwKQogIGNhdCAiL3N5cy9mcy9jZ3JvdXAke2NnfS9tZW1vcnkubWF4IiA+ICIkT1VUL21lbW9yeS5tYXgiCiAgY2F0ICIvc3lzL2ZzL2Nncm91cCR7Y2d9L21lbW9yeS5zd2FwLm1heCIgPiAiJE9VVC9tZW1vcnkuc3dhcC5tYXgiCiAgWyAiJChjYXQgIiRPVVQvbWVtb3J5Lm1heCIpIiA9IDY0NDI0NTA5NDQgXSAmJiBbICIkKGNhdCAiJE9VVC9tZW1vcnkuc3dhcC5tYXgiKSIgPSAwIF0KICBbICIkJCIgPSAxIF0gfHwgeyBlY2hvICdSMjEgbXVzdCBiZSBQSUQgMSBpbiBpc29sYXRlZCBuYW1lc3BhY2UnID4mMjsgZXhpdCAxOyB9CiAgcmVhZGxpbmsgL3Byb2Mvc2VsZi9ucy9uZXQgPiAiJE9VVC9uZXR3b3JrLW5hbWVzcGFjZS50eHQiCiAgcHJpbnRmICclc1xuJyAiJEVYUEVDVEVEX1NPVVJDRSIgPiAiJE9VVC9zb3VyY2Uuc2hhIgogIHByaW50ZiAnJXNcbicgIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiA+ICIkT1VUL2JpbmFyeS5zaGEiCiAgbm9kZSAtLXZlcnNpb24gPiAiJE9VVC9ub2RlLXZlcnNpb24udHh0IgogIGV4cG9ydCBGSVJFRU1VX1NBTkRCT1hfTEFORT1mcy1lbnQtcGlwZWxpbmUKICBzZXQgK2UKICBub2RlIGNvbmZvcm1hbmNlL3NyYy9mcy1xdWVyeS1pbmRleC9ydW4ubWpzIGNoZWNrID4gIiRPVVQvY2hlY2subG9nIiAyPiYxCiAgc3RhdHVzPSQ/CiAgc2V0IC1lCiAgcHJpbnRmICclc1xuJyAiJHN0YXR1cyIgPiAiJE9VVC9jaGVjay5leGl0IgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9maXJlZW11Lmpzb24gIiRPVVQvZmlyZWVtdS5qc29uIgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9jb21wYXJpc29uLmpzb24gIiRPVVQvY29tcGFyaXNvbi5qc29uIgogIGNwIGNvbmZvcm1hbmNlLy5ydW5zL2ZzLWVudC1waXBlbGluZS9wcm9ncmFtcy5qc29uICIkT1VUL3Byb2dyYW1zLmpzb24iCiAgbm9kZSBjb25mb3JtYW5jZS9zcmMvZnMtcXVlcnktaW5kZXgvcnVuLm1qcyBleHBvcnQtY29tcGFyaXNvbiAiJE9VVC9iYXNlbGluZS1jYW5kaWRhdGUuanNvbiIgPiAiJE9VVC9leHBvcnQubG9nIiAyPiYxCiAgbm9kZSAtICIkT1VUL2NvbXBhcmlzb24uanNvbiIgIiRFWFBFQ1RFRF9CSU5BUllfU0hBIiAiJE9VVC9zdW1tYXJ5Lmpzb24iIDw8J05PREUnCmNvbnN0IGZzPXJlcXVpcmUoJ2ZzJyk7Y29uc3QgW3Asc2hhLG91dF09cHJvY2Vzcy5hcmd2LnNsaWNlKDIpLGM9SlNPTi5wYXJzZShmcy5yZWFkRmlsZVN5bmMocCkpOwppZihjLmFydGlmYWN0U2hhMjU2IT09c2hhIHx8IGMucm93cy5sZW5ndGghPT0xOTUxIHx8IG5ldyBTZXQoYy5yb3dzLm1hcCh4PT54LnJvdykpLnNpemUhPT0xOTUxIHx8IGMub3JwaGFucy5sZW5ndGggfHwgYy5mYWlsdXJlcy5sZW5ndGgpIHByb2Nlc3MuZXhpdCgxKTsKZnMud3JpdGVGaWxlU3luYyhvdXQsSlNPTi5zdHJpbmdpZnkoe3N1bW1hcnk6Yy5zdW1tYXJ5LG9ycGhhbnM6Yy5vcnBoYW5zLGZhaWx1cmVzOmMuZmFpbHVyZXMscm93czpjLnJvd3MubGVuZ3RoLGFydGlmYWN0U2hhMjU2OmMuYXJ0aWZhY3RTaGEyNTZ9LG51bGwsMikrJ1xuJyk7Ck5PREUKICBzaGEyNTZzdW0gIiRPVVQiLyouanNvbiA+ICIkT1VUL3NoYTI1NnN1bXMiCiAgWyAiJChzaGEyNTZzdW0gIiRGSVJFRU1VX0JJTiIgfCBhd2sgJ3twcmludCAkMX0nKSIgPSAiJEVYUEVDVEVEX0JJTkFSWV9TSEEiIF0KICBbICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiIF0gJiYgWyAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluIC0tdW50cmFja2VkLWZpbGVzPW5vKSIgXQogIFsgIiRzdGF0dXMiIC1lcSAwIF0gfHwgWyAiJHN0YXR1cyIgLWVxIDEgXQogIDs7CiAqKSBlY2hvICd1c2FnZTogYnVpbGQtcjIxLWRyaXZlci5zaCBidWlsZHxyMjEnID4mMjsgZXhpdCAyOzsKZXNhYwo= | base64 -d > "$RUNNER_TEMP/build-r21-driver.sh"
+      - name: Replay full R21 in capped isolated namespace
+        env:
+          CUSTODY: ${{ runner.temp }}/v041-custody
+          OUT: ${{ runner.temp }}/v041-r21
+        shell: bash
+        run: |
+          chmod +x "$CUSTODY/fireemu"
+          mkdir -p "$OUT"
+          sudo systemd-run --scope --quiet -p MemoryMax=6442450944 -p MemorySwapMax=0 \
+            unshare --net --pid --fork --mount-proc --kill-child -- \
+            sh -c 'ip link set lo up; exec setpriv --reuid="$1" --regid="$2" --init-groups -- env PATH="$3" HOME="$4" EXPECTED_SOURCE="$5" EXPECTED_VERSION="$6" EXPECTED_BINARY_SHA="$7" CUSTODY="$8" FIREEMU_BIN="$8/fireemu" OUT="$9" bash "${10}" r21' \
+            sh "$(id -u)" "$(id -g)" "$PATH" "$HOME" "$EXPECTED_SOURCE" "$EXPECTED_VERSION" "$EXPECTED_BINARY_SHA" "$CUSTODY" "$OUT" "$RUNNER_TEMP/build-r21-driver.sh"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v041-r21-raw
+          path: |
+            ${{ runner.temp }}/v041-r21
+            conformance/.runs/fs-ent-pipeline/fireemu.json
+            conformance/.runs/fs-ent-pipeline/comparison.json
+          if-no-files-found: warn

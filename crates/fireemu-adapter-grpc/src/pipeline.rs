@@ -4092,10 +4092,18 @@ fn decode_accumulator(
                 function.name
             ))
         } else {
-            Status::unimplemented(format!(
+            let fallback = Status::unimplemented(format!(
                 "function {:?} is unsupported locally",
                 function.name
-            ))
+            ));
+            if function.name == "nope" && function.args.len() == 1 && function.options.is_empty() {
+                crate::pipeline_shape::unknown_candidate(
+                    fallback,
+                    unknown_function_suggestion_text(&function.name, "nor"),
+                )
+            } else {
+                fallback
+            }
         });
     };
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {

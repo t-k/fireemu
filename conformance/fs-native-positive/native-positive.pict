@@ -1,0 +1,3 @@
+Transport: grpc, rest
+Profile: strict, emulator
+Fault: none, type, missing, extra, result, status, reference, metadata, autogen

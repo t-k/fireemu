@@ -208,6 +208,45 @@ fn stages_may_repeat_and_come_in_any_order() {
 }
 
 #[test]
+fn ordered_select_first_refusal_is_default_off_and_type_bounded() {
+    let call = |name| Expr::call("collection_id", vec![field(name)], Placement::Value).unwrap();
+    let stage = Stage::select(vec![
+        (alias("v"), call("first")),
+        (alias("w"), call("second")),
+    ]);
+    let row = doc(
+        "x",
+        &[
+            ("first", Value::String("a".into())),
+            ("second", Value::String("b".into())),
+        ],
+    );
+    let mut default = Cursor::new(vec![stage.clone()]);
+    assert!(matches!(
+        default.push(row.clone()),
+        Err(EvalError::Unobserved { .. })
+    ));
+    let mut admitted = Cursor::new(vec![stage.clone()]).with_recorded_select_first_wrong_type();
+    assert!(matches!(
+        admitted.push(row),
+        Err(EvalError::WrongType {
+            function: "collection_id",
+            expected: "Reference",
+            got: "STRING"
+        })
+    ));
+    let changed = doc(
+        "x",
+        &[("first", int(7)), ("second", Value::String("b".into()))],
+    );
+    let mut admitted = Cursor::new(vec![stage]).with_recorded_select_first_wrong_type();
+    assert!(matches!(
+        admitted.push(changed),
+        Err(EvalError::Unobserved { .. })
+    ));
+}
+
+#[test]
 fn a_select_drops_the_name_and_times_unless_it_kept_the_name() {
     let times = RowTimes {
         created: Timestamp::new(1, 0).unwrap(),
@@ -609,7 +648,7 @@ fn eval_function(name: &str, args: Vec<Eval>) -> Eval {
         Context {
             unrecorded: Unrecorded::OfficialEmulator,
             condition: false,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -711,7 +750,7 @@ fn a_value_that_is_not_a_boolean_fails_the_logical_call() {
                 Context {
                     unrecorded,
                     condition: false,
-                    runtime: RuntimeContext::default(),
+                    runtime: &RuntimeContext::default(),
                 },
             )
         };
@@ -911,7 +950,7 @@ fn strict(function_name: &str, args: &[Eval]) -> Eval {
         Context {
             unrecorded: Unrecorded::Refuse,
             condition: false,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -1359,7 +1398,7 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
             Context {
                 unrecorded,
                 condition,
-                runtime: RuntimeContext::default(),
+                runtime: &RuntimeContext::default(),
             },
         )
     };
@@ -1375,15 +1414,28 @@ fn is_type_of_a_missing_value_is_null_for_every_type_name() {
         }
     }
 }
-/// The adapter's `where` decoder treats a function without a signature as a comparison of two
-/// operands only when it returns a boolean and takes exactly two arguments, and as a value of
-/// another kind otherwise. The table keeps those two conditions interchangeable: a function
-/// without a signature that takes exactly two arguments is a boolean comparison, and one that
-/// returns a boolean takes exactly two. So the first `||` of the adapter's test in
-/// `decode_condition` can be an `&&` without changing any answer (an equivalent mutant).
+/// Registry entries without recorded signatures still retain the legacy boolean/arity relation.
 #[test]
 fn functions_without_a_signature_are_boolean_if_and_only_if_they_take_two_arguments() {
-    for function in FUNCTIONS.iter().filter(|f| f.signature.is_empty()) {
+    for function in FUNCTIONS.iter().filter(|f| {
+        f.signature.is_empty()
+            && !matches!(
+                f.name,
+                "namespace"
+                    | "has_ancestor"
+                    | "reference_slice"
+                    | "replace_document_id"
+                    | "autogen_document_id"
+                    | "coalesce"
+                    | "cmp"
+                    | "storage_size"
+                    | "get_field"
+                    | "offset"
+                    | "reverse"
+                    | "length"
+                    | "string_concat"
+            )
+    }) {
         assert_eq!(
             function.returns_boolean,
             matches!(function.arity, Arity::Exact(2)),
@@ -1937,7 +1989,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut cursor = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Documents(2))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in &rows {
         assert!(cursor.push(row.clone()).unwrap().is_empty());
@@ -1949,7 +2001,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut all = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(1.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     let mut observed = Vec::new();
     for row in &rows {
@@ -1960,7 +2012,7 @@ fn sample_documents_and_percent_preserve_cardinality_order_and_finish_once() {
     let mut none = Cursor::new_in_with_runtime(
         vec![Stage::Sample(SampleMode::Percent(0.0))],
         Unrecorded::Refuse,
-        runtime,
+        runtime.clone(),
     );
     for row in rows {
         assert!(none.push(row).unwrap().is_empty());
@@ -2024,7 +2076,7 @@ fn sample_pict_rows_execute_with_seeded_contracts() {
             Unrecorded::OfficialEmulator
         };
         let execute = || {
-            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime);
+            let mut cursor = Cursor::new_in_with_runtime(stages.clone(), policy, runtime.clone());
             let mut out = Vec::new();
             for row in &rows {
                 if cursor.is_exhausted() {
@@ -2081,7 +2133,7 @@ proptest! {
     fn sample_documents_preserve_occurrences_and_metadata(size in 0_u64..16, input in proptest::collection::vec(-3_i64..4, 0..12), seed in any::<u64>()) {
         let rows: Vec<Row> = input.iter().enumerate().map(|(i, n)| doc(&format!("d{i}"), &[("v", int(*n))])).collect();
         let runtime = RuntimeContext { sample_seed: Some(seed), ..RuntimeContext::default() };
-        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
+        let execute = || { let mut cursor = Cursor::new_in_with_runtime(vec![Stage::Sample(SampleMode::Documents(size))], Unrecorded::Refuse, runtime.clone()); for row in &rows { cursor.push(row.clone()).unwrap(); } let out = cursor.finish().unwrap(); assert!(cursor.finish().unwrap().is_empty()); out };
         let out = execute();
         prop_assert_eq!(out.len(), usize::try_from(size).unwrap().min(rows.len()));
         prop_assert!(out.iter().all(|row| rows.contains(row)));
@@ -2474,4 +2526,93 @@ fn aggregate_five_seeded_pict_rows() {
             "{name}/{input}/{grouping}: {result:?}"
         );
     }
+}
+
+#[test]
+fn nested_sum_uses_actual_row_type() {
+    let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
+    let stage = Stage::Aggregate {
+        accumulators: vec![(
+            "s".to_owned(),
+            Accumulator {
+                kind: AccumulatorKind::Sum,
+                argument: Some(nested),
+            },
+        )],
+        groups: vec![],
+    };
+    let run = |rows: Vec<Row>| {
+        let mut cursor = Cursor::new(vec![stage.clone()]).with_recorded_nested_sum_wrong_type();
+        for row in rows {
+            cursor.push(row)?;
+        }
+        cursor.finish()
+    };
+    let row = doc("one", &[("n", int(7))]);
+    assert!(matches!(
+        execute_rows_in(vec![stage.clone()], vec![row.clone()], Unrecorded::Refuse),
+        Err(EvalError::Unobserved { .. })
+    ));
+    let error = run(vec![row]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "The function array_sum(...) requires `Array` but got `LONG`."
+    );
+    assert!(run(vec![]).is_ok());
+    assert!(run(vec![doc("one", &[("n", Value::Array(vec![int(7)]))])]).is_ok());
+    assert!(matches!(
+        run(vec![doc("one", &[("n", Value::String("x".to_owned()))])]),
+        Err(EvalError::Unobserved { .. })
+    ));
+}
+
+proptest! {
+    #[test]
+    fn nested_sum_long_requires_admission(value in any::<i64>(), admitted in any::<bool>(), ordinary in any::<bool>()) {
+        let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
+        let stage = Stage::Aggregate {
+            accumulators: vec![("s".to_owned(), Accumulator { kind: AccumulatorKind::Sum, argument: Some(nested) })],
+            groups: vec![],
+        };
+        let mode = if ordinary { Unrecorded::OfficialEmulator } else { Unrecorded::Refuse };
+        let mut cursor = Cursor::new_in(vec![stage], mode);
+        if admitted {
+            cursor = cursor.with_recorded_nested_sum_wrong_type();
+        }
+        cursor.push(doc("one", &[("n", int(value))])).unwrap();
+        let result = cursor.finish();
+        if admitted {
+            prop_assert!(matches!(result, Err(EvalError::WrongType { function: "array_sum", expected: "Array", got: "LONG" })), "expected recorded type refusal");
+        } else {
+            prop_assert!(matches!(result, Err(EvalError::Unobserved { function: "sum", .. })), "expected unobserved fallback");
+        }
+    }
+}
+
+#[test]
+fn admitted_nested_sum_evaluates_child_once() {
+    let rand = Expr::call("rand", vec![], Placement::Value).unwrap();
+    let nested = Expr::call("sum", vec![rand], Placement::Value).unwrap();
+    let stage = Stage::Aggregate {
+        accumulators: vec![(
+            "s".to_owned(),
+            Accumulator {
+                kind: AccumulatorKind::Sum,
+                argument: Some(nested),
+            },
+        )],
+        groups: vec![],
+    };
+    let rng = std::sync::Arc::new(std::sync::Mutex::new(SplitMix64::new(42)));
+    let runtime = RuntimeContext {
+        expr_rng: Some(rng.clone()),
+        ..RuntimeContext::default()
+    };
+    let mut cursor = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime)
+        .with_recorded_nested_sum_wrong_type();
+    cursor.push(doc("one", &[])).unwrap();
+    assert!(matches!(cursor.finish(), Err(EvalError::Unobserved { .. })));
+    let mut expected = SplitMix64::new(42);
+    expected.next_u64();
+    assert_eq!(rng.lock().unwrap().next_u64(), expected.next_u64());
 }

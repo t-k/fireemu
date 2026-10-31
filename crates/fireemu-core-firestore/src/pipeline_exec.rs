@@ -19,10 +19,12 @@
 //! [`EvalError::Invalid`].
 
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
+use fireemu_core_types::ids::DocumentId;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
+use std::sync::{Arc, Mutex};
 
 use crate::field_path::FieldPath;
 use crate::path::DocumentPath;
@@ -257,7 +259,7 @@ pub enum RegexError {
 pub type RegexResolver = fn(&str, &str, RegexOperation) -> Result<RegexResult, RegexError>;
 
 /// Request-scoped runtime values for pipeline expression evaluation.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeContext {
     /// One immutable request timestamp; absent when no clock was supplied.
     pub request_timestamp: Option<Timestamp>,
@@ -267,17 +269,19 @@ pub struct RuntimeContext {
     pub regex_resolver: Option<RegexResolver>,
     /// Independent request-scoped seed for sample stages.
     pub sample_seed: Option<u64>,
+    /// Independent advancing random stream for expression evaluation.
+    pub expr_rng: Option<Arc<Mutex<SplitMix64>>>,
 }
 
 /// What a function sees besides its arguments.
 #[derive(Debug, Clone, Copy)]
-pub struct Context {
+pub struct Context<'a> {
     /// What inputs with unrecorded production behavior give.
     pub unrecorded: Unrecorded,
     /// Whether the call is the whole condition of a `where` stage (its arguments are not).
     pub condition: bool,
     /// Immutable request-scoped values.
-    pub runtime: RuntimeContext,
+    pub runtime: &'a RuntimeContext,
 }
 
 /// One entry of the static function table.
@@ -292,10 +296,11 @@ pub struct Function {
     /// answers its own wording).
     pub signature: &'static str,
     /// For a function with several overloads, production's argument-count refusal lists them:
-    /// each is its signature with the fewest and the most arguments it takes. Empty for a
+    /// each is its signature with the fewest and the most arguments it takes (`usize::MAX`
+    /// represents an unbounded maximum). Empty for a
     /// function with one signature.
     pub overloads: &'static [(&'static str, usize, usize)],
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 }
 
 impl fmt::Debug for Function {
@@ -315,24 +320,32 @@ impl PartialEq for Function {
 }
 
 /// A comparison of the table.
-const fn comparison(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+const fn comparison(
+    name: &'static str,
+    signature: &'static str,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
+) -> Function {
     Function {
         name,
         arity: Arity::Exact(2),
         returns_boolean: true,
-        signature: "",
+        signature,
         overloads: &[],
         eval,
     }
 }
 
 /// A function of one document reference.
-const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eval) -> Function {
+const fn document_function(
+    name: &'static str,
+    signature: &'static str,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
+) -> Function {
     Function {
         name,
         arity: Arity::Exact(1),
         returns_boolean: false,
-        signature: "",
+        signature,
         overloads: &[],
         eval,
     }
@@ -340,24 +353,62 @@ const fn document_function(name: &'static str, eval: fn(&[Eval], Context) -> Eva
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
-    comparison("equal", |args, cx| {
+    array_access_function("namespace", Arity::Exact(1), "namespace(ref: document_reference): string", eval_namespace),
+    array_access_function("has_ancestor", Arity::Exact(2), "has_ancestor(value: document_reference, prefix: document_reference): boolean", eval_has_ancestor),
+    array_access_function("reference_slice", Arity::Exact(3), "reference_slice(current: document_reference, offset: int64, length: int64): document_reference", eval_reference_slice),
+    array_access_function(
+        "replace_document_id",
+        Arity::Exact(2),
+        "replace_document_id(ref: document_reference, new_id: any): document_reference",
+        eval_replace_document_id,
+    ),
+    array_access_function(
+        "autogen_document_id",
+        Arity::Exact(0),
+        "autogen_document_id(): string",
+        eval_autogen_document_id,
+    ),
+    array_access_function("coalesce", Arity::AtLeast(2), "coalesce(x: any?*): any?", eval_control_fallback),
+    array_access_function("cmp", Arity::Exact(2), "cmp(x: any, y: any): int64", eval_generic_cmp),
+    array_access_function(
+        "storage_size",
+        Arity::Exact(1),
+        "storage_size(input: any): int64",
+        eval_generic_storage_size,
+    ),
+    array_access_function("get_field", Arity::Exact(2), "get_field(map: map[string, any], key: string): any?", eval_generic_get_field),
+    array_access_function("offset", Arity::Exact(2), "offset(array: array[any], index: int64): any?", eval_generic_offset),
+    array_access_function("reverse", Arity::Exact(1), "reverse[T: string | bytes | array[any]](input: T): T", eval_generic_reverse),
+    array_access_function("length", Arity::Exact(1), "length[T: string | bytes | array[any] | map[string, any] | vector](input: T): T", eval_generic_length),
+    array_access_function("string_concat", Arity::AtLeast(2), "string_concat(strings: string*): string", eval_generic_concat),
+    comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
         eval_comparison(Comparison::Equal, args, cx)
     }),
-    comparison("not_equal", |args, cx| {
-        eval_comparison(Comparison::NotEqual, args, cx)
-    }),
-    comparison("less_than", |args, cx| {
-        eval_comparison(Comparison::Less, args, cx)
-    }),
-    comparison("less_than_or_equal", |args, cx| {
-        eval_comparison(Comparison::LessOrEqual, args, cx)
-    }),
-    comparison("greater_than", |args, cx| {
-        eval_comparison(Comparison::Greater, args, cx)
-    }),
-    comparison("greater_than_or_equal", |args, cx| {
-        eval_comparison(Comparison::GreaterOrEqual, args, cx)
-    }),
+    comparison(
+        "not_equal",
+        "not_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::NotEqual, args, cx),
+    ),
+    comparison(
+        "less_than",
+        "less_than(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::Less, args, cx),
+    ),
+    comparison(
+        "less_than_or_equal",
+        "less_than_or_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::LessOrEqual, args, cx),
+    ),
+    comparison(
+        "greater_than",
+        "greater_than(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::Greater, args, cx),
+    ),
+    comparison(
+        "greater_than_or_equal",
+        "greater_than_or_equal(x: any, y: any): boolean",
+        |args, cx| eval_comparison(Comparison::GreaterOrEqual, args, cx),
+    ),
     Function {
         name: "array",
         arity: Arity::Any,
@@ -366,6 +417,24 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_array,
     },
+    array_access_function(
+        "rand",
+        Arity::Exact(0),
+        "rand(): float64",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "array_filter",
+        Arity::Exact(3),
+        "array_filter(array: array[any], alias: string, filter: (any) -> boolean): array[any]",
+        eval_control_fallback,
+    ),
+    array_access_function(
+        "array_transform",
+        Arity::Between(3, 4),
+        "",
+        eval_control_fallback,
+    ),
     array_access_function(
         "if_absent",
         Arity::Exact(2),
@@ -540,9 +609,29 @@ const FUNCTIONS: &[Function] = &[
         overloads: &[],
         eval: eval_map,
     },
-    document_function("document_id", eval_document_id),
-    document_function("collection_id", eval_collection_id),
-    document_function("parent", eval_parent),
+    Function {
+        name: "current_document",
+        arity: Arity::Exact(0),
+        returns_boolean: false,
+        signature: "current_document(): map[string, any]",
+        overloads: &[],
+        eval: eval_control_fallback,
+    },
+    document_function(
+        "document_id",
+        "document_id(ref: document_reference): any",
+        eval_document_id,
+    ),
+    document_function(
+        "collection_id",
+        "collection_id(ref: document_reference): string",
+        eval_collection_id,
+    ),
+    document_function(
+        "parent",
+        "parent(ref: document_reference): document_reference?",
+        eval_parent,
+    ),
     logic::AND,
     logic::OR,
     logic::NOT,
@@ -570,6 +659,7 @@ const FUNCTIONS: &[Function] = &[
     scalar::TIMESTAMP_TO_UNIX_MICROS,
     scalar::TIMESTAMP_TO_UNIX_MILLIS,
     scalar::TIMESTAMP_TO_UNIX_SECONDS,
+    scalar::LIKE,
     scalar::REGEX_CONTAINS,
     scalar::REGEX_MATCH,
     scalar::REGEX_FIND,
@@ -598,6 +688,10 @@ const FUNCTIONS: &[Function] = &[
     scalar::DIVIDE,
     scalar::MOD,
     scalar::ABS,
+    scalar::MINIMUM,
+    scalar::MAXIMUM,
+    scalar::SUM,
+    scalar::NEGATE,
     scalar::ROUND,
     scalar::FLOOR,
     scalar::CEIL,
@@ -666,6 +760,8 @@ pub enum Expr {
         /// The child field selected as a scalar.
         field: FieldPath,
     },
+    /// A lexical variable bound by an array expression.
+    Variable(String),
     /// A constant.
     Constant(Value),
     /// A call of a table function.
@@ -710,7 +806,11 @@ impl Expr {
             let got = args.len();
             let mut options = String::new();
             for (signature, low, high) in function.overloads {
-                let _ = write!(options, "\n- {signature} with [{low}..{high}] argument(s).");
+                if *high == usize::MAX {
+                    let _ = write!(options, "\n- {signature} with [{low}..+∞) argument(s).");
+                } else {
+                    let _ = write!(options, "\n- {signature} with [{low}..{high}] argument(s).");
+                }
             }
             return Err(ExprError::Arity(format!(
                 "The function '{name}' does not accept {got} argument(s). Valid options are:{options}"
@@ -735,8 +835,14 @@ impl Expr {
         if !fits {
             // The official emulator's text for an odd number of `map(...)` arguments.
             if function.arity == Arity::Pairs {
-                return Err(ExprError::Invalid(format!(
+                return Err(ExprError::Arity(format!(
                     "'{name}' function must have an even number of arguments"
+                )));
+            }
+            if let Arity::AtLeast(minimum) = function.arity {
+                return Err(ExprError::Invalid(format!(
+                    "function {name:?} takes at least {minimum} argument(s), got {} argument(s)",
+                    args.len()
                 )));
             }
             let expected = match function.arity {
@@ -759,12 +865,19 @@ impl Expr {
     }
 
     /// Adds every field path the expression reads.
-    fn collect_fields(&self, out: &mut Vec<FieldPath>) {
+    fn collect_fields(&self, out: &mut Vec<FieldPath>, all_fields: &mut bool) {
         match self {
             Self::Field(path) => out.push(path.clone()),
-            Self::Constant(_) | Self::SubcollectionArray { .. } | Self::CorrelatedScalar { .. } => {
+            Self::Constant(_)
+            | Self::Variable(_)
+            | Self::SubcollectionArray { .. }
+            | Self::CorrelatedScalar { .. } => {}
+            Self::Call { function, args } => {
+                *all_fields |= function.name == "current_document";
+                for arg in args {
+                    arg.collect_fields(out, all_fields);
+                }
             }
-            Self::Call { args, .. } => args.iter().for_each(|arg| arg.collect_fields(out)),
         }
     }
 
@@ -778,24 +891,28 @@ impl Expr {
     /// unrecorded production behavior give.
     #[must_use]
     pub fn eval_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, false, RuntimeContext::default())
+        self.eval_at(row, unrecorded, false, &RuntimeContext::default())
     }
 
     /// Evaluates an expression with request-scoped adapter operations.
     #[must_use]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Preserve the public owned runtime API"
+    )]
     pub fn eval_in_with_runtime(
         &self,
         row: &Row,
         unrecorded: Unrecorded,
         runtime: RuntimeContext,
     ) -> Eval {
-        self.eval_at(row, unrecorded, false, runtime)
+        self.eval_at(row, unrecorded, false, &runtime)
     }
 
     /// Evaluates the expression as the whole condition of a `where` stage.
     #[must_use]
     pub fn eval_condition_in(&self, row: &Row, unrecorded: Unrecorded) -> Eval {
-        self.eval_at(row, unrecorded, true, RuntimeContext::default())
+        self.eval_at(row, unrecorded, true, &RuntimeContext::default())
     }
 
     fn eval_at(
@@ -803,9 +920,25 @@ impl Expr {
         row: &Row,
         unrecorded: Unrecorded,
         condition: bool,
-        runtime: RuntimeContext,
+        runtime: &RuntimeContext,
+    ) -> Eval {
+        self.eval_scoped(row, unrecorded, condition, runtime, &[])
+    }
+
+    fn eval_scoped(
+        &self,
+        row: &Row,
+        unrecorded: Unrecorded,
+        condition: bool,
+        runtime: &RuntimeContext,
+        bindings: &[(String, Value)],
     ) -> Eval {
         match self {
+            Self::Variable(name) => bindings
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map_or(Eval::Absent, |(_, value)| Eval::Value(value.clone())),
             Self::Field(path) if path.is_document_name() => {
                 row.path.as_ref().map_or(Eval::Absent, |path| {
                     Eval::Value(Value::Reference(path.resource_name()))
@@ -824,11 +957,52 @@ impl Expr {
                 reason: "subcollection input was not prepared",
             }),
             Self::Call { function, args } => {
+                if function.name == "rand" {
+                    return eval_rand(runtime);
+                }
+                if function.name == "current_document" {
+                    if unrecorded == Unrecorded::Refuse
+                        && (row.path.is_none() || row.times.is_none())
+                    {
+                        return Eval::Error(EvalError::Unobserved {
+                            function: "current_document",
+                            reason: "a row without document metadata is unobserved",
+                        });
+                    }
+                    let mut fields = row.fields.clone();
+                    if let Some(path) = &row.path {
+                        fields.insert(
+                            "__name__".to_owned(),
+                            Value::Reference(path.resource_name()),
+                        );
+                    }
+                    if let Some(times) = row.times {
+                        fields.insert(
+                            "__create_time__".to_owned(),
+                            Value::Timestamp(times.created),
+                        );
+                        fields.insert(
+                            "__update_time__".to_owned(),
+                            Value::Timestamp(times.updated),
+                        );
+                    }
+                    return Eval::Value(Value::Map(fields));
+                }
                 if matches!(
                     function.name,
-                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
+                    "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on" | "coalesce"
                 ) {
-                    return eval_control(function.name, args, row, unrecorded, runtime);
+                    return eval_control(function.name, args, row, unrecorded, runtime, bindings);
+                }
+                if matches!(function.name, "array_filter" | "array_transform") {
+                    return eval_array_binding(
+                        function.name,
+                        args,
+                        row,
+                        unrecorded,
+                        runtime,
+                        bindings,
+                    );
                 }
                 if unrecorded == Unrecorded::Refuse
                     && function.name == "array_index_of"
@@ -843,7 +1017,7 @@ impl Expr {
                 }
                 let args: Vec<Eval> = args
                     .iter()
-                    .map(|arg| arg.eval_at(row, unrecorded, false, runtime))
+                    .map(|arg| arg.eval_scoped(row, unrecorded, false, runtime, bindings))
                     .collect();
                 let cx = Context {
                     unrecorded,
@@ -856,8 +1030,76 @@ impl Expr {
     }
 }
 
+fn eval_rand(runtime: &RuntimeContext) -> Eval {
+    let Some(rng) = &runtime.expr_rng else {
+        return Eval::Error(EvalError::Unobserved {
+            function: "rand",
+            reason: "request random stream is unavailable",
+        });
+    };
+    let word = rng
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .next_u64();
+    #[allow(clippy::cast_precision_loss)]
+    let value = ((word >> 11) as f64) / 9_007_199_254_740_992.0;
+    Eval::Value(Value::Double(value))
+}
+
+fn eval_array_binding(
+    name: &'static str,
+    args: &[Expr],
+    row: &Row,
+    policy: Unrecorded,
+    runtime: &RuntimeContext,
+    bindings: &[(String, Value)],
+) -> Eval {
+    let unknown = || {
+        Eval::Error(EvalError::Unobserved {
+            function: name,
+            reason: "array callback input is unobserved",
+        })
+    };
+    let values = match args[0].eval_scoped(row, policy, false, runtime, bindings) {
+        Eval::Value(Value::Array(values)) => values,
+        Eval::Error(error) => return Eval::Error(error),
+        _ => return unknown(),
+    };
+    let Expr::Constant(Value::String(alias)) = &args[1] else {
+        return unknown();
+    };
+    let index_alias = if args.len() == 4 {
+        let Expr::Constant(Value::String(alias)) = &args[2] else {
+            return unknown();
+        };
+        Some(alias)
+    } else {
+        None
+    };
+    let body = &args[args.len() - 1];
+    let mut output = Vec::with_capacity(values.len());
+    for (index, value) in values.into_iter().enumerate() {
+        let mut nested = bindings.to_vec();
+        nested.push((alias.clone(), value.clone()));
+        if let Some(index_alias) = index_alias {
+            let Ok(index) = i64::try_from(index) else {
+                return unknown();
+            };
+            nested.push((index_alias.clone(), Value::Integer(index)));
+        }
+        match body.eval_scoped(row, policy, false, runtime, &nested) {
+            Eval::Value(Value::Boolean(true)) if name == "array_filter" => output.push(value),
+            Eval::Value(Value::Boolean(false) | Value::Null) if name == "array_filter" => {}
+            Eval::Value(value) if name == "array_transform" => output.push(value),
+            Eval::Error(error) => return Eval::Error(error),
+            _ => return unknown(),
+        }
+    }
+    Eval::Value(Value::Array(output))
+}
+
 // The table requires an evaluator, but control expressions are evaluated lazily in Expr.
-fn eval_control_fallback(_args: &[Eval], _cx: Context) -> Eval {
+fn eval_control_fallback(_args: &[Eval], _cx: Context<'_>) -> Eval {
     Eval::Error(EvalError::Unobserved {
         function: "control",
         reason: "control requires lazy expression evaluation",
@@ -869,9 +1111,10 @@ fn eval_control(
     args: &[Expr],
     row: &Row,
     policy: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
+    bindings: &[(String, Value)],
 ) -> Eval {
-    let evaluate = |expr: &Expr| expr.eval_at(row, policy, false, runtime);
+    let evaluate = |expr: &Expr| expr.eval_scoped(row, policy, false, runtime, bindings);
     let unknown = || {
         Eval::Error(EvalError::Unobserved {
             function: name,
@@ -879,6 +1122,16 @@ fn eval_control(
         })
     };
     match name {
+        "coalesce" => {
+            let mut last = Eval::Value(Value::Null);
+            for arg in args {
+                last = evaluate(arg);
+                if !matches!(last, Eval::Absent | Eval::Value(Value::Null)) {
+                    return last;
+                }
+            }
+            last
+        }
         "if_absent" | "if_null" | "if_error" => {
             let first = evaluate(&args[0]);
             let use_fallback = match (&first, name) {
@@ -964,7 +1217,7 @@ fn official_order(a: &Eval, b: &Eval) -> Option<Ordering> {
 /// every pair of operand kinds, a missing field included, under all six comparisons as the
 /// official emulator does (FS-ENT-ORACLE O-2 for every kind but vectors, O-3 for vectors and a
 /// missing field against every other kind, 2026-10-20).
-fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
+fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -976,7 +1229,7 @@ fn eval_comparison(op: Comparison, args: &[Eval], _cx: Context) -> Eval {
 
 /// `array(...)`: the elements in order, null for an absent element (production and the
 /// official emulator answer `[1, null]` for `array(i, x)`).
-fn eval_array(args: &[Eval], _cx: Context) -> Eval {
+fn eval_array(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -995,7 +1248,7 @@ const fn array_access_function(
     name: &'static str,
     arity: Arity,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -1010,7 +1263,7 @@ const fn array_access_function(
 fn array_access<'a>(
     args: &'a [Eval],
     name: &'static str,
-    cx: Context,
+    cx: Context<'_>,
 ) -> Result<&'a [Value], Eval> {
     if let Some(error) = first_error(args) {
         return Err(error);
@@ -1058,7 +1311,219 @@ fn array_access<'a>(
     }
 }
 
-fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
+fn eval_namespace(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Reference(name))]
+            if DocumentPath::from_resource_name(name).is_some() =>
+        {
+            Eval::Value(Value::String(String::new()))
+        }
+        _ => generic_unobserved("namespace"),
+    }
+}
+
+fn eval_has_ancestor(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Reference(ancestor))] = args
+    else {
+        return generic_unobserved("has_ancestor");
+    };
+    let (Some(path), Some(parent)) = (
+        DocumentPath::from_resource_name(name),
+        DocumentPath::from_resource_name(ancestor),
+    ) else {
+        return generic_unobserved("has_ancestor");
+    };
+    Eval::Value(Value::Boolean(
+        path.project() == parent.project()
+            && path.database() == parent.database()
+            && path.pairs().len() > parent.pairs().len()
+            && path.pairs().starts_with(parent.pairs()),
+    ))
+}
+
+fn eval_reference_slice(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::Integer(0)), Eval::Value(Value::Integer(end))] =
+        args
+    else {
+        return generic_unobserved("reference_slice");
+    };
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("reference_slice");
+    };
+    let Ok(end) = usize::try_from(*end) else {
+        return generic_unobserved("reference_slice");
+    };
+    if end == 0 || end > path.pairs().len() {
+        return generic_unobserved("reference_slice");
+    }
+    path.ancestor(end).map_or_else(
+        || generic_unobserved("reference_slice"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_replace_document_id(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let [Eval::Value(Value::Reference(name)), Eval::Value(Value::String(id))] = args else {
+        return generic_unobserved("replace_document_id");
+    };
+    if DocumentId::try_new(id.clone()).is_err() {
+        return generic_unobserved("replace_document_id");
+    }
+    let Some(path) = DocumentPath::from_resource_name(name) else {
+        return generic_unobserved("replace_document_id");
+    };
+    let mut pairs = path
+        .pairs()
+        .iter()
+        .map(|(collection, document)| format!("{}/{}", collection.as_str(), document.as_str()))
+        .collect::<Vec<_>>();
+    let Some(last) = pairs.last_mut() else {
+        return generic_unobserved("replace_document_id");
+    };
+    *last = format!("{}/{}", path.collection_id().as_str(), id);
+    DocumentPath::parse(path.project(), path.database(), &pairs.join("/")).map_or_else(
+        |_| generic_unobserved("replace_document_id"),
+        |p| Eval::Value(Value::Reference(p.resource_name())),
+    )
+}
+
+fn eval_autogen_document_id(_args: &[Eval], cx: Context<'_>) -> Eval {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let Some(rng) = &cx.runtime.expr_rng else {
+        return generic_unobserved("autogen_document_id");
+    };
+    let mut rng = rng
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let id = (0..20)
+        .map(|_| ALPHABET[usize::try_from(rng.next_below(62)).unwrap_or(0)] as char)
+        .collect();
+    Eval::Value(Value::String(id))
+}
+
+fn generic_unobserved(name: &'static str) -> Eval {
+    Eval::Error(EvalError::Unobserved {
+        function: name,
+        reason: "unrecorded argument shape",
+    })
+}
+
+fn eval_generic_cmp(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Integer(a)), Eval::Value(Value::Integer(b))] => {
+            Eval::Value(Value::Integer(match a.cmp(b) {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            }))
+        }
+        _ => generic_unobserved("cmp"),
+    }
+}
+
+fn eval_generic_storage_size(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => i64::try_from(s.len())
+            .ok()
+            .and_then(|n| n.checked_add(1))
+            .map_or_else(
+                || generic_unobserved("storage_size"),
+                |n| Eval::Value(Value::Integer(n)),
+            ),
+        _ => generic_unobserved("storage_size"),
+    }
+}
+
+fn eval_generic_get_field(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Map(map)), Eval::Value(Value::String(key))] => map
+            .get(key)
+            .cloned()
+            .map_or_else(|| generic_unobserved("get_field"), Eval::Value),
+        _ => generic_unobserved("get_field"),
+    }
+}
+
+fn eval_generic_offset(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::Array(values)), Eval::Value(Value::Integer(i))] => usize::try_from(*i)
+            .ok()
+            .and_then(|i| values.get(i))
+            .cloned()
+            .map_or_else(|| generic_unobserved("offset"), Eval::Value),
+        _ => generic_unobserved("offset"),
+    }
+}
+
+fn eval_generic_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    match args {
+        [Eval::Value(Value::String(s))] => Eval::Value(Value::String(s.chars().rev().collect())),
+        [Eval::Value(Value::Bytes(b))] => {
+            Eval::Value(Value::Bytes(b.iter().rev().copied().collect()))
+        }
+        [Eval::Value(Value::Array(a))] => {
+            Eval::Value(Value::Array(a.iter().rev().cloned().collect()))
+        }
+        _ => generic_unobserved("reverse"),
+    }
+}
+
+fn eval_generic_length(args: &[Eval], _cx: Context<'_>) -> Eval {
+    if let Some(error) = first_error(args) {
+        return error;
+    }
+    let length = match args {
+        [Eval::Value(Value::String(s))] => s.chars().count(),
+        [Eval::Value(Value::Bytes(b))] => b.len(),
+        [Eval::Value(Value::Array(a))] => a.len(),
+        [Eval::Value(Value::Map(m))] => m.len(),
+        [Eval::Value(Value::Vector(v))] => v.len(),
+        _ => return generic_unobserved("length"),
+    };
+    i64::try_from(length).map_or_else(
+        |_| generic_unobserved("length"),
+        |n| Eval::Value(Value::Integer(n)),
+    )
+}
+
+fn eval_generic_concat(args: &[Eval], cx: Context<'_>) -> Eval {
+    if args
+        .iter()
+        .any(|arg| !matches!(arg, Eval::Value(Value::String(_))))
+    {
+        return first_error(args).unwrap_or_else(|| generic_unobserved("string_concat"));
+    }
+    (scalar::CONCAT.eval)(args, cx)
+}
+
+fn eval_array_reverse(args: &[Eval], _cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1076,7 +1541,7 @@ fn eval_array_reverse(args: &[Eval], _cx: Context) -> Eval {
     }
 }
 
-fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_concat(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1115,7 +1580,7 @@ fn eval_array_concat(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Array(result))
 }
 
-fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_length(args: &[Eval], cx: Context<'_>) -> Eval {
     match array_access(args, "array_length", cx) {
         Ok(values) => Eval::Value(Value::Integer(
             i64::try_from(values.len()).unwrap_or(i64::MAX),
@@ -1124,21 +1589,21 @@ fn eval_array_length(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_array_first(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_first(args: &[Eval], cx: Context<'_>) -> Eval {
     match array_access(args, "first", cx) {
         Ok(values) => values.first().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
-fn eval_array_last(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_last(args: &[Eval], cx: Context<'_>) -> Eval {
     match array_access(args, "last", cx) {
         Ok(values) => values.last().cloned().map_or(Eval::Absent, Eval::Value),
         Err(result) => result,
     }
 }
 
-fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_get(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match array_access(args, "array_get", cx) {
         Ok(values) => values,
         Err(result) => return result,
@@ -1171,7 +1636,7 @@ fn eval_array_get(args: &[Eval], cx: Context) -> Eval {
         .map_or(Eval::Absent, Eval::Value)
 }
 
-fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool) -> Eval {
+fn eval_extrema_n(args: &[Eval], cx: Context<'_>, name: &'static str, maximum: bool) -> Eval {
     let values = match subsequence_array(args, name, cx, false) {
         Ok(values) => values,
         Err(error) => return error,
@@ -1221,14 +1686,14 @@ fn eval_extrema_n(args: &[Eval], cx: Context, name: &'static str, maximum: bool)
     selected.truncate(n);
     Eval::Value(Value::Array(selected))
 }
-fn eval_maximum_n(args: &[Eval], cx: Context) -> Eval {
+fn eval_maximum_n(args: &[Eval], cx: Context<'_>) -> Eval {
     eval_extrema_n(args, cx, "maximum_n", true)
 }
-fn eval_minimum_n(args: &[Eval], cx: Context) -> Eval {
+fn eval_minimum_n(args: &[Eval], cx: Context<'_>) -> Eval {
     eval_extrema_n(args, cx, "minimum_n", false)
 }
 
-fn eval_join(args: &[Eval], cx: Context) -> Eval {
+fn eval_join(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1309,7 +1774,7 @@ fn eval_join(args: &[Eval], cx: Context) -> Eval {
 fn subsequence_array<'a>(
     args: &'a [Eval],
     name: &'static str,
-    cx: Context,
+    cx: Context<'_>,
     search_null_is_value: bool,
 ) -> Result<&'a [Value], Eval> {
     if let Some(error) = first_error(args) {
@@ -1354,7 +1819,7 @@ fn subsequence_array<'a>(
     }
 }
 
-fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i64, Eval> {
+fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context<'_>) -> Result<i64, Eval> {
     if let Some(error) = scalar::int_argument(name, arg, cx) {
         return Err(error);
     }
@@ -1367,7 +1832,7 @@ fn subsequence_integer(arg: &Eval, name: &'static str, cx: Context) -> Result<i6
     }
 }
 
-fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_slice(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match subsequence_array(args, "array_slice", cx, false) {
         Ok(v) => v,
         Err(e) => return e,
@@ -1401,7 +1866,7 @@ fn eval_array_slice(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_index_of_all(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1431,7 +1896,7 @@ fn eval_array_index_of_all(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Array(result))
 }
 
-fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_index_of(args: &[Eval], cx: Context<'_>) -> Eval {
     let values = match subsequence_array(args, "array_index_of", cx, true) {
         Ok(v) => v,
         Err(e) => return e,
@@ -1449,7 +1914,7 @@ fn eval_array_index_of(args: &[Eval], cx: Context) -> Eval {
     ))
 }
 
-fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) -> Eval {
+fn eval_array_count(args: &[Eval], cx: Context<'_>, name: &'static str, last: bool) -> Eval {
     let values = match subsequence_array(args, name, cx, false) {
         Ok(v) => v,
         Err(e) => return e,
@@ -1470,10 +1935,10 @@ fn eval_array_count(args: &[Eval], cx: Context, name: &'static str, last: bool) 
     };
     Eval::Value(Value::Array(selected.to_vec()))
 }
-fn eval_array_first_n(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_first_n(args: &[Eval], cx: Context<'_>) -> Eval {
     eval_array_count(args, cx, "array_first_n", false)
 }
-fn eval_array_last_n(args: &[Eval], cx: Context) -> Eval {
+fn eval_array_last_n(args: &[Eval], cx: Context<'_>) -> Eval {
     eval_array_count(args, cx, "array_last_n", true)
 }
 
@@ -1482,7 +1947,7 @@ const fn map_family_function(
     name: &'static str,
     arity: Arity,
     signature: &'static str,
-    eval: fn(&[Eval], Context) -> Eval,
+    eval: fn(&[Eval], Context<'_>) -> Eval,
 ) -> Function {
     Function {
         name,
@@ -1515,7 +1980,7 @@ fn map_argument<'a>(
     }
 }
 
-fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_set(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1573,7 +2038,7 @@ fn eval_map_set(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Map(map))
 }
 
-fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_remove(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1629,7 +2094,7 @@ fn eval_map_remove(args: &[Eval], cx: Context) -> Eval {
     }
 }
 
-fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_merge(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1668,7 +2133,7 @@ fn eval_map_merge(args: &[Eval], cx: Context) -> Eval {
     Eval::Value(Value::Map(result))
 }
 
-fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_keys(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_keys", false) {
         Ok(map) => Eval::Value(Value::Array(
             map.keys().cloned().map(Value::String).collect(),
@@ -1676,13 +2141,13 @@ fn eval_map_keys(args: &[Eval], _cx: Context) -> Eval {
         Err(value) => value,
     }
 }
-fn eval_map_values(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_values(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_values", false) {
         Ok(map) => Eval::Value(Value::Array(map.values().cloned().collect())),
         Err(value) => value,
     }
 }
-fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
+fn eval_map_entries(args: &[Eval], _cx: Context<'_>) -> Eval {
     match map_argument(&args[0], "map_entries", false) {
         Ok(map) => Eval::Value(Value::Array(
             map.iter()
@@ -1703,7 +2168,7 @@ fn eval_map_entries(args: &[Eval], _cx: Context) -> Eval {
 }
 
 /// Literal map lookup; missing keys are absent and null arguments give null.
-fn eval_map_get(args: &[Eval], cx: Context) -> Eval {
+fn eval_map_get(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1780,7 +2245,7 @@ const RECORDED_MAP_KEY_TYPES: [&str; 2] = ["LONG", "BOOLEAN"];
 /// drops its entry before the duplicate check), and a key that is not a string is refused
 /// naming its type (production named LONG and BOOLEAN keys; strict refuses another type as
 /// unobserved).
-fn eval_map(args: &[Eval], cx: Context) -> Eval {
+fn eval_map(args: &[Eval], cx: Context<'_>) -> Eval {
     if let Some(error) = first_error(args) {
         return error;
     }
@@ -1906,14 +2371,14 @@ fn is_documents_root(name: &str) -> bool {
     )
 }
 
-fn eval_document_id(args: &[Eval], cx: Context) -> Eval {
+fn eval_document_id(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("document_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.document_id().as_str().to_owned())),
         Err(e) => e,
     }
 }
 
-fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
+fn eval_collection_id(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("collection_id", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::String(path.collection_id().as_str().to_owned())),
         Err(e) => e,
@@ -1922,7 +2387,7 @@ fn eval_collection_id(args: &[Eval], cx: Context) -> Eval {
 
 /// The parent document; for a top-level document production and the official emulator
 /// answer the database's documents root as a reference.
-fn eval_parent(args: &[Eval], cx: Context) -> Eval {
+fn eval_parent(args: &[Eval], cx: Context<'_>) -> Eval {
     match document_argument("parent", args, cx.unrecorded) {
         Ok(path) => Eval::Value(Value::Reference(path.parent_document().map_or_else(
             || {
@@ -2163,6 +2628,8 @@ pub struct Cursor {
     runtime: RuntimeContext,
     state: Vec<StageState>,
     sample_rng: Vec<Option<SplitMix64>>,
+    recorded_select_first_wrong_type: bool,
+    recorded_nested_sum_wrong_type: bool,
 }
 
 impl Cursor {
@@ -2223,7 +2690,23 @@ impl Cursor {
             runtime,
             state,
             sample_rng,
+            recorded_select_first_wrong_type: false,
+            recorded_nested_sum_wrong_type: false,
         }
+    }
+
+    /// Enables the recorded ordered SELECT refusal after adapter shape and wire-order admission.
+    #[must_use]
+    pub fn with_recorded_select_first_wrong_type(mut self) -> Self {
+        self.recorded_select_first_wrong_type = true;
+        self
+    }
+
+    /// Enables the recorded nested sum refusal after adapter shape admission.
+    #[must_use]
+    pub fn with_recorded_nested_sum_wrong_type(mut self) -> Self {
+        self.recorded_nested_sum_wrong_type = true;
+        self
     }
 
     /// Whether no later row can produce output: a limit before the first blocking stage is used
@@ -2276,8 +2759,11 @@ impl Cursor {
                             reason: "prepared branch contains a non-row-local stage",
                         });
                     }
-                    let mut child =
-                        Self::new_in_with_runtime(branch.stages, self.unrecorded, self.runtime);
+                    let mut child = Self::new_in_with_runtime(
+                        branch.stages,
+                        self.unrecorded,
+                        self.runtime.clone(),
+                    );
                     for row in branch.rows {
                         if self.exhausted_from(index + 1) {
                             break;
@@ -2314,17 +2800,24 @@ impl Cursor {
                     rows.truncate(usize::try_from(*count).unwrap_or(usize::MAX));
                     rows
                 }
-                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, self.runtime)?,
+                Stage::Sort(keys) => sort_rows(rows, keys, self.unrecorded, &self.runtime)?,
                 stage @ Stage::FindNearest { .. } => {
-                    nearest_rows(rows, stage, self.unrecorded, self.runtime)?
+                    nearest_rows(rows, stage, self.unrecorded, &self.runtime)?
                 }
                 Stage::Distinct(aliases) => {
-                    distinct_rows(&rows, aliases, self.unrecorded, self.runtime)?
+                    distinct_rows(&rows, aliases, self.unrecorded, &self.runtime)?
                 }
                 Stage::Aggregate {
                     accumulators,
                     groups,
-                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded, self.runtime)?,
+                } => aggregate_rows(
+                    &rows,
+                    accumulators,
+                    groups,
+                    self.unrecorded,
+                    &self.runtime,
+                    self.recorded_nested_sum_wrong_type,
+                )?,
                 _ => continue,
             };
             for row in produced {
@@ -2381,7 +2874,7 @@ impl Cursor {
                     alias,
                     index_field,
                 } => {
-                    let value = expression.eval_at(&row, self.unrecorded, false, self.runtime);
+                    let value = expression.eval_at(&row, self.unrecorded, false, &self.runtime);
                     match value {
                         Eval::Value(Value::Array(values)) => {
                             frames.push(UnnestFrame {
@@ -2415,7 +2908,7 @@ impl Cursor {
                     }
                 }
                 Stage::Where(condition) => {
-                    match condition.eval_at(&row, self.unrecorded, true, self.runtime) {
+                    match condition.eval_at(&row, self.unrecorded, true, &self.runtime) {
                         Eval::Value(Value::Boolean(true)) => {}
                         // Production dropped the row for a condition of every other kind
                         // (FS-ENT-ORACLE O-1 and O-2; O-3 for doubles, NaN, timestamps, bytes,
@@ -2458,7 +2951,7 @@ impl Cursor {
                     let mut fields = BTreeMap::new();
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
+                        match expr.eval_at(&row, self.unrecorded, false, &self.runtime) {
                             Eval::Value(value) => set_path(&mut fields, alias, value),
                             Eval::Absent if alias.segments().len() > 1 => {
                                 // Production and the official emulator retain parent maps
@@ -2467,12 +2960,24 @@ impl Cursor {
                             }
                             Eval::Absent => {}
                             Eval::Error(error) => {
-                                refused = first_refusal(
-                                    refused.as_ref(),
-                                    error,
-                                    self.unrecorded,
-                                    "select",
-                                )?;
+                                let recorded_first = self.recorded_select_first_wrong_type
+                                    && matches!(
+                                        refused.as_ref(),
+                                        Some(EvalError::WrongType {
+                                            function: "collection_id",
+                                            expected: "Reference",
+                                            got: "STRING"
+                                        })
+                                    )
+                                    && !matches!(error, EvalError::Unobserved { .. });
+                                if !recorded_first {
+                                    refused = first_refusal(
+                                        refused.as_ref(),
+                                        error,
+                                        self.unrecorded,
+                                        "select",
+                                    )?;
+                                }
                             }
                         }
                     }
@@ -2490,7 +2995,7 @@ impl Cursor {
                     let mut values = Vec::with_capacity(aliases.len());
                     let mut refused = None;
                     for (alias, expr) in aliases {
-                        match expr.eval_at(&row, self.unrecorded, false, self.runtime) {
+                        match expr.eval_at(&row, self.unrecorded, false, &self.runtime) {
                             Eval::Value(value) => values.push((alias, Some(value))),
                             // A missing value (FS-ENT-ORACLE O-9 `fields-main`): a nested
                             // alias creates the parents as empty maps (a scalar parent is
@@ -2521,7 +3026,7 @@ impl Cursor {
                 }
                 Stage::ReplaceWith { expression, mode } => {
                     let replacement =
-                        match expression.eval_at(&row, self.unrecorded, false, self.runtime) {
+                        match expression.eval_at(&row, self.unrecorded, false, &self.runtime) {
                             Eval::Value(Value::Map(fields)) => fields,
                             Eval::Error(error) => return Err(error),
                             _ => {
@@ -2620,7 +3125,7 @@ fn nearest_rows(
     rows: Vec<Row>,
     stage: &Stage,
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let Stage::FindNearest {
         expression,
@@ -2736,7 +3241,7 @@ fn sort_rows(
     rows: Vec<Row>,
     keys: &[SortKey],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut keyed = Vec::with_capacity(rows.len());
     for row in rows {
@@ -2803,7 +3308,7 @@ fn key_values(
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
     stage: &'static str,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Value>, EvalError> {
     aliases
         .iter()
@@ -2823,7 +3328,7 @@ fn distinct_rows(
     rows: &[Row],
     aliases: &[(String, Expr)],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
 ) -> Result<Vec<Row>, EvalError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
@@ -2897,14 +3402,51 @@ impl Accumulator {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep accumulator dispatch and its row evaluation together"
+    )]
     fn add(
         &self,
         running: &mut Running,
         row: &Row,
         unrecorded: Unrecorded,
-        runtime: RuntimeContext,
+        runtime: &RuntimeContext,
+        recorded_nested_sum_wrong_type: bool,
     ) -> Result<(), EvalError> {
         let value = match &self.argument {
+            Some(Expr::Call { function, args })
+                if recorded_nested_sum_wrong_type
+                    && self.kind == AccumulatorKind::Sum
+                    && function.name == "sum"
+                    && args.len() == 1 =>
+            {
+                let arg = args[0].eval_at(row, unrecorded, false, runtime);
+                let eval = (function.eval)(
+                    std::slice::from_ref(&arg),
+                    Context {
+                        unrecorded,
+                        condition: false,
+                        runtime,
+                    },
+                );
+                if matches!(arg, Eval::Value(Value::Integer(_)))
+                    && matches!(
+                        eval,
+                        Eval::Error(EvalError::Unobserved {
+                            function: "sum",
+                            reason: "unrecorded argument shape"
+                        })
+                    )
+                {
+                    return Err(EvalError::WrongType {
+                        function: "array_sum",
+                        expected: "Array",
+                        got: "LONG",
+                    });
+                }
+                blocking_value(eval, unrecorded, "aggregate")?
+            }
             Some(argument) => blocking_value(
                 argument.eval_at(row, unrecorded, false, runtime),
                 unrecorded,
@@ -3046,7 +3588,8 @@ fn aggregate_rows(
     accumulators: &[(String, Accumulator)],
     groups: &[(String, Expr)],
     unrecorded: Unrecorded,
-    runtime: RuntimeContext,
+    runtime: &RuntimeContext,
+    recorded_nested_sum_wrong_type: bool,
 ) -> Result<Vec<Row>, EvalError> {
     type Group = (Vec<Value>, Vec<Running>);
     let start = || {
@@ -3072,7 +3615,13 @@ fn aggregate_rows(
         };
         let running = &mut order[at].1;
         for ((_, accumulator), state) in accumulators.iter().zip(running.iter_mut()) {
-            accumulator.add(state, row, unrecorded, runtime)?;
+            accumulator.add(
+                state,
+                row,
+                unrecorded,
+                runtime,
+                recorded_nested_sum_wrong_type,
+            )?;
         }
     }
     order
@@ -3161,32 +3710,35 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
         )
     })?;
     let mut paths = Vec::new();
+    let mut all_fields = false;
     for stage in &stages[..=narrowing] {
         match stage {
-            Stage::Where(condition) => condition.collect_fields(&mut paths),
+            Stage::Where(condition) => condition.collect_fields(&mut paths, &mut all_fields),
             Stage::Unnest { expression, .. }
             | Stage::ReplaceWith { expression, .. }
-            | Stage::FindNearest { expression, .. } => expression.collect_fields(&mut paths),
+            | Stage::FindNearest { expression, .. } => {
+                expression.collect_fields(&mut paths, &mut all_fields);
+            }
             Stage::Select { aliases, .. } | Stage::AddFields(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Sort(keys) => keys
                 .iter()
-                .for_each(|key| key.expr.collect_fields(&mut paths)),
+                .for_each(|key| key.expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Distinct(aliases) => aliases
                 .iter()
-                .for_each(|(_, expr)| expr.collect_fields(&mut paths)),
+                .for_each(|(_, expr)| expr.collect_fields(&mut paths, &mut all_fields)),
             Stage::Aggregate {
                 accumulators,
                 groups,
             } => {
                 for (_, accumulator) in accumulators {
                     if let Some(argument) = &accumulator.argument {
-                        argument.collect_fields(&mut paths);
+                        argument.collect_fields(&mut paths, &mut all_fields);
                     }
                 }
                 for (_, expr) in groups {
-                    expr.collect_fields(&mut paths);
+                    expr.collect_fields(&mut paths, &mut all_fields);
                 }
             }
             Stage::Union { .. }
@@ -3195,6 +3747,9 @@ pub fn referenced_fields(stages: &[Stage]) -> Option<Vec<FieldPath>> {
             | Stage::Limit(_)
             | Stage::Sample(_) => {}
         }
+    }
+    if all_fields {
+        return None;
     }
     paths.sort();
     paths.dedup();

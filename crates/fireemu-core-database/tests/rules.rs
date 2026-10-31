@@ -174,9 +174,10 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
         let expr = entry["expr"].as_str().unwrap();
         assert!(Rules::compile(&read_rule_at_t(expr)).is_err(), "{entry}");
     }
-    let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) = corpus
-        .into_iter()
-        .partition(|entry| entry.get("fireemu").is_some());
+    let (denied, agreeing): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
+        corpus.into_iter().partition(|entry| {
+            entry.get("fireemu").is_some() && entry["fireemu_current"] != "official"
+        });
     assert!(agreeing.len() > 1200 && denied.len() > 200);
     // Both refuse it; the official emulator places the error of an expression that spans a
     // line break elsewhere on the line.
@@ -1185,4 +1186,44 @@ fn coverage_histograms_stay_bounded_over_many_evaluations() {
         largest,
         fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION
     );
+}
+
+#[test]
+fn auth_root_identity_matches_the_recorded_read() {
+    let tree = seed();
+    let auth = j(serde_json::json!({"uid": "synthetic-user"}));
+    let requester = Requester {
+        auth: &auth,
+        now: 1_792_464_733_000,
+    };
+    let rules = Rules::compile(&read_rule_at_t(
+        "auth != null && auth.uid == 'synthetic-user' && auth == auth",
+    ))
+    .unwrap();
+    assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+
+    #[test]
+    fn root_auth_identity_through_rules_for_varied_claims(
+        uid in "[a-zA-Z0-9]{1,20}",
+        score in proptest::prelude::any::<i32>(),
+        enabled in proptest::prelude::any::<bool>(),
+    ) {
+        let tree = seed();
+        let auth = j(serde_json::json!({"uid": uid, "score": score, "enabled": enabled}));
+        let requester = Requester { auth: &auth, now: 0 };
+        let guard = Rules::compile(&read_rule_at_t("auth != null && auth == auth")).unwrap();
+        let negated = Rules::compile(&read_rule_at_t("auth != null && !(auth == auth)")).unwrap();
+        proptest::prop_assert!(guard.can_read(tree.root(), &p("/t"), None, &requester));
+        proptest::prop_assert!(!negated.can_read(tree.root(), &p("/t"), None, &requester));
+
+        let anonymous = Json::Null;
+        let requester = Requester { auth: &anonymous, now: 0 };
+        let null_control = Rules::compile(&read_rule_at_t("auth == null && auth == auth")).unwrap();
+        proptest::prop_assert!(null_control.can_read(tree.root(), &p("/t"), None, &requester));
+        proptest::prop_assert!(!guard.can_read(tree.root(), &p("/t"), None, &requester));
+    }
 }

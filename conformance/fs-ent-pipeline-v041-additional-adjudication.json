@@ -1,0 +1,314 @@
+{
+  "kind": "fs-ent-pipeline-v041-additional-replay-v1",
+  "decision": "ACCEPTED_FINITE_NATIVE_ERRORS_AND_SCALAR_CONTRACTS",
+  "decisionAuthority": "Root2119 after independent actual review",
+  "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+  "sourceTree": "694df8b4f2c4ffb281128d62bd7d1e2391b41839",
+  "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+  "actualIndexSha256": "a1b44cb72e11334d8cccc46517c30d816253ac3cdcdf6ff8879942a928c58639",
+  "independentReviewSha256": "0e14239292bcaf91066ff9e10bf270e74f163f2609a076efe844a9d5bdb25a9f",
+  "native": {
+    "judgmentSha256": "e3a1a712af91dc1ee66c8e4b3f9e8de871dc4aeb8db7be3b39a3ce66902b151c",
+    "results": [
+      {
+        "id": "bit-not-int",
+        "round": 1,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "bit-left-shift-int",
+        "round": 1,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "bit-right-shift-int",
+        "round": 1,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "geo-distance",
+        "round": 1,
+        "code": 3,
+        "same": true
+      },
+      {
+        "id": "bit-not-int",
+        "round": 2,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "bit-left-shift-int",
+        "round": 2,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "bit-right-shift-int",
+        "round": 2,
+        "code": 13,
+        "same": true
+      },
+      {
+        "id": "geo-distance",
+        "round": 2,
+        "code": 3,
+        "same": true
+      }
+    ],
+    "scope": "Four captured strict native request shapes in two rounds: integer bit-operation INTERNAL errors and the geo_distance SELECT placement refusal. Decoded request values, status, message and details are compared; protobuf defaults and database substitution are explicit. Trailer wire identity, successful bit mathematics, REST error parity and geo SEARCH/index behavior remain unclaimed."
+  },
+  "earlyScalars": {
+    "judgmentSha256": "56aca91a337e1f82d69770a8713a8d012c8ec1263f6b3c6adbd8f40dbc2081be",
+    "results": [
+      {
+        "id": "array-filter-populated",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-filter-empty",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-transform-populated",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-transform-empty",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-index-of-all-repeated",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-index-of-all-absent",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "conditional-true",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "conditional-false",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-absent-missing",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-absent-present",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-error-empty-array",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-error-control",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-explicit-null",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-present",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-absent",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "switch-on-match",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "switch-on-default",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "like-positive",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "like-negative",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "rand",
+        "round": 1,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-filter-populated",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-filter-empty",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-transform-populated",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-transform-empty",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-index-of-all-repeated",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "array-index-of-all-absent",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "conditional-true",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "conditional-false",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-absent-missing",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-absent-present",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-error-empty-array",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-error-control",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-explicit-null",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-present",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "if-null-absent",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "switch-on-match",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "switch-on-default",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "like-positive",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "like-negative",
+        "round": 2,
+        "match": true,
+        "differences": []
+      },
+      {
+        "id": "rand",
+        "round": 2,
+        "match": true,
+        "differences": []
+      }
+    ],
+    "scope": "Strict profile only. Forty comparisons using the original full typed-value and shape predicates for the recorded rand, like, array_filter and array_transform forms. Random range and shape are checked, not a production random sequence or distribution."
+  },
+  "clockControlStatus": "PENDING_POST_PUBLICATION_NATIVE_LINUX_ARM64_REPLAY",
+  "scope": "Existing finite captured recipes only; the time control was not executed in this replay window.",
+  "parentClosureClaimed": false,
+  "profile": "strict"
+}

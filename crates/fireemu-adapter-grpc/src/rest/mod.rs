@@ -1624,6 +1624,7 @@ impl RestState {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
+        let wire_body = body;
         let body = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
             self.transcoded("executePipeline", body)
                 .map_err(|error| gate.answer(nesting(error)))?
@@ -1640,12 +1641,26 @@ impl RestState {
         })?;
         let request = pipeline_json::request_from_json(database, &body)
             .map_err(|e| gate.answer(nesting(bad(&e))))?;
-        let ast = crate::pipeline::validate_pipeline(&request, unrecorded)
-            .map_err(|error| gate.answer(error))?;
+        let answer = |error: Status| {
+            if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+                && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
+                && crate::pipeline::candidate_shape_eligible(&request)
+                && crate::pipeline_shape::candidate_json_eligible(wire_body)
+            {
+                crate::pipeline_shape::RefusalGate::Ordinary(
+                    crate::pipeline_shape::shape_of_json(wire_body, key_order),
+                    database.to_owned(),
+                )
+                .answer(error)
+            } else {
+                gate.answer(error)
+            }
+        };
+        let ast = crate::pipeline::validate_pipeline(&request, unrecorded).map_err(answer)?;
         let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let refuse = |error| crate::service::pipeline_status(gate.answer(error), &canonical);
+        let refuse = |error| crate::service::pipeline_status(answer(error), &canonical);
         let compiled = crate::pipeline::compile_pipeline_in_order(
             &request,
             &parent,
@@ -1692,11 +1707,63 @@ impl RestState {
         };
         // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);
+        let recorded_select_first = unrecorded
+            == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse
+            && compiled.stages.len() == 1
+            && matches!(compiled.stages.first(), Some(fireemu_core_firestore::pipeline_exec::Stage::Select { aliases, .. }) if aliases.len() == 3)
+            && key_order
+                .keys("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields")
+                .is_some_and(|keys| {
+                    wire_body
+                        .pointer("/structuredPipeline/pipeline/stages/1/args/0/mapValue/fields")
+                        .and_then(Value::as_object)
+                        .is_some_and(|fields| {
+                            keys.len() == 3
+                                && keys.len() == fields.len()
+                                && keys.iter().all(|key| fields.contains_key(key))
+                        })
+                })
+            && gate
+                .answer(crate::pipeline::eval_status(
+                    &fireemu_core_firestore::pipeline_exec::EvalError::WrongType {
+                        function: "collection_id",
+                        expected: "Reference",
+                        got: "STRING",
+                    },
+                ))
+                .code()
+                == tonic::Code::InvalidArgument;
+        let aggregate_only = matches!(
+            compiled.stages.as_slice(),
+            [fireemu_core_firestore::pipeline_exec::Stage::Aggregate { .. }]
+        );
         let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
             compiled.stages,
             unrecorded,
             runtime,
         );
+        if recorded_select_first {
+            cursor = cursor.with_recorded_select_first_wrong_type();
+        }
+        let admission_gate =
+            if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+                gate.clone()
+            } else {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    if aggregate_only
+                        && crate::pipeline_shape::candidate_json_eligible(wire_body)
+                        && crate::pipeline::candidate_shape_eligible(&request)
+                    {
+                        crate::pipeline_shape::shape_of_json(wire_body, key_order)
+                    } else {
+                        None
+                    },
+                    database.to_owned(),
+                )
+            };
+        if crate::pipeline::recorded_nested_sum_admitted(&admission_gate, unrecorded) {
+            cursor = cursor.with_recorded_nested_sum_wrong_type();
+        }
         let mut rows = Vec::new();
         for document in responses.iter().filter_map(|r| r.document.as_ref()) {
             if cursor.is_exhausted() {

@@ -1,0 +1,83 @@
+{
+  "kind": "fs-ent-pipeline-o6-sort-contract-adjudication-v1",
+  "decision": "ACCEPTED_FINITE_STRICT_CONTRACT",
+  "decisionAuthority": "Owner2114; Root registration2117 after independent final E actual review",
+  "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+  "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+  "actualIndexSha256": "c0f9287450f7f20a4431f7b5b9f51b8cf78a71d63c25ab5c3bd4f6190fb23f1a",
+  "rawSummary": {
+    "MATCH": 1906,
+    "MISMATCH": 26,
+    "MATCH_NONDETERMINISTIC": 17,
+    "UNKNOWN": 2
+  },
+  "profile": "strict",
+  "scope": "Only the two owner2114 strict REST sort-tie contracts. Raw MISMATCH is preserved. No ordinary profile, other order difference, framing wire, client UNKNOWN or time-row claim.",
+  "proofs": [
+    {
+      "id": "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+      "rawStatus": "MISMATCH",
+      "authority": "owner2114",
+      "requestSha256": "1e616423f8a48f87fedb4ece337a0465227164863a1ae1b092dbe848c52e4e47",
+      "seedSha256": "95ae3f6ffedaeafb8deb55ce83026bdd47e2bf2914e603c6303305765632ab1d",
+      "fixtureStepSha256": "fa018cbba8b01a611bdd48998a2400e980785aac904630d025bd38c323ea8de1",
+      "dependencySha256": "b2ed37b3417c41275eb26106651b8ffcad0c54e09f5889e53373dc81312df79a",
+      "proofClassification": "ORDERED_TYPED_NULL_ABSENT_TIE_EQUIVALENT",
+      "resultCount": 16,
+      "fixedPrefixCount": 14,
+      "tieClassCount": 2,
+      "sourceProof": "BOUND_ORIGINAL_SEED_AND_SEED_VECTOR_PRELUDE",
+      "localStepSha256": "b5e5f8743295d66d8d05bb844c3cf2d56bc8e8713ea53c61dad8298b1aba0d80"
+    },
+    {
+      "id": "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+      "rawStatus": "MISMATCH",
+      "authority": "owner2114",
+      "requestSha256": "0fa1dab2b8453fabe766d7bb5d989a73c7bafb08deb9f5d5ec4c5e43a5143299",
+      "seedSha256": "b9a6bc3daa8ecacd03c7f490a5c9f6b45add6cbd362e93005a6b61e589d3eccd",
+      "fixtureStepSha256": "9932d0268ee2762a4b7e435278552071ae170d748aa1d9b941f294cf45faa64e",
+      "dependencySha256": "5a091c758a5aab24e4c50d109bb2f82dfa521b6918ef12d4fb58fc6550f822b9",
+      "proofClassification": "LEGAL_UNORDERED_SELECTION",
+      "resultCount": 2,
+      "eligibleCount": 3,
+      "selectedCount": 2,
+      "minimumKey": {
+        "integerValue": "1"
+      },
+      "eligibleOrigin": "DERIVED_FROM_BOUND_EXISTING_COMPANION_AND_SEED",
+      "companion": "fs-ent-pipeline/o6/sort-ties#g-asc",
+      "companionRequestSha256": "ba3cde9fdb294f45b1b20f42825db67be4a08da7b4c85f928d62998fd6843436",
+      "localStepSha256": "508c927add3cb0b0b876def750b94d6ce5d1c149f81b959b6e0502525de3144f"
+    }
+  ],
+  "localReplaySha256": "d8b3596b68065b918eee38047b0d2f7489a7c9fe36173ca9e48bf92376174c89",
+  "productionFixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "requestExportSha256": "8e0591940bd2fb6f879ef02609dff2ab2285ef3f27729fec7092a0b1b4917a17",
+  "adjudicatorSha256": "36b3fb587ce2e128bde84f54bf67d4bdddb90bac314d884edcbcb3c345b4f955",
+  "reusedO7EvaluatorSha256": "4b2846e23f7e9b170403d8ec2045b6f83d19a05b4cd985b96fc9769548ac3a47",
+  "rawRenormalizerSha256": "47b1689be06cc0526f30bf8a6327185233eb6485594318bd7f5a50b7c8ec92e8",
+  "productionWitnesses": [
+    {
+      "id": "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+      "representation": "PUBLIC_CANONICAL_FALLBACK_NO_SEPARATE_SECOND_RAW",
+      "originalSecondRawAvailable": false,
+      "note": "Canonical production fixture is the witness; the production2 fallback is not a separately available observed raw reply."
+    },
+    {
+      "id": "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+      "representation": "PUBLIC_CANONICAL_FALLBACK_NO_SEPARATE_SECOND_RAW",
+      "originalSecondRawAvailable": false,
+      "note": "Canonical production fixture is the witness; the production2 fallback is not a separately available observed raw reply."
+    }
+  ],
+  "seedBinding": "Exact original seed matches actual producer programs; existing session raw does not separately record initial seed harness writes. Captured seed-vector prelude is independently renormalized.",
+  "bindingChecks": {
+    "sourceBuildTreeAndBinaryBytesMatched": true,
+    "comparisonIdentities": 1951,
+    "rawMismatchesUnchanged": true,
+    "capturedRestBodiesAndStoredNormalizationMatched": true,
+    "finalSourcePinned": true
+  },
+  "parentClosureClaimed": false,
+  "independentReviewSha256": "e6d4ded787621ce6e0491617c136edf1e55ac43efe95aeabdb0c5e9ce747063f"
+}

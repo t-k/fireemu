@@ -167,16 +167,15 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
         )
     };
     check(vec![
-        // Production recorded the unknown function before the empty select (O-4); fireemu
-        // cannot tell it from a function it does not run, so strict refuses it.
+        // Recorded request shapes answer the unknown function before later errors.
         Case {
             label: "select {} then where(nope_fn(n))",
             stages: vec![
                 empty(),
                 stage("where", vec![func("nope_fn", vec![field("n")])]),
             ],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "select {} then where(unregistered_probe(\"a\"))",
@@ -199,17 +198,14 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
         Case {
             label: "add_fields {a: nope_fn()} then select {}",
             stages: vec![add_unknown(), empty()],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "add_fields {a: nope_fn()} then limit(\"x\")",
             stages: vec![add_unknown(), stage("limit", vec![string("x")])],
-            strict: None,
-            emulator: (
-                400,
-                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
-            ),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "add_fields {a: nope_fn()} then a one-argument aggregate",
@@ -220,8 +216,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part() {
                     vec![map(vec![("c", func("count", vec![field("n")]))])],
                 ),
             ],
-            strict: None,
-            emulator: (400, AGGREGATE_ARITY),
+            strict: Some((400, "The function 'nope_fn' does not exist.")),
+            emulator: (400, "The function 'nope_fn' does not exist."),
         },
         Case {
             label: "sort then limit(\"x\")",
@@ -682,7 +678,7 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
         Case {
             label: "vector without value",
             stages: vec![select(map(vec![("__type__", string("__vector__"))]))],
-            strict: None,
+            strict: Some((400, missing)),
             emulator: (400, missing),
         },
         Case {
@@ -860,37 +856,31 @@ fn strict_answers_only_the_vector_and_key_shapes_production_recorded() {
 }
 
 #[test]
-fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
+fn strict_answers_recorded_arity_and_refuses_unobserved_shapes() {
     check(vec![
         Case {
             label: "equal()",
             stages: vec![select(func("equal", vec![]))],
-            strict: None,
-            emulator: (
-                400,
-                "function \"equal\" takes 2 argument(s), got 0 argument(s)",
-            ),
+            strict: Some((400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."),
         },
         Case {
             label: "document_id()",
             stages: vec![select(func("document_id", vec![]))],
-            strict: None,
-            emulator: (
-                400,
-                "function \"document_id\" takes 1 argument(s), got 0 argument(s)",
-            ),
+            strict: Some((400, "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'document_id(ref: document_reference): any' takes [1..1] argument(s), but 0 were provided."),
         },
         Case {
             label: "map(\"k\")",
             stages: vec![select(func("map", vec![string("k")]))],
-            strict: None,
+            strict: Some((400, "'map' function must have an even number of arguments")),
             emulator: (400, "'map' function must have an even number of arguments"),
         },
         Case {
             label: "where(equal(i))",
             stages: vec![stage("where", vec![func("equal", vec![field("i")])])],
             strict: None,
-            emulator: (400, "equal requires exactly two arguments"),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."),
         },
         Case {
             label: "select {} then where(equal())",
@@ -898,12 +888,10 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
                 stage("select", vec![map(vec![])]),
                 stage("where", vec![func("equal", vec![])]),
             ],
-            strict: None,
-            // The official emulator answers the argument count first; the emulator profile
-            // answers the empty select (a text difference, both refuse).
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided.")),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 0 were provided."),
         },
-        // The official emulator ignores function options; production has not answered them.
+        // The recorded document_id option shape is accepted; other option shapes remain unobserved.
         Case {
             label: "document_id with options",
             stages: vec![select(json!({ "functionValue": {
@@ -911,7 +899,7 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
                 "args": [field("__name__")],
                 "options": { "x": int(1) },
             } }))],
-            strict: None,
+            strict: Some((200, "")),
             emulator: (200, ""),
         },
         Case {
@@ -958,9 +946,7 @@ fn strict_refuses_fireemus_own_texts_for_the_functions_it_runs() {
 
 #[test]
 fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
-    // Production's order between an argument-type refusal and an empty map or a later stage's
-    // check is unrecorded, so under strict a function call that fails on its constants (fields
-    // read as absent) refuses the pipeline as unobserved; the emulator profile keeps its order.
+    // N76, N78, N15 and N14 record these validation priorities; other boundaries remain unobserved.
     let empty = || stage("select", vec![map(vec![])]);
     let double = json!({ "doubleValue": 1.5 });
     check(vec![
@@ -976,8 +962,8 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
-            emulator: (400, EMPTY_SELECT),
+            strict: Some((400, "map key must be of type STRING, given type is DOUBLE")),
+            emulator: (400, "map key must be of type STRING, given type is DOUBLE"),
         },
         Case {
             label: "N78 select {v: document_id(1.5)} then limit(\"x\")",
@@ -985,7 +971,10 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 select(func("document_id", vec![double.clone()])),
                 stage("limit", vec![string("x")]),
             ],
-            strict: None,
+            strict: Some((
+                400,
+                "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
+            )),
             emulator: (
                 400,
                 "Expected limit to be INTEGER_VALUE, but was STRING_VALUE.",
@@ -1000,7 +989,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -1015,7 +1004,7 @@ fn strict_lets_no_deferred_or_later_check_answer_past_a_constant_that_fails() {
                 ),
                 empty(),
             ],
-            strict: None,
+            strict: Some((400, EMPTY_SELECT)),
             emulator: (400, EMPTY_SELECT),
         },
         Case {
@@ -1414,7 +1403,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
     let vec_int = || vector(vec![int(1)]);
     let doubles = "Vector must only contain values of type 'double'";
     let mut cases = Vec::new();
-    // A `__type__` that is no string (r3 review M1): the official text, 501 under strict.
+    // Recorded non-string type-tag shapes answer their computed error; other shapes remain unobserved.
     for (label, value, kind) in [
         ("{__type__: 1}", int(1), "LONG"),
         (
@@ -1436,7 +1425,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         cases.push(Case {
             label,
             stages: vec![select(typed(value))],
-            strict: None,
+            strict: matches!(kind, "LONG" | "BOOLEAN" | "NULL" | "DOUBLE").then_some((400, text)),
             emulator: (400, text),
         });
     }
@@ -1450,13 +1439,13 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "{a: {__type__: 1}}",
             stages: vec![select(map(vec![("a", typed(int(1)))]))],
-            strict: None,
+            strict: Some((400, "Field __type__ must be a string; founds LONG.")),
             emulator: (400, "Field __type__ must be a string; founds LONG."),
         },
         Case {
             label: "where({__type__: 1})",
             stages: vec![stage("where", vec![typed(int(1))])],
-            strict: None,
+            strict: Some((400, "Field __type__ must be a string; founds LONG.")),
             emulator: (400, "Field __type__ must be a string; founds LONG."),
         },
         Case {
@@ -1476,7 +1465,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
             label: "equal(vector of integers): the argument count first",
             stages: vec![select(func("equal", vec![vec_int()]))],
             strict: None,
-            emulator: (400, "function \"equal\" takes 2 argument(s), got 1 argument(s)"),
+            emulator: (400, "The function 'equal(x: any, y: any): boolean' takes [2..2] argument(s), but 1 was provided."),
         },
         Case {
             label: "{__x__: field, a: vector of integers}: the reserved key first",
@@ -1505,7 +1494,7 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "vector of Infinity",
             stages: vec![select(vector(vec![json!({ "doubleValue": "Infinity" })]))],
-            strict: None,
+            strict: Some((200, "")),
             emulator: (200, ""),
         },
         // An alias error beside a value strict refuses (r3 review M2).
@@ -1525,19 +1514,19 @@ fn type_keys_references_and_the_official_order_of_literal_checks() {
         Case {
             label: "select {v: ref c}",
             stages: vec![select(reference("c"))],
-            strict: None,
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c\" lacks \"/\" at index 49."),
         },
         Case {
             label: "select {v: ref c//d}",
             stages: vec![select(reference("c//d"))],
-            strict: None,
+            strict: Some((400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50.")),
             emulator: (400, "Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."),
         },
         Case {
             label: "select {v: ref garbage}",
             stages: vec![select(json!({ "referenceValue": "garbage" }))],
-            strict: None,
+            strict: Some((400, "Document parent name \"garbage\" lacks \"projects\" at index 0.")),
             emulator: (400, "Document parent name \"garbage\" lacks \"projects\" at index 0."),
         },
         Case {
@@ -1630,7 +1619,7 @@ fn the_round_four_checks_hold_in_every_position() {
         Case { label: "[[vector of integers, i]]", stages: vec![select(list(vec![list(vec![vec_int(), field("i")])]))], strict: None, emulator: (400, doubles) },
         Case { label: "{a: [vector of integers, i]}", stages: vec![select(map(vec![("a", list(vec![vec_int(), field("i")]))]))], strict: None, emulator: (400, doubles) },
         // References.
-        Case { label: "ref to the documents root", stages: vec![select(json!({ "referenceValue": DOCS }))], strict: None, emulator: (200, "") },
+        Case { label: "ref to the documents root", stages: vec![select(json!({ "referenceValue": DOCS }))], strict: Some((200, "")), emulator: (200, "") },
         Case { label: "ref to a non-ASCII document", stages: vec![select(reference("あ/d"))], strict: None, emulator: (200, "") },
         Case {
             label: "document_id(ref garbage)",
@@ -1963,8 +1952,8 @@ fn later_checks_answer_before_an_empty_key_a_reserved_alias_or_a_map_key_type() 
     }
 }
 
-/// The documents root and the database root name no document and no production row holds
-/// them, so strict refuses every function of them (review r9 M3); the emulator profile answers
+/// The documents root is recorded as a literal; its use inside functions remains unobserved,
+/// as does the database root, so strict refuses those function calls; the emulator profile answers
 /// what the official emulator 1.22.0 does.
 #[test]
 fn strict_refuses_document_functions_of_a_root() {

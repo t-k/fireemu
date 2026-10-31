@@ -694,8 +694,23 @@ impl Firestore for GatewayService {
         }
         let correlated_binding =
             crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
+        let answer = |error: Status| {
+            if registry_unrecorded
+                == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+                && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
+                && crate::pipeline::candidate_shape_eligible(request.get_ref())
+            {
+                crate::pipeline_shape::RefusalGate::Ordinary(
+                    crate::pipeline_shape::shape_of_request(request.get_ref()),
+                    request.get_ref().database.clone(),
+                )
+                .answer(error)
+            } else {
+                gate.answer(error)
+            }
+        };
         let ast = crate::pipeline::validate_pipeline(&compiler_request, registry_unrecorded)
-            .map_err(|error| gate.answer(error))?;
+            .map_err(answer)?;
         crate::pipeline::validate_function_depth(&compiler_request)
             .map_err(|error| pipeline_status(error, &ast.canonical_text()))?;
         if self.local_backend().is_some() {
@@ -711,7 +726,20 @@ impl Firestore for GatewayService {
             };
             let compiled =
                 crate::pipeline::compile_pipeline(&compiler_request, &parent, unrecorded)
-                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                    .map_err(|error| {
+                        if self.gateway.production_refusals()
+                            && recorded_bit_internal(request.get_ref(), &error)
+                        {
+                            eprintln!("[firestore] pipeline: recorded integer bit function returned an internal error");
+                            Status::internal("An internal error occurred.")
+                        } else if self.gateway.production_refusals()
+                            && recorded_geo_select(request.get_ref(), &error)
+                        {
+                            Status::invalid_argument("The 'geo_distance' function can only be used in the search(...) stage.")
+                        } else {
+                            pipeline_status(answer(error), &canonical)
+                        }
+                    })?;
             if request.get_ref().consistency_selector.is_some()
                 && (compiled.documents.is_none()
                     || !compiled.unions.is_empty()
@@ -737,7 +765,7 @@ impl Firestore for GatewayService {
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
                         crate::pipeline::execute_correlated_scalar(
-                            local, &database, &compiled, &binding, guard, unrecorded, runtime,
+                            local, &database, &compiled, &binding, guard, unrecorded, &runtime,
                         )
                     })
                     .await
@@ -777,7 +805,7 @@ impl Firestore for GatewayService {
                 let responses =
                     blocking_read(local, self.rules.clone(), caller, move |local, guard| {
                         crate::pipeline::execute_subcollection_array(
-                            local, &compiled, guard, unrecorded, runtime,
+                            local, &compiled, guard, unrecorded, &runtime,
                         )
                     })
                     .await
@@ -874,13 +902,38 @@ impl Firestore for GatewayService {
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
             };
             let numeric_scope = numeric_row_scope(request.get_ref(), &compiled);
+            let admission_gate =
+                if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+                    gate.clone()
+                } else {
+                    crate::pipeline_shape::RefusalGate::Recorded(
+                        if matches!(
+                            compiled.stages.as_slice(),
+                            [fireemu_core_firestore::pipeline_exec::Stage::Aggregate { .. }]
+                        ) && crate::pipeline::candidate_shape_eligible(request.get_ref())
+                        {
+                            crate::pipeline_shape::shape_of_request(request.get_ref())
+                        } else {
+                            None
+                        },
+                        request.get_ref().database.clone(),
+                    )
+                };
+            let admitted =
+                crate::pipeline::recorded_nested_sum_admitted(&admission_gate, unrecorded);
+            let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
+                compiled.stages,
+                unrecorded,
+                runtime,
+            );
+            if admitted {
+                cursor = cursor.with_recorded_nested_sum_wrong_type();
+            }
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
                 input,
-                compiled,
-                unrecorded,
+                cursor,
                 canonical,
                 gate,
-                runtime,
                 numeric_scope,
             ))));
         }
@@ -1228,6 +1281,106 @@ impl tokio_stream::Stream for AggregationResponseStream {
     }
 }
 
+// Native validation recordings cover only this direct single-field gRPC shape.
+// Called after the usual validation and only on the corresponding compiler refusal.
+fn recorded_native_function<'a>(
+    request: &'a pb::ExecutePipelineRequest,
+    error: &Status,
+) -> Option<&'a pb::Function> {
+    use pb::{execute_pipeline_request::PipelineType, value::ValueType as V};
+    if request.auto_commit_transaction
+        || request.request_options.is_some()
+        || request.consistency_selector.is_some()
+        || error.code() != tonic::Code::Unimplemented
+    {
+        return None;
+    }
+    let Some(PipelineType::StructuredPipeline(structured)) = &request.pipeline_type else {
+        return None;
+    };
+    if !structured.options.is_empty() {
+        return None;
+    }
+    let Some(pipeline) = &structured.pipeline else {
+        return None;
+    };
+    let [collection, select] = pipeline.stages.as_slice() else {
+        return None;
+    };
+    if collection.name != "collection"
+        || !collection.options.is_empty()
+        || select.name != "select"
+        || !select.options.is_empty()
+    {
+        return None;
+    }
+    let [pb::Value {
+        value_type: Some(V::ReferenceValue(path)),
+    }] = collection.args.as_slice()
+    else {
+        return None;
+    };
+    if !path
+        .strip_prefix('/')
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    {
+        return None;
+    }
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = select.args.as_slice()
+    else {
+        return None;
+    };
+    if map.fields.len() != 1 {
+        return None;
+    }
+    let Some(pb::Value {
+        value_type: Some(V::FunctionValue(function)),
+    }) = map.fields.get("value")
+    else {
+        return None;
+    };
+    if function.options.is_empty()
+        && error.message() == format!("function {:?} is unsupported locally", function.name)
+    {
+        Some(function)
+    } else {
+        None
+    }
+}
+
+fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::value::ValueType as V;
+    let Some(function) = recorded_native_function(request, error) else {
+        return false;
+    };
+    let count = match function.name.as_str() {
+        "bit_not" => 1,
+        "bit_left_shift" | "bit_right_shift" => 2,
+        _ => return false,
+    };
+    function.args.len() == count
+        && function
+            .args
+            .iter()
+            .all(|value| matches!(value.value_type, Some(V::IntegerValue(_))))
+}
+
+fn recorded_geo_select(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::value::ValueType as V;
+    let Some(function) = recorded_native_function(request, error) else {
+        return false;
+    };
+    function.name == "geo_distance"
+        && function.args.len() == 2
+        && function.args.iter().all(|value| {
+            matches!(&value.value_type,
+            Some(V::GeoPointValue(point)) if (-90.0..=90.0).contains(&point.latitude)
+                && (-180.0..=180.0).contains(&point.longitude))
+        })
+}
+
 /// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
 /// the REST route).
 pub(crate) fn pipeline_status(mut error: Status, canonical: &str) -> Status {
@@ -1352,20 +1505,14 @@ impl PipelineResponseStream {
     /// A stream over the input scan of a compiled pipeline.
     fn running(
         inner: BoxStream<pb::RunQueryResponse>,
-        compiled: crate::pipeline::CompiledExecution,
-        unrecorded: fireemu_core_firestore::pipeline_exec::Unrecorded,
+        cursor: fireemu_core_firestore::pipeline_exec::Cursor,
         canonical: String,
         gate: crate::pipeline_shape::RefusalGate,
-        runtime: fireemu_core_firestore::pipeline_exec::RuntimeContext,
         numeric_row_scope: Option<NumericRowScope>,
     ) -> Self {
         Self {
             inner: Some(inner),
-            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
-                compiled.stages,
-                unrecorded,
-                runtime,
-            ),
+            cursor,
             read_time: None,
             canonical,
             gate,
@@ -1947,6 +2094,178 @@ mod tests {
     use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
+
+    fn geo_request(latitude: f64, longitude: f64) -> pb::ExecutePipelineRequest {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"geo_distance","args":[{"geoPointValue":{}},{"geoPointValue":{"latitude":latitude,"longitude":longitude}}]
+            }}}}}]}
+        ]}}});
+        crate::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn recorded_geo_shape_accepts_valid_coordinates_without_fixing_values(lat in -90i32..=90, lon in -180i32..=180) {
+            let request = geo_request(f64::from(lat), f64::from(lon));
+            let error = Status::unimplemented("function \"geo_distance\" is unsupported locally");
+            proptest::prop_assert!(recorded_geo_select(&request, &error));
+            proptest::prop_assert!(!recorded_geo_select(&request, &Status::invalid_argument(error.message())));
+        }
+    }
+
+    #[test]
+    fn recorded_geo_shape_rejects_invalid_coordinates() {
+        let error = Status::unimplemented("function \"geo_distance\" is unsupported locally");
+        let original = geo_request(0.0, 0.0);
+        assert!(recorded_geo_select(&original, &error));
+        for latitude in [true, false] {
+            let mut request = original.clone();
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+                &mut request.pipeline_type
+            else {
+                unreachable!()
+            };
+            let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+            let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type else {
+                unreachable!()
+            };
+            let Some(pb::value::ValueType::FunctionValue(function)) =
+                &mut map.fields.get_mut("value").unwrap().value_type
+            else {
+                unreachable!()
+            };
+            let Some(pb::value::ValueType::GeoPointValue(point)) = &mut function.args[1].value_type
+            else {
+                unreachable!()
+            };
+            if latitude {
+                point.latitude = 91.0;
+            } else {
+                point.longitude = 181.0;
+            }
+            assert!(!recorded_geo_select(&request, &error));
+        }
+    }
+
+    fn bit_request(first: i64, second: i64) -> pb::ExecutePipelineRequest {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"bit_left_shift","args":[{"integerValue":first.to_string()},{"integerValue":second.to_string()}]
+            }}}}}]}
+        ]}}});
+        crate::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn recorded_bit_shape_depends_on_types_not_integer_values(first in proptest::prelude::any::<i64>(), second in proptest::prelude::any::<i64>()) {
+            let request = bit_request(first, second);
+            let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+            proptest::prop_assert!(recorded_bit_internal(&request, &error));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::invalid_argument("function \"bit_left_shift\" is unsupported locally")));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::unimplemented("earlier refusal")));
+        }
+    }
+
+    #[test]
+    fn recorded_bit_shape_rejects_unobserved_request_neighbors() {
+        let request = bit_request(5, 1);
+        let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+        assert!(recorded_bit_internal(&request, &error));
+        let mut neighbors = Vec::new();
+        let mut changed = request.clone();
+        changed.auto_commit_transaction = true;
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        pipeline
+            .options
+            .insert("x".to_owned(), pb::Value::default());
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let stages = &mut pipeline.pipeline.as_mut().unwrap().stages;
+        stages.push(pb::pipeline::Stage {
+            name: "limit".to_owned(),
+            args: vec![],
+            options: std::collections::HashMap::new(),
+        });
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+        let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type else {
+            unreachable!()
+        };
+        let Some(pb::value::ValueType::FunctionValue(function)) =
+            &mut map.fields.get_mut("value").unwrap().value_type
+        else {
+            unreachable!()
+        };
+        function.args[0].value_type = Some(pb::value::ValueType::StringValue("5".to_owned()));
+        neighbors.push(changed);
+        for mutation in ["arity", "options", "alias", "stage_options"] {
+            let mut changed = request.clone();
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+                &mut changed.pipeline_type
+            else {
+                unreachable!()
+            };
+            let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+            if mutation == "stage_options" {
+                select.options.insert("x".to_owned(), pb::Value::default());
+            } else {
+                let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type
+                else {
+                    unreachable!()
+                };
+                if mutation == "alias" {
+                    let value = map.fields.remove("value").unwrap();
+                    map.fields.insert("other".to_owned(), value);
+                } else {
+                    let Some(pb::value::ValueType::FunctionValue(function)) =
+                        &mut map.fields.get_mut("value").unwrap().value_type
+                    else {
+                        unreachable!()
+                    };
+                    if mutation == "arity" {
+                        function.args.pop();
+                    } else {
+                        function
+                            .options
+                            .insert("x".to_owned(), pb::Value::default());
+                    }
+                }
+            }
+            neighbors.push(changed);
+        }
+        for changed in neighbors {
+            assert!(!recorded_bit_internal(&changed, &error));
+        }
+    }
 
     fn test_gateway() -> Gateway {
         Gateway {

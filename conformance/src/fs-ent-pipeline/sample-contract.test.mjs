@@ -276,3 +276,35 @@ test("candidate configuration must bind strict enterprise native mode", () => {
   ])
     assert.equal(checkConfig(value), false);
 });
+
+test("the finite unordered percent contract accepts any typed subset order", () => {
+  const p = policy.recipes.find((x) => x.id.endsWith("sample-percent-50"));
+  const x = input(p);
+  const rows = companion.body[0].results;
+  x.response.body[0].results = [rows[4], rows[1]];
+  assert.ok(evaluateSample({ ...x, unorderedInput: true }));
+  x.response.body[0].results = [rows[4], rows[4]];
+  assert.equal(evaluateSample({ ...x, unorderedInput: true }), null);
+});
+
+test("unordered percent accepts every permutation of each typed subset without duplicates", () => {
+  const p = policy.recipes.find((x) => x.id.endsWith("sample-percent-50"));
+  const inputRow = input(p);
+  const all = companion.body[0].results;
+  const permutations = (items) =>
+    items.length === 0
+      ? [[]]
+      : items.flatMap((item, index) =>
+          permutations(items.filter((_, i) => i !== index)).map((tail) => [item, ...tail]),
+        );
+  for (let mask = 0; mask < 1 << all.length; mask++) {
+    for (const selected of permutations(all.filter((_, i) => mask & (1 << i)))) {
+      inputRow.response.body[0].results = selected;
+      assert.ok(evaluateSample({ ...inputRow, unorderedInput: true }));
+      if (selected.length) {
+        inputRow.response.body[0].results = [...selected, selected[0]];
+        assert.equal(evaluateSample({ ...inputRow, unorderedInput: true }), null);
+      }
+    }
+  }
+});

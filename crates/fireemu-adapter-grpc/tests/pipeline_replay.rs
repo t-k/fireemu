@@ -639,24 +639,7 @@ fn satisfies_in(
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function",
-        "fireemu cannot tell a function that does not exist from one it does not run: strict refuses it as unobserved, the emulator profile answers the empty select's text first",
-    ),
-    (
-        "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
-        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-args#accumulator-unknown",
-        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-args#nested-aggregate",
-        "a nested aggregate evaluates `sum` as the array function `array_sum` in production; not reproduced",
-    ),
-];
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Rows whose 200 answer holds other rows or another order than production's because the cut or
 /// the order depends on what production has not shown (see the reason); both profiles answer 200
@@ -917,6 +900,98 @@ fn message(text: &str) -> String {
     }
 }
 
+// The recorded reference row retains its source index after project-name substitution.
+// Validate each resource's actual UTF-16 offset before comparing the remaining envelope.
+fn recorded_empty_reference_environment_matches(local: &Value, production: &Value) -> bool {
+    fn split(text: &str) -> Option<(&str, usize)> {
+        let (resource, index) = text
+            .strip_prefix("Document parent name \"")?
+            .split_once("\" lacks a resource id at index ")?;
+        Some((resource, index.strip_suffix('.')?.parse().ok()?))
+    }
+    fn offset(resource: &str) -> Option<usize> {
+        let empty = resource.find("//")?;
+        Some(resource[..=empty].encode_utf16().count())
+    }
+    let Some(local_text) = local.pointer("/0/error/message").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(recorded_text) = production
+        .pointer("/0/error/message")
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let Some((local_resource, local_index)) = split(local_text) else {
+        return false;
+    };
+    let Some((recorded_resource, recorded_index)) = split(recorded_text) else {
+        return false;
+    };
+    let Some(suffix) = recorded_resource.strip_prefix("projects/demo-fs-query-index/") else {
+        return false;
+    };
+    // The recorded source project was one UTF-16 unit longer than its public placeholder.
+    let source_length_resource = format!("projects/demo-fs-query-indexx/{suffix}");
+    if offset(local_resource) != Some(local_index)
+        || offset(&source_length_resource) != Some(recorded_index)
+        || relative(local_resource) != relative(recorded_resource)
+    {
+        return false;
+    }
+    let mut local = local.clone();
+    let mut production = production.clone();
+    let Some(local_error) = local.pointer_mut("/0/error").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    local_error.remove("message");
+    let Some(recorded_error) = production
+        .pointer_mut("/0/error")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+    recorded_error.remove("message");
+    local == production
+}
+
+#[test]
+fn reference_environment_comparison_checks_both_offsets_and_suffix() {
+    let local = json!([{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Document parent name \"projects/demo-app/databases/(default)/documents/c//d\" lacks a resource id at index 50."}}]);
+    let production = read("fs-ent-pipeline-production.json")["programs"]
+        ["fs-ent-pipeline/o5/appendix"]["steps"]["proposed-reference-empty-segment"]["body"]
+        .clone();
+    assert!(recorded_empty_reference_environment_matches(
+        &local,
+        &production
+    ));
+    for (from, to) in [
+        ("index 50.", "index 49."),
+        ("index 50.", "index 51."),
+        ("/c//d", "/c//other"),
+    ] {
+        let mut changed = local.clone();
+        let message = changed[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .replace(from, to);
+        changed[0]["error"]["message"] = json!(message);
+        assert!(!recorded_empty_reference_environment_matches(
+            &changed,
+            &production
+        ));
+    }
+    let mut changed = production.clone();
+    let message = changed[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .replace("index 61.", "index 60.");
+    changed[0]["error"]["message"] = json!(message);
+    assert!(!recorded_empty_reference_environment_matches(
+        &local, &changed
+    ));
+}
+
 /// A Firestore value or document in a comparable form.
 fn normalize(value: &Value) -> Value {
     match value {
@@ -1054,6 +1129,7 @@ struct O5Difference {
 }
 
 const O5_INTERNAL_ROW: &str = "fs-ent-pipeline/o5/appendix#proposed-select-duplicate-quoted-path";
+const O5_REFERENCE_ENV_ROW: &str = "fs-ent-pipeline/o5/appendix#proposed-reference-empty-segment";
 const O8A_INTERNAL_ROWS: &[&str] = &[
     "fs-ent-pipeline/o8a/dupquote-main#same-1",
     "fs-ent-pipeline/o8a/dupquote-main#same-2",
@@ -1071,6 +1147,11 @@ fn validate_o5_pin(row: &O5Difference) {
         assert_eq!(row.category, "unknown-production-outcome");
         assert_eq!(row.production, recorded_internal_answer());
         assert_eq!(row.strict, row.production);
+    } else if row.row == O5_REFERENCE_ENV_ROW {
+        assert_eq!(row.category, "environment-reference-comparison");
+        assert_eq!(row.strict["status"], 400);
+        assert_eq!(Some(&row.strict), row.emulator.as_ref());
+        assert_ne!(row.strict, row.production);
     } else {
         assert_ne!(
             row.category, "unknown-production-outcome",
@@ -1208,10 +1289,10 @@ fn o5_differences() -> BTreeMap<String, O5Difference> {
     let rows = o5_difference_rows();
     // (A run that regenerates the debt file counts what is there.)
     if std::env::var_os("REGENERATE_O5_DEBT").is_none() {
-        assert_eq!(rows.len(), 127, "finite O5 debt inventory");
+        assert_eq!(rows.len(), 1, "finite O5 debt inventory");
         assert_eq!(
             rows.iter().filter(|row| row.emulator.is_some()).count(),
-            98,
+            1,
             "finite emulator debt inventory"
         );
     }
@@ -1439,6 +1520,717 @@ fn internal_case_at(
             json!({"grpcMessage": error.message()}),
         ),
     }
+}
+
+#[test]
+fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
+    let message = "The function 'nope_fn' does not exist.";
+    for step in [
+        "add-fields-unknown-then-aggregate-one",
+        "add-fields-unknown-then-limit-string",
+    ] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(true, "o5/stage-order", step, grpc);
+            assert_eq!(status, 400, "{step} grpc={grpc}: {body}");
+            if grpc {
+                assert_eq!(body["grpcMessage"], message, "{step}");
+            } else {
+                assert_eq!(body[0]["error"]["message"], message, "{step}");
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_docid_order_matches_original_rest() {
+    let production = read("fs-ent-pipeline-production.json");
+    for id in [
+        "proposed-n14-docid-where-then-empty",
+        "proposed-n15-docid-add-then-empty",
+        "proposed-n78-docid-double-then-limit",
+    ] {
+        let expected = &production["programs"]["fs-ent-pipeline/o5/appendix"]["steps"][id];
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, "o5/appendix", id, false);
+            assert_eq!(
+                status,
+                u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
+                "{id} strict={strict}"
+            );
+            assert_eq!(body, expected["body"], "{id} strict={strict}");
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn generated_remaining_recorded_boundaries_use_real_routes() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let table = "docid_options	observed	strict	rest\ndocid_options	observed	strict	grpc\ndocid_options	nearby	strict	grpc\ndocid_order	competing	strict	rest\nreference	observed	strict	rest\nerror_info	observed	ordinary	grpc\ndocid_order	observed	ordinary	grpc\nreference	nearby	ordinary	rest\ndocid_options	competing	ordinary	grpc\nreference	competing	ordinary	grpc\nerror_info	nearby	strict	rest\nerror_info	competing	strict	grpc\ndocid_order	nearby	strict	rest";
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for line in table.lines() {
+        let fields: Vec<_> = line.split('\t').collect();
+        let [family, shape, profile, transport] = fields.as_slice() else {
+            panic!("bad PICT row")
+        };
+        let (program_id, id) = match *family {
+            "docid_options" => (
+                "fs-ent-pipeline/o5/value-shapes",
+                "document-id-with-options",
+            ),
+            "docid_order" => (
+                "fs-ent-pipeline/o5/appendix",
+                "proposed-n15-docid-add-then-empty",
+            ),
+            "reference" => (
+                "fs-ent-pipeline/o5/appendix",
+                "proposed-reference-empty-segment",
+            ),
+            _ => ("fs-ent-pipeline/o5/appendix", "original-m4242-00731"),
+        };
+        let (p, program) = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, x)| x["id"] == program_id)
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, x)| x["id"] == id)
+            .unwrap();
+        let mut body = fill(&step["body"]);
+        if *family == "docid_options" && *shape == "nearby" {
+            body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]["fields"]
+                ["v"]["functionValue"]["options"]["x"] = json!({"stringValue":"1"});
+        }
+        if *family == "docid_options" && *shape == "competing" {
+            body["structuredPipeline"]["pipeline"]["stages"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
+        }
+        if *family == "docid_order" && *shape == "nearby" {
+            body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]["fields"]
+                ["a"]["functionValue"]["args"][0] = json!({"stringValue":"bad"});
+        }
+        if *family == "reference" && *shape == "nearby" {
+            body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]["fields"]
+                ["v"]["referenceValue"] = json!(format!("{DOCS}/c/d"));
+        }
+        if *family == "reference" && *shape == "competing" {
+            body["structuredPipeline"]["pipeline"]["stages"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":"select","args":[{"mapValue":{"fields":{}}}]}));
+        }
+        let strict = *profile == "strict";
+        let s = state(strict);
+        for seed in program["seed"].as_array().unwrap() {
+            let mut values = fill(&seed[1]);
+            if *family == "error_info" && *shape == "nearby" {
+                values["top"] = json!({"integerValue":"7"});
+            }
+            let (status, _) = call(
+                &s,
+                "PATCH",
+                &format!("{DOCS}/{}", seed[0].as_str().unwrap()),
+                &json!({"fields":values}),
+            );
+            assert_eq!(status, 200, "{line}");
+        }
+        let status = if *transport == "rest" {
+            call_ordered(
+                &s,
+                "POST",
+                &format!("{DOCS}:executePipeline"),
+                &body,
+                &order.rebased(&format!("/programs/{p}/steps/{n}/body"), ""),
+            )
+            .0
+        } else {
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+            let result = rt.block_on(async {
+                use tokio_stream::StreamExt as _;
+                let mut stream =
+                    Firestore::execute_pipeline(&service, tonic::Request::new(request))
+                        .await?
+                        .into_inner();
+                while let Some(response) = stream.next().await {
+                    response?;
+                }
+                Ok::<(), tonic::Status>(())
+            });
+            match result {
+                Ok(()) => 200,
+                Err(error) => match error.code() {
+                    tonic::Code::InvalidArgument => 400,
+                    tonic::Code::Unimplemented => 501,
+                    tonic::Code::Internal => 500,
+                    _ => 0,
+                },
+            }
+        };
+        let expected = match (*family, *shape, *profile, *transport) {
+            ("docid_options", "observed", _, _) | ("reference", "nearby", _, _) => 200,
+            ("docid_options" | "docid_order" | "error_info", "nearby", "strict", _)
+            | ("error_info", "competing", "strict", "grpc") => 501,
+            ("docid_options", "competing", "ordinary", _)
+            | ("docid_order" | "reference" | "error_info", _, _, _) => 400,
+            _ => panic!("unexpected PICT row {line}"),
+        };
+        assert_eq!(status, expected, "{line}");
+    }
+}
+
+#[test]
+fn recorded_empty_reference_index_tracks_each_actual_resource() {
+    fn check(message: &str) {
+        let resource = message.split('"').nth(1).unwrap();
+        let empty = resource.find("//").unwrap();
+        let expected = resource[..=empty].encode_utf16().count();
+        assert!(
+            message.ends_with(&format!("lacks a resource id at index {expected}.")),
+            "{message}"
+        );
+    }
+    let production = read("fs-ent-pipeline-production.json");
+    let recorded = production["programs"]["fs-ent-pipeline/o5/appendix"]["steps"]
+        ["proposed-reference-empty-segment"]["body"][0]["error"]["message"]
+        .as_str()
+        .unwrap();
+    // The public fixture's displayed project is one UTF-16 unit shorter than the source name.
+    let original = recorded.replacen(
+        "projects/demo-fs-query-index/",
+        "projects/demo-fs-query-indexx/",
+        1,
+    );
+    assert_ne!(original, recorded);
+    check(&original);
+    for strict in [true, false] {
+        for grpc in [true, false] {
+            let (status, body) = internal_case(
+                strict,
+                "o5/appendix",
+                "proposed-reference-empty-segment",
+                grpc,
+            );
+            assert_eq!(status, 400, "{body}");
+            let message = if grpc {
+                body["grpcMessage"].as_str().unwrap()
+            } else {
+                body[0]["error"]["message"].as_str().unwrap()
+            };
+            check(message);
+        }
+    }
+}
+
+#[test]
+fn recorded_error_info_preserves_unobserved_and_empty_boundaries() {
+    let (requests, order) = read_ordered("fs-ent-pipeline-requests.json");
+    let (p, program) = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, program)| program["id"] == "fs-ent-pipeline/o5/appendix")
+        .unwrap();
+    let (n, step) = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .find(|(_, step)| step["id"] == "original-m4242-00731")
+        .unwrap();
+    let body = fill(&step["body"]);
+    let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+    let empty = state(true);
+    let (status, _) = call_ordered(
+        &empty,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &body,
+        &order,
+    );
+    assert_eq!(status, 200);
+    let changed = state(true);
+    let mut fields = fill(&program["seed"][0][1]);
+    fields["top"] = json!({"integerValue":"7"});
+    let (seed_status, _) = call(
+        &changed,
+        "PATCH",
+        &format!("{DOCS}/{}", program["seed"][0][0].as_str().unwrap()),
+        &json!({"fields":fields}),
+    );
+    assert_eq!(seed_status, 200);
+    let (status, answer) = call_ordered(
+        &changed,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &body,
+        &order,
+    );
+    assert_eq!(status, 501, "{answer}");
+    assert_eq!(
+        answer[0]["error"]["message"],
+        "select: a second refused field in one stage; this behavior is not observed locally"
+    );
+    let (status, body) = internal_case(true, "o5/appendix", "original-m4242-00731", true);
+    assert_eq!(status, 501);
+    assert_eq!(
+        body["grpcMessage"],
+        "select: a second refused field in one stage; this behavior is not observed locally"
+    );
+}
+
+#[test]
+fn recorded_error_info_matches_original_rest() {
+    let production = read("fs-ent-pipeline-production.json");
+    for id in ["original-m4242-00731"] {
+        let expected = &production["programs"]["fs-ent-pipeline/o5/appendix"]["steps"][id];
+        for strict in [true, false] {
+            let (status, body) = internal_case(strict, "o5/appendix", id, false);
+            assert_eq!(
+                status,
+                u16::try_from(expected["status"].as_u64().unwrap()).unwrap(),
+                "{id} strict={strict}"
+            );
+            assert_eq!(body, expected["body"], "{id} strict={strict}");
+        }
+    }
+}
+
+#[test]
+fn document_id_unrecorded_option_shapes_remain_closed() {
+    let original = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/vs5"}]},
+        {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{
+            "name":"document_id","args":[{"fieldReferenceValue":"__name__"}],"options":{"x":{"integerValue":"1"}}
+        }}}}}]}
+    ]}}});
+    for change in ["name", "type", "argument", "stage", "extra_alias"] {
+        let mut body = original.clone();
+        let function = &mut body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]
+            ["mapValue"]["fields"]["v"]["functionValue"];
+        match change {
+            "name" => function["options"] = json!({"other":{"integerValue":"1"}}),
+            "type" => function["options"]["x"] = json!({"stringValue":"1"}),
+            "argument" => function["args"][0] = json!({"fieldReferenceValue":"other"}),
+            "extra_alias" => {
+                body["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+                    ["fields"]["w"] = json!({"integerValue":"1"});
+            }
+            _ => body["structuredPipeline"]["pipeline"]["stages"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":"limit","args":[{"integerValue":"1"}]})),
+        }
+        let (status, answer) = call(
+            &state(true),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_eq!(status, 501, "{change}: {answer}");
+    }
+}
+
+#[test]
+fn document_id_recorded_options_evaluates_each_real_reference() {
+    let s = state(true);
+    for id in ["d", "different"] {
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/vs5/{id}"),
+            &json!({"fields":{"n":{"integerValue":"1"}}}),
+        );
+        assert_eq!(status, 200, "seed {body}");
+    }
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/vs5"}]},
+        {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{
+            "name":"document_id","args":[{"fieldReferenceValue":"__name__"}],"options":{"x":{"integerValue":"1"}}
+        }}}}}]}
+    ]}}});
+    let (status, answer) = call(&s, "POST", &format!("{DOCS}:executePipeline"), &body);
+    assert_eq!(status, 200, "{answer}");
+    let mut values: Vec<_> = answer
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|frame| frame["results"].as_array().into_iter().flatten())
+        .filter_map(|result| result["fields"]["v"]["stringValue"].as_str())
+        .collect();
+    values.sort_unstable();
+    assert_eq!(values, ["d", "different"]);
+}
+
+#[test]
+fn generated_context_and_bit_boundaries_use_real_routes() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let table = "bit	zero	empty	select	strict	grpc\nbit	recorded_integer	empty	select	strict	grpc\nbit	recorded_integer	empty	select	ordinary	grpc\nbit	recorded_integer	empty	select	strict	rest\ntext	zero	empty	select	ordinary	rest\ngeo	zero	empty	select	strict	grpc\nscore	zero	empty	select	strict	rest\nunknown	zero	empty	select	ordinary	grpc\nbit	recorded_integer	nonempty	select	strict	grpc\nbit	recorded_integer	empty	nested	strict	grpc\ngeo	geo_points	empty	select	strict	grpc\ngeo	geo_points	empty	select	ordinary	grpc\ngeo	geo_points	nonempty	select	strict	grpc\nscore	recorded_integer	nonempty	where	ordinary	grpc\ngeo	recorded_integer	nonempty	nested	ordinary	rest\nunknown	recorded_integer	nonempty	where	strict	rest\ntext	recorded_integer	empty	where	strict	grpc\ntext	geo_points	nonempty	nested	ordinary	rest\nbit	other	empty	where	ordinary	grpc\nscore	geo_points	nonempty	nested	ordinary	grpc\nscore	other	nonempty	nested	strict	rest\nunknown	geo_points	nonempty	nested	ordinary	grpc\nbit	geo_points	nonempty	where	ordinary	grpc\ngeo	other	nonempty	select	strict	grpc\ngeo	zero	nonempty	nested	strict	rest\nunknown	other	empty	nested	ordinary	rest\ngeo	zero	nonempty	where	ordinary	rest\ntext	other	empty	select	ordinary	rest";
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for line in table.lines() {
+        let parts: Vec<_> = line.split('\t').collect();
+        let [family, arity, options, context, profile, transport] = parts.as_slice() else {
+            panic!("bad PICT row")
+        };
+        let name = match *family {
+            "bit" => "bit_left_shift",
+            "text" => "matches",
+            "geo" => "geo_distance",
+            "score" => "score",
+            _ => "missing_fn",
+        };
+        let args = match *arity {
+            "zero" => vec![],
+            "recorded_integer" => vec![json!({"integerValue":"5"}), json!({"integerValue":"1"})],
+            "geo_points" => vec![
+                json!({"geoPointValue":{}}),
+                json!({"geoPointValue":{"longitude":1}}),
+            ],
+            _ => vec![json!({"stringValue":"bad"})],
+        };
+        let mut function = json!({"name":name,"args":args});
+        if *options == "nonempty" {
+            function["options"] = json!({"x":{"integerValue":"1"}});
+        }
+        let mut expression = json!({"functionValue":function});
+        if *context == "nested" {
+            expression = json!({"functionValue":{"name":"array","args":[expression]}});
+        }
+        let pipeline_step = if *context == "where" {
+            json!({"name":"where","args":[expression]})
+        } else {
+            json!({"name":"select","args":[{"mapValue":{"fields":{"value":expression}}}]})
+        };
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/positive"}]},pipeline_step]}}});
+        let strict = *profile == "strict";
+        let state = state(strict);
+        let code = if *transport == "grpc" {
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            rt.block_on(async {
+                match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                    Err(error) => error.code(),
+                    Ok(_) => tonic::Code::Ok,
+                }
+            })
+        } else {
+            let (status, _) = call(&state, "POST", &format!("{DOCS}:executePipeline"), &body);
+            match status {
+                500 => tonic::Code::Internal,
+                400 => tonic::Code::InvalidArgument,
+                501 => tonic::Code::Unimplemented,
+                _ => tonic::Code::Ok,
+            }
+        };
+        let captured_bit = *family == "bit"
+            && *arity == "recorded_integer"
+            && *options == "empty"
+            && *context == "select"
+            && strict
+            && *transport == "grpc";
+        let captured_geo = *family == "geo"
+            && *arity == "geo_points"
+            && *options == "empty"
+            && *context == "select"
+            && strict
+            && *transport == "grpc";
+        if captured_bit {
+            assert_eq!(code, tonic::Code::Internal, "{line}");
+        } else if captured_geo {
+            assert_eq!(code, tonic::Code::InvalidArgument, "{line}");
+        } else {
+            assert_ne!(code, tonic::Code::Internal, "{line}");
+        }
+    }
+}
+
+#[test]
+fn recorded_geo_select_grpc_refusal_is_search_only_in_strict() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for longitude in [1, 42] {
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"geo_distance","args":[{"geoPointValue":{}},{"geoPointValue":{"longitude":longitude}}]
+            }}}}}]}
+        ]}}});
+        for strict in [true, false] {
+            let s = state(strict);
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+            let error = rt.block_on(async {
+                match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("unexpectedly accepted geo distance"),
+                }
+            });
+            assert_eq!(
+                error.code(),
+                if strict {
+                    tonic::Code::InvalidArgument
+                } else {
+                    tonic::Code::Unimplemented
+                }
+            );
+            if strict {
+                assert_eq!(
+                    error.message(),
+                    "The 'geo_distance' function can only be used in the search(...) stage."
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_bit_integer_grpc_refusals_are_internal_only_in_strict() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (name, args) in [
+        ("bit_not", vec![json!({"integerValue":"5"})]),
+        (
+            "bit_left_shift",
+            vec![json!({"integerValue":"5"}), json!({"integerValue":"1"})],
+        ),
+        (
+            "bit_right_shift",
+            vec![json!({"integerValue":"8"}), json!({"integerValue":"1"})],
+        ),
+    ] {
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{"name":name,"args":args}}}}}]}
+        ]}}});
+        for strict in [true, false] {
+            let s = state(strict);
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+            let error = rt.block_on(async {
+                match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                    Err(error) => error,
+                    Ok(_) => panic!("unexpectedly accepted {name}"),
+                }
+            });
+            assert_eq!(
+                error.code(),
+                if strict {
+                    tonic::Code::Internal
+                } else {
+                    tonic::Code::Unimplemented
+                },
+                "{name}"
+            );
+            if strict {
+                assert!(!error.message().contains("projects/"));
+                assert!(!error.message().contains("Bearer"));
+            }
+        }
+    }
+}
+
+#[test]
+fn recorded_unknown_after_empty_select_matches_both_profiles() {
+    let expected = "The function 'nope_fn' does not exist.";
+    for strict in [true, false] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(
+                strict,
+                "o4/stages",
+                "select-empty-then-unknown-function",
+                grpc,
+            );
+            assert_eq!(status, 400, "strict={strict} grpc={grpc}: {body}");
+            let message = if grpc {
+                &body["grpcMessage"]
+            } else {
+                &body[0]["error"]["message"]
+            };
+            assert_eq!(message, expected, "strict={strict} grpc={grpc}");
+        }
+    }
+}
+
+#[test]
+fn unrecorded_unknown_candidates_keep_original_refusal_bodies() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let name = "fresh_unknown_neighbor";
+    let body = json!({"structuredPipeline":{"pipeline":{"stages":[
+        {"name":"collection","args":[{"referenceValue":"/positive"}]},
+        {"name":"select","args":[{"mapValue":{"fields":{"v":{"functionValue":{"name":name,"args":[]}}}}}]}
+    ]}}});
+    let expected = format!("function {name:?} is unsupported locally");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for strict in [true, false] {
+        let s = state(strict);
+        let (status, rest) = call(&s, "POST", &format!("{DOCS}:executePipeline"), &body);
+        assert_eq!(status, 501);
+        assert_eq!(rest[0]["error"]["message"], expected);
+        let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap();
+        let service = GatewayService::local((*s.gateway).clone(), Arc::clone(&s.local));
+        let error = rt.block_on(async {
+            match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                Err(error) => error,
+                Ok(_) => panic!("unexpectedly accepted unknown function"),
+            }
+        });
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert_eq!(error.message(), expected);
+    }
+}
+
+#[test]
+fn recorded_unknown_refusals_match_both_profiles_and_transports() {
+    let cases = [
+        (
+            "o5/function-order",
+            "select-unknown-function",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/function-order",
+            "select-capitalized-name",
+            "The function 'Equal' does not exist, did you mean 'equal'?",
+        ),
+        (
+            "o5/function-order",
+            "where-unknown-then-select-empty",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/stage-order",
+            "add-fields-unknown-then-aggregate-one",
+            "The function 'nope_fn' does not exist.",
+        ),
+    ];
+    for (family, step, expected) in cases {
+        for strict in [true, false] {
+            for grpc in [false, true] {
+                let (status, body) = internal_case(strict, family, step, grpc);
+                assert_eq!(status, 400, "{step} strict={strict} grpc={grpc}: {body}");
+                let message = if grpc {
+                    &body["grpcMessage"]
+                } else {
+                    &body[0]["error"]["message"]
+                };
+                assert_eq!(message, expected, "{step} strict={strict} grpc={grpc}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
+    let requests = read("fs-ent-pipeline-requests.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|program| program["id"] == "fs-ent-pipeline/o5/stage-order")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "add-fields-unknown-then-aggregate-one")
+        .unwrap();
+    let base = fill(&step["body"]);
+    let mut unrecorded_name = base.clone();
+    unrecorded_name["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+        ["fields"]["a"]["functionValue"]["name"] = json!("geo_distance");
+    let mut invalid_input = base.clone();
+    invalid_input["structuredPipeline"]["pipeline"]["stages"][0]["args"][0] =
+        json!({"stringValue":"bad"});
+    let mut outer_arity = base.clone();
+    outer_arity["structuredPipeline"]["pipeline"]["stages"][1]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"integerValue":"1"}));
+    for (name, body) in [
+        ("known unsupported", unrecorded_name.clone()),
+        ("invalid input", invalid_input),
+        ("outer arity", outer_arity),
+    ] {
+        let (status, answer) = call(
+            &state(true),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_eq!(status, 501, "{name}: {answer}");
+    }
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &base,
+    );
+    assert_eq!(status, 400, "emulator: {answer}");
+    assert_eq!(
+        answer[0]["error"]["message"],
+        "The function 'nope_fn' does not exist."
+    );
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &unrecorded_name,
+    );
+    assert_eq!(status, 400, "unrecorded emulator: {answer}");
+    assert!(answer[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("aggregate"));
 }
 
 #[test]
@@ -1857,7 +2649,45 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                             ordered,
                         )
                 };
-                let matches = if row == "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok" {
+                let matches =
+                    if row == O5_REFERENCE_ENV_ROW && status == 400 && expected["status"] == 400 {
+                        recorded_empty_reference_environment_matches(&body, &expected["body"])
+                    } else {
+                        matches
+                    };
+                let matches = if row == "fs-ent-pipeline/o5/function-names#fn-current_document"
+                    && status == 200
+                {
+                    let (document_status, document) =
+                        call(&s, "GET", &format!("{DOCS}/fx5/d"), &json!({}));
+                    let mut actual = body.clone();
+                    let mut recorded_body = expected["body"].clone();
+                    let mut metadata_matches = document_status == 200;
+                    for (key, document_key) in [
+                        ("__create_time__", "createTime"),
+                        ("__update_time__", "updateTime"),
+                    ] {
+                        let pointer =
+                            format!("/0/results/0/fields/v/mapValue/fields/{key}/timestampValue");
+                        let actual_time = actual.pointer(&pointer).and_then(Value::as_str);
+                        let document_time = document[document_key].as_str();
+                        metadata_matches &= actual_time.is_some() && actual_time == document_time;
+                        metadata_matches &=
+                            recorded_body.pointer(&pointer).and_then(Value::as_str) == Some("<t2>");
+                        if let (Some(a), Some(b)) = (
+                            actual.pointer_mut(&pointer),
+                            recorded_body.pointer_mut(&pointer),
+                        ) {
+                            *a = json!("<document-time>");
+                            *b = json!("<document-time>");
+                        } else {
+                            metadata_matches = false;
+                        }
+                    }
+                    metadata_matches
+                        && answer_in(status, &actual, ordered)
+                            == answer_in(200, &recorded_body, ordered)
+                } else if row == "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok" {
                     current_timestamp_matches(
                         status,
                         &body,
@@ -2040,15 +2870,8 @@ fn the_pipeline_corpus_replays_as_production_answered() {
                 stale.push(json!({"row": known, "reason": reason}));
                 continue;
             };
-            let pinned = if *known == "fs-ent-pipeline/o4/stages#select-empty-then-unknown-function"
-                && !strict
-            {
-                got["status"] == 400
-                    && got["body"][0]["error"]["message"]
-                        == "The 'select(...)' stage requires at least one field."
-            } else {
-                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED"
-            };
+            let pinned =
+                got["status"] == 501 && got["body"][0]["error"]["status"] == "UNIMPLEMENTED";
             if !pinned {
                 changed_known.push(json!({"row": known, "reason": reason, "local": got}));
             }
@@ -2132,6 +2955,17 @@ fn regenerate_o5_row(
     )
 }
 
+fn synthetic_o5_difference() -> O5Difference {
+    O5Difference {
+        row: "fs-ent-pipeline/o5/synthetic#unsupported".to_owned(),
+        category: "unsupported-subset".to_owned(),
+        reason: "synthetic validation control".to_owned(),
+        production: json!({"status":400,"body":[{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"recorded"}}]}),
+        strict: json!({"status":501,"body":[{"error":{"code":501,"status":"UNIMPLEMENTED","message":"unobserved"}}]}),
+        emulator: None,
+    }
+}
+
 #[test]
 fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     let rows = o5_difference_rows();
@@ -2165,11 +2999,7 @@ fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     ] {
         assert!(std::panic::catch_unwind(|| validate_o5_pin(&invalid)).is_err());
     }
-    let ordinary = rows
-        .iter()
-        .find(|row| row.row != O5_INTERNAL_ROW)
-        .unwrap()
-        .clone();
+    let ordinary = synthetic_o5_difference();
     validate_o5_pin(&ordinary);
     let stale = O5Difference {
         strict: ordinary.production.clone(),
@@ -2178,6 +3008,17 @@ fn o5_and_duplicate_internal_pins_reject_unobserved_matches() {
     assert!(std::panic::catch_unwind(|| validate_o5_pin(&stale)).is_err());
     assert!(o5_pinned_match_valid(O5_INTERNAL_ROW, true, true));
     assert!(!o5_pinned_match_valid(O5_INTERNAL_ROW, false, true));
+    let reference = O5Difference {
+        row: O5_REFERENCE_ENV_ROW.to_owned(),
+        category: "environment-reference-comparison".to_owned(),
+        reason: "synthetic environment control".to_owned(),
+        production: json!({"status":400,"body":"production environment"}),
+        strict: json!({"status":400,"body":"local environment"}),
+        emulator: Some(json!({"status":400,"body":"local environment"})),
+    };
+    validate_o5_pin(&reference);
+    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, true, true));
+    assert!(!o5_pinned_match_valid(O5_REFERENCE_ENV_ROW, false, true));
     assert!(!o5_pinned_match_valid(&ordinary.row, true, true));
     assert!(!o5_pinned_match_valid(&ordinary.row, false, true));
     for row in O8A_INTERNAL_ROWS {
@@ -2206,11 +3047,7 @@ fn o5_regeneration_requires_both_profiles_and_retains_unknown() {
     assert_eq!(kept["row"], O5_INTERNAL_ROW);
     assert_eq!(kept["category"], "unknown-production-outcome");
     assert_eq!(kept["production"], unknown.production);
-    let ordinary = rows
-        .iter()
-        .find(|row| row.row != O5_INTERNAL_ROW)
-        .unwrap()
-        .clone();
+    let ordinary = synthetic_o5_difference();
     let both = BTreeMap::from([
         ((true, ordinary.row.clone()), ordinary.production.clone()),
         ((false, ordinary.row.clone()), ordinary.production.clone()),

@@ -391,6 +391,7 @@ pub struct LocalBackend {
     transaction_ids: Mutex<SplitMix64>,
     /// Independent request seeds for pipeline sampling.
     sample_seeds: Mutex<SplitMix64>,
+    expr_seeds: Mutex<SplitMix64>,
     /// Exact identities of active transactions authenticated by this backend, bounded globally.
     issued_transactions: Mutex<BTreeMap<Vec<u8>, (String, String)>>,
     /// Identity source for logical query streams whose response is split into bounded pages.
@@ -1649,6 +1650,25 @@ mod tests {
         assert_eq!(sampled.auto_id(), control.auto_id());
     }
 
+    #[test]
+    fn expression_requests_do_not_advance_sample_seed_stream() {
+        let with_expressions = admission_backend();
+        let control = admission_backend();
+        assert_ne!(
+            with_expressions.next_expr_seed(),
+            with_expressions.next_expr_seed()
+        );
+        assert_eq!(
+            with_expressions.next_sample_seed(),
+            control.next_sample_seed()
+        );
+        assert_eq!(
+            with_expressions.next_sample_seed(),
+            control.next_sample_seed()
+        );
+        assert_eq!(with_expressions.auto_id(), control.auto_id());
+    }
+
     fn parent(database: &str) -> Parent {
         parse_parent(&format!("projects/demo-app/databases/{database}/documents")).unwrap()
     }
@@ -2703,6 +2723,7 @@ impl LocalBackend {
             ids: Mutex::new(SplitMix64::new(seed)),
             transaction_ids: Mutex::new(SplitMix64::new(seed ^ 0x0054_584e)),
             sample_seeds: Mutex::new(SplitMix64::new(seed ^ 0x5341_4d50_4c45)),
+            expr_seeds: Mutex::new(SplitMix64::new(seed ^ 0x0045_5850_5252_4e47)),
             issued_transactions: Mutex::new(BTreeMap::new()),
             query_execution_ids: std::sync::atomic::AtomicU64::new(0),
             query_selection_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -5266,6 +5287,13 @@ impl LocalBackend {
     /// Draws a request seed without consuming document or transaction identifiers.
     pub(crate) fn next_sample_seed(&self) -> u64 {
         self.sample_seeds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_u64()
+    }
+
+    pub(crate) fn next_expr_seed(&self) -> u64 {
+        self.expr_seeds
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .next_u64()

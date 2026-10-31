@@ -86,6 +86,79 @@ pub(crate) fn validate_function_depth(request: &pb::ExecutePipelineRequest) -> R
     Ok(())
 }
 
+/// Bounds recursive shape inspection only when an ordinary-profile candidate needs it.
+pub(crate) fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> bool {
+    enum Node<'a> {
+        Pipeline(&'a pb::Pipeline),
+        Stage(&'a pb::pipeline::Stage),
+        Value(&'a pb::Value),
+    }
+    const MAX_DEPTH: usize = 100;
+    const MAX_NODES: usize = 32_768;
+    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+        &request.pipeline_type
+    else {
+        return true;
+    };
+    let mut stack = Vec::new();
+    let mut seen = 0_usize;
+    macro_rules! push {
+        ($node:expr, $depth:expr) => {{
+            if seen + stack.len() >= MAX_NODES {
+                return false;
+            }
+            stack.push(($node, $depth));
+        }};
+    }
+    if let Some(pipeline) = &structured.pipeline {
+        push!(Node::Pipeline(pipeline), 0);
+    }
+    for value in structured.options.values() {
+        push!(Node::Value(value), 0);
+    }
+    while let Some((node, depth)) = stack.pop() {
+        seen += 1;
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let next = depth + 1;
+        match node {
+            Node::Pipeline(pipeline) => {
+                for stage in &pipeline.stages {
+                    push!(Node::Stage(stage), next);
+                }
+            }
+            Node::Stage(stage) => {
+                for value in stage.args.iter().chain(stage.options.values()) {
+                    push!(Node::Value(value), next);
+                }
+            }
+            Node::Value(value) => match &value.value_type {
+                Some(pb::value::ValueType::ArrayValue(array)) => {
+                    for value in &array.values {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::MapValue(map)) => {
+                    for value in map.fields.values() {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::FunctionValue(function)) => {
+                    for value in function.args.iter().chain(function.options.values()) {
+                        push!(Node::Value(value), next);
+                    }
+                }
+                Some(pb::value::ValueType::PipelineValue(pipeline)) => {
+                    push!(Node::Pipeline(pipeline), next);
+                }
+                _ => {}
+            },
+        }
+    }
+    validate_function_depth(request).is_ok()
+}
+
 /// Production's scalar-subquery cardinality refusal.
 pub(crate) const SCALAR_MULTIPLE_RESULTS: &str = "Subpipeline returned multiple results.";
 
@@ -324,7 +397,47 @@ pub fn validate_pipeline(
         ));
     };
     let mut specs = Vec::with_capacity(pipeline.stages.len());
-    for stage in &pipeline.stages {
+    let mut earlier_unknown = None;
+    for (position, stage) in pipeline.stages.iter().enumerate() {
+        // A direct unknown operand in the first add_fields precedes a later aggregate's
+        // argument-count error in the recorded request. Keep the candidate shallow: the
+        // function-depth check has not run yet, and the outer gate still admits only a
+        // recorded whole-request shape and computed text.
+        if position == 1
+            && pipeline
+                .stages
+                .first()
+                .is_some_and(|first| first.name == "collection")
+            && stage.name == "add_fields"
+            && stage.options.is_empty()
+            && stage.args.len() == 1
+        {
+            if let Some(fields) = stage
+                .args
+                .first()
+                .and_then(map_fields)
+                .filter(|fields| fields.len() == 1)
+            {
+                let (alias, value) = fields.iter().next().expect("one field");
+                if parse_alias(alias).is_ok() {
+                    if let Some(pb::value::ValueType::FunctionValue(function)) = &value.value_type {
+                        if function.args.is_empty()
+                            && function.options.is_empty()
+                            && pipeline_exec::function(&function.name).is_none()
+                        {
+                            earlier_unknown = Some(unknown_function_status(
+                                &function.name,
+                                unrecorded,
+                                Status::unimplemented(format!(
+                                    "function {:?} is unsupported locally",
+                                    function.name
+                                )),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let args = stage
             .args
             .iter()
@@ -376,7 +489,25 @@ pub fn validate_pipeline(
         ));
     }
     // Production's arity text of the stages with a signature comes before the registry's own.
-    if let Some(error) = pipeline.stages.iter().find_map(stage_arity_error) {
+    if let Some((position, error)) = pipeline
+        .stages
+        .iter()
+        .enumerate()
+        .find_map(|(position, stage)| stage_arity_error(stage).map(|error| (position, error)))
+    {
+        if position == 2
+            && pipeline.stages[position].name == "aggregate"
+            && pipeline.stages[position].args.len() != 2
+        {
+            if let Some(candidate) = earlier_unknown {
+                if let Some(text) = crate::pipeline_shape::unknown_candidate_text(&candidate) {
+                    return Err(crate::pipeline_shape::unknown_candidate(
+                        with_code(error, "FS_PIPE_INVALID"),
+                        text.to_owned(),
+                    ));
+                }
+            }
+        }
         return Err(with_code(error, "FS_PIPE_INVALID"));
     }
     canonicalize(&specs).map_err(|e| {
@@ -1051,7 +1182,8 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     let aliases = select_wire_order(order, position);
-                    match decode_select(stage, unrecorded, aliases) {
+                    let recorded_docid_options = position == 1 && pipeline.stages.len() == 2;
+                    match decode_select(stage, unrecorded, aliases, recorded_docid_options) {
                         Ok((aliases, keeps_name)) => {
                             stages.push(Stage::Select {
                                 aliases,
@@ -1229,7 +1361,16 @@ pub fn compile_pipeline_in_order(
                         continue;
                     }
                     stages.push(match stage.name.as_str() {
-                        "add_fields" => Stage::AddFields(decode_add_fields(stage, unrecorded)?),
+                        "add_fields" => match decode_add_fields(stage, unrecorded) {
+                            Ok(aliases) => Stage::AddFields(aliases),
+                            Err(error)
+                                if error.message().starts_with("map key must be of type") =>
+                            {
+                                deferred_name.get_or_insert(error);
+                                continue;
+                            }
+                            Err(error) => return Err(error),
+                        },
                         "distinct" => Stage::Distinct(decode_distinct(stage, unrecorded)?),
                         _ => {
                             let (accumulators, groups) = decode_aggregate(stage, unrecorded)?;
@@ -1254,11 +1395,48 @@ pub fn compile_pipeline_in_order(
         }
         Ok(())
     })();
+    // A later stage refusal was recorded ahead of a constant document_id type failure.
+    // Inspect only the next stage, then let the existing shape/text gate admit the candidate.
+    let compiled = match compiled {
+        Err(error)
+            if unrecorded == Unrecorded::Refuse
+                && error.code() == tonic::Code::InvalidArgument
+                && error.message().starts_with(
+                    "The function document_id(...) requires `Reference` but got `",
+                )
+                && failed_at == 1
+                && pipeline.stages.len() == 3 =>
+        {
+            let mut later = None;
+            let checked = check_unrun_alias_stage(
+                &pipeline.stages[2],
+                &mut later,
+                Unrecorded::OfficialEmulator,
+            );
+            let candidate = checked
+                .err()
+                .or(later)
+                .filter(|status| status.code() == tonic::Code::InvalidArgument);
+            match candidate {
+                Some(candidate) => Err(crate::pipeline_shape::unknown_candidate(
+                    error,
+                    candidate.message().to_owned(),
+                )),
+                None => Err(error),
+            }
+        }
+        result => result,
+    };
     // Under the emulator profile a stage fireemu cannot decode (an unsupported function, say) is
     // refused after the argument checks of the stages behind it, as a stage it does not run is:
     // the official emulator checks every stage's arguments before running any. Strict answers
     // the first refusal (no later check answers past a constant that fails; ruling of
     // 2026-10-21).
+    let unknown_text = compiled
+        .as_ref()
+        .err()
+        .and_then(crate::pipeline_shape::unknown_candidate_text)
+        .map(str::to_owned);
     let compiled = match compiled {
         Err(error)
             if error.code() == tonic::Code::Unimplemented
@@ -1288,7 +1466,7 @@ pub fn compile_pipeline_in_order(
     // Under strict, the request's shape then decides which refusal is answered (`pipeline_shape`).
     // A negative `limit` or `offset` is checked after the empty map (the official emulator
     // 1.22.0; PX1d r5 review S2), a string one before it (O-4).
-    match (compiled, deferred) {
+    let selected = match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
@@ -1307,7 +1485,11 @@ pub fn compile_pipeline_in_order(
         }
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
-    }?;
+    };
+    selected.map_err(|error| match unknown_text {
+        Some(text) => crate::pipeline_shape::retain_unknown_candidate(error, &text),
+        None => error,
+    })?;
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -1409,7 +1591,7 @@ pub(crate) fn execute_subcollection_array(
     compiled: &CompiledExecution,
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use prost::Message as _;
     let [Stage::Select {
@@ -1478,7 +1660,11 @@ pub(crate) fn execute_subcollection_array(
             .filter_map(|r| r.document.as_ref())
         {
             let row = document_row(child)?;
-            match Expr::Field(field.clone()).eval_in_with_runtime(&row, unrecorded, runtime) {
+            match Expr::Field(field.clone()).eval_in_with_runtime(
+                &row,
+                unrecorded,
+                (*runtime).clone(),
+            ) {
                 pipeline_exec::Eval::Value(value) => values.push(value),
                 _ => {
                     return Err(Status::unimplemented(
@@ -1506,7 +1692,7 @@ pub(crate) fn execute_subcollection_array(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            (*runtime).clone(),
         );
         let mut rows = cursor
             .push(document_row(document)?)
@@ -1533,7 +1719,7 @@ pub(crate) fn execute_correlated_scalar(
     binding: &(String, FieldPath),
     guard: crate::rules::ReadGuard<'_>,
     unrecorded: Unrecorded,
-    runtime: pipeline_exec::RuntimeContext,
+    runtime: &pipeline_exec::RuntimeContext,
 ) -> Result<Vec<pb::ExecutePipelineResponse>, Status> {
     use fireemu_core_firestore::value::Value;
     use prost::Message as _;
@@ -1631,9 +1817,10 @@ pub(crate) fn execute_correlated_scalar(
     let mut output_bytes = 0usize;
     for document in parents {
         let parent_row = document_row(&document)?;
-        let pipeline_exec::Eval::Value(Value::String(parent_value)) =
-            Expr::Field(binding.1.clone()).eval_in_with_runtime(&parent_row, unrecorded, runtime)
-        else {
+        let pipeline_exec::Eval::Value(Value::String(parent_value)) = Expr::Field(
+            binding.1.clone(),
+        )
+        .eval_in_with_runtime(&parent_row, unrecorded, (*runtime).clone()) else {
             return Err(Status::unimplemented(
                 "correlated binding type is unobserved",
             ));
@@ -1642,7 +1829,7 @@ pub(crate) fn execute_correlated_scalar(
         for child in &children {
             let child_row = document_row(child)?;
             let pipeline_exec::Eval::Value(Value::String(key)) = Expr::Field(predicate.clone())
-                .eval_in_with_runtime(&child_row, unrecorded, runtime)
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone())
             else {
                 return Err(Status::unimplemented(
                     "correlated predicate type is unobserved",
@@ -1652,10 +1839,10 @@ pub(crate) fn execute_correlated_scalar(
                 continue;
             }
             if let Some((filter_field, expected)) = filter {
-                let pipeline_exec::Eval::Value(Value::String(actual)) =
-                    Expr::Field(filter_field.clone())
-                        .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                else {
+                let pipeline_exec::Eval::Value(Value::String(actual)) = Expr::Field(
+                    filter_field.clone(),
+                )
+                .eval_in_with_runtime(&child_row, unrecorded, (*runtime).clone()) else {
                     return Err(Status::unimplemented(
                         "correlated filter type is unobserved",
                     ));
@@ -1668,9 +1855,11 @@ pub(crate) fn execute_correlated_scalar(
                 return Err(Status::invalid_argument(SCALAR_MULTIPLE_RESULTS));
             }
             matched = Some(
-                match Expr::Field(field.clone())
-                    .eval_in_with_runtime(&child_row, unrecorded, runtime)
-                {
+                match Expr::Field(field.clone()).eval_in_with_runtime(
+                    &child_row,
+                    unrecorded,
+                    (*runtime).clone(),
+                ) {
                     pipeline_exec::Eval::Value(Value::String(value)) => Value::String(value),
                     _ => {
                         return Err(Status::unimplemented(
@@ -1700,7 +1889,7 @@ pub(crate) fn execute_correlated_scalar(
                 keeps_name: *keeps_name,
             }],
             unrecorded,
-            runtime,
+            (*runtime).clone(),
         );
         let mut rows = cursor.push(parent_row).map_err(|e| eval_status(&e))?;
         rows.extend(cursor.finish().map_err(|e| eval_status(&e))?);
@@ -1889,6 +2078,22 @@ pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
     }
 }
 
+/// Admits the recorded nested sum type refusal only for its recorded request shape.
+pub(crate) fn recorded_nested_sum_admitted(
+    gate: &crate::pipeline_shape::RefusalGate,
+    _unrecorded: Unrecorded,
+) -> bool {
+    matches!(gate, crate::pipeline_shape::RefusalGate::Recorded(..))
+        && gate
+            .answer(eval_status(&pipeline_exec::EvalError::WrongType {
+                function: "array_sum",
+                expected: "Array",
+                got: "LONG",
+            }))
+            .code()
+            == tonic::Code::InvalidArgument
+}
+
 /// Whether a wire value holds no expression at any depth (a literal the core can decode).
 fn is_literal(value: &pb::Value) -> bool {
     expression_kind(value).is_none()
@@ -1985,11 +2190,21 @@ fn expression_text(value: &pb::Value) -> Option<String> {
 fn constant_call_error(expr: &Expr) -> Option<Status> {
     fn reads_field(expr: &Expr) -> bool {
         match expr {
-            Expr::Field(_) | Expr::SubcollectionArray { .. } | Expr::CorrelatedScalar { .. } => {
-                true
-            }
+            Expr::Field(_)
+            | Expr::Variable(_)
+            | Expr::SubcollectionArray { .. }
+            | Expr::CorrelatedScalar { .. } => true,
             Expr::Constant(_) => false,
-            Expr::Call { args, .. } => args.iter().any(reads_field),
+            Expr::Call { function, args } => {
+                matches!(
+                    function.name,
+                    "current_document"
+                        | "array_filter"
+                        | "array_transform"
+                        | "rand"
+                        | "autogen_document_id"
+                ) || args.iter().any(reads_field)
+            }
         }
     }
     // A call of a string or math function fails per row, like the logic functions below: its
@@ -2068,7 +2283,7 @@ fn map_key_error(value: &pb::Value) -> Option<Status> {
 }
 
 fn decode_operand_tree(value: &pb::Value, unrecorded: Unrecorded) -> Result<Expr, Status> {
-    decode_operand_tree_in(value, unrecorded, false)
+    decode_operand_tree_in(value, unrecorded, false, &[], true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2237,11 +2452,70 @@ fn decode_subcollection_array(nested: &pb::Pipeline) -> Result<Expr, Status> {
     })
 }
 
+/// Computes a candidate refusal; strict admission still requires the recorded shape and text.
+fn unknown_function_status(name: &str, _unrecorded: Unrecorded, ordinary: Status) -> Status {
+    let bytes = name.as_bytes();
+    let lowercase = name.to_ascii_lowercase();
+    let titlecase = bytes.first().is_some_and(u8::is_ascii_uppercase)
+        && bytes[1..].iter().all(|byte| !byte.is_ascii_uppercase());
+    let text = if titlecase && pipeline_exec::function(&lowercase).is_some() {
+        unknown_function_suggestion_text(name, &lowercase)
+    } else {
+        format!("The function '{name}' does not exist.")
+    };
+    crate::pipeline_shape::unknown_candidate(ordinary, text)
+}
+
+fn unknown_function_suggestion_text(name: &str, suggestion: &str) -> String {
+    format!("The function '{name}' does not exist, did you mean '{suggestion}'?")
+}
+
+// Signatures observed for zero-argument validation, not executable registrations.
+fn observed_context_refusal(name: &str) -> Option<String> {
+    if name == "score" {
+        return Some("The 'score' function can only be used in the search(...) stage.".to_owned());
+    }
+    let (signature, count) = match name {
+        "bit_not" => ("bit_not[T <: number](x: T): T", 1),
+        "bit_left_shift" => ("bit_left_shift[T <: number](x: T, y: int64): T", 2),
+        "bit_right_shift" => ("bit_right_shift[T <: number](x: T, y: int64): T", 2),
+        "document_matches" => ("document_matches(query: string): boolean", 1),
+        "matches" => ("matches(field: any, query: string): boolean", 2),
+        "geo_distance" => ("geo_distance(x: lat_lng, y: lat_lng): float64", 2),
+        _ => return None,
+    };
+    Some(format!(
+        "The function '{signature}' takes [{count}..{count}] argument(s), but 0 were provided."
+    ))
+}
+
+// Observed validation hints only; these names are not executable aliases.
+fn observed_scalar_suggestion(name: &str) -> Option<&str> {
+    if accumulator_kind(name).is_some() {
+        return Some(name);
+    }
+    Some(match name {
+        "row" => "pow",
+        "struct_get" => "array_get",
+        "switch" => "switch_on",
+        "mask" => "last",
+        "opaque_document_id" => "replace_document_id",
+        "search_field" => "get_field",
+        "to_row_id" => "to_lower",
+        "manhattan_distance" => "euclidean_distance",
+        "eq_any" => "equal",
+        "is_null" => "if_null",
+        _ => return None,
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 fn decode_operand_tree_in(
     value: &pb::Value,
     unrecorded: Unrecorded,
     defer_constant: bool,
+    bindings: &[String],
+    direct: bool,
 ) -> Result<Expr, Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
@@ -2249,6 +2523,13 @@ fn decode_operand_tree_in(
             "expression argument is missing".to_owned(),
             unrecorded,
         )),
+        Some(V::ReferenceValue(name))
+            if !direct && unrecorded == Unrecorded::Refuse && name.split('/').count() == 5 =>
+        {
+            Err(Status::unimplemented(
+                "a root reference inside an expression is not observed locally",
+            ))
+        }
         Some(V::FieldReferenceValue(field)) => Ok(Expr::Field(
             FieldPath::parse(field).map_err(|e| own_text(e.to_string(), unrecorded))?,
         )),
@@ -2277,10 +2558,24 @@ fn decode_operand_tree_in(
                 return Err(recorded_internal("array_reverse requires an argument"));
             }
             if pipeline_exec::function(&function.name).is_none() {
-                return Err(Status::unimplemented(format!(
+                let fallback = Status::unimplemented(format!(
                     "function {:?} is unsupported locally",
                     function.name
-                )));
+                ));
+                if function.args.is_empty() && function.options.is_empty() {
+                    if let Some(text) = observed_context_refusal(&function.name) {
+                        return Err(crate::pipeline_shape::unknown_candidate(fallback, text));
+                    }
+                    if let Some(suggestion) = observed_scalar_suggestion(&function.name) {
+                        let text = unknown_function_suggestion_text(&function.name, suggestion);
+                        return Err(crate::pipeline_shape::unknown_candidate(fallback, text));
+                    }
+                }
+                return Err(unknown_function_status(
+                    &function.name,
+                    unrecorded,
+                    fallback,
+                ));
             }
             // Production also records empty array() and map() (O-5 `function-names`).
             // The official emulator answers a function's argument count before its arguments'
@@ -2327,15 +2622,39 @@ fn decode_operand_tree_in(
                 function.name.as_str(),
                 "document_id" | "collection_id" | "parent"
             );
+            let mut body_bindings = bindings.to_vec();
+            let binder = matches!(function.name.as_str(), "array_filter" | "array_transform");
+            if binder {
+                for (index, arg) in function.args[1..function.args.len() - 1].iter().enumerate() {
+                    let Some(V::StringValue(alias)) = &arg.value_type else {
+                        if function.name == "array_transform"
+                            && index == 0
+                            && matches!(arg.value_type, Some(V::FieldReferenceValue(_)))
+                        {
+                            return Err(Status::invalid_argument("The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference"));
+                        }
+                        return Err(Status::unimplemented(
+                            "array callback aliases must be literal strings",
+                        ));
+                    };
+                    body_bindings.push(alias.clone());
+                }
+            }
             let args = function
                 .args
                 .iter()
-                .map(|arg| match &arg.value_type {
+                .enumerate()
+                .map(|(index, arg)| match &arg.value_type {
                     // Every reference constant passes the official checks first (r8 review
                     // M1): a malformed one is refused before any row, whatever it is passed to.
                     Some(V::ReferenceValue(name))
                         if document_function && unrecorded == Unrecorded::Refuse =>
                     {
+                        if name.split('/').count() == 5 {
+                            return Err(Status::unimplemented(
+                                "a root reference inside an expression is not observed locally",
+                            ));
+                        }
                         match reference_literal_error(name) {
                             Some(text) => Err(Status::invalid_argument(text)),
                             None => Ok(Expr::Constant(
@@ -2349,8 +2668,20 @@ fn decode_operand_tree_in(
                         defer_constant
                             || matches!(
                                 function.name.as_str(),
-                                "if_absent" | "if_null" | "if_error" | "conditional" | "switch_on"
-                            ),
+                                "if_absent"
+                                    | "if_null"
+                                    | "if_error"
+                                    | "conditional"
+                                    | "switch_on"
+                                    | "coalesce"
+                            )
+                            || binder,
+                        if binder && index == function.args.len() - 1 {
+                            &body_bindings
+                        } else {
+                            bindings
+                        },
+                        false,
                     ),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -2380,15 +2711,19 @@ fn decode_operand_tree_in(
             }
             Ok(expr)
         }
+        Some(V::VariableReferenceValue(name)) if bindings.contains(name) => {
+            Ok(Expr::Variable(name.clone()))
+        }
         Some(V::VariableReferenceValue(_) | V::PipelineValue(_)) => Err(Status::unimplemented(
             "variable and pipeline operands are unsupported locally",
         )),
-        // A literal of literals: the official emulator checks its vectors and `__type__` keys
-        // before its other keys; production recorded well-formed vectors and a string
-        // `__type__` only, so strict refuses the rest.
+        // The official emulator checks vectors and `__type__` keys before other literal keys.
         Some(_) if expression_kind(value).is_none() && literal_value_error(value).is_some() => {
             let error = literal_value_error(value).unwrap_or_default();
             match unrecorded {
+                Unrecorded::Refuse if recorded_literal_error_class(&error) => {
+                    Err(Status::invalid_argument(error))
+                }
                 Unrecorded::Refuse => Err(Status::unimplemented(unobserved_literal(&error))),
                 Unrecorded::OfficialEmulator => Err(Status::invalid_argument(error)),
             }
@@ -2397,9 +2732,11 @@ fn decode_operand_tree_in(
             // Production read literals of every kind, maps keyed by any name but an empty or a
             // reserved one (FS-ENT-ORACLE O-3, O-4 `o4/literals#*`); strict answers the shapes
             // it recorded (see `literal_shape_recorded`).
-            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value) => Err(
-                Status::unimplemented("a literal of this shape is not observed locally"),
-            ),
+            None if unrecorded == Unrecorded::Refuse && !literal_shape_recorded(value, direct) => {
+                Err(Status::unimplemented(
+                    "a literal of this shape is not observed locally",
+                ))
+            }
             // A literal of more than 20 levels, in the official emulator's words (1.22.0: 20
             // levels are accepted); production has not answered it, so strict gives 501 through
             // the shape gate.
@@ -2441,7 +2778,7 @@ fn decode_operand_tree_in(
 }
 
 /// Under strict, a reference constant that names no document of the request's own project and
-/// database (another database, the database root or the documents root), more than 100 key
+/// database (another database or the database root), more than 100 key
 /// path elements, or an id that matches production's
 /// documented reserved pattern `__.*__` (`____` included, which the official emulator accepts)
 /// is refused as unobserved before any row (ruling of 2026-10-21 for `PX1d` r8: production's
@@ -2450,10 +2787,18 @@ fn reference_outside(value: &pb::Value, own: &str) -> Option<Status> {
     use pb::value::ValueType as V;
     match value.value_type.as_ref() {
         Some(V::ReferenceValue(name)) => {
-            // The documents root names no document, and production recorded none (review r9 M3).
-            let inside = name
-                .strip_prefix(own)
-                .is_some_and(|rest| rest.starts_with('/'));
+            // A syntactically invalid non-resource name has a computed refusal; the caller's
+            // request-shape gate decides whether production recorded it.
+            if !name.starts_with("projects/") {
+                if let Some(error) = reference_literal_error(name) {
+                    return Some(Status::invalid_argument(error));
+                }
+            }
+            // O-5 appendix also records the request database's documents root.
+            let inside = name == own
+                || name
+                    .strip_prefix(own)
+                    .is_some_and(|rest| rest.starts_with('/'));
             // A key path element is a collection id and a document id.
             let path = name
                 .strip_prefix(own)
@@ -2637,6 +2982,20 @@ fn decode_official_literal(
             crate::decode::decode_value(value).map_err(|e| Status::invalid_argument(e.to_string()))
         }
     }
+}
+
+// These structural classes have recorded refusals. The request gate remains authoritative for
+// the exact request shape and computed message.
+fn recorded_literal_error_class(error: &str) -> bool {
+    error.starts_with("Field __type__ must be a string; founds ")
+        || error.starts_with("Document parent name ")
+        || matches!(
+            error,
+            "Vector map is missing key 'value'."
+                | "Vector value type must be an array."
+                | "Vector value map has extraneous entries."
+                | "Vector must only contain values of type 'double'"
+        )
 }
 
 /// Strict's answer for a literal the official emulator refuses (`error` is its text): it names
@@ -2946,19 +3305,16 @@ fn expression_literal_error(value: &pb::Value) -> Option<String> {
     }
 }
 
-/// Whether production recorded a literal of this shape: every vector map is
-/// `{__type__: "__vector__", value: [doubles]}` with at least one element, every one finite and
-/// none a negative zero (O-3, O-4
-/// `literals#vector`, `#map-holding-vector`, `conditions#where-vector`). Recorded reserved
-/// keys are handled by the ordered refusal checks after this shape check.
-fn literal_shape_recorded(value: &pb::Value) -> bool {
+/// Whether production recorded a literal of this shape. Vectors contain finite doubles other
+/// than negative zero (O-3 and O-4); O-5 additionally records direct single-component infinity
+/// vectors and the documents-root reference. Reserved keys are handled by the ordered refusal
+/// checks after this shape check.
+fn literal_shape_recorded(value: &pb::Value, direct: bool) -> bool {
     use pb::value::ValueType as V;
-    // `in_array`: production read vectors alone and as a map value, never inside an array
-    // (O-4 `literals#vector`, `#map-holding-vector`).
-    fn walk(value: &pb::Value, in_array: bool) -> bool {
+    // O-5 appendix also records a well-formed vector within an array.
+    fn walk(value: &pb::Value) -> bool {
         match value.value_type.as_ref() {
-            Some(V::ArrayValue(array)) => array.values.iter().all(|v| walk(v, true)),
-            Some(V::MapValue(_)) if is_vector_literal(value) && in_array => false,
+            Some(V::ArrayValue(array)) => array.values.iter().all(walk),
             Some(V::MapValue(map)) if is_vector_literal(value) => {
                 map.fields.len() == 2
                     && matches!(
@@ -2972,17 +3328,25 @@ fn literal_shape_recorded(value: &pb::Value) -> bool {
             // documents root and a non-ASCII name are unrecorded.
             Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() > 5,
             Some(V::MapValue(map)) => map.fields.iter().all(|(key, inner)| {
-                // Production answered a string `__type__` alone in its map only (O-4
-                // `literals#key-type`).
-                let typed = key != "__type__"
-                    || (matches!(inner.value_type, Some(V::StringValue(_)))
-                        && map.fields.len() == 1);
-                typed && walk(inner, false)
+                // A non-vector tag remains an ordinary map (O-5 appendix n41 and r11).
+                let typed =
+                    key != "__type__" || matches!(inner.value_type, Some(V::StringValue(_)));
+                typed && walk(inner)
             }),
             _ => true,
         }
     }
-    walk(value, false)
+    // O-5 appendix records these as direct projection literals. Nested nonfinite vectors and
+    // nested root references retain their existing unobserved guard.
+    let recorded_direct = match value.value_type.as_ref() {
+        Some(V::MapValue(map)) if is_vector_literal(value) && map.fields.len() == 2 => {
+            matches!(map.fields.get("value").and_then(|v| v.value_type.as_ref()),
+                Some(V::ArrayValue(array)) if matches!(array.values.as_slice(), [pb::Value { value_type: Some(V::DoubleValue(d)) }] if d.is_infinite()))
+        }
+        Some(V::ReferenceValue(name)) => name.is_ascii() && name.split('/').count() == 5,
+        _ => false,
+    };
+    (direct && recorded_direct) || walk(value)
 }
 
 /// Keeps unrecorded malformed literal subtrees guarded when a container holds an expression.
@@ -2992,7 +3356,7 @@ fn literal_expression_shape_safe(value: &pb::Value) -> bool {
         return false;
     }
     if expression_kind(value).is_none() {
-        return literal_value_error(value).is_none() && literal_shape_recorded(value);
+        return literal_value_error(value).is_none() && literal_shape_recorded(value, false);
     }
     match value.value_type.as_ref() {
         Some(V::ArrayValue(array)) => array.values.iter().all(literal_expression_shape_safe),
@@ -3056,24 +3420,35 @@ fn decode_condition(
         return Ok((decode_operand(condition, unrecorded)?, None));
     };
     let Some(def) = pipeline_exec::function(&function.name) else {
-        return Err(Status::unimplemented(
-            "where expression is unsupported locally",
+        return Err(unknown_function_status(
+            &function.name,
+            unrecorded,
+            Status::unimplemented("where expression is unsupported locally"),
         ));
     };
-    if !def.returns_boolean || !matches!(def.arity, Arity::Exact(2)) || !def.signature.is_empty() {
+    if !def.returns_boolean
+        || !matches!(def.arity, Arity::Exact(2))
+        || (!def.signature.is_empty()
+            && !matches!(
+                def.name,
+                "equal"
+                    | "not_equal"
+                    | "less_than"
+                    | "less_than_or_equal"
+                    | "greater_than"
+                    | "greater_than_or_equal"
+            ))
+    {
         // A function of another value: production drops the row for the kinds it recorded
         // (FS-ENT-ORACLE O-2, `where` on `document_id`, `parent`, `array` and `map`); the
         // cursor decides by the value's kind.
         return Ok((decode_operand(condition, unrecorded)?, None));
     }
-    // Every boolean function of the table is a comparison of two arguments; the wording is
-    // the finite subset's.
-    if def.arity != Arity::Exact(function.args.len()) {
-        return Err(own_text(
-            format!("{} requires exactly two arguments", def.name),
-            unrecorded,
-        ));
-    }
+    // Check the outer call before decoding operands, using the same registry as value calls.
+    let placeholders =
+        vec![Expr::Constant(fireemu_core_firestore::value::Value::Null); function.args.len()];
+    Expr::call(def.name, placeholders, Placement::Condition)
+        .map_err(|error| expr_status(error, unrecorded))?;
     // Options are ignored by the official emulator and unobserved in production, as above.
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
         return Err(Status::unimplemented(format!(
@@ -3106,6 +3481,39 @@ fn decode_condition(
     Ok((condition, pushdown))
 }
 
+// Production recorded this typed option on a direct document-name projection.
+fn is_recorded_docid_options(value: &pb::Value) -> bool {
+    use pb::value::ValueType as V;
+    let Some(V::FunctionValue(function)) = &value.value_type else {
+        return false;
+    };
+    function.name == "document_id"
+        && matches!(function.args.as_slice(), [pb::Value { value_type: Some(V::FieldReferenceValue(name)) }] if name == "__name__")
+        && function.options.len() == 1
+        && matches!(
+            function.options.get("x"),
+            Some(pb::Value {
+                value_type: Some(V::IntegerValue(_))
+            })
+        )
+}
+
+fn decode_select_operand(
+    value: &pb::Value,
+    unrecorded: Unrecorded,
+    recorded_options: bool,
+) -> Result<Expr, Status> {
+    if unrecorded == Unrecorded::Refuse && recorded_options && is_recorded_docid_options(value) {
+        let mut normalized = value.clone();
+        if let Some(pb::value::ValueType::FunctionValue(function)) = &mut normalized.value_type {
+            function.options.clear();
+        }
+        decode_operand_tree(&normalized, unrecorded)
+    } else {
+        decode_operand_tree(value, unrecorded)
+    }
+}
+
 /// Decodes `select({alias: operand, ...})`. An alias is a field path, as production and the
 /// official emulator read it (FS-ENT-ORACLE O-1 recorded the same answers from both): a
 /// dotted alias nests, a quoted one unquotes, and an invalid path, a reserved name, a
@@ -3116,6 +3524,7 @@ fn decode_select(
     stage: &pb::pipeline::Stage,
     unrecorded: Unrecorded,
     wire_order: Option<&[String]>,
+    recorded_docid_options: bool,
 ) -> Result<(Vec<(FieldPath, Expr)>, bool), Status> {
     let Some(pb::value::ValueType::MapValue(map)) =
         stage.args.first().and_then(|v| v.value_type.as_ref())
@@ -3162,7 +3571,11 @@ fn decode_select(
     let mut exprs = Vec::with_capacity(entries.len());
     let mut empty_key = None;
     for (_, value) in &entries {
-        match decode_operand_tree(value, unrecorded) {
+        match decode_select_operand(
+            value,
+            unrecorded,
+            recorded_docid_options && entries.len() == 1,
+        ) {
             Ok(expr) => exprs.push(expr),
             Err(error) if error.message() == EMPTY_LITERAL_KEY => {
                 empty_key.get_or_insert(error);
@@ -3445,10 +3858,21 @@ fn decode_sort(
                 unexpected.join(", ")
             )));
         }
-        keys.push(pipeline_exec::SortKey {
-            expr: decode_operand_tree(expression, unrecorded)?,
-            descending,
-        });
+        let expr = decode_operand_tree(expression, unrecorded).map_err(|error| {
+            if let Some(V::FunctionValue(function)) = &expression.value_type {
+                if function.name == "nope"
+                    && function.args.len() == 1
+                    && function.options.is_empty()
+                {
+                    return crate::pipeline_shape::retain_unknown_candidate(
+                        error,
+                        &unknown_function_suggestion_text(&function.name, "nor"),
+                    );
+                }
+            }
+            error
+        })?;
+        keys.push(pipeline_exec::SortKey { expr, descending });
     }
     Ok(keys)
 }
@@ -3609,6 +4033,12 @@ fn decode_add_fields(
             ));
         }
     }
+    if let Some(error) = ordered_keys(fields)
+        .into_iter()
+        .find_map(|alias| map_key_error(&fields[alias]))
+    {
+        return Err(error);
+    }
     Ok(aliases)
 }
 
@@ -3678,10 +4108,18 @@ fn decode_accumulator(
                 function.name
             ))
         } else {
-            Status::unimplemented(format!(
+            let fallback = Status::unimplemented(format!(
                 "function {:?} is unsupported locally",
                 function.name
-            ))
+            ));
+            if function.name == "nope" && function.args.len() == 1 && function.options.is_empty() {
+                crate::pipeline_shape::unknown_candidate(
+                    fallback,
+                    unknown_function_suggestion_text(&function.name, "nor"),
+                )
+            } else {
+                fallback
+            }
         });
     };
     if !function.options.is_empty() && unrecorded == Unrecorded::Refuse {
@@ -4669,7 +5107,2255 @@ fn with_code(mut status: Status, code: &str) -> Status {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_map_refusal_precedence_cases() {
+        use serde_json::json;
+        const ROWS: &str = r"Operation	Key	Later	Profile
+odd_map	valid	none	strict
+odd_map	unknown	none	strict
+add_fields_map	double	empty_select	strict
+add_fields_map	double	invalid_limit	emulator
+add_fields_map	valid	empty_select	strict
+add_fields_map	unknown	empty_select	strict
+odd_map	unknown	invalid_limit	emulator
+odd_map	double	none	emulator
+odd_map	valid	empty_select	emulator
+add_fields_map	valid	invalid_limit	strict
+add_fields_map	unknown	none	strict";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [operation, key, later, profile] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let mode = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let key_value = match *key {
+                "valid" => json!({"stringValue":"k"}),
+                "double" => json!({"doubleValue":1.5}),
+                "unknown" => json!({"functionValue":{"name":"unknown_function","args":[]}}),
+                _ => unreachable!(),
+            };
+            let args = if *operation == "odd_map" {
+                vec![key_value]
+            } else {
+                vec![key_value, json!({"fieldReferenceValue":"i"})]
+            };
+            let map = json!({"functionValue":{"name":"map","args":args}});
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *operation == "odd_map" {
+                stages.push(json!({"name":"select","args":[{"mapValue":{"fields":{"v":map}}}]}));
+            } else {
+                stages
+                    .push(json!({"name":"add_fields","args":[{"mapValue":{"fields":{"a":map}}}]}));
+            }
+            match *later {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let result = compile_pipeline_in_order(&request, &parent, mode, None);
+            let error = result.unwrap_err();
+            if *operation == "odd_map" {
+                assert_eq!(
+                    error.message(),
+                    "'map' function must have an even number of arguments",
+                    "{line}"
+                );
+            } else if *key == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            } else if *later == "invalid_limit" {
+                assert!(error.message().contains("limit"), "{line}: {error:?}");
+            } else if *key == "double" {
+                assert_eq!(
+                    error.message(),
+                    "map key must be of type STRING, given type is DOUBLE",
+                    "{line}"
+                );
+            } else {
+                assert!(error.message().contains("select"), "{line}: {error:?}");
+            }
+            if mode == Unrecorded::Refuse {
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, database.to_owned());
+                assert_eq!(
+                    gate.answer(error).code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_map_add_fields_refusal_precedes_empty_select() {
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let (p, program) = programs
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p["id"] == "fs-ent-pipeline/o5/appendix")
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s["id"] == "proposed-n76-map-add-then-empty")
+            .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let request =
+            crate::rest::pipeline_json::request_from_json(database, &step["body"]).unwrap();
+        let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+        let error =
+            compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "map key must be of type STRING, given type is DOUBLE"
+        );
+    }
+
+    #[test]
+    fn recorded_map_constructor_refusals() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use fireemu_core_firestore::value::Value;
+        let odd = Expr::call(
+            "map",
+            vec![Expr::Constant(Value::String("k".to_owned()))],
+            Placement::Value,
+        )
+        .unwrap_err();
+        assert_eq!(
+            odd,
+            ExprError::Arity("'map' function must have an even number of arguments".to_owned())
+        );
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id) in [
+            ("value-shapes", "map-one-argument"),
+            ("appendix", "proposed-n76-map-add-then-empty"),
+        ] {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                tonic::Code::InvalidArgument,
+                "{id}: {computed:?}"
+            );
+            assert_eq!(computed.message(), expected, "{id}");
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(rest.code(), tonic::Code::InvalidArgument, "REST {id}");
+            assert_eq!(rest.message(), expected, "REST {id}");
+            let grpc_shape = shape_of_request(&request);
+            assert!(grpc_shape.is_some(), "gRPC shape {id}");
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            assert_eq!(grpc.code(), tonic::Code::InvalidArgument, "gRPC {id}");
+            assert_eq!(grpc.message(), expected, "gRPC {id}");
+        }
+    }
+
+    #[test]
+    fn generated_unknown_function_boundaries_remain_bounded() {
+        use crate::pipeline_shape::RefusalGate;
+        use serde_json::json;
+        const ROWS: &str = r"Name	Placement	Competing
+plain	select	none
+plain	where	empty_select
+plain	nested	none
+plain	add_fields	invalid_limit
+plain	select	outer_arity
+titlecase	select	none
+uppercase	select	none
+unknown	select	none
+known_unimplemented	select	none
+known_unimplemented	where	outer_arity
+unknown	nested	invalid_limit
+uppercase	add_fields	outer_arity
+known_unimplemented	nested	empty_select
+uppercase	nested	outer_arity
+titlecase	where	outer_arity
+uppercase	select	empty_select
+unknown	where	outer_arity
+uppercase	select	invalid_limit
+uppercase	where	invalid_limit
+titlecase	nested	empty_select
+titlecase	add_fields	invalid_limit
+unknown	add_fields	empty_select
+known_unimplemented	add_fields	none
+known_unimplemented	add_fields	invalid_limit
+plain	where	none";
+        let database = "projects/p/databases/db";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [name_class, placement, competing] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let name = match *name_class {
+                "plain" => "nope_fn",
+                "titlecase" => "Equal",
+                "uppercase" => "AND",
+                "unknown" => "fresh_unknown",
+                "known_unimplemented" => "geo_distance",
+                _ => unreachable!(),
+            };
+            let unknown = json!({"functionValue":{"name":name,"args":[]}});
+            let mut expression = unknown;
+            if *placement == "nested" {
+                let mut args = vec![expression];
+                if *competing != "outer_arity" {
+                    args.push(json!({"fieldReferenceValue":"i"}));
+                }
+                expression = json!({"functionValue":{"name":"equal","args":args}});
+            }
+            let mut stages = vec![json!({"name":"collection","args":[{"referenceValue":"/c"}]})];
+            if *placement == "where" {
+                stages.push(json!({"name":"where","args":[expression]}));
+            } else {
+                let mut fields = serde_json::Map::new();
+                fields.insert("a".to_owned(), expression);
+                if *competing == "outer_arity" && *placement != "nested" {
+                    fields.insert(
+                        "b".to_owned(),
+                        json!({"functionValue":{"name":"add","args":[]}}),
+                    );
+                }
+                let stage = if *placement == "add_fields" {
+                    "add_fields"
+                } else {
+                    "select"
+                };
+                stages.push(json!({"name":stage,"args":[{"mapValue":{"fields":fields}}]}));
+            }
+            match *competing {
+                "empty_select" => stages.push(json!({"name":"select","args":[{"mapValue":{}}]})),
+                "invalid_limit" => {
+                    stages.push(json!({"name":"limit","args":[{"stringValue":"bad"}]}));
+                }
+                _ => {}
+            }
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":stages}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let strict =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, None).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(strict)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{line}"
+            );
+            let ordinary =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::OfficialEmulator, None)
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    ordinary.code(),
+                    tonic::Code::Unimplemented | tonic::Code::InvalidArgument
+                ),
+                "{line}: {ordinary:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for name in [
+            "fresh_unknown",
+            "geo_distance",
+            "EQUAL",
+            "EqUal",
+            "未知",
+            "x'quoted",
+        ] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![],
+                    ..Default::default()
+                })),
+            };
+            let candidate = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, String::new())
+                    .answer(candidate)
+                    .code(),
+                tonic::Code::Unimplemented,
+                "{name}"
+            );
+            let ordinary = decode_operand_tree(&wire, Unrecorded::OfficialEmulator).unwrap_err();
+            assert_eq!(ordinary.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                ordinary.message(),
+                format!("function {name:?} is unsupported locally")
+            );
+        }
+        assert_eq!(
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "AND",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
+            "The function 'AND' does not exist."
+        );
+        assert_eq!(
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "Equal",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
+            "The function 'Equal' does not exist, did you mean 'equal'?"
+        );
+    }
+
+    #[test]
+    fn generated_refusal_partition_table() {
+        use serde_json::json;
+        const ROWS: &str = r"Position	Name	Args	Input	Profile
+sort	unknown	one	long	strict
+accumulator	unknown	one	long	strict
+nested	known	one	long	strict
+nested	known	one	empty	strict
+nested	known	one	array	ordinary
+nested	known	one	long	ordinary
+sort	unknown	multiple	empty	ordinary
+nested	unknown	zero	array	strict
+accumulator	known	zero	empty	ordinary
+nested	known	multiple	array	strict
+sort	known	zero	long	strict
+sort	known	one	array	strict
+accumulator	unknown	multiple	long	ordinary
+accumulator	known	one	array	ordinary
+";
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [position, name, arity, input, profile] = cells.as_slice() else {
+                panic!("bad row: {line}")
+            };
+            let mode = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let argument = match *input {
+                "long" | "empty" => json!({"fieldReferenceValue":"n"}),
+                "array" => json!({"arrayValue":{"values":[{"integerValue":"7"}]}}),
+                _ => panic!("bad input: {line}"),
+            };
+            let count = match *arity {
+                "zero" => 0,
+                "one" => 1,
+                "multiple" => 2,
+                _ => panic!("bad arity: {line}"),
+            };
+            let function = json!({"functionValue":{"name": if *name == "unknown" { "nope" } else { "sum" }, "args": vec![argument; count]}});
+            let stage = match *position {
+                "sort" => {
+                    json!({"name":"sort","args":[{"mapValue":{"fields":{"direction":{"stringValue":"ascending"},"expression":function}}}]})
+                }
+                "accumulator" => {
+                    json!({"name":"aggregate","args":[{"mapValue":{"fields":{"s":function}}},{"mapValue":{}}]})
+                }
+                "nested" => {
+                    json!({"name":"aggregate","args":[{"mapValue":{"fields":{"s":{"functionValue":{"name":"sum","args":[function]}}}}},{"mapValue":{}}]})
+                }
+                _ => panic!("bad position: {line}"),
+            };
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/c"}]},stage]}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            let result = compile_pipeline_in_order(&request, &parent, mode, None);
+            assert_eq!(
+                result.is_ok(),
+                *name == "known" && count == 1,
+                "{line}: {result:?}"
+            );
+            if *name == "unknown" {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    crate::pipeline_shape::RefusalGate::Recorded(None, database.to_owned())
+                        .answer(error)
+                        .code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nested_sum_constant_long_keeps_unobserved_fallback() {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/c"}]},
+            {"name":"aggregate","args":[{"mapValue":{"fields":{"s":{"functionValue":{"name":"sum","args":[{"functionValue":{"name":"sum","args":[{"integerValue":"7"}]}}]}}}}},{"mapValue":{}}]}
+        ]}}});
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let error =
+            compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, None).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("unrecorded argument shape"));
+    }
+
+    #[test]
+    fn nested_sum_admission_requires_recorded_shape_in_both_profiles() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let (p, program) = requests["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p["id"] == "fs-ent-pipeline/o7/aggregate-args")
+            .unwrap();
+        let (n, step) = program["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s["id"] == "nested-aggregate")
+            .unwrap();
+        let body = &step["body"];
+        let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+        let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+        let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned());
+        assert!(recorded_nested_sum_admitted(&rest, Unrecorded::Refuse));
+        assert!(recorded_nested_sum_admitted(
+            &rest,
+            Unrecorded::OfficialEmulator
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Recorded(None, database.to_owned()),
+            Unrecorded::Refuse
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Recorded(None, database.to_owned()),
+            Unrecorded::OfficialEmulator
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Open,
+            Unrecorded::Refuse
+        ));
+        let grpc = RefusalGate::Recorded(shape_of_request(&request), database.to_owned());
+        assert!(recorded_nested_sum_admitted(&grpc, Unrecorded::Refuse));
+    }
+
+    #[test]
+    fn recorded_sort_and_accumulator_unknown_candidates() {
+        use crate::pipeline_shape::{shape_of_json, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        for (program, id) in [
+            (
+                "fs-ent-pipeline/o6/sort-wire-errors",
+                "expression-unknown-fn",
+            ),
+            ("fs-ent-pipeline/o7/aggregate-args", "accumulator-unknown"),
+        ] {
+            let (p, entry) = requests["programs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, entry)| entry["id"] == program)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let candidate =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            let answer =
+                RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                    .answer(candidate.clone());
+            assert_eq!(answer.code(), tonic::Code::InvalidArgument, "{id}");
+            assert_eq!(
+                answer.message(),
+                "The function 'nope' does not exist, did you mean 'nor'?",
+                "{id}"
+            );
+            assert_eq!(
+                RefusalGate::Ordinary(None, database.to_owned())
+                    .answer(candidate)
+                    .code(),
+                tonic::Code::Unimplemented
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_unknown_function_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-order", "select-unknown-function"),
+            ("function-order", "select-empty-name"),
+            ("function-order", "select-capitalized-name"),
+            ("function-order", "where-unknown-then-select-empty"),
+            ("function-order", "select-unknown-before-arity"),
+            ("function-order", "unknown-as-first-argument"),
+            ("stage-order", "add-fields-unknown-then-select-empty"),
+            ("stage-order", "add-fields-unknown-then-limit-string"),
+            ("stage-order", "add-fields-unknown-then-aggregate-one"),
+            ("function-names", "fn-make_struct"),
+            ("function-names", "fn-logical_or"),
+            ("function-names", "fn-u2d"),
+            ("function-names", "fn-u2b"),
+            ("function-names", "fn-u2a"),
+            ("function-names", "fn-u2f"),
+            ("function-names", "fn-u25"),
+            ("function-names", "fn-u7e"),
+            ("function-names", "fn-u3c-3c"),
+            ("function-names", "fn-u3e-3e"),
+            ("function-names", "fn-u3c"),
+            ("function-names", "fn-u3c-3d"),
+            ("function-names", "fn-u3d-3d"),
+            ("function-names", "fn-u21-3d"),
+            ("function-names", "fn-u3e"),
+            ("function-names", "fn-u3e-3d"),
+            ("function-names", "fn-orders_after"),
+            ("function-names", "fn-list_shredded_fields"),
+            ("function-names", "fn-error"),
+            ("function-names", "fn-u41-4e-44"),
+            ("function-names", "fn-u4f-52"),
+            ("function-names", "fn-u58-4f-52"),
+            ("function-names", "fn-u4e-4f-54"),
+            ("function-names", "fn-snippet"),
+            ("function-names", "fn-between"),
+            ("function-names", "fn-is_nan"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &order), database.to_owned())
+                .answer(actual.clone());
+            if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                failures.push(format!("{id} rest: {rest:?}"));
+            }
+            let grpc_shape = shape_of_request(&request);
+            let expected_code = if grpc_shape.is_some() {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            };
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(actual);
+            if grpc.code() != expected_code
+                || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+            {
+                failures.push(format!("{id} grpc: {grpc:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn generated_suggestion_boundaries_follow_context_and_shape() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("aggregate", "empty", "select", false),
+            ("observed_hint", "empty", "select", true),
+            ("unknown", "empty", "select", false),
+            ("registered", "empty", "select", true),
+            ("aggregate", "nonempty", "select", true),
+            ("observed_hint", "options", "select", false),
+            ("aggregate", "empty", "aggregate", false),
+            ("observed_hint", "empty", "where", true),
+            ("unknown", "options", "aggregate", true),
+            ("observed_hint", "nonempty", "aggregate", false),
+            ("aggregate", "options", "where", false),
+            ("registered", "nonempty", "where", false),
+            ("registered", "options", "aggregate", true),
+            ("unknown", "nonempty", "where", true),
+        ];
+        for (class, arguments, context, ordinary) in cases {
+            let mode = if ordinary {
+                Unrecorded::OfficialEmulator
+            } else {
+                Unrecorded::Refuse
+            };
+            let name = match class {
+                "aggregate" => "count",
+                "observed_hint" => "row",
+                "registered" => "add",
+                _ => "unknown_neighbor",
+            };
+            let args = if arguments == "nonempty" {
+                vec![pb::Value::default()]
+            } else {
+                vec![]
+            };
+            let options = if arguments == "options" {
+                std::collections::HashMap::from([("x".to_owned(), pb::Value::default())])
+            } else {
+                std::collections::HashMap::default()
+            };
+            let value = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    options,
+                })),
+            };
+            let error = match context {
+                "select" => decode_operand_tree(&value, mode).err(),
+                "where" => decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![value],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .err(),
+                _ => decode_accumulator(&value, mode).err(),
+            };
+            let text = error
+                .as_ref()
+                .and_then(crate::pipeline_shape::unknown_candidate_text);
+            let expected_hint = class == "observed_hint" || class == "aggregate";
+            if context == "select" && arguments == "empty" && expected_hint {
+                assert!(
+                    text.is_some_and(|value| value.contains("did you mean")),
+                    "{class} {context}"
+                );
+            } else {
+                assert!(
+                    !text.is_some_and(|value| value.contains("did you mean")),
+                    "{class} {arguments} {context}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observed_suggestion_neighbors_keep_the_original_fallback() {
+        use crate::pipeline_shape::{unknown_candidate_text, RefusalGate};
+        use pb::value::ValueType as V;
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (name, args, options) in [
+                (
+                    "row",
+                    vec![pb::Value::default()],
+                    std::collections::HashMap::new(),
+                ),
+                (
+                    "count",
+                    vec![pb::Value::default()],
+                    std::collections::HashMap::new(),
+                ),
+                ("Row", vec![], std::collections::HashMap::new()),
+                ("fresh_neighbor", vec![], std::collections::HashMap::new()),
+                (
+                    "row",
+                    vec![],
+                    std::collections::HashMap::from([("x".to_owned(), pb::Value::default())]),
+                ),
+            ] {
+                let value = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: name.to_owned(),
+                        args,
+                        options,
+                    })),
+                };
+                let error = decode_operand_tree(&value, mode).unwrap_err();
+                let original = format!("function {name:?} is unsupported locally");
+                let gate = if mode == Unrecorded::Refuse {
+                    RefusalGate::Recorded(None, String::new())
+                } else {
+                    RefusalGate::Ordinary(None, String::new())
+                };
+                let answer = gate.answer(error);
+                assert_eq!(answer.code(), tonic::Code::Unimplemented);
+                assert_eq!(answer.message(), original);
+            }
+            let value = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "row".to_owned(),
+                    args: vec![],
+                    options: std::collections::HashMap::default(),
+                })),
+            };
+            let error = decode_operand_tree(&value, mode).unwrap_err();
+            assert_eq!(
+                unknown_candidate_text(&error),
+                Some("The function 'row' does not exist, did you mean 'pow'?")
+            );
+            let answer = RefusalGate::Ordinary(None, String::new()).answer(error);
+            assert_eq!(answer.message(), "function \"row\" is unsupported locally");
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn observed_suggestion_targets_are_catalogued_without_becoming_aliases(
+            name in proptest::sample::select(vec![
+                "count", "count_if", "count_distinct", "average", "first", "last",
+                "array_agg", "array_agg_distinct", "row", "struct_get", "switch", "mask",
+                "opaque_document_id", "search_field", "to_row_id", "manhattan_distance",
+                "eq_any", "is_null",
+            ])
+        ) {
+            let target = observed_scalar_suggestion(name).unwrap();
+            proptest::prop_assert!(pipeline_exec::function(target).is_some() || accumulator_kind(target).is_some());
+            proptest::prop_assert!(pipeline_exec::function(name).is_none());
+        }
+    }
+
+    #[test]
+    fn recorded_suggestion_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-names", "fn-count"),
+            ("function-names", "fn-count_if"),
+            ("function-names", "fn-count_distinct"),
+            ("function-names", "fn-average"),
+            ("function-names", "fn-first"),
+            ("function-names", "fn-last"),
+            ("function-names", "fn-array_agg"),
+            ("function-names", "fn-array_agg_distinct"),
+            ("function-names", "fn-row"),
+            ("function-names", "fn-struct_get"),
+            ("function-names", "fn-switch"),
+            ("function-names", "fn-mask"),
+            ("function-names", "fn-opaque_document_id"),
+            ("function-names", "fn-search_field"),
+            ("function-names", "fn-to_row_id"),
+            ("function-names", "fn-manhattan_distance"),
+            ("function-names", "fn-eq_any"),
+            ("function-names", "fn-is_null"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let actual =
+                    compile_pipeline_in_order(&request, &parent, mode, Some(&order)).unwrap_err();
+                let gate = |shape| {
+                    if mode == Unrecorded::Refuse {
+                        RefusalGate::Recorded(shape, database.to_owned())
+                    } else {
+                        RefusalGate::Ordinary(shape, database.to_owned())
+                    }
+                };
+                let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
+                if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                    failures.push(format!("{id} rest: {rest:?}"));
+                }
+                let grpc_shape = shape_of_request(&request);
+                let expected_code = if grpc_shape.is_some() {
+                    tonic::Code::InvalidArgument
+                } else {
+                    tonic::Code::Unimplemented
+                };
+                let grpc = gate(grpc_shape).answer(actual);
+                if grpc.code() != expected_code
+                    || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+                {
+                    failures.push(format!("{id} grpc: {grpc:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn document_id_recorded_option_matches_integer_type_not_literal(value in proptest::prelude::any::<i64>()) {
+            let wire = pb::Value { value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
+                name: "document_id".to_owned(),
+                args: vec![pb::Value { value_type: Some(pb::value::ValueType::FieldReferenceValue("__name__".to_owned())) }],
+                options: std::collections::HashMap::from([("x".to_owned(), pb::Value { value_type: Some(pb::value::ValueType::IntegerValue(value)) })]),
+            })) };
+            proptest::prop_assert!(is_recorded_docid_options(&wire));
+            let mut changed = wire.clone();
+            let Some(pb::value::ValueType::FunctionValue(function)) = &mut changed.value_type else { unreachable!() };
+            function.options.insert("other".to_owned(), pb::Value::default());
+            proptest::prop_assert!(!is_recorded_docid_options(&changed));
+        }
+    }
+
+    #[test]
+    fn recorded_context_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-names", "fn-bit_not"),
+            ("function-names", "fn-bit_left_shift"),
+            ("function-names", "fn-bit_right_shift"),
+            ("function-names", "fn-document_matches"),
+            ("function-names", "fn-matches"),
+            ("function-names", "fn-geo_distance"),
+            ("function-names", "fn-score"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+                let actual =
+                    compile_pipeline_in_order(&request, &parent, mode, Some(&order)).unwrap_err();
+                let gate = |shape| {
+                    if mode == Unrecorded::Refuse {
+                        RefusalGate::Recorded(shape, database.to_owned())
+                    } else {
+                        RefusalGate::Ordinary(shape, database.to_owned())
+                    }
+                };
+                let rest = gate(shape_of_json(body, &order)).answer(actual.clone());
+                if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                    failures.push(format!("{id} rest: {rest:?}"));
+                }
+                let grpc_shape = shape_of_request(&request);
+                let expected_code = if grpc_shape.is_some() {
+                    tonic::Code::InvalidArgument
+                } else {
+                    tonic::Code::Unimplemented
+                };
+                let grpc = gate(grpc_shape).answer(actual);
+                if grpc.code() != expected_code
+                    || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+                {
+                    failures.push(format!("{id} grpc: {grpc:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn recorded_registered_function_arities_match_both_transports() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let full = "fs-ent-pipeline/o5/function-names";
+        let (p, program) = programs
+            .iter()
+            .enumerate()
+            .find(|(_, program)| program["id"] == full)
+            .unwrap();
+        let names = [
+            "get_field",
+            "offset",
+            "sum",
+            "minimum",
+            "maximum",
+            "negate",
+            "cmp",
+            "reverse",
+            "length",
+            "storage_size",
+            "coalesce",
+            "namespace",
+            "has_ancestor",
+            "reference_slice",
+            "autogen_document_id",
+            "replace_document_id",
+            "string_concat",
+        ];
+        let mut failures = Vec::new();
+        for name in names {
+            let id = format!("fn-{name}");
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][full]["steps"][&id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(actual.clone())
+                    .code(),
+                tonic::Code::Unimplemented,
+                "unrecorded {id}"
+            );
+            let ordinary = compile_pipeline_in_order(
+                &request,
+                &parent,
+                Unrecorded::OfficialEmulator,
+                Some(&order),
+            )
+            .unwrap_err();
+            if ordinary.code() != tonic::Code::InvalidArgument || ordinary.message() != expected {
+                failures.push(format!("{id} emulator: {ordinary:?}"));
+            }
+            for (transport, shape) in [
+                ("rest", shape_of_json(body, &order)),
+                ("grpc", shape_of_request(&request)),
+            ] {
+                let answered =
+                    RefusalGate::Recorded(shape, database.to_owned()).answer(actual.clone());
+                if answered.code() != tonic::Code::InvalidArgument || answered.message() != expected
+                {
+                    failures.push(format!("{id} {transport}: {answered:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn registered_function_arity_unrecorded_shapes_remain_refused() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for (name, count) in [("sum", 2), ("coalesce", 1), ("autogen_document_id", 2)] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![
+                        pb::Value {
+                            value_type: Some(V::IntegerValue(1))
+                        };
+                        count
+                    ],
+                    ..Default::default()
+                })),
+            };
+            let error = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            let answer = RefusalGate::Recorded(None, String::new()).answer(error);
+            assert_eq!(answer.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                decode_operand_tree(&wire, Unrecorded::OfficialEmulator)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recorded_literal_refusal_gate_matrix() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        use tonic::Code;
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let docs = format!("{database}/documents");
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json")
+            .replace("{docs}", &docs);
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let parent = crate::decode::parse_parent(&docs).unwrap();
+        let targets = [
+            ("stage-order", "where-vector-of-integer", true),
+            ("value-shapes", "vector-of-integer", true),
+            ("value-shapes", "vector-of-double-and-integer", true),
+            ("value-shapes", "vector-without-value", false),
+            ("value-shapes", "vector-with-extra-key", true),
+            ("value-shapes", "vector-value-not-array", true),
+            ("appendix", "proposed-type-tag-integer", false),
+            ("appendix", "proposed-type-tag-boolean", false),
+            ("appendix", "proposed-type-tag-null", false),
+            ("appendix", "proposed-type-tag-double", false),
+            ("appendix", "proposed-type-tag-map", false),
+            ("appendix", "proposed-type-tag-array", false),
+            ("appendix", "proposed-type-tag-nested", false),
+            ("appendix", "proposed-type-tag-where", false),
+            ("appendix", "proposed-type-tag-function-argument", false),
+            ("appendix", "proposed-reference-collection", false),
+            ("appendix", "proposed-reference-empty-segment", false),
+            ("appendix", "proposed-reference-garbage", false),
+        ];
+        let programs = requests["programs"].as_array().unwrap();
+        for (program, id, unordered) in targets {
+            let full = format!("fs-ent-pipeline/o5/{program}");
+            let (p, entry) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p["id"] == full)
+                .unwrap();
+            let (n, step) = entry["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let body_order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let computed =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&body_order))
+                    .unwrap_err();
+            assert_eq!(
+                computed.code(),
+                Code::InvalidArgument,
+                "{full}#{id}: {computed:?}"
+            );
+            if id == "proposed-reference-collection" || id == "proposed-reference-empty-segment" {
+                let suffix = if id == "proposed-reference-collection" {
+                    "/c"
+                } else {
+                    "/c/"
+                };
+                let index = format!("{docs}{suffix}").encode_utf16().count();
+                assert!(
+                    computed.message().contains(&format!(" at index {index}.")),
+                    "{full}#{id}: {computed:?}"
+                );
+                assert_eq!(
+                    crate::pipeline_shape::normalized_text(computed.message()),
+                    crate::pipeline_shape::normalized_text(expected),
+                    "{full}#{id}"
+                );
+            } else {
+                assert_eq!(computed.message(), expected, "{full}#{id}");
+            }
+            let computed_message = computed.message().to_owned();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &body_order), database.to_owned())
+                .answer(computed.clone());
+            assert_eq!(
+                rest.code(),
+                Code::InvalidArgument,
+                "REST {full}#{id}: {rest:?}"
+            );
+            assert_eq!(rest.message(), computed_message, "REST {full}#{id}");
+            let grpc_shape = shape_of_request(&request);
+            if unordered {
+                assert!(grpc_shape.is_none(), "gRPC shape {full}#{id}");
+            }
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(computed);
+            println!(
+                "literal-matrix {full}#{id} rest={:?} grpc={:?} unordered={unordered}",
+                rest.code(),
+                grpc.code()
+            );
+            if unordered {
+                assert_eq!(grpc.code(), Code::Unimplemented, "gRPC {full}#{id}");
+            } else {
+                assert_eq!(grpc.code(), Code::InvalidArgument, "gRPC {full}#{id}");
+                assert_eq!(grpc.message(), computed_message, "gRPC {full}#{id}");
+            }
+        }
+    }
     use super::*;
+
+    #[test]
+    fn literal_refusal_preserves_precedence_gate_and_utf16_index() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let invalid = tagged_literal(
+            val(V::StringValue("__vector__".to_owned())),
+            vec![val(V::IntegerValue(1))],
+            false,
+        );
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for name in ["equal", "unknown_function"] {
+                let call = val(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![invalid.clone()],
+                    ..Default::default()
+                }));
+                let error = decode_operand_tree(&call, mode).unwrap_err();
+                if name == "equal" {
+                    assert!(error.message().contains("argument(s)"), "{error:?}");
+                } else {
+                    assert_eq!(error.code(), tonic::Code::Unimplemented);
+                }
+            }
+        }
+        let gate = crate::pipeline_shape::RefusalGate::Recorded(
+            None,
+            "projects/p/databases/db".to_owned(),
+        );
+        assert_eq!(
+            gate.answer(Status::invalid_argument(
+                "Vector must only contain values of type 'double'"
+            ))
+            .code(),
+            tonic::Code::Unimplemented
+        );
+        let foreign = val(V::ReferenceValue(
+            "projects/q/databases/db/documents/c/d".to_owned(),
+        ));
+        assert_eq!(
+            reference_outside(&foreign, "projects/p/databases/db/documents")
+                .unwrap()
+                .code(),
+            tonic::Code::Unimplemented
+        );
+        let name = "projects/😀/databases/☃/documents/c";
+        let error = reference_literal_error(name).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", name.encode_utf16().count())),
+            "{error}"
+        );
+        let unicode_path = "projects/p/databases/db/documents/😀";
+        let error = reference_literal_error(unicode_path).unwrap();
+        assert!(
+            error.contains(&format!(
+                "at index {}.",
+                unicode_path.encode_utf16().count()
+            )),
+            "{error}"
+        );
+        let prefix = "projects/😀/databases/☃/";
+        let missing_keyword = format!("{prefix}documentX");
+        let error = reference_literal_error(&missing_keyword).unwrap();
+        assert!(
+            error.contains(&format!("at index {}.", prefix.encode_utf16().count())),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn generated_literal_refusal_boundary_cases() {
+        use pb::value::ValueType as V;
+        const ROWS: &str = r"Family	Transport	Profile	Position	Conflict
+vector	rest	strict	direct	none
+vector	grpc	strict	where	none
+type_tag	rest	strict	nested	none
+type_tag	grpc	strict	function	none
+reference	rest	strict	direct	none
+reference	grpc	strict	direct	foreign
+vector	rest	emulator	function	arity
+type_tag	grpc	strict	function	unknown
+vector	grpc	emulator	nested	foreign
+reference	grpc	strict	nested	arity
+type_tag	rest	emulator	direct	unknown
+reference	rest	emulator	where	foreign
+type_tag	grpc	strict	direct	arity
+reference	rest	strict	where	unknown
+vector	rest	strict	nested	unknown
+type_tag	grpc	strict	where	foreign
+type_tag	rest	emulator	where	arity
+reference	rest	emulator	function	none
+vector	grpc	emulator	function	foreign";
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for line in ROWS.lines().skip(1) {
+            let cells: Vec<_> = line.split('\t').collect();
+            let [family, transport, profile, position, conflict] = cells.as_slice() else {
+                panic!("{line}")
+            };
+            let policy = if *profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let literal = match *family {
+                "vector" => tagged_literal(
+                    value(V::StringValue("__vector__".to_owned())),
+                    vec![value(V::IntegerValue(1))],
+                    false,
+                ),
+                "type_tag" => tagged_literal(
+                    value(V::IntegerValue(7)),
+                    vec![value(V::DoubleValue(1.0))],
+                    false,
+                ),
+                "reference" => value(V::ReferenceValue("garbage".to_owned())),
+                _ => unreachable!(),
+            };
+            let mut operand = match *position {
+                "nested" => value(V::ArrayValue(pb::ArrayValue {
+                    values: vec![literal],
+                })),
+                "function" => value(V::FunctionValue(pb::Function {
+                    name: "equal".to_owned(),
+                    args: vec![value(V::FieldReferenceValue("i".to_owned())), literal],
+                    ..Default::default()
+                })),
+                _ => literal,
+            };
+            if *conflict == "arity" || *conflict == "unknown" {
+                let name = if *conflict == "arity" {
+                    "equal"
+                } else {
+                    "unknown_function"
+                };
+                operand = value(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![operand],
+                    ..Default::default()
+                }));
+            }
+            if *conflict == "foreign" {
+                let foreign = value(V::ReferenceValue(
+                    "projects/q/databases/db/documents/c/d".to_owned(),
+                ));
+                assert_eq!(
+                    reference_outside(&foreign, "projects/p/databases/db/documents")
+                        .unwrap()
+                        .code(),
+                    tonic::Code::Unimplemented,
+                    "{line}"
+                );
+            }
+            let error = if *position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![operand],
+                        ..Default::default()
+                    },
+                    policy,
+                )
+                .unwrap_err()
+            } else {
+                decode_operand_tree(&operand, policy).unwrap_err()
+            };
+            if *conflict == "unknown" {
+                assert_eq!(error.code(), tonic::Code::Unimplemented, "{line}");
+            }
+            if *conflict == "arity" {
+                assert!(error.message().contains("argument(s)"), "{line}: {error:?}");
+            }
+            let gate = if *profile == "strict" {
+                crate::pipeline_shape::RefusalGate::Recorded(
+                    None,
+                    "projects/p/databases/db".to_owned(),
+                )
+            } else {
+                crate::pipeline_shape::RefusalGate::Open
+            };
+            let gated = gate.answer(error.clone());
+            if *profile == "strict" {
+                assert_eq!(
+                    gated.code(),
+                    tonic::Code::Unimplemented,
+                    "{transport}: {line}"
+                );
+            } else {
+                assert_eq!(gated.code(), error.code(), "{transport}: {line}");
+            }
+        }
+    }
+
+    fn tagged_literal(tag: pb::Value, values: Vec<pb::Value>, in_array: bool) -> pb::Value {
+        use pb::value::ValueType as V;
+        let map = pb::Value {
+            value_type: Some(V::MapValue(pb::MapValue {
+                fields: [
+                    ("__type__".to_owned(), tag),
+                    (
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(V::ArrayValue(pb::ArrayValue { values })),
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            })),
+        };
+        if in_array {
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![map] })),
+            }
+        } else {
+            map
+        }
+    }
+
+    #[test]
+    fn recorded_tagged_literals_preserve_wire_shapes() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("unknown", "double", "strict", "map", "valid"),
+            ("unknown", "integer", "strict", "map", "valid"),
+            ("vector", "double", "strict", "array", "valid"),
+            ("vector", "integer", "strict", "array", "invalid"),
+            ("unknown", "double", "emulator", "map", "valid"),
+            ("unknown", "integer", "emulator", "array", "invalid"),
+            ("vector", "double", "emulator", "map", "invalid"),
+        ];
+        for (kind, number, profile, context, validity) in cases {
+            let tag = if kind == "unknown" && validity == "invalid" {
+                V::IntegerValue(7)
+            } else {
+                V::StringValue(if kind == "vector" { "__vector__" } else { "x" }.to_owned())
+            };
+            let number = if number == "integer" {
+                V::IntegerValue(1)
+            } else {
+                V::DoubleValue(1.0)
+            };
+            let values =
+                if kind == "vector" && validity == "invalid" && matches!(number, V::DoubleValue(_))
+                {
+                    vec![]
+                } else {
+                    vec![pb::Value {
+                        value_type: Some(number),
+                    }]
+                };
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(tag),
+                },
+                values,
+                context == "array",
+            );
+            let profile = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = decode_operand_tree(&wire, profile);
+            if validity == "valid" {
+                let Expr::Constant(value) = result.unwrap() else {
+                    panic!("expected constant")
+                };
+                assert_eq!(crate::encode::encode_value(&value), wire);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_infinite_vectors_and_documents_root_preserve_types() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, f64::NEG_INFINITY] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                false,
+            );
+            let Expr::Constant(Value::Vector(vector)) =
+                decode_operand_tree(&wire, Unrecorded::Refuse).unwrap()
+            else {
+                panic!("expected vector")
+            };
+            assert_eq!(vector, vec![number]);
+            assert_eq!(crate::encode::encode_value(&Value::Vector(vector)), wire);
+        }
+        let own = "projects/p/databases/db/documents";
+        let root = pb::Value {
+            value_type: Some(V::ReferenceValue(own.to_owned())),
+        };
+        assert!(reference_outside(&root, own).is_none());
+        let Expr::Constant(Value::Reference(reference)) =
+            decode_operand_tree(&root, Unrecorded::Refuse).unwrap()
+        else {
+            panic!("expected reference")
+        };
+        assert_eq!(reference, own);
+        let foreign = pb::Value {
+            value_type: Some(V::ReferenceValue(
+                "projects/p/databases/other/documents".to_owned(),
+            )),
+        };
+        assert!(reference_outside(&foreign, own).is_some());
+    }
+
+    #[test]
+    fn generated_infinity_reference_projection_cases() {
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let own = "projects/p/databases/db/documents";
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (number, allowed) in [
+                (f64::INFINITY, true),
+                (f64::NEG_INFINITY, true),
+                (1.0, true),
+                (f64::NAN, false),
+            ] {
+                let wire = tagged_literal(
+                    pb::Value {
+                        value_type: Some(V::StringValue("__vector__".to_owned())),
+                    },
+                    vec![pb::Value {
+                        value_type: Some(V::DoubleValue(number)),
+                    }],
+                    false,
+                );
+                let result = decode_operand_tree(&wire, profile);
+                if allowed {
+                    let Expr::Constant(Value::Vector(vector)) = result.unwrap() else {
+                        panic!("expected vector")
+                    };
+                    assert_eq!(vector, vec![number]);
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+            let too_long = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![
+                    pb::Value {
+                        value_type: Some(V::DoubleValue(1.0))
+                    };
+                    2049
+                ],
+                false,
+            );
+            assert!(decode_operand_tree(&too_long, profile).is_err());
+            for (name, own_database) in
+                [(own, true), ("projects/p/databases/other/documents", false)]
+            {
+                let wire = pb::Value {
+                    value_type: Some(V::ReferenceValue(name.to_owned())),
+                };
+                if profile == Unrecorded::Refuse && !own_database {
+                    assert!(reference_outside(&wire, own).is_some());
+                } else {
+                    assert!(decode_operand_tree(&wire, profile).is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn infinity_vector_admission_depends_on_expression_position() {
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (kind, number) in [
+                ("positive", f64::INFINITY),
+                ("negative", f64::NEG_INFINITY),
+                ("finite", 1.0),
+                ("unknown", 1.0),
+            ] {
+                let tag = if kind == "unknown" { "x" } else { "__vector__" };
+                let literal = tagged_literal(
+                    val(V::StringValue(tag.to_owned())),
+                    vec![val(V::DoubleValue(number))],
+                    false,
+                );
+                for position in ["direct", "constructor", "equal", "literal_nested"] {
+                    let operand = match position {
+                        "direct" => literal.clone(),
+                        "literal_nested" => val(V::ArrayValue(pb::ArrayValue {
+                            values: vec![literal.clone()],
+                        })),
+                        name => {
+                            let (name, args) = if name == "constructor" {
+                                ("array", vec![literal.clone()])
+                            } else {
+                                (
+                                    "equal",
+                                    vec![
+                                        val(V::FieldReferenceValue("i".to_owned())),
+                                        literal.clone(),
+                                    ],
+                                )
+                            };
+                            val(V::FunctionValue(pb::Function {
+                                name: name.to_owned(),
+                                args,
+                                ..Default::default()
+                            }))
+                        }
+                    };
+                    let result = decode_operand_tree(&operand, profile);
+                    let refused = profile == Unrecorded::Refuse
+                        && number.is_infinite()
+                        && position != "direct";
+                    if refused {
+                        assert_eq!(
+                            result.unwrap_err().code(),
+                            tonic::Code::Unimplemented,
+                            "{kind} {position} {profile:?}"
+                        );
+                    } else {
+                        assert!(result.is_ok(), "{kind} {position} {profile:?}: {result:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vector_in_array_keeps_unobserved_components_refused() {
+        use pb::value::ValueType as V;
+        for number in [f64::INFINITY, -0.0] {
+            let wire = tagged_literal(
+                pb::Value {
+                    value_type: Some(V::StringValue("__vector__".to_owned())),
+                },
+                vec![pb::Value {
+                    value_type: Some(V::DoubleValue(number)),
+                }],
+                true,
+            );
+            assert!(decode_operand_tree(&wire, Unrecorded::Refuse).is_err());
+        }
+    }
+
+    #[test]
+    fn generated_comparison_arity_and_precedence_cases() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("equal", "where", 0, "valid", "strict"),
+            ("equal", "where", 1, "unknown", "strict"),
+            ("equal", "select", 1, "valid", "strict"),
+            ("less_than", "select", 0, "valid", "strict"),
+            ("equal", "where", 2, "valid", "emulator"),
+            ("equal", "select", 3, "unknown", "emulator"),
+            ("less_than", "where", 0, "unknown", "emulator"),
+            ("less_than", "select", 2, "unknown", "strict"),
+            ("less_than", "where", 3, "valid", "strict"),
+            ("less_than", "select", 1, "unknown", "emulator"),
+        ];
+        for (name, position, count, operand, profile) in cases {
+            let valid = || pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            let mut args = vec![valid(); count];
+            if let Some(first) = args.first_mut() {
+                *first = if operand == "unknown" {
+                    pb::Value {
+                        value_type: Some(V::FunctionValue(pb::Function {
+                            name: "not_a_registered_function".to_owned(),
+                            ..Default::default()
+                        })),
+                    }
+                } else {
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    }
+                };
+            }
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let mode = if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            };
+            let result = if position == "where" {
+                decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![wire],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .map(|_| ())
+            } else {
+                decode_operand_tree(&wire, mode).map(|_| ())
+            };
+            if count != 2 {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.code(),
+                    tonic::Code::InvalidArgument,
+                    "{name} {position} {count} {profile}"
+                );
+                assert_eq!(error.message(), format!("The function '{name}(x: any, y: any): boolean' takes [2..2] argument(s), but {count} {} provided.", if count == 1 { "was" } else { "were" }));
+            } else if operand == "unknown" {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn array_transform_element_alias_validation_and_priority() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("exact", "field", "field", Unrecorded::Refuse),
+            ("exact", "field", "empty", Unrecorded::Refuse),
+            ("short", "field", "field", Unrecorded::Refuse),
+            ("exact", "string", "empty", Unrecorded::Refuse),
+            ("exact", "integer", "field", Unrecorded::Refuse),
+            ("exact", "variable", "field", Unrecorded::Refuse),
+            ("exact", "field", "field", Unrecorded::OfficialEmulator),
+            ("short", "variable", "empty", Unrecorded::OfficialEmulator),
+            ("short", "integer", "empty", Unrecorded::OfficialEmulator),
+            ("short", "string", "field", Unrecorded::OfficialEmulator),
+        ];
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        for (arity, alias, input, profile) in cases {
+            let input = if input == "empty" {
+                pb::Value {
+                    value_type: Some(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                }
+            } else {
+                field()
+            };
+            let alias = pb::Value {
+                value_type: Some(match alias {
+                    "field" => V::FieldReferenceValue("i".to_owned()),
+                    "string" => V::StringValue("item".to_owned()),
+                    "integer" => V::IntegerValue(1),
+                    _ => V::VariableReferenceValue("item".to_owned()),
+                }),
+            };
+            let mut args = vec![input, alias];
+            if arity == "exact" {
+                args.extend([
+                    pb::Value {
+                        value_type: Some(V::StringValue("index".to_owned())),
+                    },
+                    field(),
+                ]);
+            }
+            let operand = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "array_transform".to_owned(),
+                    args,
+                    ..Default::default()
+                })),
+            };
+            let result = decode_operand_tree(&operand, profile);
+            if arity == "short" {
+                assert!(!result.unwrap_err().message().contains("element_alias"));
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::FieldReferenceValue(_))))
+            {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(error.message(), "The 'element_alias' argument of the 'array_transform' function must be a literal value, found: a property reference");
+                let gate = crate::pipeline_shape::RefusalGate::Recorded(None, String::new());
+                assert_eq!(gate.answer(error).code(), tonic::Code::Unimplemented);
+            } else if matches!(operand.value_type.as_ref(), Some(V::FunctionValue(f)) if matches!(f.args[1].value_type, Some(V::StringValue(_))))
+            {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::Unimplemented);
+            }
+        }
+    }
+
+    #[test]
+    fn array_transform_unobserved_index_alias_remains_refused() {
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let call = value(V::FunctionValue(pb::Function {
+            name: "array_transform".to_owned(),
+            args: vec![
+                value(V::ArrayValue(pb::ArrayValue { values: vec![] })),
+                value(V::StringValue("item".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+                value(V::FieldReferenceValue("i".to_owned())),
+            ],
+            ..Default::default()
+        }));
+        for profile in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            assert_eq!(
+                decode_operand_tree(&call, profile).unwrap_err().code(),
+                tonic::Code::Unimplemented
+            );
+        }
+    }
+
+    #[test]
+    fn where_is_type_keeps_static_type_validation() {
+        use pb::value::ValueType as V;
+        let field = || pb::Value {
+            value_type: Some(V::FieldReferenceValue("i".to_owned())),
+        };
+        let bogus = || pb::Value {
+            value_type: Some(V::StringValue("bogus".to_owned())),
+        };
+        let variable = || pb::Value {
+            value_type: Some(V::VariableReferenceValue("v".to_owned())),
+        };
+        let unknown = || pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "not_a_registered_function".to_owned(),
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (args, code, text) in [
+                (
+                    vec![field(), bogus()],
+                    tonic::Code::InvalidArgument,
+                    "argument 'type'",
+                ),
+                (
+                    vec![field(), variable()],
+                    tonic::Code::Unimplemented,
+                    "variable and pipeline",
+                ),
+                (
+                    vec![unknown(), bogus()],
+                    tonic::Code::Unimplemented,
+                    "not_a_registered_function",
+                ),
+            ] {
+                let condition = pb::Value {
+                    value_type: Some(V::FunctionValue(pb::Function {
+                        name: "is_type".to_owned(),
+                        args,
+                        ..Default::default()
+                    })),
+                };
+                let stage = pb::pipeline::Stage {
+                    name: "where".to_owned(),
+                    args: vec![condition],
+                    ..Default::default()
+                };
+                let error = decode_condition(&stage, mode).unwrap_err();
+                assert_eq!(error.code(), code);
+                assert!(error.message().contains(text), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn valid_where_equal_retains_field_filter_pushdown() {
+        use pb::value::ValueType as V;
+        let condition = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "equal".to_owned(),
+                args: vec![
+                    pb::Value {
+                        value_type: Some(V::FieldReferenceValue("i".to_owned())),
+                    },
+                    pb::Value {
+                        value_type: Some(V::IntegerValue(1)),
+                    },
+                ],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let stage = pb::pipeline::Stage {
+                name: "where".to_owned(),
+                args: vec![condition.clone()],
+                ..Default::default()
+            };
+            assert!(decode_condition(&stage, mode).unwrap().1.is_some());
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn captured_array_and_like_expressions_preserve_typed_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let val = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let field = |name: &str| val(V::FieldReferenceValue(name.to_owned()));
+        let variable = |name: &str| val(V::VariableReferenceValue(name.to_owned()));
+        let string = |text: &str| val(V::StringValue(text.to_owned()));
+        let integer = |number| val(V::IntegerValue(number));
+        let call = |name: &str, args| {
+            val(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let row = Row::derived(
+            [
+                (
+                    "itemsPop".to_owned(),
+                    Value::Array(vec![Value::Integer(0), Value::Integer(2)]),
+                ),
+                ("itemsEmpty".to_owned(), Value::Array(vec![])),
+                (
+                    "textPositive".to_owned(),
+                    Value::String("apricot".to_owned()),
+                ),
+                ("textNegative".to_owned(), Value::String("berry".to_owned())),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let cases = [
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(2)]),
+            ),
+            (
+                call(
+                    "array_filter",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("greater_than", vec![variable("item"), integer(1)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsPop"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![Value::Integer(0), Value::Integer(4)]),
+            ),
+            (
+                call(
+                    "array_transform",
+                    vec![
+                        field("itemsEmpty"),
+                        string("item"),
+                        call("multiply", vec![variable("item"), integer(2)]),
+                    ],
+                ),
+                Value::Array(vec![]),
+            ),
+            (
+                call("like", vec![field("textPositive"), string("%ap%")]),
+                Value::Boolean(true),
+            ),
+            (
+                call("like", vec![field("textNegative"), string("%ap%")]),
+                Value::Boolean(false),
+            ),
+        ];
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (wire, expected) in &cases {
+                let expression = decode_operand_tree(wire, mode).unwrap();
+                let runtime = RuntimeContext {
+                    regex_resolver: Some(crate::pipeline_regex::resolve),
+                    ..RuntimeContext::default()
+                };
+                assert_eq!(
+                    expression.eval_in_with_runtime(&row, mode, runtime),
+                    Eval::Value(expected.clone())
+                );
+            }
+            assert!(decode_operand_tree(&call("rand", vec![]), mode).is_ok());
+        }
+    }
+
+    #[test]
+    fn captured_numeric_scalar_expressions_preserve_integer_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let integer = |number| value(V::IntegerValue(number));
+        let array = || {
+            value(V::ArrayValue(pb::ArrayValue {
+                values: vec![integer(7), integer(2), integer(5)],
+            }))
+        };
+        let call = |name: &str, args| {
+            value(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        let cases = [
+            (call("minimum", vec![array()]), 2),
+            (call("minimum", vec![integer(7), integer(2)]), 2),
+            (call("maximum", vec![array()]), 7),
+            (call("maximum", vec![integer(7), integer(2)]), 7),
+            (call("sum", vec![array()]), 14),
+            (call("negate", vec![integer(7)]), -7),
+        ];
+        let row = Row::derived(std::collections::BTreeMap::default());
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            for (wire, expected) in &cases {
+                let expression = decode_operand_tree(wire, mode).unwrap();
+                assert_eq!(
+                    expression.eval_in_with_runtime(&row, mode, RuntimeContext::default()),
+                    Eval::Value(Value::Integer(*expected))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_scalar_unobserved_arity_keeps_profile_boundary() {
+        use pb::value::ValueType as V;
+        for name in ["minimum", "maximum", "sum", "negate"] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![],
+                    ..Default::default()
+                })),
+            };
+            for (mode, code) in [
+                (Unrecorded::Refuse, tonic::Code::Unimplemented),
+                (Unrecorded::OfficialEmulator, tonic::Code::InvalidArgument),
+            ] {
+                let error = decode_operand_tree(&wire, mode).unwrap_err();
+                let answer = if mode == Unrecorded::Refuse {
+                    crate::pipeline_shape::RefusalGate::Recorded(None, String::new()).answer(error)
+                } else {
+                    error
+                };
+                assert_eq!(answer.code(), code, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn captured_generic_expressions_preserve_typed_results() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use serde_json::json;
+        let cases: serde_json::Value = serde_json::from_str(r#"[{"id":"cmp-int","expression":{"functionValue":{"name":"cmp","args":[{"integerValue":"2"},{"integerValue":"7"}]}},"expected":{"integerValue":"-1"}},{"id":"storage-size-string","expression":{"functionValue":{"name":"storage_size","args":[{"stringValue":"abc"}]}},"expected":{"integerValue":"4"}},{"id":"coalesce-null-string","expression":{"functionValue":{"name":"coalesce","args":[{"nullValue":"NULL_VALUE"},{"stringValue":"fallback"}]}},"expected":{"stringValue":"fallback"}},{"id":"namespace-reference","expression":{"functionValue":{"name":"namespace","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}]}},"expected":{"stringValue":""}},{"id":"has-ancestor-reference","expression":{"functionValue":{"name":"has_ancestor","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1/children/c1"},{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}]}},"expected":{"booleanValue":true}},{"id":"reference-slice","expression":{"functionValue":{"name":"reference_slice","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1/children/c1"},{"integerValue":"0"},{"integerValue":"1"}]}},"expected":{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"}},{"id":"autogen-document-id","expression":{"functionValue":{"name":"autogen_document_id","args":[]}},"expected":null},{"id":"replace-document-id","expression":{"functionValue":{"name":"replace_document_id","args":[{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d1"},{"stringValue":"d2"}]}},"expected":{"referenceValue":"projects/fireemu-oracle-query/databases/entpipe2-20261031/documents/positive/d2"}},{"id":"get-field-map","expression":{"functionValue":{"name":"get_field","args":[{"mapValue":{"fields":{"answer":{"integerValue":"7"}}}},{"stringValue":"answer"}]}},"expected":{"integerValue":"7"}},{"id":"offset-array","expression":{"functionValue":{"name":"offset","args":[{"arrayValue":{"values":[{"integerValue":"10"},{"integerValue":"20"}]}},{"integerValue":"1"}]}},"expected":{"integerValue":"20"}},{"id":"reverse-string","expression":{"functionValue":{"name":"reverse","args":[{"stringValue":"abc"}]}},"expected":{"stringValue":"cba"}},{"id":"reverse-bytes","expression":{"functionValue":{"name":"reverse","args":[{"bytesValue":"YWJj"}]}},"expected":{"bytesValue":"Y2Jh"}},{"id":"reverse-array","expression":{"functionValue":{"name":"reverse","args":[{"arrayValue":{"values":[{"integerValue":"1"},{"integerValue":"2"}]}}]}},"expected":{"arrayValue":{"values":[{"integerValue":"2"},{"integerValue":"1"}]}}},{"id":"length-string","expression":{"functionValue":{"name":"length","args":[{"stringValue":"abc"}]}},"expected":{"integerValue":"3"}},{"id":"length-bytes","expression":{"functionValue":{"name":"length","args":[{"bytesValue":"YWJj"}]}},"expected":{"integerValue":"3"}},{"id":"length-array","expression":{"functionValue":{"name":"length","args":[{"arrayValue":{"values":[{"integerValue":"1"},{"integerValue":"2"}]}}]}},"expected":{"integerValue":"2"}},{"id":"length-map","expression":{"functionValue":{"name":"length","args":[{"mapValue":{"fields":{"answer":{"integerValue":"7"}}}}]}},"expected":{"integerValue":"1"}},{"id":"length-vector","expression":{"functionValue":{"name":"length","args":[{"mapValue":{"fields":{"__type__":{"stringValue":"__vector__"},"value":{"arrayValue":{"values":[{"doubleValue":1},{"doubleValue":2}]}}}}}]}},"expected":{"integerValue":"2"}},{"id":"string-concat","expression":{"functionValue":{"name":"string_concat","args":[{"stringValue":"ab"},{"stringValue":"cd"}]}},"expected":{"stringValue":"abcd"}}]"#).unwrap();
+        let database = "projects/fireemu-oracle-query/databases/entpipe2-20261031";
+        let wire = |input: &serde_json::Value| {
+            let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"select","args":[input]}]}}});
+            let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+            structured_pipeline(&request).unwrap().stages[0].args[0].clone()
+        };
+        let row = Row::derived(std::collections::BTreeMap::default());
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let mut ids = Vec::new();
+            let runtime = RuntimeContext {
+                expr_rng: Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    fireemu_core_types::determinism::SplitMix64::new(42),
+                ))),
+                ..RuntimeContext::default()
+            };
+            for case in cases.as_array().unwrap() {
+                let id = case["id"].as_str().unwrap();
+                let expression = decode_operand_tree(&wire(&case["expression"]), mode)
+                    .unwrap_or_else(|error| panic!("{id}: {error:?}"));
+                let actual = expression.eval_in_with_runtime(&row, mode, runtime.clone());
+                if id == "autogen-document-id" {
+                    for result in [
+                        actual,
+                        expression.eval_in_with_runtime(&row, mode, runtime.clone()),
+                    ] {
+                        let Eval::Value(Value::String(value)) = result else {
+                            panic!("{id}: {result:?}")
+                        };
+                        assert_eq!(value.len(), 20);
+                        assert!(value.bytes().all(|b| b.is_ascii_alphanumeric()));
+                        ids.push(value);
+                    }
+                } else {
+                    let expected = crate::decode::decode_value(&wire(&case["expected"])).unwrap();
+                    assert_eq!(actual, Eval::Value(expected), "{id}");
+                }
+            }
+            assert_ne!(ids[0], ids[1]);
+        }
+    }
+
+    #[test]
+    fn autogen_document_id_uses_request_runtime() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let wire = pb::Value {
+            value_type: Some(V::FunctionValue(pb::Function {
+                name: "autogen_document_id".to_owned(),
+                args: vec![],
+                ..Default::default()
+            })),
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let expression = decode_operand_tree(&wire, mode).unwrap();
+            let runtime = RuntimeContext {
+                expr_rng: Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    fireemu_core_types::determinism::SplitMix64::new(42),
+                ))),
+                ..RuntimeContext::default()
+            };
+            let row = Row::derived(std::collections::BTreeMap::default());
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let Eval::Value(Value::String(id)) =
+                    expression.eval_in_with_runtime(&row, mode, runtime.clone())
+                else {
+                    panic!("expected ID")
+                };
+                assert_eq!(id.len(), 20);
+                assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+                ids.push(id);
+            }
+            assert_ne!(ids[0], ids[1]);
+        }
+    }
+
+    #[test]
+    fn coalesce_skips_failing_constant_but_validates_static_errors() {
+        use fireemu_core_firestore::pipeline_exec::{Eval, Row, RuntimeContext};
+        use fireemu_core_firestore::value::Value;
+        use pb::value::ValueType as V;
+        let value = |kind| pb::Value {
+            value_type: Some(kind),
+        };
+        let int = |number| value(V::IntegerValue(number));
+        let call = |name: &str, args| {
+            value(V::FunctionValue(pb::Function {
+                name: name.to_owned(),
+                args,
+                ..Default::default()
+            }))
+        };
+        for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+            let expression = decode_operand_tree(
+                &call(
+                    "coalesce",
+                    vec![int(7), call("divide", vec![int(1), int(0)])],
+                ),
+                mode,
+            )
+            .unwrap();
+            assert_eq!(
+                expression.eval_in_with_runtime(
+                    &Row::derived(std::collections::BTreeMap::default()),
+                    mode,
+                    RuntimeContext::default()
+                ),
+                Eval::Value(Value::Integer(7))
+            );
+            let array = value(V::ArrayValue(pb::ArrayValue {
+                values: vec![int(1)],
+            }));
+            let skipped = decode_operand_tree(
+                &call(
+                    "coalesce",
+                    vec![int(7), call("offset", vec![array, int(5)])],
+                ),
+                mode,
+            )
+            .unwrap();
+            assert_eq!(
+                skipped.eval_in_with_runtime(
+                    &Row::derived(std::collections::BTreeMap::default()),
+                    mode,
+                    RuntimeContext::default()
+                ),
+                Eval::Value(Value::Integer(7))
+            );
+            assert!(decode_operand_tree(
+                &call("coalesce", vec![int(7), call("unknown_function", vec![])]),
+                mode
+            )
+            .is_err());
+            assert!(decode_operand_tree(
+                &call("coalesce", vec![int(7), call("divide", vec![int(1)])]),
+                mode
+            )
+            .is_err());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn vector_in_array_preserves_dimension_order(numbers in proptest::collection::vec(-1000i32..1000, 1..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::DoubleValue(f64::from(*n))) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue("__vector__".to_owned())) }, values, true);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn unknown_tag_preserves_ordered_integer_values(tag in "[a-z]{1,8}", numbers in proptest::collection::vec(-1000i64..1000, 0..8)) {
+            use pb::value::ValueType as V;
+            let values = numbers.iter().map(|n| pb::Value { value_type: Some(V::IntegerValue(*n)) }).collect();
+            let wire = tagged_literal(pb::Value { value_type: Some(V::StringValue(tag)) }, values, false);
+            let Expr::Constant(value) = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap() else { panic!("expected constant") };
+            proptest::prop_assert_eq!(crate::encode::encode_value(&value), wire);
+        }
+    }
 
     proptest::proptest! {
         #[test]
@@ -4693,6 +7379,70 @@ mod tests {
             let result = validate_function_depth(&request);
             proptest::prop_assert_eq!(result.is_err(), depth > 32);
         }
+    }
+
+    #[test]
+    fn candidate_shape_eligibility_bounds_nested_function_options() {
+        use pb::value::ValueType as V;
+        let request = |depth| {
+            let mut value = pb::Value {
+                value_type: Some(V::IntegerValue(1)),
+            };
+            for _ in 0..depth {
+                value = pb::Value {
+                    value_type: Some(V::MapValue(pb::MapValue {
+                        fields: [("x".to_owned(), value)].into_iter().collect(),
+                    })),
+                };
+            }
+            let function = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: "unknown".to_owned(),
+                    args: vec![],
+                    options: [("x".to_owned(), value)].into_iter().collect(),
+                })),
+            };
+            pb::ExecutePipelineRequest {
+                pipeline_type: Some(
+                    pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                        pb::StructuredPipeline {
+                            pipeline: Some(pb::Pipeline {
+                                stages: vec![pb::pipeline::Stage {
+                                    args: vec![function],
+                                    ..Default::default()
+                                }],
+                            }),
+                            ..Default::default()
+                        },
+                    ),
+                ),
+                ..Default::default()
+            }
+        };
+        assert!(candidate_shape_eligible(&request(8)));
+        let deep = request(120);
+        assert!(validate_function_depth(&deep).is_ok());
+        assert!(!candidate_shape_eligible(&deep));
+        let mut wide = request(0);
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
+            &mut wide.pipeline_type
+        else {
+            unreachable!()
+        };
+        structured.options.insert(
+            "x".to_owned(),
+            pb::Value {
+                value_type: Some(V::ArrayValue(pb::ArrayValue {
+                    values: vec![
+                        pb::Value {
+                            value_type: Some(V::NullValue(0))
+                        };
+                        32_768
+                    ],
+                })),
+            },
+        );
+        assert!(!candidate_shape_eligible(&wide));
     }
 
     #[test]
@@ -5187,7 +7937,7 @@ mod tests {
         };
         for (name, outside) in [
             (format!("{own}/c/d"), false),
-            (own.to_owned(), true),
+            (own.to_owned(), false),
             (format!("{own}/{}", deep(200)), false),
             (format!("{own}/{}", deep(201)), false),
             (format!("{own}/{}", deep(202)), true),
@@ -5823,7 +8573,7 @@ mod tests {
             ..Default::default()
         };
         let overlap = |order: Option<&[String]>| {
-            decode_select(&stage, Unrecorded::OfficialEmulator, order)
+            decode_select(&stage, Unrecorded::OfficialEmulator, order, false)
                 .unwrap_err()
                 .details()
                 .to_vec()
@@ -6403,7 +9153,7 @@ mod tests {
                 let rotation = usize::try_from(shuffle % u64::try_from(entries.len()).unwrap()).unwrap();
                 entries.rotate_left(rotation);
                 let (aliases, keeps_name) =
-                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None).unwrap();
+                    decode_select(&select(&entries), Unrecorded::OfficialEmulator, None, false).unwrap();
                 prop_assert_eq!(keeps_name, identity);
                 let mut set: Vec<String> = aliases.iter().map(|(path, _)| path.canonical()).collect();
                 set.sort();
@@ -6420,6 +9170,7 @@ mod tests {
                     &select(&[("__name__", &source)]),
                     Unrecorded::OfficialEmulator,
                     None,
+                    false,
                 ).unwrap_err();
                 prop_assert_eq!(refused.code(), tonic::Code::InvalidArgument);
                 prop_assert!(refused.message().contains("can not be overwritten"));
@@ -6439,7 +9190,7 @@ mod tests {
                 vec![("__name__", "__name__"), ("nm", "__name__")],
             ] {
                 let (_, keeps_name) =
-                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap();
+                    decode_select(&select(&entries), Unrecorded::Refuse, None, false).unwrap();
                 assert!(keeps_name, "{entries:?}");
             }
             for entries in [
@@ -6453,7 +9204,7 @@ mod tests {
                 vec![("__name__", "__name__"), ("__name__.x", "n")],
             ] {
                 let refused =
-                    decode_select(&select(&entries), Unrecorded::Refuse, None).unwrap_err();
+                    decode_select(&select(&entries), Unrecorded::Refuse, None, false).unwrap_err();
                 assert_eq!(refused.code(), tonic::Code::Unimplemented, "{entries:?}");
             }
         }

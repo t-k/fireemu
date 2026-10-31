@@ -303,14 +303,45 @@ test("v0.35 promotes exactly the accepted 55 strict rows and preserves all other
   assert.equal(accepted.binarySha256, comparison.artifactSha256);
 });
 
-test("finite contract adjudications preserve their strict-only raw outcomes", () => {
+test("finite contract adjudications preserve their declared finite outcomes", () => {
   const contracts = closure.finiteContractEvidence;
   assert.deepEqual(
     contracts.map((item) => item.kind),
-    ["sample", "o7-order", "scalar-subquery"],
+    contracts.some((entry) => entry.kind === "native-positive")
+      ? ["sample", "o7-order", "scalar-subquery", "native-positive"]
+      : ["sample", "o7-order", "scalar-subquery"],
   );
   for (const entry of contracts) {
     assert.equal(entry.sha256, sha256(entry.path));
+    if (entry.kind === "native-positive") {
+      const proof = json(entry.path);
+      assert.equal(proof.kind, "fs-ent-pipeline-native-positive-observation-v1");
+      assert.equal(proof.decision, "ACCEPTED_FINITE_VALUE_AND_SHAPE_CONTRACT");
+      assert.equal(proof.contract, "FINITE_VALUE_AND_SHAPE_ONLY");
+      assert.equal(proof.parentClosureClaimed, false);
+      const cohort = closure.recordedLeafReview.v041Promotion;
+      const finalComparison = json(cohort.comparisonPath);
+      assert.equal(sha256(cohort.comparisonPath), cohort.comparisonSha256);
+      assert.equal(proof.binarySha256, cohort.binarySha256);
+      assert.equal(proof.binarySha256, finalComparison.artifactSha256);
+      assert.equal(proof.sourceCommit, cohort.sourceCommit);
+      assert.equal(proof.fixtureSha256, sha256("conformance/fs-native-positive/production.json"));
+      assert.equal(
+        proof.requestCorpusSha256,
+        sha256("conformance/fs-native-positive/program.json"),
+      );
+      assert.equal(proof.typedFieldComparisons, 296);
+      assert.equal(proof.localReplays.length, 8);
+      assert.equal(proof.productionJournals.length, 3);
+      for (const row of [...proof.productionJournals, ...proof.localReplays])
+        assert.match(row.sha256, /^[a-f0-9]{64}$/);
+      assert.equal(proof.proofs.length, 216);
+      assert.equal(proof.productionMetadata.length, 54);
+      assert.equal(proof.localMetadata.length, 216);
+      assert.equal(proof.policy.absoluteTimeEquality, false);
+      assert.deepEqual(badDigests(proof), []);
+      continue;
+    }
     if (entry.kind === "scalar-subquery") {
       const proof = json(entry.path);
       assert.equal(proof.profile, "strict");

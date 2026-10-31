@@ -1,0 +1,220 @@
+{
+  "kind": "rtdb-installed-binary-public-replay-v1",
+  "decision": "ACCEPTED_FINITE_EXISTING_CONTRACT_REPLAY",
+  "decisionAuthority": "Root2118 after independent actual review",
+  "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+  "sourceTree": "694df8b4f2c4ffb281128d62bd7d1e2391b41839",
+  "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+  "buildRun": 41171655005,
+  "actualIndexSha256": "69514fa83e272a3c56394285df1c4ddd56f90c2352ab462262c31f7d4e902a18",
+  "actualSummarySha256": "2f53c670a37825a56e565679b09a1288a8dfdcc401072cab540fd03e2a963dd4",
+  "independentReviewSha256": "720ed449d5d9f175de05abab998ad288cbf832f4ee8c21295d834c292af02b12",
+  "runnerFilesVerified": 58,
+  "registeredProductionContracts": {
+    "rest": {
+      "comparisons": 124,
+      "additionalM14Comparisons": 48,
+      "historicalJudges": [
+        "rest-old",
+        "rest-v033"
+      ]
+    },
+    "ondisconnect": {
+      "events": 36
+    },
+    "auth": {
+      "profiles": 4,
+      "localEvents": 92
+    },
+    "residual": {
+      "comparisons": 8
+    },
+    "prioritizedSplit": {
+      "rounds": 2
+    },
+    "functions": {
+      "strictComparisons": 72,
+      "ordinaryProfilePolicy": "Existing recorded profile differences are preserved."
+    }
+  },
+  "exportedJudgeReceipts": {
+    "auth": {
+      "sha256": "6bc746a9b8be7f370473a62202c6d8f7436067a5bf96751102d423b4ab58e44e",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "functions": {
+      "sha256": "88fb7d77247a49bbfcd2558cd6c09de4ee50ed11ec4095f916f359fe101af554",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "ondisconnect": {
+      "sha256": "aef09cc9a6e8d342b5cdd0be4ccd13516751d1c42f9d26e414ffb4acfc6f9d41",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "residual": {
+      "sha256": "2f5801a86d93b039d6855b2da97c010fa9d2e6c8b34be3d0e05d8ae193394388",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "rest-v033": {
+      "sha256": "a426c10cd64bd6015832bf53fbb9bf9d17b5c5e8ebf5484ccafbbfb29b156bac",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "s5": {
+      "sha256": "5f572dadf9c353773fed6db8462eab125ee0141a3b81658ef40b174403b168ec",
+      "judgeAccepted": true,
+      "oracle": "existing-finite-contract-with-declared-profile-differences"
+    },
+    "smoke": {
+      "sha256": "bd021febede50d5a299910595f19c753e681122a906ec17a90fdf55031db755f",
+      "judgeAccepted": true,
+      "oracle": "official-emulator-fixture-only"
+    }
+  },
+  "sideCampaigns": {
+    "strict": {
+      "next4": {
+        "rows": 36,
+        "verdicts": {
+          "MATCH": 36
+        },
+        "sha256": "51098b30f008fcea7defaebeb6faebc8e5189b1436d6b81ec5742cec43ce153b"
+      },
+      "rules-validation": {
+        "rows": 56,
+        "verdicts": {
+          "MATCH": 56
+        },
+        "sha256": "a464d4cada71ef458cb6b2a8954af3e42334f2d889242af693f897d75cb64329"
+      },
+      "query-rules": {
+        "rows": 20,
+        "verdicts": {
+          "MATCH": 20
+        },
+        "sha256": "4da967ccc03ae030486108ec87e4093f4a7fc28ed3b8b1c996fda725439c9110"
+      },
+      "query-bounds": {
+        "rows": 20,
+        "verdicts": {
+          "MATCH": 20
+        },
+        "sha256": "d226f4bc20a0e58f056bd667f2f087579715620bc21c4c5a5a56b6ecaafc57b4"
+      },
+      "priority": {
+        "rows": 6,
+        "verdicts": {
+          "MATCH": 6
+        },
+        "sha256": "3e56d1bec46439bd77d0acd1ad1c8650f8195750a4675f24e097fbb17552b536"
+      },
+      "server-values": {
+        "rows": 10,
+        "verdicts": {
+          "MATCH": 10
+        },
+        "sha256": "864f44a9b0635a3a98743685fed4bea372353d3fba4bda5815dca6bbf5a48fee"
+      },
+      "rules-language": {
+        "rows": 16,
+        "verdicts": {
+          "MATCH": 16
+        },
+        "sha256": "bea30c102f2284d102a03fd27508643743c58a57a990a5314a67ad9dc87ac97d"
+      },
+      "rules-methods": {
+        "rows": 58,
+        "verdicts": {
+          "MATCH": 58
+        },
+        "sha256": "39b2d4d3c736fc44a3cdd22a7a356effd40de1b433e5c1680879a308f734a39c"
+      },
+      "rules-operators": {
+        "rows": 98,
+        "verdicts": {
+          "MATCH": 98
+        },
+        "sha256": "809c7e42e4898b77e0492956f7b66a15d46b619fef099da426b86524fafd7251"
+      },
+      "identity": {
+        "cells": 7,
+        "sha256": "557230842459fe3b6cfec943b7ada525051e1aa3183da16296aeb1023f80544a"
+      }
+    },
+    "emulator": {
+      "next4": {
+        "rows": 36,
+        "verdicts": {
+          "MATCH": 36
+        },
+        "sha256": "69f53a4e2608b998874fddda7e54cd379dec73226845a7cdbe650f0963726be0"
+      },
+      "rules-validation": {
+        "rows": 56,
+        "verdicts": {
+          "MATCH": 56
+        },
+        "sha256": "a464d4cada71ef458cb6b2a8954af3e42334f2d889242af693f897d75cb64329"
+      },
+      "query-rules": {
+        "rows": 20,
+        "verdicts": {
+          "MATCH": 20
+        },
+        "sha256": "4da967ccc03ae030486108ec87e4093f4a7fc28ed3b8b1c996fda725439c9110"
+      },
+      "query-bounds": {
+        "rows": 20,
+        "verdicts": {
+          "MATCH": 20
+        },
+        "sha256": "d226f4bc20a0e58f056bd667f2f087579715620bc21c4c5a5a56b6ecaafc57b4"
+      },
+      "priority": {
+        "rows": 6,
+        "verdicts": {
+          "MATCH": 6
+        },
+        "sha256": "5ea37d29f9d1482005c93fa72902dc2930e113b01e8e10befd8dd56cdd6e0867"
+      },
+      "server-values": {
+        "rows": 10,
+        "verdicts": {
+          "MATCH": 10
+        },
+        "sha256": "2f8eb097b5b8fae26206114f99b817307bb70c5e86f948184519bbfa62964f8b"
+      },
+      "rules-language": {
+        "rows": 16,
+        "verdicts": {
+          "MATCH": 16
+        },
+        "sha256": "18eabde0e202b5ab279466a63ead6e1d6d769560a47e8c536673e3fd7722cb10"
+      },
+      "rules-methods": {
+        "rows": 58,
+        "verdicts": {
+          "MATCH": 58
+        },
+        "sha256": "f571eb5a3d101195a2a7130e6264df042476641f374bd2ee3abe3f2c1bb8c806"
+      },
+      "rules-operators": {
+        "rows": 98,
+        "verdicts": {
+          "MATCH": 98
+        },
+        "sha256": "224fc76a6009f290d9fcb320dcc4e35febcbcf792478acd2043f253af1a60c7c"
+      },
+      "identity": {
+        "cells": 7,
+        "sha256": "557230842459fe3b6cfec943b7ada525051e1aa3183da16296aeb1023f80544a"
+      }
+    }
+  },
+  "sdkCrudScope": "Source-bound official-emulator-fixture smoke only; no production CRUD claim or retained per-event journal.",
+  "scope": "Finite existing recorded shapes only. Mac-specific controls and other API coverage obligations remain pending. Raw framing, trigger breadth and unobserved SDK routes are not promoted by this replay.",
+  "parentClosureClaimed": false
+}

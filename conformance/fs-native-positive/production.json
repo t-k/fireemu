@@ -1,0 +1,1081 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "project": "demo-fs-query-index",
+    "note": "Native captured frames projected with the existing protobuf/REST projection. Canonical database prefix substitution only. Execution metadata retained; this is a candidate archive, not a normalized R21 comparison or a closure claim."
+  },
+  "programs": {
+    "fs-ent-pipeline/native-functions-20261031": {
+      "corpusDigest": "b0355215b4ce41077a6dcdd9fc7c7f0e3febb9008b643f6b9f12c252c360bb6d",
+      "steps": {
+        "minimum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:15:57.543464Z"
+            }
+          ]
+        },
+        "minimum-variadic": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:15:58.73258Z"
+            }
+          ]
+        },
+        "maximum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:15:59.663794Z"
+            }
+          ]
+        },
+        "maximum-variadic": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:16:00.941528Z"
+            }
+          ]
+        },
+        "sum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "14"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:16:01.90523Z"
+            }
+          ]
+        },
+        "negate-int": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "-7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T21:16:02.86808Z"
+            }
+          ]
+        },
+        "cmp-int": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:50.378618Z"
+            }
+          ]
+        },
+        "storage-size-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "4"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:51.430266Z"
+            }
+          ]
+        },
+        "coalesce-null-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "fallback"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:52.439114Z"
+            }
+          ]
+        },
+        "namespace-reference": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:53.441128Z"
+            }
+          ]
+        },
+        "has-ancestor-reference": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:54.506464Z"
+            }
+          ]
+        },
+        "reference-slice": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:55.464553Z"
+            }
+          ]
+        },
+        "autogen-document-id": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "ufpwkROw3G84rJv6ti5Y"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:56.432267Z"
+            }
+          ]
+        },
+        "replace-document-id": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:57.468157Z"
+            }
+          ]
+        },
+        "get-field-map": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:58.471077Z"
+            }
+          ]
+        },
+        "offset-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "20"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:58.847938Z"
+            }
+          ]
+        },
+        "reverse-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "cba"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:15:59.76074Z"
+            }
+          ]
+        },
+        "reverse-bytes": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "bytesValue": "Y2Jh"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:00.649128Z"
+            }
+          ]
+        },
+        "reverse-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:01.611364Z"
+            }
+          ]
+        },
+        "length-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:02.461952Z"
+            }
+          ]
+        },
+        "length-bytes": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:02.664785Z"
+            }
+          ]
+        },
+        "length-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:03.483051Z"
+            }
+          ]
+        },
+        "length-map": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:04.549468Z"
+            }
+          ]
+        },
+        "length-vector": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:05.441795Z"
+            }
+          ]
+        },
+        "string-concat": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "abcd"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:06.455504Z"
+            }
+          ]
+        },
+        "numeric-finite-mixed": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "sum_mixed_double": {
+                      "doubleValue": 30.5
+                    },
+                    "min_array_double": {
+                      "doubleValue": 2
+                    },
+                    "max_variadic_mixed": {
+                      "integerValue": "7"
+                    },
+                    "negate_double": {
+                      "doubleValue": -2.5
+                    },
+                    "max_array_double": {
+                      "doubleValue": 7.5
+                    },
+                    "min_variadic_mixed": {
+                      "doubleValue": 2.5
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T23:19:09.936999Z"
+            }
+          ]
+        },
+        "numeric-null-absent": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "sum_empty": {
+                      "nullValue": null
+                    },
+                    "sum_ignore_nonnumeric": {
+                      "integerValue": "2"
+                    },
+                    "max_variadic_absent": {
+                      "integerValue": "7"
+                    },
+                    "min_variadic_absent": {
+                      "integerValue": "2"
+                    },
+                    "max_array_null": {
+                      "integerValue": "7"
+                    },
+                    "min_array_null": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T23:19:10.81761Z"
+            }
+          ]
+        }
+      },
+      "second": {
+        "minimum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:11.565029Z"
+            }
+          ]
+        },
+        "minimum-variadic": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:12.538845Z"
+            }
+          ]
+        },
+        "maximum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:13.472269Z"
+            }
+          ]
+        },
+        "maximum-variadic": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:14.428778Z"
+            }
+          ]
+        },
+        "sum-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "14"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:15.341771Z"
+            }
+          ]
+        },
+        "negate-int": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "-7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:16.237865Z"
+            }
+          ]
+        },
+        "cmp-int": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "-1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:20.349583Z"
+            }
+          ]
+        },
+        "storage-size-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "4"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:21.268047Z"
+            }
+          ]
+        },
+        "coalesce-null-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "fallback"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:22.181914Z"
+            }
+          ]
+        },
+        "namespace-reference": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": ""
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:23.074279Z"
+            }
+          ]
+        },
+        "has-ancestor-reference": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "booleanValue": true
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:24.087884Z"
+            }
+          ]
+        },
+        "reference-slice": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:24.89639Z"
+            }
+          ]
+        },
+        "autogen-document-id": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "a9RR86To0wMJkeHQcZfJ"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:25.935726Z"
+            }
+          ]
+        },
+        "replace-document-id": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "referenceValue": "projects/demo-fs-query-index/databases/(default)/documents/positive/d2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:26.93089Z"
+            }
+          ]
+        },
+        "get-field-map": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "7"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:27.888353Z"
+            }
+          ]
+        },
+        "offset-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "20"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:28.718902Z"
+            }
+          ]
+        },
+        "reverse-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "cba"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:29.676338Z"
+            }
+          ]
+        },
+        "reverse-bytes": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "bytesValue": "Y2Jh"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:30.650391Z"
+            }
+          ]
+        },
+        "reverse-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "arrayValue": {
+                        "values": [
+                          {
+                            "integerValue": "2"
+                          },
+                          {
+                            "integerValue": "1"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:31.552893Z"
+            }
+          ]
+        },
+        "length-string": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:32.436866Z"
+            }
+          ]
+        },
+        "length-bytes": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "3"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:33.355258Z"
+            }
+          ]
+        },
+        "length-array": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:34.315536Z"
+            }
+          ]
+        },
+        "length-map": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:35.231344Z"
+            }
+          ]
+        },
+        "length-vector": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:36.039625Z"
+            }
+          ]
+        },
+        "string-concat": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "value": {
+                      "stringValue": "abcd"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T22:16:36.964506Z"
+            }
+          ]
+        },
+        "numeric-finite-mixed": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "max_variadic_mixed": {
+                      "integerValue": "7"
+                    },
+                    "negate_double": {
+                      "doubleValue": -2.5
+                    },
+                    "sum_mixed_double": {
+                      "doubleValue": 30.5
+                    },
+                    "max_array_double": {
+                      "doubleValue": 7.5
+                    },
+                    "min_variadic_mixed": {
+                      "doubleValue": 2.5
+                    },
+                    "min_array_double": {
+                      "doubleValue": 2
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T23:19:14.632444Z"
+            }
+          ]
+        },
+        "numeric-null-absent": {
+          "transport": "grpc",
+          "code": 0,
+          "messages": [
+            {
+              "results": [
+                {
+                  "fields": {
+                    "sum_empty": {
+                      "nullValue": null
+                    },
+                    "min_variadic_absent": {
+                      "integerValue": "2"
+                    },
+                    "max_variadic_absent": {
+                      "integerValue": "7"
+                    },
+                    "max_array_null": {
+                      "integerValue": "7"
+                    },
+                    "min_array_null": {
+                      "integerValue": "2"
+                    },
+                    "sum_ignore_nonnumeric": {
+                      "integerValue": "2"
+                    }
+                  }
+                }
+              ],
+              "executionTime": "2026-10-30T23:19:15.476739Z"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "provenance": {
+    "productionJournalSha256": [
+      "5d4f1476841843d8a753c9b3e6afe53836dd42ad49fca3ac401ca49af8012dfd",
+      "a8ca631098ec7891a12e1198302636a2eef25d564d37b4167255c897e07fa803",
+      "06e10e943bcbf6eabd42f0dab9d6f4d923cb3ef2f454e85c1d3eedd8972157ce"
+    ],
+    "codecSha256": "d85b048d7d93e25c1a3d867d6034932d9e70d331bff5268f7e943056297c231a",
+    "projectionSha256": "0f665a00e57ffd09fed301ac6d47cdf93b1d8633536c909eaf5ee06c24aa32d3",
+    "recorderSourceIndexSha256": [
+      "1138b2f2956b15d96ddf34ab7b64cf4d23226fed93a57f384ffea9636605e6b8",
+      "477eaac794dacc94c622f0489c64737754c7ec3315e45ed871bd8841cae42efa",
+      "f6b09cd4d32bfda0dbf2327da38f8881c8ee09aebfeb018f80e25838cee42f85"
+    ],
+    "scope": "27 positive request shapes, twice each; 37 typed fields per round. No local replay, clock equality, failure behavior or parent closure is claimed."
+  }
+}

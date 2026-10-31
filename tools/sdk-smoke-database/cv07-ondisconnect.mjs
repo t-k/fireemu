@@ -2,6 +2,7 @@
 // against a local fireemu and compared with the production recording.
 //
 //   node tools/sdk-smoke-database/cv07-ondisconnect.mjs local --fireemu <binary> --out <new dir> [--modules <node_modules>]
+//   node tools/sdk-smoke-database/cv07-ondisconnect.mjs compare <journal.json> [--out <comparison.json>]
 //   node tools/sdk-smoke-database/cv07-ondisconnect.mjs fixture <production sdk-events.jsonl> <fixture.json>
 //
 // `local` starts `fireemu up --only auth,database` in the strict profile on free loopback ports,
@@ -9,7 +10,7 @@
 // production-live.mjs, unchanged) in headless Chromium for the four flows (round 1 and 2,
 // WebSocket then long polling) and stops the server. It writes `result.json`: the 36 durable SDK
 // events projected on the eight comparison keys, the ordered comparison with the fixture, and the
-// onDisconnect fire delay of each flow in seconds (0.1 s). Raw millisecond timings are not kept.
+// onDisconnect fire delay of each flow in seconds (0.1 s). The local journal retains timings for offline adjudication.
 // `fixture` rebuilds fixtures/production-sdk-ondisconnect.json from the private recording.
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -20,6 +21,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import { sdkScenario } from './production-live.mjs';
+import { assertNoSecrets } from './cv11-genuine-auth.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const FIXTURE = './fixtures/production-sdk-ondisconnect.json';
@@ -83,6 +85,15 @@ export function sanitizeResult({ local, native, fire, nativeFire }) {
     timing: timingJudgement(fire, nativeFire),
     events: projected,
   };
+}
+
+/** Refuse secret-shaped content before retaining a local journal. */
+export const journalText = (events) => assertNoSecrets(`${JSON.stringify(events, null, 1)}\n`, []);
+
+/** Recompute the comparison from the captured local browser events. */
+export function judgeCaptured(events, fixture) {
+  if (!Array.isArray(events)) throw Error('events must be an array');
+  return sanitizeResult({ local: events, native: fixture.events, fire: fireDelays(events), nativeFire: fixture.onDisconnectFireSeconds });
 }
 
 /** The fixture from the private production journal: projected sdk-* events and fire delays. */
@@ -165,8 +176,9 @@ async function runLocal({ fireemu, modules, out }) {
     const rules = await fetch(`${origin}.settings/rules.json?ns=${NAMESPACE}`, { method: 'PUT', headers: { authorization: 'Bearer owner' }, body: JSON.stringify(RULES) });
     if (rules.status !== 200) throw Error(`installing the Rules answered ${rules.status}`);
     const events = await runBrowser({ modules, origin, databaseURL: `${origin}?ns=${NAMESPACE}` });
+    writeFileSync(path.join(out, 'journal.json'), journalText(events), { flag: 'wx' });
     const fixture = JSON.parse(readFileSync(new URL(FIXTURE, import.meta.url), 'utf8'));
-    return sanitizeResult({ local: events, native: fixture.events, fire: fireDelays(events), nativeFire: fixture.onDisconnectFireSeconds });
+    return judgeCaptured(events, fixture);
   } finally {
     child.stdin.end(); // --owner-stdin: closing stdin stops the server
     const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }, 10000);
@@ -183,6 +195,14 @@ async function main(argv) {
     const fixture = fixtureFromRecording(readFileSync(input, 'utf8').trim().split('\n'));
     writeFileSync(output, `${JSON.stringify(fixture, null, 1)}\n`);
     return 0;
+  }
+  if (argv[0] === 'compare' && argv[1]) {
+    const events = JSON.parse(readFileSync(argv[1], 'utf8'));
+    const fixture = JSON.parse(readFileSync(new URL(FIXTURE, import.meta.url), 'utf8'));
+    const result = judgeCaptured(events, fixture);
+    if (opt('--out')) writeFileSync(opt('--out'), `${JSON.stringify(result, null, 1)}\n`, { flag: 'wx' });
+    console.log(JSON.stringify({ matched: result.matched, timing: result.timing }));
+    return result.matched && result.timing.within ? 0 : 1;
   }
   if (argv[0] !== 'local' || !opt('--out') || !opt('--fireemu')) throw Error('usage: local --fireemu <binary> --out <new dir> [--modules <dir>] | fixture <jsonl> <json>');
   const out = opt('--out');

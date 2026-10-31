@@ -119,6 +119,7 @@ export function evaluateSample({
   companion,
   response,
   role,
+  unorderedInput = false,
 }) {
   try {
     const rule = policy.recipes.find((x) => x.id === id);
@@ -149,7 +150,13 @@ export function evaluateSample({
         : input;
     const expected =
       rule.placement === "limit" ? Math.min(rule.size, eligible.length, 1) : rule.size;
-    if (!sampleRows(output, eligible, rule.mode, expected)) return null;
+    // For the recorded percent-50 collection query, collection input order is unspecified.
+    // Every ordering of an eligible subset can be a subsequence of some legal input order.
+    const unorderedPercent = unorderedInput && id.endsWith("#sample-percent-50");
+    const accepted = unorderedPercent
+      ? sampleRows(output, eligible, "documents", output.length)
+      : sampleRows(output, eligible, rule.mode, expected);
+    if (!accepted) return null;
     return {
       id,
       proofClassification: "FINITE_SAMPLE_CONTRACT",

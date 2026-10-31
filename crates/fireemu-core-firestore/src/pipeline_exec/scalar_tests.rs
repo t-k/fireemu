@@ -40,7 +40,7 @@ fn call_in(name: &str, args: &[Eval], unrecorded: Unrecorded, condition: bool) -
         Context {
             unrecorded,
             condition,
-            runtime: RuntimeContext::default(),
+            runtime: &RuntimeContext::default(),
         },
     )
 }
@@ -82,7 +82,8 @@ fn the_table_holds_exactly_the_named_functions() {
     for name in NAMES {
         assert!(function(name).is_some(), "{name}");
     }
-    assert_eq!(NAMES.len(), 54);
+    assert_eq!(NAMES.len(), 55);
+    assert!(function("like").is_some());
     for name in ["exp", "ln", "log", "log10", "trunc"] {
         assert!(function(name).is_some());
     }
@@ -650,10 +651,10 @@ fn argument_counts_are_refused_in_the_words_production_used() {
         refusal("round", 3),
         arity("The function 'round' does not accept 3 argument(s). Valid options are:\n- round[T <: number](number: T): T with [1..1] argument(s).\n- round[T <: number](number: T, places: int64): T with [2..2] argument(s).")
     );
-    // `ltrim` and `rtrim` have no recorded signature: fireemu's own words.
+    // Production records both overload signatures for `ltrim` and `rtrim`.
     for name in ["ltrim", "rtrim"] {
-        assert!(matches!(refusal(name, 0), ExprError::Invalid(_)), "{name}");
-        assert!(matches!(refusal(name, 3), ExprError::Invalid(_)), "{name}");
+        assert!(matches!(refusal(name, 0), ExprError::Arity(_)), "{name}");
+        assert!(matches!(refusal(name, 3), ExprError::Arity(_)), "{name}");
         assert!(Expr::call(
             name,
             vec![Expr::Constant(Value::Integer(1))],
@@ -2219,6 +2220,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     assert!(cursor
@@ -2246,6 +2248,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
             zone_resolver: None,
             regex_resolver: None,
             sample_seed: None,
+            expr_rng: None,
         },
     );
     second.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2274,6 +2277,7 @@ fn timestamp_request_clock_is_stable_through_nested_and_blocking_stages() {
                 zone_resolver: None,
                 regex_resolver: None,
                 sample_seed: None,
+                expr_rng: None,
             },
         );
         blocking.push(Row::derived(BTreeMap::new())).unwrap();
@@ -2333,6 +2337,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         zone_resolver: Some(resolve),
         regex_resolver: None,
         sample_seed: None,
+        expr_rng: None,
     };
     let stages = vec![Stage::Select {
         aliases: vec![
@@ -2347,7 +2352,7 @@ fn timestamp_named_zone_uses_injected_resolver_and_refuses_when_missing() {
         ],
         keeps_name: false,
     }];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     let out = cursor.push(row).unwrap();
     assert_eq!(
         out[0].fields["t"],
@@ -2466,7 +2471,7 @@ fn regex_invalid_inputs_and_unobserved_grammar_never_call_the_resolver() {
     let cx = Context {
         unrecorded: Unrecorded::Refuse,
         condition: false,
-        runtime: RuntimeContext {
+        runtime: &RuntimeContext {
             regex_resolver: Some(unexpected),
             ..RuntimeContext::default()
         },
@@ -2508,7 +2513,7 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             keeps_name: false,
         },
     ];
-    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime);
+    let mut cursor = Cursor::new_in_with_runtime(stages, Unrecorded::Refuse, runtime.clone());
     assert!(cursor
         .push(Row::derived(BTreeMap::new()))
         .unwrap()
@@ -2532,7 +2537,8 @@ fn regex_resolver_reaches_nested_and_blocking_stages() {
             )],
         },
     ] {
-        let mut buffered = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime);
+        let mut buffered =
+            Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime.clone());
         assert!(buffered
             .push(Row::derived(BTreeMap::new()))
             .unwrap()
@@ -2574,7 +2580,7 @@ fn regex_port_maps_syntax_resource_and_incompatible_results() {
         let cx = Context {
             unrecorded: mode,
             condition: false,
-            runtime: RuntimeContext {
+            runtime: &RuntimeContext {
                 regex_resolver: Some(resolver),
                 ..RuntimeContext::default()
             },
@@ -3901,4 +3907,636 @@ fn vector_scalars_finite_cancellation_nan_and_underflow_are_bounded() {
         "cosine_distance",
         &[tiny.clone(), tiny]
     )));
+}
+
+#[test]
+fn map_odd_argument_count_is_an_arity_error() {
+    let result = Expr::call(
+        "map",
+        vec![Expr::Constant(Value::String("k".into()))],
+        Placement::Value,
+    );
+    assert!(
+        matches!(result, Err(ExprError::Arity(message)) if message == "'map' function must have an even number of arguments")
+    );
+    assert!(Expr::call("map", vec![], Placement::Value).is_ok());
+    assert!(Expr::call(
+        "map",
+        vec![
+            Expr::Constant(Value::String("k".into())),
+            Expr::Constant(Value::Integer(1))
+        ],
+        Placement::Value
+    )
+    .is_ok());
+}
+
+#[test]
+fn numeric_scalar_recorded_integer_forms() {
+    let values = array(vec![
+        Value::Integer(7),
+        Value::Integer(2),
+        Value::Integer(5),
+    ]);
+    for (name, expected) in [("minimum", 2), ("maximum", 7)] {
+        assert_eq!(both(name, std::slice::from_ref(&values)), int(expected));
+        assert_eq!(both(name, &[int(7), int(2)]), int(expected));
+    }
+    assert_eq!(both("sum", &[values]), int(14));
+    assert_eq!(both("negate", &[int(7)]), int(-7));
+}
+
+#[test]
+fn numeric_scalar_unobserved_inputs_are_refused() {
+    assert!(is_unobserved(&strict(
+        "sum",
+        &[array(vec![Value::Integer(i64::MAX), Value::Integer(1)])]
+    )));
+    assert!(is_unobserved(&strict("negate", &[int(i64::MIN)])));
+    assert!(is_unobserved(&strict("negate", &[text("x")])));
+}
+
+#[test]
+fn numeric_scalar_pict_rows() {
+    let cases = [
+        ("minimum", "array", "integers"),
+        ("minimum", "variadic", "integers"),
+        ("maximum", "array", "integers"),
+        ("maximum", "variadic", "integers"),
+        ("sum", "array", "integers"),
+        ("negate", "scalar", "integers"),
+        ("maximum", "array", "empty"),
+        ("sum", "array", "empty"),
+        ("sum", "array", "overflow"),
+        ("minimum", "array", "wrong_type"),
+        ("minimum", "variadic", "overflow"),
+        ("sum", "array", "wrong_type"),
+        ("negate", "scalar", "overflow"),
+        ("minimum", "array", "empty"),
+        ("maximum", "variadic", "wrong_type"),
+        ("negate", "scalar", "wrong_type"),
+        ("maximum", "variadic", "overflow"),
+    ];
+    for (name, shape, input) in cases {
+        let values = match input {
+            "integers" => vec![Value::Integer(7), Value::Integer(2)],
+            "empty" => vec![],
+            "wrong_type" => vec![Value::Null, Value::Integer(2)],
+            "overflow" => vec![Value::Integer(i64::MAX), Value::Integer(1)],
+            _ => unreachable!(),
+        };
+        let args = match shape {
+            "array" => vec![array(values)],
+            "variadic" => values.into_iter().map(Eval::Value).collect(),
+            "scalar" if input == "integers" => vec![int(7)],
+            "scalar" if input == "overflow" => vec![int(i64::MIN)],
+            "scalar" => vec![null()],
+            _ => unreachable!(),
+        };
+        let actual = strict(name, &args);
+        if (input == "wrong_type" && name == "negate")
+            || (input == "overflow" && (name == "sum" || name == "negate"))
+        {
+            assert!(is_unobserved(&actual), "{name} {shape} {input}: {actual:?}");
+        } else {
+            if input == "empty" {
+                assert_eq!(actual, null(), "{name} {shape} {input}");
+                continue;
+            }
+            let expected = match (name, input) {
+                (_, "wrong_type") | ("minimum", "integers") => 2,
+                ("maximum", "integers") => 7,
+                ("minimum", "overflow") => 1,
+                ("maximum", "overflow") => i64::MAX,
+                ("sum", "integers") => 9,
+                ("negate", "integers") => -7,
+                _ => unreachable!(),
+            };
+            assert_eq!(actual, int(expected), "{name} {shape} {input}");
+        }
+    }
+}
+
+#[test]
+fn at_least_arity_is_bounded() {
+    for name in ["minimum", "maximum"] {
+        assert!(
+            matches!(
+                Expr::call(name, vec![], Placement::Value),
+                Err(ExprError::Arity(_))
+            ),
+            "{name}"
+        );
+    }
+    for function in FUNCTIONS
+        .iter()
+        .filter(|f| matches!(f.arity, Arity::AtLeast(_)))
+    {
+        let Arity::AtLeast(minimum) = function.arity else {
+            unreachable!()
+        };
+        if minimum > 0 {
+            assert!(
+                Expr::call(
+                    function.name,
+                    vec![Expr::Constant(Value::Integer(1)); minimum - 1],
+                    Placement::Value
+                )
+                .is_err(),
+                "{}",
+                function.name
+            );
+        }
+    }
+}
+
+#[test]
+fn arity_review_pict_rows() {
+    let rows = [
+        ("minimum", 0, false),
+        ("maximum", 0, false),
+        ("minimum", 0, true),
+        ("maximum", 0, true),
+        ("map", 0, false),
+        ("concat", 2, false),
+        ("minimum", 1, true),
+        ("map", 1, false),
+        ("maximum", 2, true),
+        ("maximum", 1, true),
+        ("concat", 0, true),
+        ("minimum", 2, true),
+        ("concat", 1, false),
+        ("map", 2, true),
+    ];
+    for (name, count, condition) in rows {
+        let placement = if condition {
+            Placement::Condition
+        } else {
+            Placement::Value
+        };
+        let result = Expr::call(
+            name,
+            vec![Expr::Constant(Value::Integer(1)); count],
+            placement,
+        );
+        if condition {
+            assert!(
+                matches!(result, Err(ExprError::Unsupported(_))),
+                "{name} {count}"
+            );
+        } else if ((name == "minimum" || name == "maximum") && count == 0)
+            || (name == "map" && count % 2 == 1)
+            || (name == "concat" && count < 2)
+        {
+            assert!(
+                matches!(result, Err(ExprError::Arity(_))),
+                "{name} {count}: {result:?}"
+            );
+        } else {
+            assert!(result.is_ok(), "{name} {count}: {result:?}");
+        }
+    }
+}
+
+#[test]
+fn observed_generic_sequence_and_map_forms() {
+    let map = Value::Map(
+        [("answer".to_owned(), Value::Integer(7))]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(both("cmp", &[int(2), int(7)]), int(-1));
+    assert_eq!(both("storage_size", &[text("abc")]), int(4));
+    assert_eq!(
+        both("get_field", &[Eval::Value(map.clone()), text("answer")]),
+        int(7)
+    );
+    assert_eq!(
+        both(
+            "offset",
+            &[array(vec![Value::Integer(10), Value::Integer(20)]), int(1)]
+        ),
+        int(20)
+    );
+    assert_eq!(both("reverse", &[text("abc")]), text("cba"));
+    assert_eq!(both("reverse", &[bytes(b"abc")]), bytes(b"cba"));
+    assert_eq!(
+        both(
+            "reverse",
+            &[array(vec![Value::Integer(1), Value::Integer(2)])]
+        ),
+        array(vec![Value::Integer(2), Value::Integer(1)])
+    );
+    for (value, expected) in [
+        (text("abc"), 3),
+        (bytes(b"abc"), 3),
+        (array(vec![Value::Integer(1), Value::Integer(2)]), 2),
+        (Eval::Value(map), 1),
+        (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2),
+    ] {
+        assert_eq!(both("length", &[value]), int(expected));
+    }
+    assert_eq!(
+        both("string_concat", &[text("ab"), text("cd")]),
+        text("abcd")
+    );
+}
+
+#[test]
+fn observed_reference_forms_and_autogen_id() {
+    let parent = "projects/p/databases/(default)/documents/positive/d1";
+    let child = format!("{parent}/children/c1");
+    let reference = |s: &str| Eval::Value(Value::Reference(s.to_owned()));
+    assert_eq!(both("namespace", &[reference(parent)]), text(""));
+    assert_eq!(
+        both("has_ancestor", &[reference(&child), reference(parent)]),
+        Eval::Value(Value::Boolean(true))
+    );
+    assert_eq!(
+        both("reference_slice", &[reference(&child), int(0), int(1)]),
+        reference(parent)
+    );
+    assert_eq!(
+        both("replace_document_id", &[reference(parent), text("d2")]),
+        reference("projects/p/databases/(default)/documents/positive/d2")
+    );
+    let runtime = RuntimeContext {
+        expr_rng: Some(Arc::new(Mutex::new(SplitMix64::new(7)))),
+        ..RuntimeContext::default()
+    };
+    let cx = Context {
+        unrecorded: Unrecorded::Refuse,
+        condition: false,
+        runtime: &runtime,
+    };
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let Eval::Value(Value::String(id)) =
+            (function("autogen_document_id").unwrap().eval)(&[], cx)
+        else {
+            panic!("expected ID")
+        };
+        assert_eq!(id.len(), 20);
+        assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
+        ids.push(id);
+    }
+    assert_ne!(ids[0], ids[1]);
+}
+
+#[test]
+fn observed_replace_document_id_refuses_descendant_paths() {
+    for path in [
+        "projects/p/databases/(default)/documents/positive/d1",
+        "projects/p/databases/(default)/documents/positive/d1/children/c1",
+    ] {
+        let result = both(
+            "replace_document_id",
+            &[
+                Eval::Value(Value::Reference(path.to_owned())),
+                text("d2/children/c1"),
+            ],
+        );
+        assert!(matches!(
+            result,
+            Eval::Error(EvalError::Unobserved {
+                function: "replace_document_id",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn observed_coalesce_is_lazy_and_skips_null_and_absent() {
+    let row = Row::derived(BTreeMap::new());
+    let constant = |value| Expr::Constant(value);
+    let call = |args| Expr::call("coalesce", args, Placement::Value).unwrap();
+    for mode in [Unrecorded::Refuse, Unrecorded::OfficialEmulator] {
+        assert_eq!(
+            call(vec![
+                constant(Value::Null),
+                constant(Value::String("fallback".into()))
+            ])
+            .eval_in(&row, mode),
+            text("fallback")
+        );
+        let absent = Expr::Field(FieldPath::parse("missing").unwrap());
+        assert_eq!(
+            call(vec![constant(Value::Null), absent.clone()]).eval_in(&row, mode),
+            Eval::Absent
+        );
+        assert_eq!(
+            call(vec![absent, constant(Value::Integer(7))]).eval_in(&row, mode),
+            int(7)
+        );
+        let error = Expr::call(
+            "divide",
+            vec![constant(Value::Integer(1)), constant(Value::Integer(0))],
+            Placement::Value,
+        )
+        .unwrap();
+        assert_eq!(
+            call(vec![constant(Value::Integer(7)), error]).eval_in(&row, mode),
+            int(7)
+        );
+    }
+}
+
+#[test]
+fn observed_generic_sequence_pict_rows() {
+    let rows = [
+        ("reverse", "string", "strict"),
+        ("reverse", "bytes", "strict"),
+        ("reverse", "array", "strict"),
+        ("length", "string", "strict"),
+        ("length", "bytes", "strict"),
+        ("length", "array", "strict"),
+        ("length", "map", "strict"),
+        ("length", "vector", "strict"),
+        ("reverse", "string", "emulator"),
+        ("length", "vector", "emulator"),
+        ("reverse", "array", "emulator"),
+        ("length", "bytes", "emulator"),
+        ("length", "map", "emulator"),
+    ];
+    for (name, kind, profile) in rows {
+        let (input, length, reversed) = match kind {
+            "string" => (text("abc"), 3, text("cba")),
+            "bytes" => (bytes(b"abc"), 3, bytes(b"cba")),
+            "array" => (
+                array(vec![Value::Integer(1), Value::Integer(2)]),
+                2,
+                array(vec![Value::Integer(2), Value::Integer(1)]),
+            ),
+            "map" => (
+                Eval::Value(Value::Map(
+                    [("answer".to_owned(), Value::Integer(7))]
+                        .into_iter()
+                        .collect(),
+                )),
+                1,
+                Eval::Absent,
+            ),
+            "vector" => (Eval::Value(Value::Vector(vec![1.0, 2.0])), 2, Eval::Absent),
+            _ => unreachable!(),
+        };
+        let actual = if profile == "strict" {
+            strict(name, &[input])
+        } else {
+            emulator(name, &[input])
+        };
+        assert_eq!(
+            actual,
+            if name == "length" {
+                int(length)
+            } else {
+                reversed
+            },
+            "{name} {kind} {profile}"
+        );
+    }
+}
+
+#[test]
+fn observed_generic_unrecorded_boundaries_and_arity_are_bounded() {
+    assert!(is_unobserved(&strict(
+        "get_field",
+        &[Eval::Value(Value::Map(BTreeMap::new())), text("missing")]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(-1)]
+    )));
+    assert!(is_unobserved(&strict(
+        "offset",
+        &[array(vec![Value::Integer(1)]), int(1)]
+    )));
+    assert!(is_unobserved(&strict("reverse", &[int(1)])));
+    for (name, count) in [
+        ("cmp", 2),
+        ("storage_size", 1),
+        ("get_field", 2),
+        ("offset", 2),
+        ("reverse", 1),
+        ("length", 1),
+        ("string_concat", 2),
+        ("coalesce", 2),
+        ("namespace", 1),
+        ("has_ancestor", 2),
+        ("reference_slice", 3),
+        ("replace_document_id", 2),
+    ] {
+        assert!(
+            Expr::call(
+                name,
+                vec![Expr::Constant(Value::Null); count - 1],
+                Placement::Value
+            )
+            .is_err(),
+            "{name}"
+        );
+    }
+    assert!(Expr::call(
+        "autogen_document_id",
+        vec![Expr::Constant(Value::Null)],
+        Placement::Value
+    )
+    .is_err());
+}
+
+#[test]
+fn numeric_scalar_domain_pict_rows() {
+    let cases = [
+        ("minimum", "array", "integers", "strict"),
+        ("minimum", "array", "doubles", "strict"),
+        ("maximum", "array", "doubles", "strict"),
+        ("minimum", "variadic", "mixed", "strict"),
+        ("maximum", "variadic", "mixed", "strict"),
+        ("sum", "array", "mixed", "strict"),
+        ("negate", "scalar", "doubles", "strict"),
+        ("minimum", "array", "null", "strict"),
+        ("maximum", "array", "null", "strict"),
+        ("minimum", "variadic", "absent", "strict"),
+        ("maximum", "variadic", "absent", "strict"),
+        ("sum", "array", "nonnumeric", "strict"),
+        ("sum", "array", "empty", "strict"),
+        ("sum", "array", "integers", "strict"),
+        ("sum", "array", "overflow", "strict"),
+        ("negate", "scalar", "integers", "emulator"),
+        ("minimum", "variadic", "nonnumeric", "emulator"),
+        ("maximum", "variadic", "overflow", "emulator"),
+        ("sum", "array", "doubles", "emulator"),
+        ("negate", "scalar", "overflow", "emulator"),
+        ("maximum", "variadic", "integers", "emulator"),
+        ("sum", "array", "null", "emulator"),
+        ("maximum", "array", "nonnumeric", "strict"),
+        ("maximum", "array", "mixed", "emulator"),
+        ("maximum", "array", "empty", "emulator"),
+        ("maximum", "variadic", "doubles", "emulator"),
+        ("minimum", "variadic", "overflow", "emulator"),
+        ("minimum", "array", "empty", "emulator"),
+        ("minimum", "variadic", "absent", "emulator"),
+        ("minimum", "variadic", "null", "emulator"),
+    ];
+    for (name, shape, input, profile) in cases {
+        let values = match input {
+            "integers" => vec![int(7), int(2)],
+            "doubles" => vec![dbl(7.5), dbl(2.0)],
+            "mixed" => vec![int(7), dbl(2.5)],
+            "null" => vec![null(), int(2)],
+            "absent" => vec![Eval::Absent, int(7), int(2)],
+            "empty" => vec![],
+            "nonnumeric" => vec![null(), int(2), text("x")],
+            "overflow" => vec![int(i64::MAX), int(1)],
+            _ => unreachable!(),
+        };
+        let args = match shape {
+            "array" => vec![array(
+                values
+                    .into_iter()
+                    .map(|v| match v {
+                        Eval::Value(value) => value,
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+            )],
+            "variadic" => values,
+            "scalar" if input == "overflow" => vec![int(i64::MIN)],
+            "scalar" => vec![values[0].clone()],
+            _ => unreachable!(),
+        };
+        let actual = call_in(
+            name,
+            &args,
+            if profile == "strict" {
+                Unrecorded::Refuse
+            } else {
+                Unrecorded::OfficialEmulator
+            },
+            false,
+        );
+        if (input == "overflow" && (name == "sum" || name == "negate"))
+            || (input == "nonnumeric" && (name == "minimum" || name == "maximum"))
+        {
+            assert!(
+                is_unobserved(&actual),
+                "{name} {shape} {input} {profile}: {actual:?}"
+            );
+            continue;
+        }
+        let expected = match (name, input) {
+            (_, "empty") => null(),
+            ("minimum", "doubles") => dbl(2.0),
+            ("maximum", "doubles") => dbl(7.5),
+            ("sum", "doubles" | "mixed") => dbl(9.5),
+            ("negate", "doubles") => dbl(-7.5),
+            ("minimum", "mixed") => dbl(2.5),
+            ("minimum", "overflow") => int(1),
+            ("maximum", "overflow") => int(i64::MAX),
+            ("sum", "null" | "nonnumeric") | ("maximum", "null") | ("minimum", _) => int(2),
+            ("maximum", _) => int(7),
+            ("sum", "integers") => int(9),
+            ("negate", "integers") => int(-7),
+            _ => unreachable!("{name} {input}"),
+        };
+        assert_eq!(actual, expected, "{name} {shape} {input} {profile}");
+    }
+}
+
+#[test]
+fn numeric_scalar_native_domain_and_boundaries() {
+    for (name, args, expected) in [
+        (
+            "minimum",
+            vec![array(vec![Value::Double(7.5), Value::Double(2.0)])],
+            dbl(2.0),
+        ),
+        (
+            "maximum",
+            vec![array(vec![Value::Double(7.5), Value::Double(2.0)])],
+            dbl(7.5),
+        ),
+        ("minimum", vec![int(7), dbl(2.5)], dbl(2.5)),
+        ("maximum", vec![int(7), dbl(2.5)], int(7)),
+        (
+            "sum",
+            vec![array(vec![Value::Integer(10), Value::Double(20.5)])],
+            dbl(30.5),
+        ),
+        ("negate", vec![dbl(2.5)], dbl(-2.5)),
+        (
+            "minimum",
+            vec![array(vec![Value::Null, Value::Integer(2)])],
+            int(2),
+        ),
+        (
+            "maximum",
+            vec![array(vec![Value::Null, Value::Integer(7)])],
+            int(7),
+        ),
+        ("minimum", vec![Eval::Absent, int(2)], int(2)),
+        ("maximum", vec![Eval::Absent, int(7)], int(7)),
+        (
+            "sum",
+            vec![array(vec![
+                Value::Null,
+                Value::Integer(2),
+                Value::String("x".into()),
+            ])],
+            int(2),
+        ),
+        ("sum", vec![array(vec![])], null()),
+    ] {
+        assert_eq!(both(name, &args), expected, "{name} {args:?}");
+    }
+    for name in ["minimum", "maximum"] {
+        assert_eq!(both(name, &[null(), Eval::Absent]), null());
+        assert_eq!(both(name, &[array(vec![Value::Null])]), null());
+        assert_eq!(both(name, &[array(vec![])]), null());
+    }
+    let exact = 9_007_199_254_740_993;
+    assert_eq!(
+        both("maximum", &[int(exact), dbl(9_007_199_254_740_992.0)]),
+        int(exact)
+    );
+    assert_eq!(
+        both("minimum", &[int(exact), dbl(9_007_199_254_740_992.0)]),
+        dbl(9_007_199_254_740_992.0)
+    );
+    assert_eq!(
+        both(
+            "sum",
+            &[array(vec![Value::Null, Value::String("x".into())])]
+        ),
+        null()
+    );
+    assert_eq!(
+        both(
+            "sum",
+            &[array(vec![
+                Value::Double(0.0),
+                Value::Integer(i64::MAX),
+                Value::Integer(1)
+            ])]
+        ),
+        dbl(9_223_372_036_854_775_808.0)
+    );
+    assert!(is_unobserved(&both(
+        "sum",
+        &[array(vec![
+            Value::Integer(i64::MAX),
+            Value::Integer(1),
+            Value::Double(0.0)
+        ])]
+    )));
+    for name in ["minimum", "maximum", "sum", "negate"] {
+        let error = Eval::Error(EvalError::Invalid("upstream".into()));
+        assert_eq!(both(name, std::slice::from_ref(&error)), error);
+    }
+}
+
+#[test]
+fn sum_scalar_preserves_unrecorded_long_type() {
+    assert!(is_unobserved(&strict("sum", &[int(7)])));
+    assert_eq!(strict("sum", &[array(vec![Value::Integer(7)])]), int(7));
 }

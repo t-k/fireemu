@@ -14,7 +14,7 @@ cases=[
  ('geo_profile',service,'} else if self.gateway.production_refusals()\n                            && recorded_geo_select(request.get_ref(), &error)','} else if recorded_geo_select(request.get_ref(), &error)','recorded_geo_select_grpc_refusal_is_search_only_in_strict'),
  ('ordered_optin',rest,'if recorded_select_first {','if false && recorded_select_first {','recorded_error_info_matches_original_rest'),
  ('ordered_default',core,'recorded_select_first_wrong_type: false,','recorded_select_first_wrong_type: true,','ordered_select_first_refusal_is_default_off_and_type_bounded'),
- ('reference_offset','crates/fireemu-adapter-grpc/tests/pipeline_replay.rs','Some(resource[..empty + 1].encode_utf16().count())','Some(resource[..empty + 2].encode_utf16().count())','reference_environment_comparison_checks_both_offsets_and_suffix'),
+ ('reference_offset','crates/fireemu-adapter-grpc/tests/pipeline_replay.rs','Some(resource[..=empty].encode_utf16().count())','Some(resource[..empty + 2].encode_utf16().count())','reference_environment_comparison_checks_both_offsets_and_suffix'),
  ('ordered_type',core,'function: "collection_id",\n                                            expected: "Reference",\n                                            got: "STRING"','function: "collection_id",\n                                            expected: _,\n                                            got: _','ordered_select_first_refusal_is_default_off_and_type_bounded'),
 ]
 out=Path('/tmp/o5-remaining-mutants');out.mkdir(exist_ok=True);results=[]

@@ -5,19 +5,30 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  mutation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 5bddc78300d82b10cd3cfa84c9966f6b688eb0ff
           fetch-depth: 0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: .ci-helper
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
           test "$(git rev-parse HEAD)" = 5bddc78300d82b10cd3cfa84c9966f6b688eb0ff
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-core-firestore --profile pr --locked -E 'test(ordered_select_first_refusal_is_default_off_and_type_bounded)'
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(reference_environment_comparison_checks_both_offsets_and_suffix) | test(recorded_empty_reference_index_tracks_each_actual_resource) | test(generated_remaining_recorded_boundaries_use_real_routes) | test(recorded_error_info_matches_original_rest) | test(recorded_error_info_preserves_unobserved_and_empty_boundaries) | test(document_id_unrecorded_option_shapes_remain_closed) | test(recorded_geo_select_grpc_refusal_is_search_only_in_strict) | test(generated_context_and_bit_boundaries_use_real_routes)'
-          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features --locked -- -D warnings
+          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" python3 .ci-helper/.github/temporary/remaining_mutations.py
+      - name: Preserve mutation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: o5-remaining-clean-mutations
+          path: /tmp/o5-remaining-mutants/
+          if-no-files-found: warn

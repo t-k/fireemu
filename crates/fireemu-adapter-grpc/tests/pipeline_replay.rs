@@ -1463,6 +1463,84 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn generated_context_and_bit_boundaries_use_real_routes() {
+    use fireemu_adapter_grpc::service::GatewayService;
+    use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;
+    let table = "bit	zero	empty	select	strict	grpc\nbit	recorded_integer	empty	select	strict	grpc\nbit	recorded_integer	empty	select	ordinary	grpc\nbit	recorded_integer	empty	select	strict	rest\ntext	zero	empty	select	ordinary	rest\ngeo	zero	empty	select	strict	grpc\nscore	zero	empty	select	strict	rest\nunknown	zero	empty	select	ordinary	grpc\nbit	recorded_integer	nonempty	select	strict	grpc\nbit	recorded_integer	empty	nested	strict	grpc\ntext	other	nonempty	nested	ordinary	rest\ntext	other	nonempty	where	strict	grpc\ngeo	recorded_integer	nonempty	where	ordinary	rest\nscore	other	empty	where	ordinary	grpc\ntext	recorded_integer	empty	where	strict	grpc\ngeo	other	nonempty	nested	ordinary	rest\nscore	zero	nonempty	nested	ordinary	grpc\nbit	other	nonempty	select	strict	grpc\nunknown	zero	nonempty	where	strict	rest\nunknown	recorded_integer	empty	nested	strict	rest\nscore	recorded_integer	empty	select	strict	grpc\nbit	other	nonempty	where	strict	grpc\nunknown	other	nonempty	where	strict	grpc";
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for line in table.lines() {
+        let parts: Vec<_> = line.split('\t').collect();
+        let [family, arity, options, context, profile, transport] = parts.as_slice() else {
+            panic!("bad PICT row")
+        };
+        let name = match *family {
+            "bit" => "bit_left_shift",
+            "text" => "matches",
+            "geo" => "geo_distance",
+            "score" => "score",
+            _ => "missing_fn",
+        };
+        let args = match *arity {
+            "zero" => vec![],
+            "recorded_integer" => vec![json!({"integerValue":"5"}), json!({"integerValue":"1"})],
+            _ => vec![json!({"stringValue":"bad"})],
+        };
+        let mut function = json!({"name":name,"args":args});
+        if *options == "nonempty" {
+            function["options"] = json!({"x":{"integerValue":"1"}});
+        }
+        let mut expression = json!({"functionValue":function});
+        if *context == "nested" {
+            expression = json!({"functionValue":{"name":"array","args":[expression]}});
+        }
+        let stage = if *context == "where" {
+            json!({"name":"where","args":[expression]})
+        } else {
+            json!({"name":"select","args":[{"mapValue":{"fields":{"value":expression}}}]})
+        };
+        let body = json!({"structuredPipeline":{"pipeline":{"stages":[{"name":"collection","args":[{"referenceValue":"/positive"}]},stage]}}});
+        let strict = *profile == "strict";
+        let state = state(strict);
+        let code = if *transport == "grpc" {
+            let request = fireemu_adapter_grpc::rest::pipeline_json::request_from_json(
+                "projects/demo-app/databases/(default)",
+                &body,
+            )
+            .unwrap();
+            let service = GatewayService::local((*state.gateway).clone(), Arc::clone(&state.local));
+            rt.block_on(async {
+                match Firestore::execute_pipeline(&service, tonic::Request::new(request)).await {
+                    Err(error) => error.code(),
+                    Ok(_) => tonic::Code::Ok,
+                }
+            })
+        } else {
+            let (status, _) = call(&state, "POST", &format!("{DOCS}:executePipeline"), &body);
+            match status {
+                500 => tonic::Code::Internal,
+                400 => tonic::Code::InvalidArgument,
+                501 => tonic::Code::Unimplemented,
+                _ => tonic::Code::Ok,
+            }
+        };
+        let captured_bit = *family == "bit"
+            && *arity == "recorded_integer"
+            && *options == "empty"
+            && *context == "select"
+            && strict
+            && *transport == "grpc";
+        if captured_bit {
+            assert_eq!(code, tonic::Code::Internal, "{line}");
+        } else {
+            assert_ne!(code, tonic::Code::Internal, "{line}");
+        }
+    }
+}
+
+#[test]
 fn recorded_bit_integer_grpc_refusals_are_internal_only_in_strict() {
     use fireemu_adapter_grpc::service::GatewayService;
     use fireemu_proto_firestore::google::firestore::v1::firestore_server::Firestore;

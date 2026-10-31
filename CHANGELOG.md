@@ -16,6 +16,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Fixed
 
 - Pipeline argument-count, unknown-function and suggestion diagnostics match additional recorded request shapes. Suggestions remain error messages and do not introduce function aliases. Unrecorded arguments, options and contexts retain their existing fallback behavior.
+- Strict native gRPC reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`, with a fixed explanation in the console. This establishes error compatibility for those forms, rather than successful bit-operation semantics.
 - Realtime Database Rules compare the root authentication value equal to itself, matching the recorded production case. This does not change snapshot or query identity semantics.
 
 ## [0.40.0] - 2026-10-31

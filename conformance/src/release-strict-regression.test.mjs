@@ -2721,12 +2721,18 @@ test("R21 compares the recorded v0.41 baseline and rejects altered exports", () 
     runIds: ["R21"],
   };
   assert.equal(current.rows.length, 1951);
-  assert.deepEqual(current.summary, { MATCH: 1906, MISMATCH: 26, MATCH_NONDETERMINISTIC: 17, UNKNOWN: 2 });
+  assert.deepEqual(current.summary, {
+    MATCH: 1906,
+    MISMATCH: 26,
+    MATCH_NONDETERMINISTIC: 17,
+    UNKNOWN: 2,
+  });
   for (const status of [false, true]) {
     for (const missing of [false, true]) {
       for (const binary of [false, true]) {
         const observed = { ...structuredClone(current), artifactSha256: BINARY };
-        if (status) observed.rows[0].status = observed.rows[0].status === "MATCH" ? "UNKNOWN" : "MATCH";
+        if (status)
+          observed.rows[0].status = observed.rows[0].status === "MATCH" ? "UNKNOWN" : "MATCH";
         if (missing) observed.rows.pop();
         if (binary) observed.artifactSha256 = "0".repeat(64);
         const errors = judge(comparison, { R21: observed }, { binarySha256: BINARY, readJson });
@@ -2739,19 +2745,30 @@ test("R21 compares the recorded v0.41 baseline and rejects altered exports", () 
     (x) => x.rows.push({ row: "unexpected", status: "MATCH" }),
     (x) => x.rows.find((row) => row.status === "MISMATCH").differences.push("unexpected"),
     (x) => x.summary.MATCH--,
-    (x) => x.fixtureSha256 = "0".repeat(64),
+    (x) => (x.fixtureSha256 = "0".repeat(64)),
   ]) {
     const observed = { ...structuredClone(current), artifactSha256: BINARY };
     change(observed);
-    assert.notDeepEqual(judge(comparison, { R21: observed }, { binarySha256: BINARY, readJson }), []);
+    assert.notDeepEqual(
+      judge(comparison, { R21: observed }, { binarySha256: BINARY, readJson }),
+      [],
+    );
   }
-  assert.throws(() => judge(comparison, {}, {
-    binarySha256: BINARY,
-    readJson: (requested) => {
-      if (requested === path) throw new Error("missing v041 snapshot");
-      return readJson(requested);
-    },
-  }), /missing v041 snapshot/);
+  assert.throws(
+    () =>
+      judge(
+        comparison,
+        {},
+        {
+          binarySha256: BINARY,
+          readJson: (requested) => {
+            if (requested === path) throw new Error("missing v041 snapshot");
+            return readJson(requested);
+          },
+        },
+      ),
+    /missing v041 snapshot/,
+  );
 });
 
 test("R21 v0.40 promotes only recorded empty constructors", () => {
@@ -2780,10 +2797,12 @@ test("R21 v0.40 promotes only recorded empty constructors", () => {
     kind: current.kind,
     runIds: ["R21"],
   };
-  const historicalReadJson = (path) => readJson(
-    path === "conformance/fs-ent-pipeline-v041-comparison.json"
-      ? "conformance/fs-ent-pipeline-release-v040.json" : path,
-  );
+  const historicalReadJson = (path) =>
+    readJson(
+      path === "conformance/fs-ent-pipeline-v041-comparison.json"
+        ? "conformance/fs-ent-pipeline-release-v040.json"
+        : path,
+    );
   const valid = { ...structuredClone(current), artifactSha256: BINARY };
   assert.throws(
     () =>
@@ -2807,7 +2826,10 @@ test("R21 v0.40 promotes only recorded empty constructors", () => {
   ]) {
     const broken = structuredClone(valid);
     change(broken);
-    assert.notDeepEqual(judge(comparison, { R21: broken }, { binarySha256: BINARY, readJson: historicalReadJson }), []);
+    assert.notDeepEqual(
+      judge(comparison, { R21: broken }, { binarySha256: BINARY, readJson: historicalReadJson }),
+      [],
+    );
   }
   const lines = readFileSync(new URL("./v040-r21.generated.tsv", import.meta.url), "utf8")
     .trim()
@@ -2826,7 +2848,11 @@ test("R21 v0.40 promotes only recorded empty constructors", () => {
     if (mutation === "rows") observed.rows.pop();
     if (mutation === "fixture") observed.fixtureSha256 = "0".repeat(64);
     if (mutation === "artifact") observed.artifactSha256 = "0".repeat(64);
-    const errors = judge(comparison, { R21: observed }, { binarySha256: BINARY, readJson: historicalReadJson });
+    const errors = judge(
+      comparison,
+      { R21: observed },
+      { binarySha256: BINARY, readJson: historicalReadJson },
+    );
     assert.equal(
       errors.length === 0,
       mutation === "none" && (status === "promoted" || row === "other"),

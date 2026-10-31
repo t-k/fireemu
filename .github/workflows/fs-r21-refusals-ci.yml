@@ -1,0 +1,18 @@
+name: fs-r21-refusals-ci
+on:
+  push:
+    branches: [work/fs-r21-refusals-ci]
+permissions:
+  contents: read
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: cc0a6862b
+      - name: Record failing tests with memory limit
+        run: |
+          test "$(git rev-parse HEAD)" = $(git rev-parse cc0a6862b)
+          sudo systemd-run --scope -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= cargo test --locked --manifest-path crates/fireemu-adapter-grpc/Cargo.toml recorded_sort_and_accumulator_unknown_candidates -- --nocapture

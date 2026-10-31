@@ -1186,3 +1186,18 @@ fn coverage_histograms_stay_bounded_over_many_evaluations() {
         fireemu_core_database::rules::COVERAGE_VALUES_PER_EXPRESSION
     );
 }
+
+#[test]
+fn auth_root_identity_matches_the_recorded_read() {
+    let tree = seed();
+    let auth = j(serde_json::json!({"uid": "synthetic-user"}));
+    let requester = Requester {
+        auth: &auth,
+        now: 1_792_464_733_000,
+    };
+    let rules = Rules::compile(&read_rule_at_t(
+        "auth != null && auth.uid == 'synthetic-user' && auth == auth",
+    ))
+    .unwrap();
+    assert!(rules.can_read(tree.root(), &p("/t"), None, &requester));
+}

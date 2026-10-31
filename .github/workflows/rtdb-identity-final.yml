@@ -28,7 +28,7 @@ jobs:
           test "$(git rev-parse HEAD)" = e973b98c0124aededd0fa107e38ea94f34eee25b
           mkdir /tmp/rtdb-verify
           git rev-parse HEAD > /tmp/rtdb-verify/source.txt
-          sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" bash .ci-helper/.github/temporary/rtdb_verify.sh
+          sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" CARGO_BUILD_JOBS=2 bash .ci-helper/.github/temporary/rtdb_verify.sh
       - name: Replay exact binary in isolated network
         run: |
           set -euo pipefail

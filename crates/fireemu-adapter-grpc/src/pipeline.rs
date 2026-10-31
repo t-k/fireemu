@@ -2421,6 +2421,25 @@ fn unknown_function_suggestion_text(name: &str, suggestion: &str) -> String {
     format!("The function '{name}' does not exist, did you mean '{suggestion}'?")
 }
 
+// Signatures observed for zero-argument validation, not executable registrations.
+fn observed_context_refusal(name: &str) -> Option<String> {
+    if name == "score" {
+        return Some("The 'score' function can only be used in the search(...) stage.".to_owned());
+    }
+    let (signature, count) = match name {
+        "bit_not" => ("bit_not[T <: number](x: T): T", 1),
+        "bit_left_shift" => ("bit_left_shift[T <: number](x: T, y: int64): T", 2),
+        "bit_right_shift" => ("bit_right_shift[T <: number](x: T, y: int64): T", 2),
+        "document_matches" => ("document_matches(query: string): boolean", 1),
+        "matches" => ("matches(field: any, query: string): boolean", 2),
+        "geo_distance" => ("geo_distance(x: lat_lng, y: lat_lng): float64", 2),
+        _ => return None,
+    };
+    Some(format!(
+        "The function '{signature}' takes [{count}..{count}] argument(s), but 0 were provided."
+    ))
+}
+
 // Observed validation hints only; these names are not executable aliases.
 fn observed_scalar_suggestion(name: &str) -> Option<&str> {
     if accumulator_kind(name).is_some() {
@@ -2495,6 +2514,9 @@ fn decode_operand_tree_in(
                     function.name
                 ));
                 if function.args.is_empty() && function.options.is_empty() {
+                    if let Some(text) = observed_context_refusal(&function.name) {
+                        return Err(crate::pipeline_shape::unknown_candidate(fallback, text));
+                    }
                     if let Some(suggestion) = observed_scalar_suggestion(&function.name) {
                         let text = unknown_function_suggestion_text(&function.name, suggestion);
                         return Err(crate::pipeline_shape::unknown_candidate(fallback, text));

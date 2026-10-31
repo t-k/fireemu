@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 92f86793c9dc00377cb0ab02b8742a84cebc508b
+          ref: 891c0a6bf7de82f98cc3ce32d510ba28e724797d
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 92f86793c9dc00377cb0ab02b8742a84cebc508b
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_unknown_refusals_match_both_profiles_and_transports)'
+          test "$(git rev-parse HEAD)" = 891c0a6bf7de82f98cc3ce32d510ba28e724797d
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_unknown_function_refusals_follow_shape_gate) | test(unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries) | test(generated_unknown_function_boundaries_remain_bounded) | test(unknown_add_fields_precedes_later_stage_arity_on_both_transports) | test(unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries) | test(recorded_unknown_refusals_match_both_profiles_and_transports) | test(unrecorded_unknown_candidates_keep_original_refusal_bodies) | test(unknown_candidate_gate_preserves_exact_fallback_status)'

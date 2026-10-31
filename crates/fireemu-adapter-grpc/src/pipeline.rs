@@ -6628,6 +6628,11 @@ vector	grpc	emulator	function	foreign";
         }
     }
 
+    // Baseline reproducer: the existing function-depth guard does not bound map nesting.
+    fn candidate_shape_eligible(request: &pb::ExecutePipelineRequest) -> bool {
+        validate_function_depth(request).is_ok()
+    }
+
     #[test]
     fn candidate_shape_eligibility_bounds_nested_function_options() {
         use pb::value::ValueType as V;

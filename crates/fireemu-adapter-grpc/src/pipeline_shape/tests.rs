@@ -721,7 +721,7 @@ fn unknown_candidate_gate_preserves_exact_fallback_status() {
         sourced.clone(),
         "The function 'nope_fn' does not exist.".to_owned(),
     );
-    let answer = RefusalGate::Ordinary(None, DB.to_owned()).answer(candidate);
+    let answer = RefusalGate::Ordinary(None, DB.to_owned()).answer(candidate.clone());
     assert_eq!(answer.code(), sourced.code());
     assert_eq!(answer.message(), sourced.message());
     assert_eq!(answer.details(), sourced.details());

@@ -4980,6 +4980,126 @@ add_fields_map	unknown	none	strict";
     }
 
     #[test]
+    fn recorded_registered_function_arities_match_both_transports() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let full = "fs-ent-pipeline/o5/function-names";
+        let (p, program) = programs
+            .iter()
+            .enumerate()
+            .find(|(_, program)| program["id"] == full)
+            .unwrap();
+        let names = [
+            "get_field",
+            "offset",
+            "sum",
+            "minimum",
+            "maximum",
+            "negate",
+            "cmp",
+            "reverse",
+            "length",
+            "storage_size",
+            "coalesce",
+            "namespace",
+            "has_ancestor",
+            "reference_slice",
+            "autogen_document_id",
+            "replace_document_id",
+            "string_concat",
+        ];
+        let mut failures = Vec::new();
+        for name in names {
+            let id = format!("fn-{name}");
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][full]["steps"][&id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            assert_eq!(
+                RefusalGate::Recorded(None, database.to_owned())
+                    .answer(actual.clone())
+                    .code(),
+                tonic::Code::Unimplemented,
+                "unrecorded {id}"
+            );
+            let ordinary = compile_pipeline_in_order(
+                &request,
+                &parent,
+                Unrecorded::OfficialEmulator,
+                Some(&order),
+            )
+            .unwrap_err();
+            if ordinary.code() != tonic::Code::InvalidArgument || ordinary.message() != expected {
+                failures.push(format!("{id} emulator: {ordinary:?}"));
+            }
+            for (transport, shape) in [
+                ("rest", shape_of_json(body, &order)),
+                ("grpc", shape_of_request(&request)),
+            ] {
+                let answered =
+                    RefusalGate::Recorded(shape, database.to_owned()).answer(actual.clone());
+                if answered.code() != tonic::Code::InvalidArgument || answered.message() != expected
+                {
+                    failures.push(format!("{id} {transport}: {answered:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn registered_function_arity_unrecorded_shapes_remain_refused() {
+        use crate::pipeline_shape::RefusalGate;
+        use pb::value::ValueType as V;
+        for (name, count) in [("sum", 2), ("coalesce", 1), ("autogen_document_id", 2)] {
+            let wire = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args: vec![
+                        pb::Value {
+                            value_type: Some(V::IntegerValue(1))
+                        };
+                        count
+                    ],
+                    ..Default::default()
+                })),
+            };
+            let error = decode_operand_tree(&wire, Unrecorded::Refuse).unwrap_err();
+            let answer = RefusalGate::Recorded(None, String::new()).answer(error);
+            assert_eq!(answer.code(), tonic::Code::Unimplemented, "{name}");
+            assert_eq!(
+                decode_operand_tree(&wire, Unrecorded::OfficialEmulator)
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn recorded_literal_refusal_gate_matrix() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
@@ -5962,11 +6082,13 @@ vector	grpc	emulator	function	foreign";
                 (Unrecorded::Refuse, tonic::Code::Unimplemented),
                 (Unrecorded::OfficialEmulator, tonic::Code::InvalidArgument),
             ] {
-                assert_eq!(
-                    decode_operand_tree(&wire, mode).unwrap_err().code(),
-                    code,
-                    "{name}"
-                );
+                let error = decode_operand_tree(&wire, mode).unwrap_err();
+                let answer = if mode == Unrecorded::Refuse {
+                    crate::pipeline_shape::RefusalGate::Recorded(None, String::new()).answer(error)
+                } else {
+                    error
+                };
+                assert_eq!(answer.code(), code, "{name}");
             }
         }
     }

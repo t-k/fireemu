@@ -296,7 +296,8 @@ pub struct Function {
     /// answers its own wording).
     pub signature: &'static str,
     /// For a function with several overloads, production's argument-count refusal lists them:
-    /// each is its signature with the fewest and the most arguments it takes. Empty for a
+    /// each is its signature with the fewest and the most arguments it takes (`usize::MAX`
+    /// represents an unbounded maximum). Empty for a
     /// function with one signature.
     pub overloads: &'static [(&'static str, usize, usize)],
     eval: fn(&[Eval], Context<'_>) -> Eval,
@@ -352,34 +353,34 @@ const fn document_function(
 
 /// The functions the executor evaluates. Every other name is refused by [`Expr::call`].
 const FUNCTIONS: &[Function] = &[
-    array_access_function("namespace", Arity::Exact(1), "", eval_namespace),
-    array_access_function("has_ancestor", Arity::Exact(2), "", eval_has_ancestor),
-    array_access_function("reference_slice", Arity::Exact(3), "", eval_reference_slice),
+    array_access_function("namespace", Arity::Exact(1), "namespace(ref: document_reference): string", eval_namespace),
+    array_access_function("has_ancestor", Arity::Exact(2), "has_ancestor(value: document_reference, prefix: document_reference): boolean", eval_has_ancestor),
+    array_access_function("reference_slice", Arity::Exact(3), "reference_slice(current: document_reference, offset: int64, length: int64): document_reference", eval_reference_slice),
     array_access_function(
         "replace_document_id",
         Arity::Exact(2),
-        "",
+        "replace_document_id(ref: document_reference, new_id: any): document_reference",
         eval_replace_document_id,
     ),
     array_access_function(
         "autogen_document_id",
         Arity::Exact(0),
-        "",
+        "autogen_document_id(): string",
         eval_autogen_document_id,
     ),
-    array_access_function("coalesce", Arity::AtLeast(2), "", eval_control_fallback),
-    array_access_function("cmp", Arity::Exact(2), "", eval_generic_cmp),
+    array_access_function("coalesce", Arity::AtLeast(2), "coalesce(x: any?*): any?", eval_control_fallback),
+    array_access_function("cmp", Arity::Exact(2), "cmp(x: any, y: any): int64", eval_generic_cmp),
     array_access_function(
         "storage_size",
         Arity::Exact(1),
-        "",
+        "storage_size(input: any): int64",
         eval_generic_storage_size,
     ),
-    array_access_function("get_field", Arity::Exact(2), "", eval_generic_get_field),
-    array_access_function("offset", Arity::Exact(2), "", eval_generic_offset),
-    array_access_function("reverse", Arity::Exact(1), "", eval_generic_reverse),
-    array_access_function("length", Arity::Exact(1), "", eval_generic_length),
-    array_access_function("string_concat", Arity::AtLeast(2), "", eval_generic_concat),
+    array_access_function("get_field", Arity::Exact(2), "get_field(map: map[string, any], key: string): any?", eval_generic_get_field),
+    array_access_function("offset", Arity::Exact(2), "offset(array: array[any], index: int64): any?", eval_generic_offset),
+    array_access_function("reverse", Arity::Exact(1), "reverse[T: string | bytes | array[any]](input: T): T", eval_generic_reverse),
+    array_access_function("length", Arity::Exact(1), "length[T: string | bytes | array[any] | map[string, any] | vector](input: T): T", eval_generic_length),
+    array_access_function("string_concat", Arity::AtLeast(2), "string_concat(strings: string*): string", eval_generic_concat),
     comparison("equal", "equal(x: any, y: any): boolean", |args, cx| {
         eval_comparison(Comparison::Equal, args, cx)
     }),
@@ -805,7 +806,11 @@ impl Expr {
             let got = args.len();
             let mut options = String::new();
             for (signature, low, high) in function.overloads {
-                let _ = write!(options, "\n- {signature} with [{low}..{high}] argument(s).");
+                if *high == usize::MAX {
+                    let _ = write!(options, "\n- {signature} with [{low}..+∞) argument(s).");
+                } else {
+                    let _ = write!(options, "\n- {signature} with [{low}..{high}] argument(s).");
+                }
             }
             return Err(ExprError::Arity(format!(
                 "The function '{name}' does not accept {got} argument(s). Valid options are:{options}"

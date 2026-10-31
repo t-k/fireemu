@@ -4018,12 +4018,12 @@ fn numeric_scalar_pict_rows() {
 }
 
 #[test]
-fn empty_signature_at_least_arity_is_bounded() {
+fn at_least_arity_is_bounded() {
     for name in ["minimum", "maximum"] {
         assert!(
             matches!(
                 Expr::call(name, vec![], Placement::Value),
-                Err(ExprError::Invalid(_))
+                Err(ExprError::Arity(_))
             ),
             "{name}"
         );
@@ -4084,12 +4084,10 @@ fn arity_review_pict_rows() {
                 matches!(result, Err(ExprError::Unsupported(_))),
                 "{name} {count}"
             );
-        } else if (name == "minimum" || name == "maximum") && count == 0 {
-            assert!(
-                matches!(result, Err(ExprError::Invalid(_))),
-                "{name} {count}: {result:?}"
-            );
-        } else if (name == "map" && count % 2 == 1) || (name == "concat" && count < 2) {
+        } else if ((name == "minimum" || name == "maximum") && count == 0)
+            || (name == "map" && count % 2 == 1)
+            || (name == "concat" && count < 2)
+        {
             assert!(
                 matches!(result, Err(ExprError::Arity(_))),
                 "{name} {count}: {result:?}"

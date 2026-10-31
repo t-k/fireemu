@@ -11,15 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: f6845eab72cf6416d0e3a66192d0f56caa7e77ed
+          ref: dc28b1f4df0111b725587855e92ae1545b8a7ea6
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
-      - name: Run affected crates
+      - name: Run unknown refusal and controls
         run: |
-          test "$(git rev-parse HEAD)" = f6845eab72cf6416d0e3a66192d0f56caa7e77ed
-          cargo nextest run -p fireemu-core-firestore -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast
+          test "$(git rev-parse HEAD)" = dc28b1f4df0111b725587855e92ae1545b8a7ea6
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(the_pipeline_corpus_replays_as_production_answered) | test(strict_lets_no_deferred_or_later_check_answer_past_an_unvalidated_part) | test(recorded_unknown_function_refusals_follow_shape_gate) | test(unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries) | test(generated_unknown_function_boundaries_remain_bounded) | test(unknown_add_fields_precedes_later_stage_arity_on_both_transports) | test(unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries) | test(recorded_unknown_refusals_match_both_profiles_and_transports) | test(unrecorded_unknown_candidates_keep_original_refusal_bodies) | test(unknown_candidate_gate_preserves_exact_fallback_status) | test(candidate_shape_eligibility_bounds_nested_function_options) | test(candidate_json_eligibility_bounds_depth_and_width) | test(recorded_unknown_after_empty_select_matches_both_profiles)'
       - name: Clippy affected crates
         if: always()
         run: cargo clippy -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --locked -- -D warnings

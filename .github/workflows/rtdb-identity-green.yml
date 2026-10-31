@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 307504ea6
+          ref: 307504ea6635b0ea648f43281e5639cfc760ed92
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
       - name: Confirm focused regressions under capped build
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 307504ea6
+          test "$(git rev-parse HEAD)" = 307504ea6635b0ea648f43281e5639cfc760ed92
           mkdir /tmp/rtdb-green
           git rev-parse HEAD > /tmp/rtdb-green/source.txt
           set +e

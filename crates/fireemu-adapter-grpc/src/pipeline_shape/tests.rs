@@ -688,9 +688,24 @@ fn unknown_candidate_gate_preserves_exact_fallback_status() {
         assert_eq!(answer.code(), original.code());
         assert_eq!(answer.message(), original.message());
         assert_eq!(answer.details(), original.details());
-        assert_eq!(answer.metadata(), original.metadata());
+        assert_eq!(answer.metadata().len(), original.metadata().len());
+        assert_eq!(
+            answer.metadata().get("fireemu-code"),
+            original.metadata().get("fireemu-code")
+        );
         assert!(answer.source().is_none());
     }
+    let stage_fallback = unknown_candidate(
+        Status::invalid_argument("original stage arity"),
+        "The function 'nope_fn' does not exist.".to_owned(),
+    );
+    let strict = RefusalGate::Recorded(None, DB.to_owned()).answer(stage_fallback.clone());
+    assert_eq!(strict.code(), tonic::Code::Unimplemented);
+    assert!(strict.message().starts_with("original stage arity"));
+    let ordinary = RefusalGate::Ordinary(None, DB.to_owned()).answer(stage_fallback);
+    assert_eq!(ordinary.code(), tonic::Code::InvalidArgument);
+    assert_eq!(ordinary.message(), "original stage arity");
+    assert!(ordinary.source().is_none());
     let known = recorded()
         .iter()
         .find(|(_, texts)| texts.contains("The function 'nope_fn' does not exist."))

@@ -330,8 +330,7 @@ pub fn validate_pipeline(
         // argument-count error in the recorded request. Keep the candidate shallow: the
         // function-depth check has not run yet, and the outer gate still admits only a
         // recorded whole-request shape and computed text.
-        if unrecorded == Unrecorded::Refuse
-            && position == 1
+        if position == 1
             && pipeline
                 .stages
                 .first()
@@ -428,7 +427,12 @@ pub fn validate_pipeline(
             && pipeline.stages[position].args.len() != 2
         {
             if let Some(candidate) = earlier_unknown {
-                return Err(with_code(candidate, "FS_PIPE_INVALID"));
+                if let Some(text) = crate::pipeline_shape::unknown_candidate_text(&candidate) {
+                    return Err(crate::pipeline_shape::unknown_candidate(
+                        with_code(error, "FS_PIPE_INVALID"),
+                        text.to_owned(),
+                    ));
+                }
             }
         }
         return Err(with_code(error, "FS_PIPE_INVALID"));
@@ -1322,6 +1326,11 @@ pub fn compile_pipeline_in_order(
     // the official emulator checks every stage's arguments before running any. Strict answers
     // the first refusal (no later check answers past a constant that fails; ruling of
     // 2026-10-21).
+    let unknown_text = compiled
+        .as_ref()
+        .err()
+        .and_then(crate::pipeline_shape::unknown_candidate_text)
+        .map(str::to_owned);
     let compiled = match compiled {
         Err(error)
             if error.code() == tonic::Code::Unimplemented
@@ -1351,7 +1360,7 @@ pub fn compile_pipeline_in_order(
     // Under strict, the request's shape then decides which refusal is answered (`pipeline_shape`).
     // A negative `limit` or `offset` is checked after the empty map (the official emulator
     // 1.22.0; PX1d r5 review S2), a string one before it (O-4).
-    match (compiled, deferred) {
+    let selected = match (compiled, deferred) {
         (Err(error), Some(empty))
             if error.code() != tonic::Code::InvalidArgument
                 && (validated_unrun || unrecorded == Unrecorded::OfficialEmulator) =>
@@ -1370,7 +1379,11 @@ pub fn compile_pipeline_in_order(
         }
         (Ok(()), Some(empty)) => Err(empty),
         (result, _) => result,
-    }?;
+    };
+    selected.map_err(|error| match unknown_text {
+        Some(text) => crate::pipeline_shape::retain_unknown_candidate(error, &text),
+        None => error,
+    })?;
     // A select narrows the rows, so the scan copies only the fields the stages read.
     let projection =
         pipeline_exec::referenced_fields(&stages).map(|paths| pb::structured_query::Projection {
@@ -2318,21 +2331,17 @@ fn decode_subcollection_array(nested: &pb::Pipeline) -> Result<Expr, Status> {
 }
 
 /// Computes a candidate refusal; strict admission still requires the recorded shape and text.
-fn unknown_function_status(name: &str, unrecorded: Unrecorded, ordinary: Status) -> Status {
-    if unrecorded != Unrecorded::Refuse {
-        return ordinary;
-    }
+fn unknown_function_status(name: &str, _unrecorded: Unrecorded, ordinary: Status) -> Status {
     let bytes = name.as_bytes();
     let lowercase = name.to_ascii_lowercase();
     let titlecase = bytes.first().is_some_and(u8::is_ascii_uppercase)
         && bytes[1..].iter().all(|byte| !byte.is_ascii_uppercase());
-    if titlecase && pipeline_exec::function(&lowercase).is_some() {
-        Status::invalid_argument(format!(
-            "The function '{name}' does not exist, did you mean '{lowercase}'?"
-        ))
+    let text = if titlecase && pipeline_exec::function(&lowercase).is_some() {
+        format!("The function '{name}' does not exist, did you mean '{lowercase}'?")
     } else {
-        Status::invalid_argument(format!("The function '{name}' does not exist."))
-    }
+        format!("The function '{name}' does not exist.")
+    };
+    crate::pipeline_shape::unknown_candidate(ordinary, text)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -5196,13 +5205,21 @@ plain	where	none";
             );
         }
         assert_eq!(
-            unknown_function_status("AND", Unrecorded::Refuse, Status::unimplemented("unused"))
-                .message(),
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "AND",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
             "The function 'AND' does not exist."
         );
         assert_eq!(
-            unknown_function_status("Equal", Unrecorded::Refuse, Status::unimplemented("unused"))
-                .message(),
+            crate::pipeline_shape::unknown_candidate_text(&unknown_function_status(
+                "Equal",
+                Unrecorded::Refuse,
+                Status::unimplemented("unused")
+            ))
+            .unwrap(),
             "The function 'Equal' does not exist, did you mean 'equal'?"
         );
     }

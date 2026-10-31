@@ -36,6 +36,42 @@ use crate::rest::json_syntax::{self, KeyOrder};
 const REQUESTS: &str = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
 const PRODUCTION: &str = include_str!("../../../conformance/fs-ent-pipeline-production.json");
 
+#[derive(Debug)]
+struct UnknownCandidate {
+    fallback: Status,
+    text: String,
+}
+
+impl std::fmt::Display for UnknownCandidate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("private pipeline refusal candidate")
+    }
+}
+impl std::error::Error for UnknownCandidate {}
+
+fn unknown_carrier(status: &Status) -> Option<&UnknownCandidate> {
+    use std::error::Error as _;
+    status.source()?.downcast_ref::<UnknownCandidate>()
+}
+
+pub(crate) fn unknown_candidate(fallback: Status, text: String) -> Status {
+    let mut outer = fallback.clone();
+    outer.set_source(std::sync::Arc::new(UnknownCandidate { fallback, text }));
+    outer
+}
+
+pub(crate) fn unknown_candidate_text(status: &Status) -> Option<&str> {
+    unknown_carrier(status).map(|candidate| candidate.text.as_str())
+}
+
+pub(crate) fn retain_unknown_candidate(fallback: Status, text: &str) -> Status {
+    let fallback = match unknown_carrier(&fallback) {
+        Some(candidate) => candidate.fallback.clone(),
+        None => fallback,
+    };
+    unknown_candidate(fallback, text.to_owned())
+}
+
 /// How a pipeline's refusals are answered: as fireemu computes them (the emulator profile), or
 /// only when the request has a recorded shape (strict; `None` when it has no shape), with the
 /// request's database (`projects/{p}/databases/{d}`): a text may name that database in place
@@ -46,6 +82,8 @@ pub enum RefusalGate {
     Open,
     /// A refusal is answered only for a request of this recorded shape, in this database.
     Recorded(Option<String>, String),
+    /// Ordinary behavior, with recorded-shape admission for a private unknown candidate only.
+    Ordinary(Option<String>, String),
 }
 
 impl RefusalGate {
@@ -54,6 +92,23 @@ impl RefusalGate {
     /// `UNIMPLEMENTED`.
     #[must_use]
     pub fn answer(&self, error: Status) -> Status {
+        if let Some(candidate) = unknown_carrier(&error) {
+            let fallback = candidate.fallback.clone();
+            let computed = Status::invalid_argument(candidate.text.clone());
+            let recorded = match self {
+                Self::Recorded(shape, database) | Self::Ordinary(shape, database) => {
+                    Self::Recorded(shape.clone(), database.clone()).answer(computed)
+                }
+                Self::Open => Status::unimplemented("candidate has no recorded shape"),
+            };
+            if recorded.code() == tonic::Code::InvalidArgument {
+                return recorded;
+            }
+            return match self {
+                Self::Recorded(_, _) => self.answer(fallback),
+                Self::Open | Self::Ordinary(_, _) => fallback,
+            };
+        }
         let Self::Recorded(shape, database) = self else {
             return error;
         };

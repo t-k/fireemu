@@ -1624,6 +1624,7 @@ impl RestState {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
+        let wire_body = body;
         let body = if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
             self.transcoded("executePipeline", body)
                 .map_err(|error| gate.answer(nesting(error)))?
@@ -1640,12 +1641,25 @@ impl RestState {
         })?;
         let request = pipeline_json::request_from_json(database, &body)
             .map_err(|e| gate.answer(nesting(bad(&e))))?;
-        let ast = crate::pipeline::validate_pipeline(&request, unrecorded)
-            .map_err(|error| gate.answer(error))?;
+        let answer = |error: Status| {
+            if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+                && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
+                && crate::pipeline::validate_function_depth(&request).is_ok()
+            {
+                crate::pipeline_shape::RefusalGate::Ordinary(
+                    crate::pipeline_shape::shape_of_json(wire_body, key_order),
+                    database.to_owned(),
+                )
+                .answer(error)
+            } else {
+                gate.answer(error)
+            }
+        };
+        let ast = crate::pipeline::validate_pipeline(&request, unrecorded).map_err(answer)?;
         let canonical = ast.canonical_text();
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let refuse = |error| crate::service::pipeline_status(gate.answer(error), &canonical);
+        let refuse = |error| crate::service::pipeline_status(answer(error), &canonical);
         let compiled = crate::pipeline::compile_pipeline_in_order(
             &request,
             &parent,

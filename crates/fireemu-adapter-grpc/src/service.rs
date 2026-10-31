@@ -694,8 +694,23 @@ impl Firestore for GatewayService {
         }
         let correlated_binding =
             crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
+        let answer = |error: Status| {
+            if registry_unrecorded
+                == fireemu_core_firestore::pipeline_exec::Unrecorded::OfficialEmulator
+                && crate::pipeline_shape::unknown_candidate_text(&error).is_some()
+                && crate::pipeline::validate_function_depth(&compiler_request).is_ok()
+            {
+                crate::pipeline_shape::RefusalGate::Ordinary(
+                    crate::pipeline_shape::shape_of_request(request.get_ref()),
+                    request.get_ref().database.clone(),
+                )
+                .answer(error)
+            } else {
+                gate.answer(error)
+            }
+        };
         let ast = crate::pipeline::validate_pipeline(&compiler_request, registry_unrecorded)
-            .map_err(|error| gate.answer(error))?;
+            .map_err(answer)?;
         crate::pipeline::validate_function_depth(&compiler_request)
             .map_err(|error| pipeline_status(error, &ast.canonical_text()))?;
         if self.local_backend().is_some() {
@@ -711,7 +726,7 @@ impl Firestore for GatewayService {
             };
             let compiled =
                 crate::pipeline::compile_pipeline(&compiler_request, &parent, unrecorded)
-                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?;
+                    .map_err(|error| pipeline_status(answer(error), &canonical))?;
             if request.get_ref().consistency_selector.is_some()
                 && (compiled.documents.is_none()
                     || !compiled.unions.is_empty()

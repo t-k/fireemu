@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 35a25dae1c329d8f86a15551649e98c174cffc6c
+          ref: 6f5b28b38f32c84ec9be941c5ec8b9444ef82714
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = 35a25dae1c329d8f86a15551649e98c174cffc6c
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(unknown_add_fields_precedes_later_stage_arity_on_both_transports)'
+          test "$(git rev-parse HEAD)" = 6f5b28b38f32c84ec9be941c5ec8b9444ef82714
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(unknown_add_fields_precedes_later_stage_arity_on_both_transports) | test(unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries) | test(generated_unknown_function_boundaries_remain_bounded) | test(recorded_unknown_function_refusals_follow_shape_gate) | test(unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries) | test(captured_generic_expressions_preserve_typed_results) | test(captured_numeric_scalar_expressions_preserve_integer_results)'

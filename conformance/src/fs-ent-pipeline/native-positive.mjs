@@ -5,8 +5,8 @@ import { createReadStream, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { projectGrpcMessage, buildRestRequest, buildGrpcRequest } from "./harness.mjs";
 import { isMainModule } from "../fs-query-index/main-module.mjs";
-const fixtureURL = new URL("../../fixtures/fs-native-positive/production.json", import.meta.url);
-const programURL = new URL("../../fixtures/fs-native-positive/program.json", import.meta.url);
+const fixtureURL = new URL("../../fs-native-positive/production.json", import.meta.url);
+const programURL = new URL("../../fs-native-positive/program.json", import.meta.url);
 const fixtureBytes = readFileSync(fixtureURL),
   programBytes = readFileSync(programURL);
 const fixture = JSON.parse(fixtureBytes),

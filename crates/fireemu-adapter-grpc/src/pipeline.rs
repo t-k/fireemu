@@ -3842,10 +3842,21 @@ fn decode_sort(
                 unexpected.join(", ")
             )));
         }
-        keys.push(pipeline_exec::SortKey {
-            expr: decode_operand_tree(expression, unrecorded)?,
-            descending,
-        });
+        let expr = decode_operand_tree(expression, unrecorded).map_err(|error| {
+            if let Some(V::FunctionValue(function)) = &expression.value_type {
+                if function.name == "nope"
+                    && function.args.len() == 1
+                    && function.options.is_empty()
+                {
+                    return crate::pipeline_shape::retain_unknown_candidate(
+                        error,
+                        &unknown_function_suggestion_text(&function.name, "nor"),
+                    );
+                }
+            }
+            error
+        })?;
+        keys.push(pipeline_exec::SortKey { expr, descending });
     }
     Ok(keys)
 }

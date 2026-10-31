@@ -1568,7 +1568,7 @@ fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
         .unwrap()
         .push(json!({"integerValue":"1"}));
     for (name, body) in [
-        ("known unsupported", unrecorded_name),
+        ("known unsupported", unrecorded_name.clone()),
         ("invalid input", invalid_input),
         ("outer arity", outer_arity),
     ] {
@@ -1587,6 +1587,17 @@ fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
         &base,
     );
     assert_eq!(status, 400, "emulator: {answer}");
+    assert_eq!(
+        answer[0]["error"]["message"],
+        "The function 'nope_fn' does not exist."
+    );
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &unrecorded_name,
+    );
+    assert_eq!(status, 400, "unrecorded emulator: {answer}");
     assert!(answer[0]["error"]["message"]
         .as_str()
         .unwrap()

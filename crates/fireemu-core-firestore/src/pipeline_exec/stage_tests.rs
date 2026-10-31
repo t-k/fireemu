@@ -2541,21 +2541,27 @@ fn nested_sum_uses_actual_row_type() {
         )],
         groups: vec![],
     };
-    let error = execute_rows_in(
-        vec![stage.clone()],
-        vec![doc("one", &[("n", int(7))])],
-        Unrecorded::Refuse,
-    )
-    .unwrap_err();
+    let run = |rows: Vec<Row>| {
+        let mut cursor = Cursor::new(vec![stage.clone()]).with_recorded_nested_sum_wrong_type();
+        for row in rows {
+            cursor.push(row)?;
+        }
+        cursor.finish()
+    };
+    let row = doc("one", &[("n", int(7))]);
+    assert!(matches!(
+        execute_rows_in(vec![stage.clone()], vec![row.clone()], Unrecorded::Refuse),
+        Err(EvalError::Unobserved { .. })
+    ));
+    let error = run(vec![row]).unwrap_err();
     assert_eq!(
         error.to_string(),
         "The function array_sum(...) requires `Array` but got `LONG`."
     );
-    assert!(execute_rows_in(vec![stage.clone()], vec![], Unrecorded::Refuse).is_ok());
-    assert!(execute_rows_in(
-        vec![stage],
-        vec![doc("one", &[("n", Value::Array(vec![int(7)]))])],
-        Unrecorded::Refuse
-    )
-    .is_ok());
+    assert!(run(vec![]).is_ok());
+    assert!(run(vec![doc("one", &[("n", Value::Array(vec![int(7)]))])]).is_ok());
+    assert!(matches!(
+        run(vec![doc("one", &[("n", Value::String("x".to_owned()))])]),
+        Err(EvalError::Unobserved { .. })
+    ));
 }

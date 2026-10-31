@@ -2078,6 +2078,23 @@ pub fn eval_status(error: &pipeline_exec::EvalError) -> Status {
     }
 }
 
+/// Admits the recorded nested sum type refusal only for its recorded request shape.
+pub(crate) fn recorded_nested_sum_admitted(
+    gate: &crate::pipeline_shape::RefusalGate,
+    unrecorded: Unrecorded,
+) -> bool {
+    unrecorded == Unrecorded::Refuse
+        && matches!(gate, crate::pipeline_shape::RefusalGate::Recorded(..))
+        && gate
+            .answer(eval_status(&pipeline_exec::EvalError::WrongType {
+                function: "array_sum",
+                expected: "Array",
+                got: "LONG",
+            }))
+            .code()
+            == tonic::Code::InvalidArgument
+}
+
 /// Whether a wire value holds no expression at any depth (a literal the core can decode).
 fn is_literal(value: &pb::Value) -> bool {
     expression_kind(value).is_none()

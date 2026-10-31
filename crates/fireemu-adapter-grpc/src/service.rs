@@ -1487,13 +1487,18 @@ impl PipelineResponseStream {
         runtime: fireemu_core_firestore::pipeline_exec::RuntimeContext,
         numeric_row_scope: Option<NumericRowScope>,
     ) -> Self {
+        let admitted = crate::pipeline::recorded_nested_sum_admitted(&gate, unrecorded);
+        let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
+            compiled.stages,
+            unrecorded,
+            runtime,
+        );
+        if admitted {
+            cursor = cursor.with_recorded_nested_sum_wrong_type();
+        }
         Self {
             inner: Some(inner),
-            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
-                compiled.stages,
-                unrecorded,
-                runtime,
-            ),
+            cursor,
             read_time: None,
             canonical,
             gate,

@@ -5534,6 +5534,21 @@ nested	unknown	multiple	long	ordinary
     }
 
     #[test]
+    fn nested_sum_constant_long_keeps_unobserved_fallback() {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/c"}]},
+            {"name":"aggregate","args":[{"mapValue":{"fields":{"s":{"functionValue":{"name":"sum","args":[{"functionValue":{"name":"sum","args":[{"integerValue":"7"}]}}]}}}}},{"mapValue":{}}]}
+        ]}}});
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let request = crate::rest::pipeline_json::request_from_json(database, &body).unwrap();
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let error =
+            compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, None).unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unimplemented);
+        assert!(error.message().contains("unrecorded argument shape"));
+    }
+
+    #[test]
     fn nested_sum_admission_requires_recorded_shape_and_strict_profile() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

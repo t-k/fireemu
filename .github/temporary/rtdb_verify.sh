@@ -6,7 +6,7 @@ cat "/sys/fs/cgroup$cgroup/memory.max" "/sys/fs/cgroup$cgroup/memory.swap.max" >
 test "$(cat "/sys/fs/cgroup$cgroup/memory.max")" = 6442450944
 test "$(cat "/sys/fs/cgroup$cgroup/memory.swap.max")" = 0
 cargo fmt --all -- --check > "$out/fmt.log" 2>&1
-cargo nextest run -p fireemu-core-database -p fireemu-adapter-database --profile pr --locked -j 2 > "$out/nextest.log" 2>&1
+cargo nextest run -p fireemu-core-database -p fireemu-adapter-database --profile pr --locked --no-fail-fast -j 2 > "$out/nextest.log" 2>&1
 cargo clippy -p fireemu-core-database -p fireemu-adapter-database --all-targets --all-features --locked -j 2 -- -D warnings > "$out/clippy.log" 2>&1
 cargo build -p fireemu --locked -j 2 > "$out/build.log" 2>&1
 sha256sum target/debug/fireemu > "$out/binary.sha256"

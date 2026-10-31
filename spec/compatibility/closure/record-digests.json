@@ -179,6 +179,7 @@
     "spec/compatibility/closure/evidence/RTDB-rules-v035-comparison.json": "73aee352e66e0e02cc6f5bde2c0abdcd6787d8f711f49190724fd52a4981491e",
     "spec/compatibility/closure/evidence/RTDB-s5-comparison.json": "401856de843e190a346260d9b9fdfe519479e0d93591d2abc4c5eebf959e84b9",
     "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json": "0ac5226a62ffe9e2d8184517d3c31707b22fc48ddb2081c8f515c2f1020dbde1",
+    "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",

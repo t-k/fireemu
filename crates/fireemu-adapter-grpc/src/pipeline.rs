@@ -5488,7 +5488,7 @@ nested	unknown	multiple	long	ordinary
                 Unrecorded::OfficialEmulator
             };
             let argument = match *input {
-                "long" => json!({"integerValue":"7"}),
+                "long" => json!({"fieldReferenceValue":"n"}),
                 "array" => json!({"arrayValue":{"values":[{"integerValue":"7"}]}}),
                 "empty" => json!({"fieldReferenceValue":"n"}),
                 _ => panic!("bad input: {line}"),

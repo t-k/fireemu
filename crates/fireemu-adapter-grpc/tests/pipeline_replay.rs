@@ -1467,6 +1467,59 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
+    let requests = read("fs-ent-pipeline-requests.json");
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|program| program["id"] == "fs-ent-pipeline/o5/stage-order")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "add-fields-unknown-then-aggregate-one")
+        .unwrap();
+    let base = fill(&step["body"]);
+    let mut unrecorded_name = base.clone();
+    unrecorded_name["structuredPipeline"]["pipeline"]["stages"][1]["args"][0]["mapValue"]
+        ["fields"]["a"]["functionValue"]["name"] = json!("geo_distance");
+    let mut invalid_input = base.clone();
+    invalid_input["structuredPipeline"]["pipeline"]["stages"][0]["args"][0] =
+        json!({"stringValue":"bad"});
+    let mut outer_arity = base.clone();
+    outer_arity["structuredPipeline"]["pipeline"]["stages"][1]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"integerValue":"1"}));
+    for (name, body) in [
+        ("known unsupported", unrecorded_name),
+        ("invalid input", invalid_input),
+        ("outer arity", outer_arity),
+    ] {
+        let (status, answer) = call(
+            &state(true),
+            "POST",
+            &format!("{DOCS}:executePipeline"),
+            &body,
+        );
+        assert_eq!(status, 501, "{name}: {answer}");
+    }
+    let (status, answer) = call(
+        &state(false),
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        &base,
+    );
+    assert_eq!(status, 400, "emulator: {answer}");
+    assert!(answer[0]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("aggregate"));
+}
+
+#[test]
 fn observed_internal_fixtures_and_pict_cases() {
     let fixture = read("fs-ent-pipeline-production.json");
     let mut failures = Vec::new();

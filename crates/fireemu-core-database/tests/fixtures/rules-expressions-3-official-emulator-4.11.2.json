@@ -61436,7 +61436,8 @@
   "error": null,
   "read": 200,
   "fireemu": "denies",
-  "fireemu_current": "official"
+  "fireemu_current": "official",
+  "fireemu_current_source": "307504ea6635b0ea648f43281e5639cfc760ed92"
  },
  {
   "expr": "auth.token.missing || data.child('arr').val()",
@@ -100344,7 +100345,8 @@
   "error": null,
   "read": 200,
   "fireemu": "denies",
-  "fireemu_current": "official"
+  "fireemu_current": "official",
+  "fireemu_current_source": "307504ea6635b0ea648f43281e5639cfc760ed92"
  },
  {
   "expr": "!(auth == auth)",
@@ -100367,7 +100369,8 @@
   "error": null,
   "read": 200,
   "fireemu": "denies",
-  "fireemu_current": "official"
+  "fireemu_current": "official",
+  "fireemu_current_source": "307504ea6635b0ea648f43281e5639cfc760ed92"
  },
  {
   "expr": "auth === auth",
@@ -100376,7 +100379,8 @@
   "error": null,
   "read": 200,
   "fireemu": "denies",
-  "fireemu_current": "official"
+  "fireemu_current": "official",
+  "fireemu_current_source": "307504ea6635b0ea648f43281e5639cfc760ed92"
  },
  {
   "expr": "!(auth === auth)",

@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2db18e0933035729cee9398c630ce826e4c5df36
+          ref: 3f47be5f8363e60403d05ebae7f959f9e490a8e8
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -24,7 +24,7 @@ jobs:
         with:
           name: v041-build-custody
           path: ${{ runner.temp }}/custody
-          run-id: 41168171034
+          run-id: 41169742924
           github-token: ${{ github.token }}
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
@@ -36,7 +36,7 @@ jobs:
       - name: Replay original requests over both local transports
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 2db18e0933035729cee9398c630ce826e4c5df36
+          test "$(git rev-parse HEAD)" = 3f47be5f8363e60403d05ebae7f959f9e490a8e8
           test "$(cat "$RUNNER_TEMP/custody/source.sha")" = "$(git rev-parse HEAD)"
           test "$(sha256sum "$RUNNER_TEMP/custody/fireemu" | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/custody/binary.sha")"
           chmod +x "$RUNNER_TEMP/custody/fireemu"
@@ -61,10 +61,10 @@ jobs:
             ' sh "$(id -u)" "$(id -g)" "$PATH" "$HOME" "$RUNNER_TEMP/r21-boundary" "$profile" "$GITHUB_RUN_ID" "$RUNNER_TEMP/custody/fireemu" "$config" "$project" > "$RUNNER_TEMP/r21-boundary/$profile.log" 2>&1
           done
           test "$(sha256sum "$RUNNER_TEMP/custody/fireemu" | cut -d' ' -f1)" = "$(cat "$RUNNER_TEMP/custody/binary.sha")"
-          test "$(git rev-parse HEAD)" = 2db18e0933035729cee9398c630ce826e4c5df36
+          test "$(git rev-parse HEAD)" = 3f47be5f8363e60403d05ebae7f959f9e490a8e8
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: fs-r21-boundary
+          name: fs-r21-boundary-v2
           path: ${{ runner.temp }}/r21-boundary
           if-no-files-found: warn

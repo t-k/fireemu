@@ -11,18 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3f47be5f8363e60403d05ebae7f959f9e490a8e8
+          ref: 4070258627daf4113aecbf49b2e6a69c6d60b7a5
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - name: Run all affected tests without fail fast
         run: |
-          test "$(git rev-parse HEAD)" = 3f47be5f8363e60403d05ebae7f959f9e490a8e8
+          test "$(git rev-parse HEAD)" = 4070258627daf4113aecbf49b2e6a69c6d60b7a5
           test -z "$(git status --porcelain)"
-          sudo systemd-run --scope --unit=fs-r21-tests -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-tests.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo nextest run --manifest-path Cargo.toml --locked --profile pr --no-fail-fast -p fireemu-core-firestore -p fireemu-adapter-grpc'
+          sudo systemd-run --scope --unit=fs-r21-tests -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-tests.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo nextest run --manifest-path Cargo.toml --locked --profile pr --no-fail-fast -p fireemu-core-firestore -p fireemu-adapter-grpc -E "test(nested_sum_recorded_grpc_error_is_admitted_in_both_profiles)"'
       - name: Run clippy independently
         if: always()
         run: |
-          test "$(git rev-parse HEAD)" = 3f47be5f8363e60403d05ebae7f959f9e490a8e8
+          test "$(git rev-parse HEAD)" = 4070258627daf4113aecbf49b2e6a69c6d60b7a5
           sudo systemd-run --scope --unit=fs-r21-clippy -p MemoryMax=6G -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-clippy.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo clippy --manifest-path Cargo.toml --locked -p fireemu-core-firestore -p fireemu-adapter-grpc --all-targets --all-features -- -D warnings'
           test -z "$(git status --porcelain)"

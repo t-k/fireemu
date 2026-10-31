@@ -14,6 +14,7 @@
     "conformance/fs-data-write-production-supplements/partial-7bfd51026a2ac56617d81504.json": "4867fbf7837f16ecd3e4ada73aa91655686e9c37bcafb36c171ab491ed5a2582",
     "conformance/fs-ent-pipeline-framing.json": "85b4db894388ab51ebfae4f396daa24e0aa593d7f8666feef50b55d85652f63a",
     "conformance/fs-ent-pipeline-native-positive-adjudication.json": "92b6ae7e6233a1d4c9f72e19d4f46b8205bdacfbb7f9c89aeedd6b4705df0e2e",
+    "conformance/fs-ent-pipeline-o6-adjudication.json": "95dd16d7fd895491b5b3618769a6c433f88eb1f848765ca44eb79b54d17d45d7",
     "conformance/fs-ent-pipeline-o7-adjudication.json": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f",
     "conformance/fs-ent-pipeline-production.json": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
     "conformance/fs-ent-pipeline-sample-adjudication.json": "8f25887df568b0a07b68b2018596f9095c190ac5e1d773e55d0cea7dfedc97fe",

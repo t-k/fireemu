@@ -1467,6 +1467,28 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn recorded_unknown_after_empty_select_matches_both_profiles() {
+    let expected = "The function 'nope_fn' does not exist.";
+    for strict in [true, false] {
+        for grpc in [false, true] {
+            let (status, body) = internal_case(
+                strict,
+                "o4/stages",
+                "select-empty-then-unknown-function",
+                grpc,
+            );
+            assert_eq!(status, 400, "strict={strict} grpc={grpc}: {body}");
+            let message = if grpc {
+                &body["grpcMessage"]
+            } else {
+                &body[0]["error"]["message"]
+            };
+            assert_eq!(message, expected, "strict={strict} grpc={grpc}");
+        }
+    }
+}
+
+#[test]
 fn unrecorded_unknown_candidates_keep_original_refusal_bodies() {
     for name in ["row", "geo_distance"] {
         let step = format!("fn-{name}");

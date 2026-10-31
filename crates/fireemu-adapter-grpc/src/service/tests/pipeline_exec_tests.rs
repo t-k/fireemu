@@ -3642,3 +3642,64 @@ async fn correlated_scalar_second_filter_rejects_unobserved_child_value_type() {
         .expect("unobserved type must fail closed");
     assert_eq!(error.code(), tonic::Code::Unimplemented);
 }
+
+#[tokio::test]
+async fn nested_sum_recorded_grpc_error_is_admitted_in_both_profiles() {
+    use fireemu_core_firestore::index::IndexValidationPolicy;
+    let requests: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../conformance/fs-ent-pipeline-requests.json"
+    ))
+    .unwrap();
+    let program = requests["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "fs-ent-pipeline/o7/aggregate-args")
+        .unwrap();
+    let step = program["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "nested-aggregate")
+        .unwrap();
+    let database = "projects/demo-app/databases/(default)";
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let backend = test_backend();
+        backend
+            .commit(&pb::CommitRequest {
+                database: database.to_owned(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{database}/documents/aa/d"),
+                        fields: [("n".to_owned(), value(pb::value::ValueType::IntegerValue(7)))]
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let mut gateway = test_gateway();
+        gateway.ctx.edition = fireemu_core_types::edition::FirestoreEdition::Enterprise;
+        gateway.ctx.policy = policy;
+        let service = GatewayService::local(gateway, backend);
+        let request =
+            crate::rest::pipeline_json::request_from_json(database, &step["body"]).unwrap();
+        let mut stream = Firestore::execute_pipeline(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "The function array_sum(...) requires `Array` but got `LONG`."
+        );
+        assert!(!error.details().is_empty());
+    }
+}

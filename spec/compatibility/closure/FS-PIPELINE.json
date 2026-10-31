@@ -2769,6 +2769,21 @@
       "addedRecipeCount": 55,
       "ownerDecision": "docs.local/instructions/owner-decisions.md (1938)",
       "result": "Exactly 55 prior MISMATCH rows now MATCH; all 1951 row identities and prior matches remain. Random sample contracts remain separate and parent remains IMPLEMENTING."
+    },
+    "v041Promotion": {
+      "decision": "FINITE_NATIVE_CONTRACT_ACCEPTED_FINAL_CLOSURE_PENDING",
+      "ownerDecision": "docs.local/instructions/owner-decisions.md (2116)",
+      "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+      "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+      "comparisonPath": "conformance/fs-ent-pipeline-v041-comparison.json",
+      "comparisonSha256": "f556c686eb2797383432aef7c0e81e23686c899267f2fb062d061635dcf71dca",
+      "rawSummary": {
+        "MATCH": 1906,
+        "MISMATCH": 26,
+        "MATCH_NONDETERMINISTIC": 17,
+        "UNKNOWN": 2
+      },
+      "scope": "Original1951 row identities retained. Raw mismatches and original client-side serialization UNKNOWN rows remain. Clock control and other final replay gates are pending; this record does not close the parent."
     }
   },
   "finiteContractEvidence": [
@@ -2791,6 +2806,13 @@
       "path": "conformance/fs-ent-pipeline-scalar-subquery-adjudication.json",
       "sha256": "050ac6e5afd2cc4172cee4690c4a7e61d2a0a0b004b1a96758c0845a71b1155c",
       "scope": "Two recorded strict scalar-subquery request shapes, each observed twice; separate from the historical raw comparison."
+    },
+    {
+      "kind": "native-positive",
+      "path": "conformance/fs-ent-pipeline-native-positive-adjudication.json",
+      "sha256": "92b6ae7e6233a1d4c9f72e19d4f46b8205bdacfbb7f9c89aeedd6b4705df0e2e",
+      "ownerDecision": "docs.local/instructions/owner-decisions.md (2116)",
+      "scope": "Twenty-seven recorded native corpus recipe IDs and37 typed fields:296 finite value/shape comparisons across both profiles and transports in two rounds. Absolute time and production random sequences remain unclaimed."
     }
   ]
 }

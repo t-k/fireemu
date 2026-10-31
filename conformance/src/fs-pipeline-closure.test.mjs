@@ -319,8 +319,12 @@ test("finite contract adjudications preserve their declared finite outcomes", ()
       assert.equal(proof.decision, "ACCEPTED_FINITE_VALUE_AND_SHAPE_CONTRACT");
       assert.equal(proof.contract, "FINITE_VALUE_AND_SHAPE_ONLY");
       assert.equal(proof.parentClosureClaimed, false);
-      assert.equal(proof.binarySha256, comparison.artifactSha256);
-      assert.equal(proof.sourceCommit, closure.integratedRegression.integrationCommit);
+      const cohort = closure.recordedLeafReview.v041Promotion;
+      const finalComparison = json(cohort.comparisonPath);
+      assert.equal(sha256(cohort.comparisonPath), cohort.comparisonSha256);
+      assert.equal(proof.binarySha256, cohort.binarySha256);
+      assert.equal(proof.binarySha256, finalComparison.artifactSha256);
+      assert.equal(proof.sourceCommit, cohort.sourceCommit);
       assert.equal(
         proof.fixtureSha256,
         sha256("conformance/fixtures/fs-native-positive/production.json"),

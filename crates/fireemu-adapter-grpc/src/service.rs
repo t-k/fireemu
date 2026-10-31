@@ -726,7 +726,16 @@ impl Firestore for GatewayService {
             };
             let compiled =
                 crate::pipeline::compile_pipeline(&compiler_request, &parent, unrecorded)
-                    .map_err(|error| pipeline_status(answer(error), &canonical))?;
+                    .map_err(|error| {
+                        if self.gateway.production_refusals()
+                            && recorded_bit_internal(request.get_ref(), &error)
+                        {
+                            eprintln!("[firestore] pipeline: recorded integer bit function returned an internal error");
+                            Status::internal("An internal error occurred.")
+                        } else {
+                            pipeline_status(answer(error), &canonical)
+                        }
+                    })?;
             if request.get_ref().consistency_selector.is_some()
                 && (compiled.documents.is_none()
                     || !compiled.unions.is_empty()
@@ -1241,6 +1250,77 @@ impl tokio_stream::Stream for AggregationResponseStream {
         }
         std::task::Poll::Ready(response.map(Ok))
     }
+}
+
+// The native recording covers only this direct, integer-argument gRPC shape.
+// Called after the usual validation and only on the corresponding compiler refusal.
+fn recorded_bit_internal(request: &pb::ExecutePipelineRequest, error: &Status) -> bool {
+    use pb::{execute_pipeline_request::PipelineType, value::ValueType as V};
+    if request.auto_commit_transaction
+        || request.request_options.is_some()
+        || request.consistency_selector.is_some()
+        || error.code() != tonic::Code::Unimplemented
+    {
+        return false;
+    }
+    let Some(PipelineType::StructuredPipeline(structured)) = &request.pipeline_type else {
+        return false;
+    };
+    if !structured.options.is_empty() {
+        return false;
+    }
+    let Some(pipeline) = &structured.pipeline else {
+        return false;
+    };
+    let [collection, select] = pipeline.stages.as_slice() else {
+        return false;
+    };
+    if collection.name != "collection"
+        || !collection.options.is_empty()
+        || select.name != "select"
+        || !select.options.is_empty()
+    {
+        return false;
+    }
+    let [pb::Value {
+        value_type: Some(V::ReferenceValue(path)),
+    }] = collection.args.as_slice()
+    else {
+        return false;
+    };
+    if !path
+        .strip_prefix('/')
+        .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    {
+        return false;
+    }
+    let [pb::Value {
+        value_type: Some(V::MapValue(map)),
+    }] = select.args.as_slice()
+    else {
+        return false;
+    };
+    if map.fields.len() != 1 {
+        return false;
+    }
+    let Some(pb::Value {
+        value_type: Some(V::FunctionValue(function)),
+    }) = map.fields.get("value")
+    else {
+        return false;
+    };
+    let count = match function.name.as_str() {
+        "bit_not" => 1,
+        "bit_left_shift" | "bit_right_shift" => 2,
+        _ => return false,
+    };
+    function.options.is_empty()
+        && function.args.len() == count
+        && function
+            .args
+            .iter()
+            .all(|value| matches!(value.value_type, Some(V::IntegerValue(_))))
+        && error.message() == format!("function {:?} is unsupported locally", function.name)
 }
 
 /// Adds the canonical pipeline and the `FS_PIPE_*` code to a pipeline refusal (also used by
@@ -1962,6 +2042,120 @@ mod tests {
     use tokio_stream::wrappers::TcpListenerStream;
 
     use super::*;
+
+    fn bit_request(first: i64, second: i64) -> pb::ExecutePipelineRequest {
+        let body = serde_json::json!({"structuredPipeline":{"pipeline":{"stages":[
+            {"name":"collection","args":[{"referenceValue":"/positive"}]},
+            {"name":"select","args":[{"mapValue":{"fields":{"value":{"functionValue":{
+                "name":"bit_left_shift","args":[{"integerValue":first.to_string()},{"integerValue":second.to_string()}]
+            }}}}}]}
+        ]}}});
+        crate::rest::pipeline_json::request_from_json(
+            "projects/demo-app/databases/(default)",
+            &body,
+        )
+        .unwrap()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn recorded_bit_shape_depends_on_types_not_integer_values(first in proptest::prelude::any::<i64>(), second in proptest::prelude::any::<i64>()) {
+            let request = bit_request(first, second);
+            let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+            proptest::prop_assert!(recorded_bit_internal(&request, &error));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::invalid_argument("function \"bit_left_shift\" is unsupported locally")));
+            proptest::prop_assert!(!recorded_bit_internal(&request, &Status::unimplemented("earlier refusal")));
+        }
+    }
+
+    #[test]
+    fn recorded_bit_shape_rejects_unobserved_request_neighbors() {
+        let request = bit_request(5, 1);
+        let error = Status::unimplemented("function \"bit_left_shift\" is unsupported locally");
+        assert!(recorded_bit_internal(&request, &error));
+        let mut neighbors = Vec::new();
+        let mut changed = request.clone();
+        changed.auto_commit_transaction = true;
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        pipeline
+            .options
+            .insert("x".to_owned(), pb::Value::default());
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let stages = &mut pipeline.pipeline.as_mut().unwrap().stages;
+        stages.push(pb::pipeline::Stage {
+            name: "limit".to_owned(),
+            args: vec![],
+            options: std::collections::HashMap::new(),
+        });
+        neighbors.push(changed);
+        let mut changed = request.clone();
+        let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+            &mut changed.pipeline_type
+        else {
+            unreachable!()
+        };
+        let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+        let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type else {
+            unreachable!()
+        };
+        let Some(pb::value::ValueType::FunctionValue(function)) =
+            &mut map.fields.get_mut("value").unwrap().value_type
+        else {
+            unreachable!()
+        };
+        function.args[0].value_type = Some(pb::value::ValueType::StringValue("5".to_owned()));
+        neighbors.push(changed);
+        for mutation in ["arity", "options", "alias", "stage_options"] {
+            let mut changed = request.clone();
+            let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(pipeline)) =
+                &mut changed.pipeline_type
+            else {
+                unreachable!()
+            };
+            let select = &mut pipeline.pipeline.as_mut().unwrap().stages[1];
+            if mutation == "stage_options" {
+                select.options.insert("x".to_owned(), pb::Value::default());
+            } else {
+                let Some(pb::value::ValueType::MapValue(map)) = &mut select.args[0].value_type
+                else {
+                    unreachable!()
+                };
+                if mutation == "alias" {
+                    let value = map.fields.remove("value").unwrap();
+                    map.fields.insert("other".to_owned(), value);
+                } else {
+                    let Some(pb::value::ValueType::FunctionValue(function)) =
+                        &mut map.fields.get_mut("value").unwrap().value_type
+                    else {
+                        unreachable!()
+                    };
+                    if mutation == "arity" {
+                        function.args.pop();
+                    } else {
+                        function
+                            .options
+                            .insert("x".to_owned(), pb::Value::default());
+                    }
+                }
+            }
+            neighbors.push(changed);
+        }
+        for changed in neighbors {
+            assert!(!recorded_bit_internal(&changed, &error));
+        }
+    }
 
     fn test_gateway() -> Gateway {
         Gateway {

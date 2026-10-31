@@ -5465,14 +5465,15 @@ accumulator	unknown	one	long	strict
 nested	known	one	long	strict
 nested	known	one	empty	strict
 nested	known	one	array	ordinary
+nested	known	one	long	ordinary
 sort	unknown	multiple	empty	ordinary
 nested	unknown	zero	array	strict
-accumulator	known	zero	long	ordinary
-sort	known	multiple	array	strict
-sort	unknown	zero	empty	ordinary
-accumulator	known	multiple	empty	ordinary
-accumulator	unknown	multiple	array	ordinary
-nested	unknown	multiple	long	ordinary
+accumulator	known	zero	empty	ordinary
+nested	known	multiple	array	strict
+sort	known	zero	long	strict
+sort	known	one	array	strict
+accumulator	unknown	multiple	long	ordinary
+accumulator	known	one	array	ordinary
 ";
         let database = "projects/demo-fs-query-index/databases/entpipe1";
         let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
@@ -5579,6 +5580,10 @@ nested	unknown	multiple	long	ordinary
         assert!(!recorded_nested_sum_admitted(
             &RefusalGate::Recorded(None, database.to_owned()),
             Unrecorded::Refuse
+        ));
+        assert!(!recorded_nested_sum_admitted(
+            &RefusalGate::Recorded(None, database.to_owned()),
+            Unrecorded::OfficialEmulator
         ));
         assert!(!recorded_nested_sum_admitted(
             &RefusalGate::Open,

@@ -2568,13 +2568,14 @@ fn nested_sum_uses_actual_row_type() {
 
 proptest! {
     #[test]
-    fn nested_sum_long_requires_admission(value in any::<i64>(), admitted in any::<bool>()) {
+    fn nested_sum_long_requires_admission(value in any::<i64>(), admitted in any::<bool>(), ordinary in any::<bool>()) {
         let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
         let stage = Stage::Aggregate {
             accumulators: vec![("s".to_owned(), Accumulator { kind: AccumulatorKind::Sum, argument: Some(nested) })],
             groups: vec![],
         };
-        let mut cursor = Cursor::new(vec![stage]);
+        let mode = if ordinary { Unrecorded::OfficialEmulator } else { Unrecorded::Refuse };
+        let mut cursor = Cursor::new_in(vec![stage], mode);
         if admitted {
             cursor = cursor.with_recorded_nested_sum_wrong_type();
         }

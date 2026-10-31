@@ -5,9 +5,9 @@ on:
 permissions:
   contents: read
 jobs:
-  mutation:
+  replay:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -18,18 +18,36 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           path: .ci-helper
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
-          tool: cargo-nextest@0.9.143
-      - name: Verify exact source and run mutations
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Build exact source and replay both profiles
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = dc28b1f4df0111b725587855e92ae1545b8a7ea6
           test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .ci-helper/.github/temporary/o5_unknown_dual_mutations.py
-      - name: Preserve mutation evidence
+          pnpm -C conformance install --frozen-lockfile
+          cargo build -p fireemu --locked
+          mkdir /tmp/o5-unknown-dual-evidence
+          git rev-parse HEAD > /tmp/o5-unknown-dual-evidence/source.txt
+          sha256sum target/debug/fireemu > /tmp/o5-unknown-dual-evidence/binary.sha256
+          python3 .ci-helper/.github/temporary/prepare_o5_unknown.py
+          cp /tmp/o5-unknown-programs.json /tmp/o5-unknown-dual-evidence/programs.json
+          for profile in strict emulator; do
+            if test "$profile" = strict; then config=conformance/fs-ent-pipeline.fireemu.json; else config=conformance/fs-ent-pipeline.emulator.fireemu.json; fi
+            sudo unshare --net -- env PATH="$PATH" HOME="$HOME" sh -c '
+              ip link set lo up
+              exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS FIREEMU_SANDBOX_LANE=fs-ent-pipeline FS_QUERY_INDEX_IN=/tmp/o5-unknown-programs.json FS_QUERY_INDEX_OUT="/tmp/o5-unknown-dual-evidence/$5.json" FS_QUERY_INDEX_RUN="$4" "$3" exec --config "$6" --project fireemu-oracle-query --only firestore --firestore-port 0 --http-port 0 --storage-port 0 --ui-port 0 --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local
+            ' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" "$GITHUB_RUN_ID" "$profile" "$config" 2>&1 | tee "/tmp/o5-unknown-dual-evidence/$profile.log"
+          done
+      - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: o5-unknown-dual-mutations
-          path: /tmp/o5-unknown-dual-mutants/
+          name: o5-unknown-dual-actual
+          path: /tmp/o5-unknown-dual-evidence/
           if-no-files-found: warn

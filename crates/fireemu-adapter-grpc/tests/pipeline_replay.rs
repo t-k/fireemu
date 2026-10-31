@@ -1481,6 +1481,46 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn recorded_unknown_refusals_match_both_profiles_and_transports() {
+    let cases = [
+        (
+            "o5/function-order",
+            "select-unknown-function",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/function-order",
+            "select-capitalized-name",
+            "The function 'Equal' does not exist, did you mean 'equal'?",
+        ),
+        (
+            "o5/function-order",
+            "where-unknown-then-select-empty",
+            "The function 'nope_fn' does not exist.",
+        ),
+        (
+            "o5/stage-order",
+            "add-fields-unknown-then-aggregate-one",
+            "The function 'nope_fn' does not exist.",
+        ),
+    ];
+    for (family, step, expected) in cases {
+        for strict in [true, false] {
+            for grpc in [false, true] {
+                let (status, body) = internal_case(strict, family, step, grpc);
+                assert_eq!(status, 400, "{step} strict={strict} grpc={grpc}: {body}");
+                let message = if grpc {
+                    &body["grpcMessage"]
+                } else {
+                    &body[0]["error"]["message"]
+                };
+                assert_eq!(message, expected, "{step} strict={strict} grpc={grpc}");
+            }
+        }
+    }
+}
+
+#[test]
 fn unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries() {
     let requests = read("fs-ent-pipeline-requests.json");
     let program = requests["programs"]

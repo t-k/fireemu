@@ -5,46 +5,17 @@ on:
 permissions:
   contents: read
 jobs:
-  replay:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: f16d6ef9216a709fe180fdee8264f71c05ff48e1
+          ref: 72813aba1ae02bef3e855366495f615f946a0d48
           fetch-depth: 0
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          path: .ci-helper
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: 10.32.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 24
-      - name: Build source-bound local binary and replay
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = f16d6ef9216a709fe180fdee8264f71c05ff48e1
-          test "$(git -C .ci-helper rev-parse HEAD)" = "$GITHUB_SHA"
-          pnpm -C conformance install --frozen-lockfile
-          cargo build -p fireemu --locked
-          mkdir /tmp/o5-unknown-evidence
-          git rev-parse HEAD > /tmp/o5-unknown-evidence/source.txt
-          sha256sum target/debug/fireemu > /tmp/o5-unknown-evidence/binary.sha256
-          python3 .ci-helper/.github/temporary/prepare_o5_unknown.py
-          cp /tmp/o5-unknown-programs.json /tmp/o5-unknown-evidence/programs.json
-          sudo unshare --net -- env PATH="$PATH" HOME="$HOME" sh -c '
-            ip link set lo up
-            exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS FIREEMU_SANDBOX_LANE=fs-ent-pipeline FS_QUERY_INDEX_IN=/tmp/o5-unknown-programs.json FS_QUERY_INDEX_OUT=/tmp/o5-unknown-evidence/fireemu.json FS_QUERY_INDEX_RUN="$4" "$3" exec --config conformance/fs-ent-pipeline.fireemu.json --project fireemu-oracle-query --only firestore --firestore-port 0 --http-port 0 --storage-port 0 --ui-port 0 --hub-port 0 --logging-port 0 --firebase-json conformance/fs-ent-pipeline.firebase.json -- node conformance/src/fs-query-index/run.mjs session-local
-          ' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" "$GITHUB_RUN_ID" 2>&1 | tee /tmp/o5-unknown-evidence/replay.log
-      - name: Preserve local actual and binary binding
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: o5-unknown-local-actual
-          path: /tmp/o5-unknown-evidence/
-          if-no-files-found: warn
+          tool: cargo-nextest@0.9.143
+      - run: |
+          test "$(git rev-parse HEAD)" = 72813aba1ae02bef3e855366495f615f946a0d48
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(recorded_unknown_function_refusals_follow_shape_gate) | test(unknown_function_candidates_preserve_unrecorded_and_emulator_boundaries) | test(captured_generic_expressions_preserve_typed_results) | test(captured_numeric_scalar_expressions_preserve_integer_results)'

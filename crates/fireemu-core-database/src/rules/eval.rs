@@ -732,11 +732,7 @@ fn text(value: &Value<'_>) -> Option<String> {
     }
 }
 
-/// Equality of two values of the same primitive type, or of two orderings; values of
-/// different types are not equal, and a new object (`val()`, a member of `auth`) equals
-/// nothing. The official emulator compares two snapshots by location, and `auth` and
-/// `query` each by identity; that is not reproduced, so such a comparison is an error and
-/// the rule is false whether or not it is negated (review r9 M25, option (b)).
+/// Primitive values and orderings compare by value, and values of different types are unequal. New objects from `val()` or an `auth` member equal nothing. Root `auth` references from one scope compare equal. Snapshot and query identity comparisons remain rule errors, so the rule is false even when the comparison is negated (review r9 M25, option (b)).
 #[allow(clippy::float_cmp)]
 fn equal(l: &Value<'_>, r: &Value<'_>) -> Option<bool> {
     Some(match (l, r) {

@@ -1481,6 +1481,26 @@ fn unknown_add_fields_precedes_later_stage_arity_on_both_transports() {
 }
 
 #[test]
+fn unrecorded_unknown_candidates_keep_original_refusal_bodies() {
+    for name in ["row", "geo_distance"] {
+        let step = format!("fn-{name}");
+        let message = format!("function {name:?} is unsupported locally");
+        for strict in [true, false] {
+            for grpc in [false, true] {
+                let (status, body) = internal_case(strict, "o5/function-names", &step, grpc);
+                assert_eq!(status, 501, "{name} strict={strict} grpc={grpc}: {body}");
+                if grpc {
+                    assert_eq!(body["grpcMessage"], message, "{name}");
+                } else {
+                    assert_eq!(body[0]["error"]["message"], message, "{name}");
+                    assert_eq!(body[0]["error"]["status"], "UNIMPLEMENTED", "{name}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn recorded_unknown_refusals_match_both_profiles_and_transports() {
     let cases = [
         (

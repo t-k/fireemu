@@ -4980,6 +4980,102 @@ add_fields_map	unknown	none	strict";
     }
 
     #[test]
+    fn recorded_unknown_function_refusals_follow_shape_gate() {
+        use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
+        let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");
+        let (requests, order) =
+            crate::rest::json_syntax::parse_with_key_order(requests.as_bytes()).unwrap();
+        let production: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../conformance/fs-ent-pipeline-production.json"
+        ))
+        .unwrap();
+        let database = "projects/demo-fs-query-index/databases/entpipe1";
+        let parent = crate::decode::parse_parent(&format!("{database}/documents")).unwrap();
+        let programs = requests["programs"].as_array().unwrap();
+        let cases = [
+            ("function-order", "select-unknown-function"),
+            ("function-order", "select-empty-name"),
+            ("function-order", "select-capitalized-name"),
+            ("function-order", "where-unknown-then-select-empty"),
+            ("function-order", "select-unknown-before-arity"),
+            ("function-order", "unknown-as-first-argument"),
+            ("stage-order", "add-fields-unknown-then-select-empty"),
+            ("stage-order", "add-fields-unknown-then-limit-string"),
+            ("stage-order", "add-fields-unknown-then-aggregate-one"),
+            ("function-names", "fn-make_struct"),
+            ("function-names", "fn-logical_or"),
+            ("function-names", "fn-u2d"),
+            ("function-names", "fn-u2b"),
+            ("function-names", "fn-u2a"),
+            ("function-names", "fn-u2f"),
+            ("function-names", "fn-u25"),
+            ("function-names", "fn-u7e"),
+            ("function-names", "fn-u3c-3c"),
+            ("function-names", "fn-u3e-3e"),
+            ("function-names", "fn-u3c"),
+            ("function-names", "fn-u3c-3d"),
+            ("function-names", "fn-u3d-3d"),
+            ("function-names", "fn-u21-3d"),
+            ("function-names", "fn-u3e"),
+            ("function-names", "fn-u3e-3d"),
+            ("function-names", "fn-orders_after"),
+            ("function-names", "fn-list_shredded_fields"),
+            ("function-names", "fn-error"),
+            ("function-names", "fn-u41-4e-44"),
+            ("function-names", "fn-u4f-52"),
+            ("function-names", "fn-u58-4f-52"),
+            ("function-names", "fn-u4e-4f-54"),
+            ("function-names", "fn-snippet"),
+            ("function-names", "fn-between"),
+            ("function-names", "fn-is_nan"),
+        ];
+        let mut failures = Vec::new();
+        for (family, id) in cases {
+            let full = format!("fs-ent-pipeline/o5/{family}");
+            let (p, program) = programs
+                .iter()
+                .enumerate()
+                .find(|(_, program)| program["id"] == full)
+                .unwrap();
+            let (n, step) = program["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .find(|(_, step)| step["id"] == id)
+                .unwrap();
+            let body = &step["body"];
+            let order = order.rebased(&format!("/programs/{p}/steps/{n}/body"), "");
+            let request = crate::rest::pipeline_json::request_from_json(database, body).unwrap();
+            let expected = production["programs"][&full]["steps"][id]["body"][0]["error"]
+                ["message"]
+                .as_str()
+                .unwrap();
+            let actual =
+                compile_pipeline_in_order(&request, &parent, Unrecorded::Refuse, Some(&order))
+                    .unwrap_err();
+            let rest = RefusalGate::Recorded(shape_of_json(body, &order), database.to_owned())
+                .answer(actual.clone());
+            if rest.code() != tonic::Code::InvalidArgument || rest.message() != expected {
+                failures.push(format!("{id} rest: {rest:?}"));
+            }
+            let grpc_shape = shape_of_request(&request);
+            let expected_code = if grpc_shape.is_some() {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            };
+            let grpc = RefusalGate::Recorded(grpc_shape, database.to_owned()).answer(actual);
+            if grpc.code() != expected_code
+                || (expected_code == tonic::Code::InvalidArgument && grpc.message() != expected)
+            {
+                failures.push(format!("{id} grpc: {grpc:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
     fn recorded_registered_function_arities_match_both_transports() {
         use crate::pipeline_shape::{shape_of_json, shape_of_request, RefusalGate};
         let requests = include_str!("../../../conformance/fs-ent-pipeline-requests.json");

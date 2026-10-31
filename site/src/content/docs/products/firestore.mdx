@@ -68,7 +68,7 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 
 In v0.41.0 (unreleased), additional recorded forms include `like`, `rand`, `array_filter` and `array_transform`. Input types, lambda placement and combinations remain bounded. Random values do not reproduce production's random sequence.
 
-The same release adds recorded scalar forms of `minimum`, `maximum`, `sum` and `negate`, including captured integer, finite-double, mixed numeric and null/absent cases. An empty scalar `sum` returns null. Other types, non-finite inputs and numerical extremes remain outside this finite compatibility claim.
+The same release adds recorded scalar forms of `minimum`, `maximum`, `sum` and `negate`, including captured integer, finite-double, mixed numeric and null/absent cases. The recorded `sum([])` returns null. Other types, non-finite inputs and numerical extremes remain outside this finite compatibility claim.
 
 Additional recorded generic forms include `cmp`, `storage_size`, `coalesce`, `get_field`, `offset`, `reverse`, `length`, `string_concat`, `namespace`, `has_ancestor`, `reference_slice`, `replace_document_id` and `autogen_document_id`. Each observation covers its declared input types: for example, `storage_size` currently supports strings, while recorded `reverse` forms cover strings, bytes and arrays. Generated document IDs follow the finite 20-character ASCII-alphanumeric contract; these observations do not establish entropy or global uniqueness.
 

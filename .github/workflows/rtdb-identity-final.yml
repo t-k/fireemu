@@ -1,0 +1,43 @@
+name: rtdb-identity-final
+on:
+  push:
+    branches: [work/rtdb-rules-identity-ci]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 01b8e66b050e1ebdd59c095fb5bd86763aedc5c9
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: .ci-helper
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          components: clippy,rustfmt
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
+        with:
+          tool: cargo-nextest@0.9.143
+      - name: Verify exact source under cgroup cap
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 01b8e66b050e1ebdd59c095fb5bd86763aedc5c9
+          mkdir /tmp/rtdb-verify
+          git rev-parse HEAD > /tmp/rtdb-verify/source.txt
+          sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" bash .ci-helper/.github/temporary/rtdb_verify.sh
+      - name: Replay exact binary in isolated network
+        run: |
+          set -euo pipefail
+          for profile in strict emulator; do
+            printf '{"schemaVersion":1,"profile":"%s"}\n' "$profile" > "/tmp/$profile.json"
+            sudo unshare --net -- sh -c 'ip link set lo up; exec setpriv --reuid="$1" --regid="$2" --init-groups -- env -u GOOGLE_APPLICATION_CREDENTIALS "$3" exec --config "$4" --no-config-discovery --project demo-test --only database --database-port 0 --ui-port 0 --hub-port 0 --logging-port 0 -- bash "$5" "$6"' sh "$(id -u)" "$(id -g)" "$PWD/target/debug/fireemu" "/tmp/$profile.json" "$PWD/.ci-helper/.github/temporary/rtdb_replay.sh" "/tmp/rtdb-verify/$profile.json" > "/tmp/rtdb-verify/$profile.log" 2>&1
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: rtdb-identity-final
+          path: /tmp/rtdb-verify/

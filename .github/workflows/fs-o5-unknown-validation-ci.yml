@@ -11,11 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: c80525499c08d95d78032a4958ccb5f098a087d1
+          ref: 93251c83befdea5f5bf0275f4ab263a49782f289
           fetch-depth: 0
       - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177
         with:
           tool: cargo-nextest@0.9.143
       - run: |
-          test "$(git rev-parse HEAD)" = c80525499c08d95d78032a4958ccb5f098a087d1
-          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked --no-fail-fast -E 'test(the_pipeline_corpus_replays_as_production_answered) | test(o5_and_duplicate_internal_pins_reject_unobserved_matches) | test(recorded_unknown_refusals_match_both_profiles_and_transports) | test(unrecorded_unknown_candidates_keep_original_refusal_bodies) | test(unknown_before_stage_arity_preserves_unobserved_and_emulator_boundaries) | test(unknown_candidate_gate_preserves_exact_fallback_status) | test(generated_unknown_function_boundaries_remain_bounded)'
+          test "$(git rev-parse HEAD)" = 93251c83befdea5f5bf0275f4ab263a49782f289
+          cargo nextest run -p fireemu-adapter-grpc --profile pr --locked -E 'test(candidate_shape_eligibility_bounds_nested_function_options)'

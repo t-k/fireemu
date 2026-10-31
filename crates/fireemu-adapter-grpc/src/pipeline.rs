@@ -5425,6 +5425,85 @@ plain	where	none";
     }
 
     #[test]
+    fn generated_suggestion_boundaries_follow_context_and_shape() {
+        use pb::value::ValueType as V;
+        let cases = [
+            ("aggregate", "empty", "select", false),
+            ("observed_hint", "empty", "select", true),
+            ("unknown", "empty", "select", false),
+            ("registered", "empty", "select", true),
+            ("aggregate", "nonempty", "select", true),
+            ("observed_hint", "options", "select", false),
+            ("aggregate", "empty", "aggregate", false),
+            ("observed_hint", "empty", "where", true),
+            ("unknown", "options", "aggregate", true),
+            ("observed_hint", "nonempty", "aggregate", false),
+            ("aggregate", "options", "where", false),
+            ("registered", "nonempty", "where", false),
+            ("registered", "options", "aggregate", true),
+            ("unknown", "nonempty", "where", true),
+        ];
+        for (class, arguments, context, ordinary) in cases {
+            let mode = if ordinary {
+                Unrecorded::OfficialEmulator
+            } else {
+                Unrecorded::Refuse
+            };
+            let name = match class {
+                "aggregate" => "count",
+                "observed_hint" => "row",
+                "registered" => "add",
+                _ => "unknown_neighbor",
+            };
+            let args = if arguments == "nonempty" {
+                vec![pb::Value::default()]
+            } else {
+                vec![]
+            };
+            let options = if arguments == "options" {
+                std::collections::HashMap::from([("x".to_owned(), pb::Value::default())])
+            } else {
+                Default::default()
+            };
+            let value = pb::Value {
+                value_type: Some(V::FunctionValue(pb::Function {
+                    name: name.to_owned(),
+                    args,
+                    options,
+                })),
+            };
+            let error = match context {
+                "select" => decode_operand_tree(&value, mode).err(),
+                "where" => decode_condition(
+                    &pb::pipeline::Stage {
+                        name: "where".to_owned(),
+                        args: vec![value],
+                        ..Default::default()
+                    },
+                    mode,
+                )
+                .err(),
+                _ => decode_accumulator(&value, mode).err(),
+            };
+            let text = error
+                .as_ref()
+                .and_then(crate::pipeline_shape::unknown_candidate_text);
+            let expected_hint = class == "observed_hint" || class == "aggregate";
+            if context == "select" && arguments == "empty" && expected_hint {
+                assert!(
+                    text.is_some_and(|value| value.contains("did you mean")),
+                    "{class} {context}"
+                );
+            } else {
+                assert!(
+                    !text.is_some_and(|value| value.contains("did you mean")),
+                    "{class} {arguments} {context}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn observed_suggestion_neighbors_keep_the_original_fallback() {
         use crate::pipeline_shape::{unknown_candidate_text, RefusalGate};
         use pb::value::ValueType as V;

@@ -419,7 +419,12 @@ async fn selector_validation_precedes_minting_and_non_documents_remain_refused()
 #[tokio::test]
 async fn selector_evaluation_error_does_not_commit_or_abandon_existing_token() {
     for mode in ["rw", "existing"] {
-        let (service, backend) = fixture("strict");
+        let (mut service, backend) = fixture("strict");
+        let selected = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_selected = selected.clone();
+        service.first_query_page_ready = Some(Arc::new(move || {
+            worker_selected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
         let (mut req, existing) = request(&backend, mode, true, "found");
         let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
             req.pipeline_type.as_mut()
@@ -442,11 +447,17 @@ async fn selector_evaluation_error_does_not_commit_or_abandon_existing_token() {
             })),
         ));
         assert!(responses(&service, req).await.is_err());
+        assert_eq!(
+            selected.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an unsupported selector refusal is not an evaluation failure"
+        );
         if mode == "existing" {
             assert!(read_token(&backend, &existing).is_ok());
             rollback(&backend, existing).unwrap();
         }
         assert_eq!(transaction_stats(&backend).active, 0);
+        assert_eq!(transaction_stats(&backend).finished, 1);
     }
 }
 

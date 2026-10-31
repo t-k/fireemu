@@ -1,0 +1,133 @@
+name: v041 Quint private candidate
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Version-bumped source commit SHA
+        required: true
+        type: string
+      version:
+        description: Expected workspace version
+        default: 0.41.0
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  quint-generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+      CARGO_BUILD_JOBS: 1
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact input and clean source
+        shell: bash
+        run: |
+          [[ "$EXPECTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test "$EXPECTED_VERSION" = 0.41.0
+          python3 -c 'import os,tomllib; assert tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"] == os.environ["EXPECTED_VERSION"]'
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: install protected verification JDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          java_path="$(readlink -f "$(command -v java)")"
+          source_jdk="$(dirname "$(dirname "$java_path")")"
+          test "$source_jdk" != / && test -x "$source_jdk/bin/java"
+          test -x "$source_jdk/bin/javac" && test -x "$source_jdk/bin/jar"
+
+          protected_jdk="$(sudo mktemp -d /usr/lib/fireemu-quint-jdk.XXXXXX)"
+          # Dereference internal JDK symlinks so every executable remains inside the protected
+          # copy and no permissive symlink mode is mistaken for an executable permission.
+          sudo cp -aL "$source_jdk"/. "$protected_jdk"/
+          sudo chown -R root:root "$protected_jdk"
+          sudo chmod -R go-w "$protected_jdk"
+          sudo chmod 0755 "$protected_jdk"
+
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            test -x "$path"
+            resolved="$(readlink -f "$path")"
+            test "$resolved" = "$path"
+          done
+
+          # trusted_path() rejects any non-root-owned or caller-writable ancestor.
+          test "$(find "$protected_jdk" -xdev \( ! -user root -o -perm /022 \) -print -quit)" = ""
+          for executable in java javac jar; do
+            path="$protected_jdk/bin/$executable"
+            parent="$path"
+            while true; do
+              test "$(stat -c '%u' "$parent")" = 0
+              mode="$(stat -c '%a' "$parent")"
+              test "$((8#$mode & 022))" = 0
+              test "$parent" != / || break
+              parent="$(dirname "$parent")"
+            done
+          done
+
+          echo "JAVA_HOME=$protected_jdk" >> "$GITHUB_ENV"
+          echo "$protected_jdk/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          components: rustfmt, clippy
+      - name: Verify pinned Rust toolchain
+        run: rustc --version | tee /dev/stderr | grep -q "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: verification/quint/pnpm-lock.yaml
+      - run: pnpm -C verification/quint install --frozen-lockfile
+      - name: Install verified Apalache backend
+        run: QUINT_HOME="$RUNNER_TEMP/quint-home" verification/quint/bin/install-apalache
+      - name: Fetch locked Cargo dependencies
+        run: cargo fetch --locked
+      - name: Generate and verify 15 models in bounded scope
+        env:
+          OUT: ${{ runner.temp }}/v041-quint-output
+          WT: ${{ github.workspace }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/v041-quint-target
+          QUINT_REAL_BIN: ${{ github.workspace }}/verification/quint/node_modules/.bin/quint
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -e "$OUT"; then echo 'Output path already exists' >&2; exit 1; fi
+          mkdir -p "$OUT"
+          echo IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbApjZCAiJFdUIgpbWyAiJEVYUEVDVEVEX1NPVVJDRSIgPX4gXlswLTlhLWZdezQwfSQgXV0KdGVzdCAiJChnaXQgcmV2LXBhcnNlIEhFQUQpIiA9ICIkRVhQRUNURURfU09VUkNFIgp0ZXN0IC16ICIkKGdpdCBzdGF0dXMgLS1wb3JjZWxhaW4gLS11bnRyYWNrZWQtZmlsZXM9bm8pIgpweXRob24zIC1jICdpbXBvcnQgdG9tbGxpYjsgYXNzZXJ0IHRvbWxsaWIubG9hZChvcGVuKCJDYXJnby50b21sIiwicmIiKSlbIndvcmtzcGFjZSJdWyJwYWNrYWdlIl1bInZlcnNpb24iXT09IjAuNDEuMCInCmNnPSQoYXdrIC1GOiAnJDE9PSIwIiB7cHJpbnQgJDN9JyAvcHJvYy9zZWxmL2Nncm91cCkKY2F0ICIvc3lzL2ZzL2Nncm91cCR7Y2d9L21lbW9yeS5tYXgiID4gIiRPVVQvbWVtb3J5Lm1heCIKY2F0ICIvc3lzL2ZzL2Nncm91cCR7Y2d9L21lbW9yeS5zd2FwLm1heCIgPiAiJE9VVC9tZW1vcnkuc3dhcC5tYXgiCnRlc3QgIiQoY2F0ICIkT1VUL21lbW9yeS5tYXgiKSIgPSA2NDQyNDUwOTQ0CnRlc3QgIiQoY2F0ICIkT1VUL21lbW9yeS5zd2FwLm1heCIpIiA9IDAKZ2l0IHJldi1wYXJzZSBIRUFEID4gIiRPVVQvc291cmNlLnNoYSIKZ2l0IHJldi1wYXJzZSBIRUFEXnt0cmVlfSA+ICIkT1VUL3RyZWUuc2hhIgpydXN0YyAtLXZlcnNpb24gLS12ZXJib3NlID4gIiRPVVQvcnVzdGMudHh0Igpub2RlIC0tdmVyc2lvbiA+ICIkT1VUL25vZGUudHh0IgojIEFsbCB0cmFja2VkIGlucHV0cyBvdXRzaWRlIHRoZSAxNiBnZW5lcmF0ZWQgZXZpZGVuY2UgZmlsZXM7IGRvIG5vdCBpbmNsdWRlIHRhcmdldC9ub2RlX21vZHVsZXMuCmdpdCBscy1maWxlcyAteiB8IHB5dGhvbjMgLWMgJ2ltcG9ydCBzeXM7IGE9c3lzLnN0ZGluLmJ1ZmZlci5yZWFkKCkuc3BsaXQoYiJcMCIpOyBzeXMuc3Rkb3V0LmJ1ZmZlci53cml0ZShiIlwwIi5qb2luKHggZm9yIHggaW4gYSBpZiB4IGFuZCBub3QgeC5zdGFydHN3aXRoKGIidmVyaWZpY2F0aW9uL3F1aW50L2V2aWRlbmNlLyIpKStiIlwwIiknIHwgeGFyZ3MgLTAgc2hhMjU2c3VtID4gIiRPVVQvaW5wdXRzLnNoYTI1NiIKZW52IC11IFFVSU5UX0hPTUUgY2FyZ28gcnVuIC0tbG9ja2VkIC1xIC1wIGZpcmVlbXUtdmVyaWZpY2F0aW9uLXF1aW50IC0tIGNhcmdvLWF1dGhvcml0eSAtLXdyaXRlIHZlcmlmaWNhdGlvbi9xdWludC9ldmlkZW5jZS9jYXJnby1hdXRob3JpdHkuanNvbgpmb3IgbW9kZWwgaW4gQXRvbWljQ29tbWl0T3V0Ym94IEF0b21pY0V4cG9ydFB1YmxpY2F0aW9uIEF1dGhUb3RwIEF3YWl0SWRsZSBDb21wYXRpYmlsaXR5U2VsZWN0aW9uIEV2ZW50RGVsaXZlcnkgRmlyZXN0b3JlTGlzdGVuUmVmcmVzaCBMaW1pdFJlamVjdGlvbiBSZWdleEF1dGhvcml6YXRpb24gUmVnZXhFdmFsdWF0aW9uQ2FjaGUgUmVnZXhMaW5lYXJSZXBlYXQgUnVsZXNldEFjdGl2YXRpb24gU2Vzc2lvbkVwb2NoIFN0b3JhZ2VHZW5lcmF0aW9uIFRyYW5zYWN0aW9uQ29uZGl0aW9uYWxMb2NrOyBkbwogIFFVSU5UX0hPTUU9IiRSVU5ORVJfVEVNUC9xdWludC1ob21lIiBjYXJnbyBydW4gLS1sb2NrZWQgLXEgLXAgZmlyZWVtdS12ZXJpZmljYXRpb24tcXVpbnQgLS0gbXV0YXRlLW1vZGVsIC0tbW9kZWwgIiRtb2RlbCIgLS1ldmlkZW5jZSAidmVyaWZpY2F0aW9uL3F1aW50L2V2aWRlbmNlLyRtb2RlbC5qc29uIgogIFFVSU5UX0hPTUU9IiRSVU5ORVJfVEVNUC9xdWludC1ob21lIiBjYXJnbyBydW4gLS1sb2NrZWQgLXEgLXAgZmlyZWVtdS12ZXJpZmljYXRpb24tcXVpbnQgLS0gdmVyaWZ5LWV2aWRlbmNlIC0tbW9kZWwgIiRtb2RlbCIgLS1ldmlkZW5jZSAidmVyaWZpY2F0aW9uL3F1aW50L2V2aWRlbmNlLyRtb2RlbC5qc29uIgpkb25lCnNoYTI1NnN1bSAtYyAiJE9VVC9pbnB1dHMuc2hhMjU2IiA+ICIkT1VUL2lucHV0LXJlY2hlY2subG9nIgp0ZXN0ICIkKGdpdCByZXYtcGFyc2UgSEVBRCkiID0gIiRFWFBFQ1RFRF9TT1VSQ0UiCm1rZGlyICIkT1VUL2V2aWRlbmNlIgpjcCB2ZXJpZmljYXRpb24vcXVpbnQvZXZpZGVuY2Uve2NhcmdvLWF1dGhvcml0eSxBdG9taWNDb21taXRPdXRib3gsQXRvbWljRXhwb3J0UHVibGljYXRpb24sQXV0aFRvdHAsQXdhaXRJZGxlLENvbXBhdGliaWxpdHlTZWxlY3Rpb24sRXZlbnREZWxpdmVyeSxGaXJlc3RvcmVMaXN0ZW5SZWZyZXNoLExpbWl0UmVqZWN0aW9uLFJlZ2V4QXV0aG9yaXphdGlvbixSZWdleEV2YWx1YXRpb25DYWNoZSxSZWdleExpbmVhclJlcGVhdCxSdWxlc2V0QWN0aXZhdGlvbixTZXNzaW9uRXBvY2gsU3RvcmFnZUdlbmVyYXRpb24sVHJhbnNhY3Rpb25Db25kaXRpb25hbExvY2t9Lmpzb24gIiRPVVQvZXZpZGVuY2UvIgooY2QgIiRPVVQvZXZpZGVuY2UiICYmIHNoYTI1NnN1bSAuLyouanNvbiA+IC4uL2V2aWRlbmNlLnNoYTI1NikK | base64 -d > "$OUT/generate.sh"
+          export PATH="$WT/verification/quint/bin:$JAVA_HOME/bin:$PATH"
+          # The log belongs to the runner user; redirection must occur before sudo.
+          # shellcheck disable=SC2024
+          sudo systemd-run --scope --quiet -p MemoryMax=6442450944 -p MemorySwapMax=0 \
+            setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups -- \
+            env PATH="$PATH" HOME="$HOME" WT="$WT" EXPECTED_SOURCE="$EXPECTED_SOURCE" RUNNER_TEMP="$RUNNER_TEMP" OUT="$OUT" \
+            CARGO_TARGET_DIR="$CARGO_TARGET_DIR" CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= JAVA_HOME="$JAVA_HOME" QUINT_REAL_BIN="$QUINT_REAL_BIN" \
+            bash "$OUT/generate.sh" > "$OUT/generate.log" 2>&1
+      - name: Preserve available generated evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/v041-quint-output/partial-evidence"
+          if test -d verification/quint/evidence; then cp -a verification/quint/evidence/. "$RUNNER_TEMP/v041-quint-output/partial-evidence/"; fi
+          git status --short > "$RUNNER_TEMP/v041-quint-output/failure-status.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v041-quint-generation
+          path: ${{ runner.temp }}/v041-quint-output
+          if-no-files-found: warn

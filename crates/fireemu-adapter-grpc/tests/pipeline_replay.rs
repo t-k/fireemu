@@ -639,20 +639,7 @@ fn satisfies_in(
 /// Rows that differ from production, with the reason, the same under both profiles: functions and
 /// stages outside the finite local subset (PX1b-d and later slices), which fireemu refuses with
 /// UNIMPLEMENTED where production answers, and the result order without a sort.
-const KNOWN_DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "fs-ent-pipeline/o6/sort-wire-errors#expression-unknown-fn",
-        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-args#accumulator-unknown",
-        "the \"did you mean\" hint of an unknown function name is not reproduced (the function library is outside this subset)",
-    ),
-    (
-        "fs-ent-pipeline/o7/aggregate-args#nested-aggregate",
-        "a nested aggregate evaluates `sum` as the array function `array_sum` in production; not reproduced",
-    ),
-];
+const KNOWN_DIFFERENCES: &[(&str, &str)] = &[];
 
 /// Rows whose 200 answer holds other rows or another order than production's because the cut or
 /// the order depends on what production has not shown (see the reason); both profiles answer 200

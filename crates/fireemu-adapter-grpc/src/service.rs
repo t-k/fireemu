@@ -902,13 +902,38 @@ impl Firestore for GatewayService {
                     .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
             };
             let numeric_scope = numeric_row_scope(request.get_ref(), &compiled);
+            let admission_gate =
+                if unrecorded == fireemu_core_firestore::pipeline_exec::Unrecorded::Refuse {
+                    gate.clone()
+                } else {
+                    crate::pipeline_shape::RefusalGate::Recorded(
+                        if matches!(
+                            compiled.stages.as_slice(),
+                            [fireemu_core_firestore::pipeline_exec::Stage::Aggregate { .. }]
+                        ) && crate::pipeline::candidate_shape_eligible(request.get_ref())
+                        {
+                            crate::pipeline_shape::shape_of_request(request.get_ref())
+                        } else {
+                            None
+                        },
+                        request.get_ref().database.clone(),
+                    )
+                };
+            let admitted =
+                crate::pipeline::recorded_nested_sum_admitted(&admission_gate, unrecorded);
+            let mut cursor = fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
+                compiled.stages,
+                unrecorded,
+                runtime,
+            );
+            if admitted {
+                cursor = cursor.with_recorded_nested_sum_wrong_type();
+            }
             return Ok(Response::new(Box::pin(PipelineResponseStream::running(
                 input,
-                compiled,
-                unrecorded,
+                cursor,
                 canonical,
                 gate,
-                runtime,
                 numeric_scope,
             ))));
         }
@@ -1480,20 +1505,14 @@ impl PipelineResponseStream {
     /// A stream over the input scan of a compiled pipeline.
     fn running(
         inner: BoxStream<pb::RunQueryResponse>,
-        compiled: crate::pipeline::CompiledExecution,
-        unrecorded: fireemu_core_firestore::pipeline_exec::Unrecorded,
+        cursor: fireemu_core_firestore::pipeline_exec::Cursor,
         canonical: String,
         gate: crate::pipeline_shape::RefusalGate,
-        runtime: fireemu_core_firestore::pipeline_exec::RuntimeContext,
         numeric_row_scope: Option<NumericRowScope>,
     ) -> Self {
         Self {
             inner: Some(inner),
-            cursor: fireemu_core_firestore::pipeline_exec::Cursor::new_in_with_runtime(
-                compiled.stages,
-                unrecorded,
-                runtime,
-            ),
+            cursor,
             read_time: None,
             canonical,
             gate,

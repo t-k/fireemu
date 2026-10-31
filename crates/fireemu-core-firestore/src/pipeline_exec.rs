@@ -2629,6 +2629,7 @@ pub struct Cursor {
     state: Vec<StageState>,
     sample_rng: Vec<Option<SplitMix64>>,
     recorded_select_first_wrong_type: bool,
+    recorded_nested_sum_wrong_type: bool,
 }
 
 impl Cursor {
@@ -2690,6 +2691,7 @@ impl Cursor {
             state,
             sample_rng,
             recorded_select_first_wrong_type: false,
+            recorded_nested_sum_wrong_type: false,
         }
     }
 
@@ -2697,6 +2699,13 @@ impl Cursor {
     #[must_use]
     pub fn with_recorded_select_first_wrong_type(mut self) -> Self {
         self.recorded_select_first_wrong_type = true;
+        self
+    }
+
+    /// Enables the recorded nested sum refusal after adapter shape admission.
+    #[must_use]
+    pub fn with_recorded_nested_sum_wrong_type(mut self) -> Self {
+        self.recorded_nested_sum_wrong_type = true;
         self
     }
 
@@ -2801,7 +2810,14 @@ impl Cursor {
                 Stage::Aggregate {
                     accumulators,
                     groups,
-                } => aggregate_rows(&rows, accumulators, groups, self.unrecorded, &self.runtime)?,
+                } => aggregate_rows(
+                    &rows,
+                    accumulators,
+                    groups,
+                    self.unrecorded,
+                    &self.runtime,
+                    self.recorded_nested_sum_wrong_type,
+                )?,
                 _ => continue,
             };
             for row in produced {
@@ -3386,14 +3402,51 @@ impl Accumulator {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep accumulator dispatch and its row evaluation together"
+    )]
     fn add(
         &self,
         running: &mut Running,
         row: &Row,
         unrecorded: Unrecorded,
         runtime: &RuntimeContext,
+        recorded_nested_sum_wrong_type: bool,
     ) -> Result<(), EvalError> {
         let value = match &self.argument {
+            Some(Expr::Call { function, args })
+                if recorded_nested_sum_wrong_type
+                    && self.kind == AccumulatorKind::Sum
+                    && function.name == "sum"
+                    && args.len() == 1 =>
+            {
+                let arg = args[0].eval_at(row, unrecorded, false, runtime);
+                let eval = (function.eval)(
+                    std::slice::from_ref(&arg),
+                    Context {
+                        unrecorded,
+                        condition: false,
+                        runtime,
+                    },
+                );
+                if matches!(arg, Eval::Value(Value::Integer(_)))
+                    && matches!(
+                        eval,
+                        Eval::Error(EvalError::Unobserved {
+                            function: "sum",
+                            reason: "unrecorded argument shape"
+                        })
+                    )
+                {
+                    return Err(EvalError::WrongType {
+                        function: "array_sum",
+                        expected: "Array",
+                        got: "LONG",
+                    });
+                }
+                blocking_value(eval, unrecorded, "aggregate")?
+            }
             Some(argument) => blocking_value(
                 argument.eval_at(row, unrecorded, false, runtime),
                 unrecorded,
@@ -3536,6 +3589,7 @@ fn aggregate_rows(
     groups: &[(String, Expr)],
     unrecorded: Unrecorded,
     runtime: &RuntimeContext,
+    recorded_nested_sum_wrong_type: bool,
 ) -> Result<Vec<Row>, EvalError> {
     type Group = (Vec<Value>, Vec<Running>);
     let start = || {
@@ -3561,7 +3615,13 @@ fn aggregate_rows(
         };
         let running = &mut order[at].1;
         for ((_, accumulator), state) in accumulators.iter().zip(running.iter_mut()) {
-            accumulator.add(state, row, unrecorded, runtime)?;
+            accumulator.add(
+                state,
+                row,
+                unrecorded,
+                runtime,
+                recorded_nested_sum_wrong_type,
+            )?;
         }
     }
     order

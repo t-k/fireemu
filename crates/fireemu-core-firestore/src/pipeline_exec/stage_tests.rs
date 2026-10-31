@@ -2527,3 +2527,92 @@ fn aggregate_five_seeded_pict_rows() {
         );
     }
 }
+
+#[test]
+fn nested_sum_uses_actual_row_type() {
+    let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
+    let stage = Stage::Aggregate {
+        accumulators: vec![(
+            "s".to_owned(),
+            Accumulator {
+                kind: AccumulatorKind::Sum,
+                argument: Some(nested),
+            },
+        )],
+        groups: vec![],
+    };
+    let run = |rows: Vec<Row>| {
+        let mut cursor = Cursor::new(vec![stage.clone()]).with_recorded_nested_sum_wrong_type();
+        for row in rows {
+            cursor.push(row)?;
+        }
+        cursor.finish()
+    };
+    let row = doc("one", &[("n", int(7))]);
+    assert!(matches!(
+        execute_rows_in(vec![stage.clone()], vec![row.clone()], Unrecorded::Refuse),
+        Err(EvalError::Unobserved { .. })
+    ));
+    let error = run(vec![row]).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "The function array_sum(...) requires `Array` but got `LONG`."
+    );
+    assert!(run(vec![]).is_ok());
+    assert!(run(vec![doc("one", &[("n", Value::Array(vec![int(7)]))])]).is_ok());
+    assert!(matches!(
+        run(vec![doc("one", &[("n", Value::String("x".to_owned()))])]),
+        Err(EvalError::Unobserved { .. })
+    ));
+}
+
+proptest! {
+    #[test]
+    fn nested_sum_long_requires_admission(value in any::<i64>(), admitted in any::<bool>(), ordinary in any::<bool>()) {
+        let nested = Expr::call("sum", vec![field("n")], Placement::Value).unwrap();
+        let stage = Stage::Aggregate {
+            accumulators: vec![("s".to_owned(), Accumulator { kind: AccumulatorKind::Sum, argument: Some(nested) })],
+            groups: vec![],
+        };
+        let mode = if ordinary { Unrecorded::OfficialEmulator } else { Unrecorded::Refuse };
+        let mut cursor = Cursor::new_in(vec![stage], mode);
+        if admitted {
+            cursor = cursor.with_recorded_nested_sum_wrong_type();
+        }
+        cursor.push(doc("one", &[("n", int(value))])).unwrap();
+        let result = cursor.finish();
+        if admitted {
+            prop_assert!(matches!(result, Err(EvalError::WrongType { function: "array_sum", expected: "Array", got: "LONG" })), "expected recorded type refusal");
+        } else {
+            prop_assert!(matches!(result, Err(EvalError::Unobserved { function: "sum", .. })), "expected unobserved fallback");
+        }
+    }
+}
+
+#[test]
+fn admitted_nested_sum_evaluates_child_once() {
+    let rand = Expr::call("rand", vec![], Placement::Value).unwrap();
+    let nested = Expr::call("sum", vec![rand], Placement::Value).unwrap();
+    let stage = Stage::Aggregate {
+        accumulators: vec![(
+            "s".to_owned(),
+            Accumulator {
+                kind: AccumulatorKind::Sum,
+                argument: Some(nested),
+            },
+        )],
+        groups: vec![],
+    };
+    let rng = std::sync::Arc::new(std::sync::Mutex::new(SplitMix64::new(42)));
+    let runtime = RuntimeContext {
+        expr_rng: Some(rng.clone()),
+        ..RuntimeContext::default()
+    };
+    let mut cursor = Cursor::new_in_with_runtime(vec![stage], Unrecorded::Refuse, runtime)
+        .with_recorded_nested_sum_wrong_type();
+    cursor.push(doc("one", &[])).unwrap();
+    assert!(matches!(cursor.finish(), Err(EvalError::Unobserved { .. })));
+    let mut expected = SplitMix64::new(42);
+    expected.next_u64();
+    assert_eq!(rng.lock().unwrap().next_u64(), expected.next_u64());
+}

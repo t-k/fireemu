@@ -1,0 +1,19 @@
+name: fs-r21 ordinary admission red
+on:
+  push:
+    branches: [work/fs-r21-refusals-ci]
+    paths: [.github/workflows/fs-r21-ordinary-red.yml]
+permissions:
+  contents: read
+jobs:
+  red:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 30e12110f23a41d7bb6347185583436c260f8a84
+      - name: Run recorded profile admission test under memory limit
+        run: |
+          test "$(git rev-parse HEAD)" = 30e12110f23a41d7bb6347185583436c260f8a84
+          sudo systemd-run --scope --unit=fs-r21-ordinary-red -p MemoryMax=6442450944 -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" RUSTC_WRAPPER= bash -c 'systemctl show fs-r21-ordinary-red.scope -p MemoryMax -p MemorySwapMax -p MemoryCurrent; exec cargo test --manifest-path Cargo.toml --locked -p fireemu-adapter-grpc nested_sum_admission_requires_recorded_shape_in_both_profiles -- --nocapture'

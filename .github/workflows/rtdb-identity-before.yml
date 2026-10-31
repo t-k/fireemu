@@ -21,8 +21,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = 072d5329bb140f4737d93057c94063df651cc3a0
-          sudo systemd-run --scope --quiet -p MemoryMax=10G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" cargo build -p fireemu --locked -j 2
           mkdir /tmp/rtdb-before
+          sudo systemd-run --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 --uid "$(id -u)" --gid "$(id -g)" env PATH="$PATH" HOME="$HOME" sh -c 'cgroup=$(awk -F: '"'"'$1 == "0" {print $3}'"'"' /proc/self/cgroup); cat "/sys/fs/cgroup$cgroup/memory.max" "/sys/fs/cgroup$cgroup/memory.swap.max" > /tmp/rtdb-before/cgroup.txt; test "$(cat "/sys/fs/cgroup$cgroup/memory.max")" = 6442450944; test "$(cat "/sys/fs/cgroup$cgroup/memory.swap.max")" = 0; exec cargo build -p fireemu --locked -j 2'
           git rev-parse HEAD > /tmp/rtdb-before/source.txt
           sha256sum target/debug/fireemu > /tmp/rtdb-before/binary.sha256
           for profile in strict emulator; do

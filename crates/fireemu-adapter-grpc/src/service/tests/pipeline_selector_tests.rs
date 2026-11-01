@@ -1,4 +1,4 @@
-//! Documents-only ExecutePipeline selector contracts, including stream ownership.
+//! Documents-only `ExecutePipeline` selector contracts, including stream ownership.
 
 use super::*;
 

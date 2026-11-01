@@ -4677,6 +4677,36 @@ fn advance(clock: &Mutex<VirtualClock>, seconds: i64) {
         .unwrap();
 }
 
+/// How long [`settle_dispatches`] waits before failing. Generous: it bounds a hang, it does not
+/// pace the test, because the poll returns as soon as the state is reached.
+const SETTLE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Whether nothing is pending, leased or running: only retry backoff (`retryWaiting`) or a
+/// catch-up backlog held by a full room (`catchUpPending`), both released by the next clock
+/// change, may remain.
+fn dispatches_settled(status: &serde_json::Value) -> bool {
+    status["pending"] == 0 && status["running"] == 0
+}
+
+/// Polls the runtime until [`dispatches_settled`] holds, so every dispatch the last clock change
+/// released has finished, and a failure has been rescheduled from the current virtual time,
+/// before the caller moves the clock again. `await_idle` cannot express this: it never succeeds
+/// while a retry is waiting for its backoff. A timeout fails with the step and the state.
+async fn settle_dispatches(runtime: &FunctionsRuntime, step: &str) {
+    let deadline = tokio::time::Instant::now() + SETTLE_DEADLINE;
+    loop {
+        let status = runtime.status();
+        if dispatches_settled(&status) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{step}: dispatches did not settle within {SETTLE_DEADLINE:?}: {status}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 fn count_function(runtime: &FunctionsRuntime, function: &str) -> usize {
     runtime
         .history()
@@ -4812,14 +4842,15 @@ proptest::proptest! {
                     after: Some(doc(&path, 1).into()),
                 }]));
             }
-            let _ = runtime.await_idle(Duration::from_millis(150)).await;
+            settle_dispatches(&runtime, "after the commits").await;
             let mut elapsed = 0i64;
-            // The jumps under test, then four minutes to drain the 10/20/40 s backoffs.
-            for seconds in jumps.iter().copied().chain([60, 60, 60, 60]) {
+            // The jumps under test, then four minutes to drain the 10/20/40 s backoffs. Each
+            // jump waits for the dispatches the previous one released, however slow the runner.
+            for (step, seconds) in jumps.iter().copied().chain([60, 60, 60, 60]).enumerate() {
                 advance(&clock, seconds);
                 elapsed += seconds;
                 runtime.on_clock_changed();
-                let _ = runtime.await_idle(Duration::from_millis(150)).await;
+                settle_dispatches(&runtime, &format!("jump {step} (+{seconds} s)")).await;
             }
             let idle = runtime.await_idle(Duration::from_secs(5)).await;
             let status = runtime.status();

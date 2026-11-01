@@ -747,10 +747,7 @@ impl Firestore for GatewayService {
                         }
                     })?;
             if request.get_ref().consistency_selector.is_some()
-                && (compiled.database
-                    || !compiled.unions.is_empty()
-                    || compiled.search.is_some()
-                    || crate::pipeline::unobserved_auto_commit(request.get_ref()))
+                && (compiled.database || !compiled.unions.is_empty() || compiled.search.is_some())
             {
                 return Err(Status::unimplemented(
                     "pipeline consistency is unsupported for this input",

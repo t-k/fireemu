@@ -1673,10 +1673,7 @@ impl RestState {
         )
         .map_err(refuse)?;
         if request.consistency_selector.is_some()
-            && (compiled.database
-                || !compiled.unions.is_empty()
-                || compiled.search.is_some()
-                || crate::pipeline::unobserved_auto_commit(&request))
+            && (compiled.database || !compiled.unions.is_empty() || compiled.search.is_some())
         {
             return Err(refuse(Status::unimplemented(
                 "pipeline consistency is unsupported for this input",

@@ -4817,19 +4817,6 @@ pub(crate) fn without_executed_selector(
     compiler_request
 }
 
-/// Whether the request auto-commits a new transaction that is not explicitly read-write.
-/// Production answered auto-commit for an explicit read-write new transaction and for an
-/// existing one only, so a default or read-only new transaction keeps the refusal.
-#[must_use]
-pub(crate) fn unobserved_auto_commit(request: &pb::ExecutePipelineRequest) -> bool {
-    request.auto_commit_transaction
-        && matches!(
-            &request.consistency_selector,
-            Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(options))
-                if !matches!(options.mode, Some(pb::transaction_options::Mode::ReadWrite(_)))
-        )
-}
-
 /// The `BatchGetDocuments` selector that reads a pipeline's `documents` input as selected.
 #[must_use]
 pub(crate) fn batch_get_selector(

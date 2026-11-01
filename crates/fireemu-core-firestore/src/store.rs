@@ -4730,6 +4730,11 @@ impl FirestoreState {
 
     fn transaction_conflicted(&self, id: &TransactionId) -> Result<bool, FirestoreError> {
         let transaction = self.transaction(id)?;
+        // A read-only snapshot never conflicts, and it keeps no query observation to compare
+        // (see `record_transaction_query_observation`).
+        if transaction.read_only {
+            return Ok(false);
+        }
         for (path, observed) in &transaction.read_set {
             if self.get(path).map(|document| document.version) != *observed {
                 return Ok(true);

@@ -344,7 +344,7 @@ fn inputs_production_did_not_answer_with_a_selector_stay_refused() {
 }
 
 #[test]
-fn auto_commit_of_an_unobserved_new_transaction_stays_refused() {
+fn auto_commit_of_a_new_read_only_transaction_commits_it() {
     for kind in ["collection", "group", "documents"] {
         for options in [json!({}), json!({"readOnly": {}})] {
             let state = state(true);
@@ -356,13 +356,12 @@ fn auto_commit_of_an_unobserved_new_transaction_stays_refused() {
                     json!({"newTransaction": options, "autoCommitTransaction": true}),
                 ),
             );
-            assert_eq!(status, 501, "{body}");
-            assert_eq!(
-                body[0]["error"]["message"],
-                json!("pipeline consistency is unsupported for this input")
-            );
+            assert_eq!(status, 200, "{body}");
+            let (element, v) = only(&body);
+            assert_eq!(v, 1);
+            assert!(element.get("transaction").is_none());
             let after = stats(&state);
-            assert_eq!((after.active, after.finished), (0, 0));
+            assert_eq!((after.active, after.finished), (0, 1));
         }
     }
 }
@@ -379,7 +378,7 @@ proptest! {
         mode in prop::sample::select(vec!["none", "default", "ro", "rw", "existing", "read_time"]),
         auto in any::<bool>(),
     ) {
-        prop_assume!(!auto || matches!(mode, "rw" | "existing"));
+        prop_assume!(!auto || !matches!(mode, "none" | "read_time"));
         let state = state(strict);
         let read_time = write_v(&state, 1);
         write_v(&state, 2);

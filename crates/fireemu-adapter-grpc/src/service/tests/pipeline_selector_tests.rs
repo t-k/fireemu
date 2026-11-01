@@ -1272,8 +1272,8 @@ mod selector_query_model {
             mode in prop::sample::select(vec!["none", "default", "ro", "rw", "existing", "read_time"]),
             auto in any::<bool>(),
         ) {
-            // Auto-commit is only answered with a transaction selector.
-            prop_assume!(!auto || matches!(mode, "rw" | "existing"));
+            // Auto-commit needs a transaction selector.
+            prop_assume!(!auto || !matches!(mode, "none" | "read_time"));
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             runtime.block_on(async {
                 let profile = if strict { "strict" } else { "ordinary" };
@@ -1330,10 +1330,10 @@ mod selector_query_model {
     }
 }
 
-/// Production answered auto-commit only for an explicit read-write new transaction and for an
-/// existing one; a default or read-only new transaction with auto-commit was not observed.
+/// Auto-commit of a default or read-only new transaction commits it after the answer, like
+/// the read-write one (committing a transaction that wrote nothing is harmless).
 #[tokio::test]
-async fn selector_auto_commit_of_an_unobserved_new_transaction_stays_refused() {
+async fn selector_auto_commit_of_a_new_read_only_transaction_commits_it() {
     for source in ["collection", "group", "documents"] {
         for mode in ["default", "ro"] {
             let (service, backend) = fixture("strict");
@@ -1342,14 +1342,13 @@ async fn selector_auto_commit_of_an_unobserved_new_transaction_stays_refused() {
             } else {
                 query_request(&backend, source, mode, true)
             };
-            let err = responses(&service, req).await.unwrap_err();
-            assert_eq!(err.code(), tonic::Code::Unimplemented, "{source}/{mode}");
-            assert_eq!(
-                err.message(),
-                "pipeline consistency is unsupported for this input"
-            );
+            let rows = responses(&service, req)
+                .await
+                .unwrap_or_else(|err| panic!("{source}/{mode}: {err}"));
+            assert_eq!(only_v(&rows), 1);
+            assert!(rows[0].transaction.is_empty());
             let stats = transaction_stats(&backend);
-            assert_eq!((stats.active, stats.finished), (0, 0), "{source}/{mode}");
+            assert_eq!((stats.active, stats.finished), (0, 1), "{source}/{mode}");
         }
     }
 }

@@ -66,7 +66,7 @@ On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and 
 | Lazy control | `if_absent`, `if_null`, `if_error`, `conditional` and `switch_on` |
 | Math | `add`, `subtract`, `multiply`, `divide`, `mod`, `abs`, `round`, `floor`, `ceil` and `pow` |
 
-In v0.41.0 (unreleased), additional recorded forms include `like`, `rand`, `array_filter` and `array_transform`. Input types, lambda placement and combinations remain bounded. Random values do not reproduce production's random sequence.
+In v0.41.0, additional recorded forms include `like`, `rand`, `array_filter` and `array_transform`. Input types, lambda placement and combinations remain bounded. Random values do not reproduce production's random sequence.
 
 The same release adds recorded scalar forms of `minimum`, `maximum`, `sum` and `negate`, including captured integer, finite-double, mixed numeric and null/absent cases. The recorded `sum([])` returns null. Other types, non-finite inputs and numerical extremes remain outside this finite compatibility claim.
 
@@ -88,7 +88,7 @@ A `limit` of zero passes no rows to the next stage and an `offset` of zero passe
 
 The strict profile reproduces production's recorded `INTERNAL` response for `array_reverse()` with no arguments and empty options, and for a duplicate select alias when one spelling is quoted and the other is unquoted. Fireemu writes a fixed explanation to standard error without request values. A zero-argument `array_reverse()` with nonempty options keeps its prior refusal, and the emulator profile retains its prior validation behavior. These errors cover the recorded forms only; adjust the call or alias to proceed.
 
-In v0.41.0 (unreleased), strict native gRPC also reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`. The console explains this behavior without including request values. These observations establish error compatibility for the declared native request shapes; successful bit-operation semantics and REST error parity remain unverified. The emulator profile retains its prior refusal.
+In v0.41.0, strict native gRPC also reproduces the recorded `INTERNAL` errors for finite integer forms of `bit_not`, `bit_left_shift` and `bit_right_shift`. The console explains this behavior without including request values. These observations establish error compatibility for the declared native request shapes; successful bit-operation semantics and REST error parity remain unverified. The emulator profile retains its prior refusal.
 
 The same release matches additional recorded validation-priority cases and preserves structured `ErrorInfo` for the captured ordered REST `collection_id` type error. Other precedence combinations and ambiguous native map order remain gated. The captured native gRPC `geo_distance` select call with two valid geo points returns its search-only `INVALID_ARGUMENT` diagnostic; geo search remains outside this pipeline compatibility claim. In both profiles, the recorded nested aggregate scalar `sum` call on an integer returns `INVALID_ARGUMENT` with the production `array_sum` diagnostic: expected Array, got LONG. Supply an array to that scalar call; other argument shapes retain their existing gates.
 
@@ -115,7 +115,7 @@ The recorded matching answers cover specific request shapes from the FS-ENT-ORAC
 | An unrecorded `select` with two fields that both fail when evaluated, such as `{a: documentId("s"), b: parent(true)}` | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the first in key order |
 | A vector inside an array, or a `__type__` key beside other keys in a literal | `UNIMPLEMENTED` | The official answer |
 | An unrecorded wrong argument count for a supported function | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, fireemu's text |
-| Function options | The recorded single-integer `x` option on `document_id(__name__)` is accepted in its two-stage projection form in v0.41.0 (unreleased); other options remain gated | Ignored, as the official emulator ignores them |
+| Function options | The recorded single-integer `x` option on `document_id(__name__)` is accepted in its two-stage projection form in v0.41.0; other options remain gated | Ignored, as the official emulator ignores them |
 | An empty `select` map or a later stage's check after a function or stage value fireemu does not check (production names an unknown function first) | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the later check |
 | An empty map or another refusal beside a function call that fails on its constants, such as `map(1.5, i)`, or beside any other part `strict` does not answer | `UNIMPLEMENTED` | `INVALID_ARGUMENT`, the empty map or the other refusal |
 | An unrecorded stage argument count or options | `UNIMPLEMENTED` | Depends on the stage and argument shape |

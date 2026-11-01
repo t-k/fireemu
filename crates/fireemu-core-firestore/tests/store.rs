@@ -1281,6 +1281,57 @@ fn a_query_in_a_transaction_locks_its_range() {
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
 }
 
+/// An import is the one writer the transaction locks do not hold back. What a read-write
+/// transaction read (a document, or the rows of a query) is then found changed at commit and the
+/// commit aborts for retry, while a read-only snapshot in the same situation commits.
+#[test]
+fn a_changed_read_aborts_a_read_write_commit_but_not_a_read_only_one() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_firestore::store::ImportedDocument;
+    use fireemu_core_types::ids::CollectionId;
+    let import = |s: &mut FirestoreState, name: &str, v: i64, at| {
+        s.import_documents(
+            vec![ImportedDocument {
+                path: path(name),
+                fields: [("v".to_owned(), Value::Integer(v))].into_iter().collect(),
+                create_time: None,
+                update_time: None,
+            }],
+            at,
+        )
+        .unwrap();
+    };
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("cx").unwrap(),
+    ))
+    .canonicalize()
+    .unwrap();
+    for (read_only, by_query) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut s = FirestoreState::new();
+        s.commit(&[set("cx/a", &[("v", Value::Integer(1))])], None, t(0))
+            .unwrap();
+        let txn = s.begin_transaction(read_only, t(1)).unwrap();
+        if by_query {
+            assert_eq!(s.run_query_in_transaction(&txn, &q).unwrap().len(), 1);
+            import(&mut s, "cx/b", 2, t(2));
+        } else {
+            s.get_in_transaction(&txn, &path("cx/a")).unwrap();
+            import(&mut s, "cx/a", 2, t(2));
+        }
+        let result = s.commit(&[], Some(&txn), t(3));
+        if read_only {
+            result.unwrap();
+        } else {
+            let err = result.unwrap_err();
+            assert!(
+                matches!(&err, FirestoreError::Aborted(m) if m == "Transaction was aborted due to a concurrent modification."),
+                "by_query={by_query}: {err}"
+            );
+        }
+    }
+}
+
 /// A read-only transaction keeps no query observation, so a query that returned rows must not
 /// make its (empty) commit look like a concurrent modification.
 #[test]

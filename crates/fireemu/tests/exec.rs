@@ -3,6 +3,7 @@
 //! status, and that nothing keeps listening or running afterwards.
 
 mod census;
+mod listener;
 mod scratch;
 
 use scratch::Scratch;
@@ -59,6 +60,25 @@ fn env_file(path: &Path) -> BTreeMap<String, String> {
 
 fn refused(addr: &str) -> bool {
     TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_err()
+}
+
+/// The evidence a "still listens" failure carries: the `exec` child, the census of this test's
+/// surviving descendants, and who owns the listener, classified as a survivor of the daemon
+/// family or a foreign process that claimed the released port.
+fn listener_evidence(addr: &str, exec_pid: i32) -> String {
+    let me = i32::try_from(std::process::id()).expect("pid fits in i32");
+    let descendants = census::descendants_of(me);
+    let mut family = vec![exec_pid];
+    family.extend(descendants.iter().map(|p| p.pid));
+    let port = addr
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .expect("an emulator address names a port");
+    format!(
+        "exec child pid {exec_pid}; {}\nsurviving descendants of the test:\n{}",
+        listener::ownership(port, &family),
+        census::table(&descendants)
+    )
 }
 
 fn alive(pid: &str) -> bool {
@@ -173,11 +193,13 @@ impl Drop for PidGuard {
 fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     let dir = scratch("env");
     let out = dir.join("env.txt");
-    let output = daemon()
+    let child = daemon()
         .args(["--project", "demo-exec", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
-        .output()
+        .spawn()
         .unwrap();
+    let exec_pid = i32::try_from(child.id()).expect("pid fits in i32");
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -201,7 +223,11 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     ] {
         let addr = &env[key];
         assert!(addr.starts_with("127.0.0.1:"), "{key}={addr}");
-        assert!(refused(addr), "{key}={addr} still listens after exec");
+        assert!(
+            refused(addr),
+            "{key}={addr} still listens after exec: {}",
+            listener_evidence(addr, exec_pid)
+        );
     }
     assert!(!env.contains_key("FIREEMU_FUNCTIONS_HOST"));
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1278,4 +1304,72 @@ fn an_occupied_port_of_a_selected_service_fails_before_the_command_runs() {
         String::from_utf8_lossy(&output.stderr)
     );
     drop(busy);
+}
+
+/// The owner lookup names the process that holds a listener, and nothing once it is closed.
+#[cfg(target_os = "linux")]
+#[test]
+fn listener_owner_lookup_names_the_holding_process() {
+    let me = i32::try_from(std::process::id()).expect("pid fits in i32");
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let inodes = listener::listening_inodes(port).unwrap();
+    assert!(!inodes.is_empty(), "port {port} is listening");
+    let owners = listener::owners_of(&inodes);
+    assert!(owners.iter().any(|o| o.pid == me), "{owners:?}");
+    assert!(
+        matches!(
+            listener::ownership(port, &[me]),
+            listener::Ownership::OwnedSurvivor(_)
+        ),
+        "{}",
+        listener::ownership(port, &[me])
+    );
+    drop(socket);
+    assert_eq!(
+        listener::ownership(port, &[me]),
+        listener::Ownership::NoListener
+    );
+}
+
+/// A listener held by the family under test is told apart from one a foreign process holds.
+#[test]
+fn listener_ownership_separates_a_survivor_from_a_foreign_claim() {
+    use listener::{classify, Owner, Ownership};
+    let daemon = Owner {
+        pid: 100,
+        command: "fireemu exec".to_owned(),
+    };
+    let stranger = Owner {
+        pid: 200,
+        command: "postgres".to_owned(),
+    };
+    let family = [100, 101];
+    assert_eq!(classify(false, &[], &family), Ownership::NoListener);
+    assert_eq!(
+        classify(true, std::slice::from_ref(&daemon), &family),
+        Ownership::OwnedSurvivor(vec![daemon.clone()])
+    );
+    assert_eq!(
+        classify(true, std::slice::from_ref(&stranger), &family),
+        Ownership::Foreign(vec![stranger.clone()])
+    );
+    assert_eq!(
+        classify(true, &[daemon.clone(), stranger.clone()], &family),
+        Ownership::Mixed(vec![daemon, stranger])
+    );
+    assert!(matches!(
+        classify(true, &[], &family),
+        Ownership::Unknown(_)
+    ));
+    let shown = classify(
+        true,
+        &[Owner {
+            pid: 200,
+            command: "postgres".to_owned(),
+        }],
+        &family,
+    );
+    assert!(shown.to_string().contains("unrelated process"), "{shown}");
+    assert!(shown.to_string().contains("pid 200 `postgres`"), "{shown}");
 }

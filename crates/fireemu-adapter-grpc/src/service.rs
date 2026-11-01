@@ -678,26 +678,9 @@ impl Firestore for GatewayService {
         } else {
             crate::pipeline_shape::RefusalGate::Open
         };
-        // Keep the common compiler's refusal for REST and other entrypoints. The local
-        // gRPC documents route resolves its selector through BatchGetDocuments instead.
-        let mut compiler_request = request.get_ref().clone();
-        if matches!(
-            compiler_request.consistency_selector,
-            Some(
-                pb::execute_pipeline_request::ConsistencySelector::Transaction(_)
-                    | pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_)
-            )
-        ) || (!compiler_request.auto_commit_transaction
-            && matches!(
-                compiler_request.consistency_selector,
-                Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
-                    _
-                ))
-            ))
-        {
-            compiler_request.consistency_selector = None;
-            compiler_request.auto_commit_transaction = false;
-        }
+        // The compiler still refuses a selector this adapter does not execute (an unrecorded
+        // combination); the executed ones are resolved through the input's own read below.
+        let mut compiler_request = crate::pipeline::without_executed_selector(request.get_ref());
         let correlated_binding =
             crate::pipeline::prepare_correlated_binding(&mut compiler_request)?;
         let answer = |error: Status| {
@@ -764,9 +747,10 @@ impl Firestore for GatewayService {
                         }
                     })?;
             if request.get_ref().consistency_selector.is_some()
-                && (compiled.documents.is_none()
+                && (compiled.database
                     || !compiled.unions.is_empty()
-                    || compiled.search.is_some())
+                    || compiled.search.is_some()
+                    || crate::pipeline::unobserved_auto_commit(request.get_ref()))
             {
                 return Err(Status::unimplemented(
                     "pipeline consistency is unsupported for this input",
@@ -905,26 +889,11 @@ impl Firestore for GatewayService {
                     }
                     _ => None,
                 };
-                let selector = match &request.get_ref().consistency_selector {
-                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
-                        Some(
-                            pb::batch_get_documents_request::ConsistencySelector::Transaction(
-                                token.clone(),
-                            ),
-                        )
-                    }
-                    Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(
-                        options,
-                    )) => Some(
-                        pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
-                            options.clone(),
-                        ),
-                    ),
-                    Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(time)) => {
-                        Some(pb::batch_get_documents_request::ConsistencySelector::ReadTime(*time))
-                    }
-                    None => None,
-                };
+                let selector = request
+                    .get_ref()
+                    .consistency_selector
+                    .as_ref()
+                    .map(crate::pipeline::batch_get_selector);
                 let guard_local = local.clone();
                 let guard_database = database.clone();
                 #[cfg(test)]
@@ -975,9 +944,47 @@ impl Firestore for GatewayService {
                 }
                 Box::pin(tokio_stream::iter(responses.into_iter().map(Ok)))
             } else {
-                self.scan_ordered_input(caller, &compiled.input)
+                // A collection or collection-group input reads through RunQuery, which carries
+                // the selected snapshot and announces a new transaction.
+                let selected = request.get_ref().consistency_selector.as_ref();
+                let existing = match selected {
+                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
+                        Some(token.clone())
+                    }
+                    _ => None,
+                };
+                let mut query = compiled.input.clone();
+                query.consistency_selector = selected.map(crate::pipeline::run_query_selector);
+                let (input, new_transaction, abandonment) = self
+                    .scan_ordered_input(caller, &query)
                     .await
-                    .map_err(|error| pipeline_status(gate.answer(error), &canonical))?
+                    .map_err(|error| {
+                        // Token authentication and lifecycle errors already come from the
+                        // shared transaction machinery, as for a documents input.
+                        let error = if existing.is_some()
+                            || matches!(
+                                selected,
+                                Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_))
+                            )
+                        {
+                            error
+                        } else {
+                            gate.answer(error)
+                        };
+                        pipeline_status(error, &canonical)
+                    })?;
+                rollback = abandonment;
+                if request.get_ref().auto_commit_transaction {
+                    let local = self
+                        .local_backend()
+                        .cloned()
+                        .ok_or_else(|| Status::internal("local backend disappeared"))?;
+                    let token = existing.unwrap_or(new_transaction);
+                    auto_commit = Some((local, request.get_ref().database.clone(), token));
+                } else {
+                    transaction = new_transaction;
+                }
+                input
             };
             let numeric_scope = numeric_row_scope(request.get_ref(), &compiled);
             let admission_gate =
@@ -1837,19 +1844,56 @@ impl GatewayService {
         &self,
         caller: Caller,
         input: &pb::RunQueryRequest,
-    ) -> Result<BoxStream<pb::RunQueryResponse>, Status> {
+    ) -> Result<
+        (
+            BoxStream<pb::RunQueryResponse>,
+            Vec<u8>,
+            Option<QueryTransactionGuard>,
+        ),
+        Status,
+    > {
         use tokio_stream::StreamExt as _;
-        let responses = self
+        let local = Arc::clone(
+            self.local_backend()
+                .ok_or_else(|| Status::internal("local backend disappeared"))?,
+        );
+        let creates_transaction = matches!(
+            input.consistency_selector,
+            Some(pb::run_query_request::ConsistencySelector::NewTransaction(
+                _
+            ))
+        );
+        let database = database_name_from_query_parent(&input.parent);
+        let mut stream = self
             .run_query_with_caller(caller, input.clone())
             .await?
-            .into_inner()
-            .collect::<Result<Vec<_>, _>>()
-            .await?;
-        Ok(Box::pin(tokio_stream::iter(
-            crate::pipeline::in_scan_order(responses)
-                .into_iter()
-                .map(Ok),
-        )))
+            .into_inner();
+        let mut responses = Vec::new();
+        let mut transaction = Vec::new();
+        let mut owned = None;
+        while let Some(response) = stream.next().await {
+            let response = response?;
+            // The stream has handed the announcement over, so this scan owns the new token
+            // from here on: dropping it (an error, a cancelled request) rolls it back.
+            if creates_transaction && owned.is_none() && !response.transaction.is_empty() {
+                transaction.clone_from(&response.transaction);
+                owned = Some(QueryTransactionGuard {
+                    local: Arc::clone(&local),
+                    database: database.clone(),
+                    transaction: response.transaction.clone(),
+                });
+            }
+            responses.push(response);
+        }
+        Ok((
+            Box::pin(tokio_stream::iter(
+                crate::pipeline::in_scan_order(responses)
+                    .into_iter()
+                    .map(Ok),
+            )),
+            transaction,
+            owned,
+        ))
     }
 
     #[allow(clippy::too_many_lines)]

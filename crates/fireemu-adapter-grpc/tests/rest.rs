@@ -7246,11 +7246,17 @@ fn rest_execute_pipeline_refusals_keep_their_codes() {
                     "INVALID_ARGUMENT"
                 },
             ),
+            // A read time before the database existed: production's refusal of it for this
+            // method is unrecorded, so strict does not claim it.
             (
-                "transaction selector",
+                "read time before the database existed",
                 json!({"structuredPipeline": {"pipeline": {"stages": [collection]}}, "readTime": "2026-08-29T12:00:00Z"}),
-                501,
-                "UNIMPLEMENTED",
+                if strict { 501 } else { 400 },
+                if strict {
+                    "UNIMPLEMENTED"
+                } else {
+                    "INVALID_ARGUMENT"
+                },
             ),
         ] {
             let (got, body) = run(body);
@@ -7688,12 +7694,12 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         (
             "transaction",
             json!({"structuredPipeline": pipeline, "transaction": "AQI="}),
-            501,
+            400,
         ),
         (
             "newTransaction",
             json!({"structuredPipeline": pipeline, "newTransaction": {"readOnly": {}}}),
-            501,
+            200,
         ),
         (
             "autoCommitTransaction alone",
@@ -7703,7 +7709,7 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         (
             "autoCommitTransaction with newTransaction",
             json!({"structuredPipeline": pipeline, "newTransaction": {"readWrite": {}}, "autoCommitTransaction": true}),
-            501,
+            200,
         ),
         (
             "requestOptions",
@@ -7717,7 +7723,11 @@ fn rest_execute_pipeline_transcodes_every_request_field() {
         for (label, body, status) in cases.clone() {
             // fireemu's own text, in no shape production refused: strict refuses it as
             // unobserved.
-            let status = if strict && status == 400 { 501 } else { status };
+            let status = if strict && label == "autoCommitTransaction alone" {
+                501
+            } else {
+                status
+            };
             let (got, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
             assert_eq!(got, status, "strict={strict} {label}: {body}");
             assert!(

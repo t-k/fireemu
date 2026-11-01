@@ -1,6 +1,8 @@
 //! `:executePipeline` transaction and read-time selectors over REST, against the answers
 //! production gave on 2026-11-01 (collection, collection-group and documents inputs).
 
+#![allow(clippy::needless_pass_by_value)] // test helpers take JSON literals
+
 use std::sync::{Arc, Mutex};
 
 use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
@@ -150,7 +152,10 @@ fn collection_read_time_answers_the_old_snapshot() {
         let state = state(strict);
         let read_time = write_v(&state, 1);
         write_v(&state, 2);
-        let (status, body) = execute(&state, pipeline("collection", json!({"readTime": read_time})));
+        let (status, body) = execute(
+            &state,
+            pipeline("collection", json!({"readTime": read_time})),
+        );
         assert_eq!(status, 200, "{body}");
         let (element, v) = only(&body);
         assert_eq!(v, 1);
@@ -176,7 +181,8 @@ fn documents_new_default_token_is_reusable_and_rolls_back() {
         assert_eq!(v, 2);
         let token = element["transaction"].as_str().unwrap().to_owned();
         assert!(!token.is_empty());
-        let (status, reused) = execute(&state, pipeline("documents", json!({"transaction": token})));
+        let (status, reused) =
+            execute(&state, pipeline("documents", json!({"transaction": token})));
         assert_eq!(status, 200, "{reused}");
         let (again, v) = only(&reused);
         assert_eq!(v, 2);
@@ -197,7 +203,10 @@ fn group_existing_read_write_auto_commit_closes_the_transaction() {
         let token = begin(&state, json!({"readWrite": {}}));
         let (status, body) = execute(
             &state,
-            pipeline("group", json!({"transaction": token, "autoCommitTransaction": true})),
+            pipeline(
+                "group",
+                json!({"transaction": token, "autoCommitTransaction": true}),
+            ),
         );
         assert_eq!(status, 200, "{body}");
         let (element, v) = only(&body);
@@ -310,12 +319,43 @@ fn a_bad_token_is_not_read_as_the_latest_snapshot() {
 fn inputs_production_did_not_answer_with_a_selector_stay_refused() {
     let state = state(true);
     write_v(&state, 1);
-    let union = json!({"name": "union", "args": [{"pipelineValue": {"stages": [source("collection")]}}]});
-    for stages in [vec![json!({"name": "database"})], vec![source("collection"), union]] {
-        for extra in [json!({"newTransaction": {}}), json!({"readTime": "2026-01-01T00:00:00Z"})] {
+    let union =
+        json!({"name": "union", "args": [{"pipelineValue": {"stages": [source("collection")]}}]});
+    for stages in [
+        vec![json!({"name": "database"})],
+        vec![source("collection"), union],
+    ] {
+        for extra in [
+            json!({"newTransaction": {}}),
+            json!({"readTime": "2026-01-01T00:00:00Z"}),
+        ] {
             let mut body = pipeline("collection", extra);
             body["structuredPipeline"]["pipeline"]["stages"] = Value::Array(stages.clone());
             let (status, body) = execute(&state, body);
+            assert_eq!(status, 501, "{body}");
+            assert_eq!(
+                body[0]["error"]["message"],
+                json!("pipeline consistency is unsupported for this input")
+            );
+            let after = stats(&state);
+            assert_eq!((after.active, after.finished), (0, 0));
+        }
+    }
+}
+
+#[test]
+fn auto_commit_of_an_unobserved_new_transaction_stays_refused() {
+    for kind in ["collection", "group", "documents"] {
+        for options in [json!({}), json!({"readOnly": {}})] {
+            let state = state(true);
+            write_v(&state, 1);
+            let (status, body) = execute(
+                &state,
+                pipeline(
+                    kind,
+                    json!({"newTransaction": options, "autoCommitTransaction": true}),
+                ),
+            );
             assert_eq!(status, 501, "{body}");
             assert_eq!(
                 body[0]["error"]["message"],

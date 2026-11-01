@@ -686,14 +686,17 @@ fn begin_ro_at(backend: &LocalBackend, at: prost_types::Timestamp) -> Vec<u8> {
 async fn selector_query_native_cases_match_the_recording() {
     for profile in ["strict", "ordinary"] {
         let (service, backend) = fixture(profile);
-        let read_time = stored_document(&service, DOCUMENT).await.update_time.unwrap();
+        let read_time = stored_document(&service, DOCUMENT)
+            .await
+            .update_time
+            .unwrap();
         let anchored = begin_ro_at(&backend, read_time);
         set_v(&backend, 2);
         // collection + readTime: the old value, executed at that time.
         let (mut req, _) = query_request(&backend, "collection", "none", false);
-        req.consistency_selector = Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
-            read_time,
-        ));
+        req.consistency_selector = Some(
+            pb::execute_pipeline_request::ConsistencySelector::ReadTime(read_time),
+        );
         let rows = responses(&service, req).await.unwrap();
         assert_eq!(only_v(&rows), 1, "{profile}");
         assert_eq!(rows[0].execution_time, Some(read_time), "{profile}");
@@ -706,9 +709,8 @@ async fn selector_query_native_cases_match_the_recording() {
         assert!((at.seconds, at.nanos) > (read_time.seconds, read_time.nanos));
         // collection_group + a read-only transaction begun at the old time.
         let (mut req, _) = query_request(&backend, "group", "none", false);
-        req.consistency_selector = Some(
-            pb::execute_pipeline_request::ConsistencySelector::Transaction(anchored.clone()),
-        );
+        req.consistency_selector =
+            Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(anchored.clone()));
         let rows = responses(&service, req).await.unwrap();
         assert_eq!(only_v(&rows), 1, "{profile}");
         assert_eq!(rows[0].execution_time, Some(read_time), "{profile}");
@@ -717,14 +719,15 @@ async fn selector_query_native_cases_match_the_recording() {
         assert!(read_token(&backend, &anchored).is_ok());
         rollback(&backend, anchored).unwrap();
         // collection + new read-write transaction with auto-commit: the latest value, no token,
-        // and the transaction is closed.
+        // and exactly one transaction is closed by the commit.
+        let before = transaction_stats(&backend).finished;
         let (req, _) = query_request(&backend, "collection", "rw", true);
         let rows = responses(&service, req).await.unwrap();
         assert_eq!(only_v(&rows), 2);
         assert!(rows[0].transaction.is_empty());
         assert!(rows[0].execution_time.is_some());
         let stats = transaction_stats(&backend);
-        assert_eq!((stats.active, stats.finished), (0, 2), "{profile}");
+        assert_eq!((stats.active, stats.finished), (0, before + 1), "{profile}");
     }
 }
 
@@ -954,9 +957,12 @@ async fn selector_query_cancelled_while_collecting_releases_only_new_transaction
                     .map(|id| pb::Write {
                         operation: Some(pb::write::Operation::Update(pb::Document {
                             name: format!("{PARENT}/items/{id:03}"),
-                            fields: [("v".to_owned(), value(pb::value::ValueType::IntegerValue(1)))]
-                                .into_iter()
-                                .collect(),
+                            fields: [(
+                                "v".to_owned(),
+                                value(pb::value::ValueType::IntegerValue(1)),
+                            )]
+                            .into_iter()
+                            .collect(),
                             ..Default::default()
                         })),
                         ..Default::default()
@@ -1064,7 +1070,10 @@ async fn selector_query_validation_precedes_minting_and_other_inputs_stay_refuse
 #[tokio::test]
 async fn selector_query_read_time_with_auto_commit_stays_refused() {
     let (service, backend) = fixture("strict");
-    let read_time = stored_document(&service, DOCUMENT).await.update_time.unwrap();
+    let read_time = stored_document(&service, DOCUMENT)
+        .await
+        .update_time
+        .unwrap();
     let (mut req, _) = query_request(&backend, "collection", "none", true);
     req.consistency_selector = Some(pb::execute_pipeline_request::ConsistencySelector::ReadTime(
         read_time,
@@ -1164,11 +1173,16 @@ async fn selector_query_commit_failure_is_returned_and_releases_only_own_new_tok
 async fn selector_query_invalid_existing_token_is_not_treated_as_latest() {
     for profile in ["strict", "ordinary"] {
         for source in ["collection", "group"] {
-            for auto in [false, true] {
+            for (token, auto) in [
+                (vec![1], false),
+                (vec![1], true),
+                (Vec::new(), false),
+                (Vec::new(), true),
+            ] {
                 let (service, backend) = fixture(profile);
                 let (mut req, _) = query_request(&backend, source, "none", auto);
                 req.consistency_selector =
-                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
+                    Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token));
                 assert_eq!(
                     responses(&service, req).await.unwrap_err().code(),
                     tonic::Code::InvalidArgument
@@ -1239,7 +1253,11 @@ mod selector_query_model {
             token_in_answer: matches!(mode, "default" | "ro" | "rw") && !auto,
             // The caller's transaction is anchored at the old value; a read time is the old
             // value; everything else reads the latest value.
-            value: if mode == "existing" && !auto || read_time { 1 } else { 2 },
+            value: if mode == "existing" && !auto || read_time {
+                1
+            } else {
+                2
+            },
             committed: auto,
             caller_token_open: mode == "existing" && !auto,
         }
@@ -1308,6 +1326,30 @@ mod selector_query_model {
                 prop_assert_eq!(transaction_stats(&backend).active, 0);
                 Ok(())
             })?;
+        }
+    }
+}
+
+/// Production answered auto-commit only for an explicit read-write new transaction and for an
+/// existing one; a default or read-only new transaction with auto-commit was not observed.
+#[tokio::test]
+async fn selector_auto_commit_of_an_unobserved_new_transaction_stays_refused() {
+    for source in ["collection", "group", "documents"] {
+        for mode in ["default", "ro"] {
+            let (service, backend) = fixture("strict");
+            let (req, _) = if source == "documents" {
+                request(&backend, mode, true, "found")
+            } else {
+                query_request(&backend, source, mode, true)
+            };
+            let err = responses(&service, req).await.unwrap_err();
+            assert_eq!(err.code(), tonic::Code::Unimplemented, "{source}/{mode}");
+            assert_eq!(
+                err.message(),
+                "pipeline consistency is unsupported for this input"
+            );
+            let stats = transaction_stats(&backend);
+            assert_eq!((stats.active, stats.finished), (0, 0), "{source}/{mode}");
         }
     }
 }

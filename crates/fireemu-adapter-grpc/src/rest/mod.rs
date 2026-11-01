@@ -1663,13 +1663,25 @@ impl RestState {
         let parent = crate::decode::parse_parent(&format!("{database}/documents"))
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let refuse = |error| crate::service::pipeline_status(answer(error), &canonical);
+        // The selectors this route executes are resolved by the input's own read below; the
+        // compiler still refuses any other combination.
         let compiled = crate::pipeline::compile_pipeline_in_order(
-            &request,
+            &crate::pipeline::without_executed_selector(&request),
             &parent,
             unrecorded,
             Some(key_order),
         )
         .map_err(refuse)?;
+        if request.consistency_selector.is_some()
+            && (compiled.database
+                || !compiled.unions.is_empty()
+                || compiled.search.is_some()
+                || crate::pipeline::unobserved_auto_commit(&request))
+        {
+            return Err(refuse(Status::unimplemented(
+                "pipeline consistency is unsupported for this input",
+            )));
+        }
         let guard = self.read_guard(principal);
         if !compiled.unions.is_empty() {
             let runtime =
@@ -1696,16 +1708,60 @@ impl RestState {
             )));
         }
         let runtime = crate::pipeline_timezone::runtime_for_stages(&self.local, &compiled.stages);
-        let responses = if let Some(names) = &compiled.documents {
-            crate::pipeline::documents_input(&self.local, database, names, &*guard)
-                .map_err(refuse)?
-        } else {
-            crate::pipeline::in_scan_order(
-                self.local
-                    .run_query(&compiled.input, &*guard)
-                    .map_err(refuse)?
-                    .0,
+        // Token authentication and lifecycle errors come from the shared transaction machinery,
+        // not from a pipeline expression, so a transaction selector bypasses the refusal gate.
+        let selector = request.consistency_selector.as_ref();
+        let existing = match selector {
+            Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(token)) => {
+                Some(token.clone())
+            }
+            _ => None,
+        };
+        let creates_transaction = matches!(
+            selector,
+            Some(pb::execute_pipeline_request::ConsistencySelector::NewTransaction(_))
+        );
+        let refuse_read = |error: Status| {
+            if existing.is_some() || creates_transaction {
+                crate::service::pipeline_status(error, &canonical)
+            } else {
+                refuse(error)
+            }
+        };
+        let (responses, new_transaction) = if let Some(names) = &compiled.documents {
+            crate::pipeline::documents_input_selected(
+                &self.local,
+                database,
+                names,
+                &*guard,
+                selector.map(crate::pipeline::batch_get_selector),
             )
+            .map_err(refuse_read)?
+        } else {
+            let mut query = compiled.input.clone();
+            query.consistency_selector = selector.map(crate::pipeline::run_query_selector);
+            let responses = self
+                .local
+                .run_query(&query, &*guard)
+                .map_err(refuse_read)?
+                .0;
+            let token = responses
+                .iter()
+                .find(|response| !response.transaction.is_empty())
+                .map(|response| response.transaction.clone())
+                .unwrap_or_default();
+            (crate::pipeline::in_scan_order(responses), token)
+        };
+        // A transaction this request opened is rolled back unless it is handed to the caller
+        // or consumed by the auto-commit; the caller's own transaction is never touched.
+        let mut owned = OwnedTransaction {
+            local: &self.local,
+            database,
+            transaction: if creates_transaction {
+                new_transaction.clone()
+            } else {
+                Vec::new()
+            },
         };
         // Every element carries the input snapshot's read time as its execution time.
         let execution_time = responses.iter().find_map(|r| r.read_time);
@@ -1784,11 +1840,25 @@ impl RestState {
                 .map_err(|error| refuse(crate::pipeline::eval_status(&error)))?,
         );
         let results = rows.iter().map(crate::pipeline::row_document).collect();
+        // The auto-commit runs only after the whole answer is evaluated.
+        if request.auto_commit_transaction {
+            let transaction = existing.unwrap_or(new_transaction);
+            self.local
+                .commit(&pb::CommitRequest {
+                    database: database.to_owned(),
+                    transaction,
+                    ..Default::default()
+                })
+                .map_err(|error| crate::service::pipeline_status(error, &canonical))?;
+            owned.transaction.clear();
+        }
         // Production packs a small answer into one array element (FS-ENT-ORACLE O-1).
-        let out = crate::pipeline::pack_results(results, execution_time)
-            .iter()
-            .map(pipeline_json::response_to_json)
-            .collect();
+        let mut packed = crate::pipeline::pack_results(results, execution_time);
+        if let Some(first) = packed.first_mut() {
+            // A new transaction is announced once, on the first element.
+            first.transaction = std::mem::take(&mut owned.transaction);
+        }
+        let out = packed.iter().map(pipeline_json::response_to_json).collect();
         Ok(ok(Value::Array(out)))
     }
 
@@ -2398,6 +2468,26 @@ pub(crate) fn is_commit_route(method: &str, raw_path: &str) -> bool {
         ["projects", project, "databases", database, "documents"]
             if !project.is_empty() && !database.is_empty()
     )
+}
+
+/// A transaction a request opened that nobody owns yet. Dropping it rolls the transaction back;
+/// handing it to the caller or consuming it clears it first.
+struct OwnedTransaction<'a> {
+    local: &'a LocalBackend,
+    database: &'a str,
+    transaction: Vec<u8>,
+}
+
+impl Drop for OwnedTransaction<'_> {
+    fn drop(&mut self) {
+        if !self.transaction.is_empty() {
+            let _ = self.local.rollback(&pb::RollbackRequest {
+                database: self.database.to_owned(),
+                transaction: std::mem::take(&mut self.transaction),
+                request_options: None,
+            });
+        }
+    }
 }
 
 /// `transaction`, `readTime` and `newTransaction` form a oneof: at most one may be given.

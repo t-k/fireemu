@@ -9836,30 +9836,33 @@ async fn execute_pipeline_reads_collection_projects_field_aliases_and_applies_li
         ),
         "{named:?}"
     );
-    for selector in [
-        ConsistencySelector::Transaction(vec![1]),
-        ConsistencySelector::NewTransaction(pb::TransactionOptions::default()),
-        ConsistencySelector::ReadTime(prost_types::Timestamp {
-            seconds: 1_700_000_000,
-            nanos: 0,
-        }),
+    // A collection input executes the selectors production answered; a token that is no
+    // transaction and a time before the database existed are refused as the other reads are.
+    for (selector, code) in [
+        (
+            ConsistencySelector::Transaction(vec![1]),
+            tonic::Code::InvalidArgument,
+        ),
+        (
+            ConsistencySelector::ReadTime(prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            tonic::Code::InvalidArgument,
+        ),
     ] {
         let mut req = request(vec![collection("items")]);
         req.consistency_selector = Some(selector);
-        assert_eq!(
-            client.execute_pipeline(req).await.unwrap_err().code(),
-            tonic::Code::Unimplemented
-        );
+        assert_eq!(client.execute_pipeline(req).await.unwrap_err().code(), code);
     }
     let mut req = request(vec![collection("items")]);
     req.consistency_selector = Some(ConsistencySelector::NewTransaction(
         pb::TransactionOptions::default(),
     ));
-    req.auto_commit_transaction = true;
-    assert_eq!(
-        client.execute_pipeline(req).await.unwrap_err().code(),
-        tonic::Code::Unimplemented
-    );
+    let mut stream = client.execute_pipeline(req).await.unwrap().into_inner();
+    let first = stream.message().await.unwrap().unwrap();
+    assert!(!first.transaction.is_empty());
+    drop(stream);
     let mut req = request(vec![collection("items")]);
     let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(structured)) =
         req.pipeline_type.as_mut()

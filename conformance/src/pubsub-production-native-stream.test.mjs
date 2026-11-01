@@ -248,13 +248,30 @@ test("native deadline status before close needs no server admission", async (t) 
   }
 });
 
+// The deadline starts only once the local server holds the call. A short client deadline raced the
+// server's admission: on a loaded machine it fired before the call was registered, and grpc-js then
+// never emitted `close` for the unadmitted stream, so the test failed on load rather than on the
+// transport. The deadline-before-admission path is covered without a server by the controlled
+// deadline tests in this file. Here the server answers DEADLINE_EXCEEDED after it has admitted the
+// call and read its frame, and the client deadline is only a bound on a hang.
+const ADMITTED_DEADLINE_BOUND_MS = 30_000;
+
 test("native stream deadline is unknown and closes the stream without retry", async (t) => {
-  const s = await server(() => {});
+  const s = await server((stream) =>
+    stream.once("data", () =>
+      stream.emit("error", { code: grpc.status.DEADLINE_EXCEEDED, details: "deadline exceeded" }),
+    ),
+  );
   t.after(s.close);
   const observation = observeGrpc();
   const { transport, lines, budget } = setup(t, s.target, 1, observation.grpc);
   assert.equal(typeof transport.stream, "function");
-  const reply = await call(transport, { timeoutMs: 80 });
+  const reply = await call(transport, { timeoutMs: ADMITTED_DEADLINE_BOUND_MS });
+  assert.equal(
+    s.calls.length,
+    1,
+    `the local server must admit exactly one call before the deadline (reply ${reply.code})`,
+  );
   await assertDeadlineObservation(observation.observed, reply, lines, budget);
   t.diagnostic(
     JSON.stringify({
@@ -265,7 +282,7 @@ test("native stream deadline is unknown and closes the stream without retry", as
       captures: lines.filter((line) => line.op === "streamingPull").length,
       budget: budget.used(),
       remoteAdmissions: s.calls.length,
-      timeoutMs: 80,
+      timeoutMs: ADMITTED_DEADLINE_BOUND_MS,
     }),
   );
 });

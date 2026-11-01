@@ -6199,6 +6199,33 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
                 ..request(vec![stage("collection", 1)])
             },
         ),
+        // Only auto-commit with no selector at all has a recorded production refusal.
+        (
+            "auto-commit with a transaction and a garbage database",
+            pb::ExecutePipelineRequest {
+                database: "garbage".to_owned(),
+                auto_commit_transaction: true,
+                consistency_selector: Some(
+                    pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]),
+                ),
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
+        (
+            "auto-commit with a read time",
+            pb::ExecutePipelineRequest {
+                auto_commit_transaction: true,
+                consistency_selector: Some(
+                    pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                        prost_types::Timestamp {
+                            seconds: 1,
+                            nanos: 0,
+                        },
+                    ),
+                ),
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
         (
             "pipeline option",
             pb::ExecutePipelineRequest {

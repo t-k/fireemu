@@ -4495,7 +4495,9 @@ impl FirestoreState {
                 "Cannot modify entities in a read-only transaction.".into(),
             ));
         }
-        if self.transaction_conflicted(id)? {
+        // A read-only snapshot never conflicts, and it keeps no query observation to compare
+        // (see `record_transaction_query_observation`).
+        if !transaction.read_only && self.transaction_conflicted(id)? {
             self.finish_transaction(id, TransactionState::RetryableAborted);
             return Err(FirestoreError::Aborted(
                 TRANSACTION_CONCURRENT_MODIFICATION.into(),

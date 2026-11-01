@@ -1281,6 +1281,27 @@ fn a_query_in_a_transaction_locks_its_range() {
     assert!(s.commit(&[set("other/y", &[])], Some(&txn2), t(5)).is_ok());
 }
 
+/// A read-only transaction keeps no query observation, so a query that returned rows must not
+/// make its (empty) commit look like a concurrent modification.
+#[test]
+fn a_read_only_transaction_that_queried_rows_commits_without_a_conflict() {
+    use fireemu_core_firestore::query::{Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    s.commit(&[set("ro/a", &[("v", Value::Integer(1))])], None, t(0))
+        .unwrap();
+    let q = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("ro").unwrap(),
+    ))
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(true, t(1)).unwrap();
+    assert_eq!(s.run_query_in_transaction(&txn, &q).unwrap().len(), 1);
+    s.commit(&[], Some(&txn), t(2)).unwrap();
+    assert_eq!(s.transaction_bookkeeping_stats().active, 0);
+}
+
 fn delete_write(p: &str) -> Write {
     Write {
         op: WriteOp::Delete { path: path(p) },

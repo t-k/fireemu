@@ -4793,6 +4793,59 @@ pub fn documents_input(
     documents_input_selected(local, database, names, guard, None).map(|(responses, _)| responses)
 }
 
+/// The request the shared compiler sees. The selectors this adapter executes itself (a
+/// transaction, a new transaction, and a read time without auto-commit) are taken out of it;
+/// any other combination keeps the compiler's refusal.
+#[must_use]
+pub(crate) fn without_executed_selector(
+    request: &pb::ExecutePipelineRequest,
+) -> pb::ExecutePipelineRequest {
+    use pb::execute_pipeline_request::ConsistencySelector as Selector;
+    let mut compiler_request = request.clone();
+    if matches!(
+        compiler_request.consistency_selector,
+        Some(Selector::Transaction(_) | Selector::NewTransaction(_))
+    ) || (!compiler_request.auto_commit_transaction
+        && matches!(
+            compiler_request.consistency_selector,
+            Some(Selector::ReadTime(_))
+        ))
+    {
+        compiler_request.consistency_selector = None;
+        compiler_request.auto_commit_transaction = false;
+    }
+    compiler_request
+}
+
+/// The `BatchGetDocuments` selector that reads a pipeline's `documents` input as selected.
+#[must_use]
+pub(crate) fn batch_get_selector(
+    selector: &pb::execute_pipeline_request::ConsistencySelector,
+) -> pb::batch_get_documents_request::ConsistencySelector {
+    use pb::batch_get_documents_request::ConsistencySelector as Out;
+    use pb::execute_pipeline_request::ConsistencySelector as In;
+    match selector {
+        In::Transaction(token) => Out::Transaction(token.clone()),
+        In::NewTransaction(options) => Out::NewTransaction(options.clone()),
+        In::ReadTime(time) => Out::ReadTime(*time),
+    }
+}
+
+/// The `RunQuery` selector that reads a pipeline's collection or collection-group input as
+/// selected.
+#[must_use]
+pub(crate) fn run_query_selector(
+    selector: &pb::execute_pipeline_request::ConsistencySelector,
+) -> pb::run_query_request::ConsistencySelector {
+    use pb::execute_pipeline_request::ConsistencySelector as In;
+    use pb::run_query_request::ConsistencySelector as Out;
+    match selector {
+        In::Transaction(token) => Out::Transaction(token.clone()),
+        In::NewTransaction(options) => Out::NewTransaction(options.clone()),
+        In::ReadTime(time) => Out::ReadTime(*time),
+    }
+}
+
 /// Reads document inputs through the existing selected-snapshot transaction machinery.
 pub fn documents_input_selected(
     local: &crate::local::LocalBackend,

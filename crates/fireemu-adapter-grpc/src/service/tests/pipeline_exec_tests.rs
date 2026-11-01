@@ -1805,7 +1805,7 @@ async fn consistency_selector_scope_covers_seeded_cases() {
         let response = Firestore::execute_pipeline(&service, Request::new(request)).await;
         assert_eq!(
             response.is_ok(),
-            selector == "strong" || (input == "documents" && selector != "invalid"),
+            selector != "invalid",
             "{selector}/{phase}/{input}"
         );
     }

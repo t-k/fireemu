@@ -19,6 +19,8 @@ mod admin_fields_tests;
 #[cfg(test)]
 mod admin_inventory_tests;
 #[cfg(test)]
+mod pipeline_selector_tests;
+#[cfg(test)]
 mod transaction_tests;
 
 use std::collections::BTreeMap;

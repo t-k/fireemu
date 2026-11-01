@@ -350,6 +350,10 @@ pub struct LocalBackend {
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
+    /// The virtual instant [`Self::clock_advanced`] last saw. Under wall-clock write time a
+    /// transaction's times are wall instants, so a virtual advance is applied to them as an age
+    /// (the difference from this instant) rather than compared with them as an instant.
+    last_virtual_clock: Mutex<fireemu_core_types::time::LogicalInstant>,
     /// The only project that exists (scope decision C11), when requests naming another are
     /// refused as production refuses a project the credential cannot use.
     project_boundary: Option<String>,
@@ -2701,6 +2705,7 @@ impl LocalBackend {
             field_operation_ordinals: std::sync::atomic::AtomicU64::new(0),
             clock,
             wall_clock_write_time: false,
+            last_virtual_clock: Mutex::new(created_at),
             project_boundary: None,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
@@ -3458,18 +3463,63 @@ impl LocalBackend {
             .unwrap_or_default()
     }
 
+    /// Applies a change of the shared virtual clock to every attached database, then compacts
+    /// them ([`Self::compact_all`]).
+    ///
+    /// With a pinned clock every Firestore time is a virtual instant and compaction compares
+    /// them with `now` directly. Under wall-clock write time a transaction begins, is touched
+    /// and is pruned on the wall clock, so the virtual instant is not comparable with its times:
+    /// the advance since the previous call is applied to every transaction as age instead.
+    /// A transaction then expires on the time elapsed since its begin and its last activity,
+    /// virtual advances made while it lived included, and never on advances made before it began.
+    pub fn clock_advanced(&self, now: fireemu_core_types::time::LogicalInstant) {
+        if self.wall_clock_write_time {
+            let advance = {
+                let mut last = self
+                    .last_virtual_clock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let advance = now.as_nanos().saturating_sub(last.as_nanos());
+                *last = now;
+                advance
+            };
+            if advance > 0 {
+                let advance = fireemu_core_types::time::LogicalDuration::from_nanos(advance);
+                let scope = fireemu_core_session::tenancy::Scope::AllExcept(
+                    std::collections::BTreeSet::new(),
+                );
+                for (_, handle) in self.handles_of(&scope) {
+                    let _ = handle.with(|state| {
+                        state.age_transactions(advance);
+                        Ok(())
+                    });
+                }
+            }
+        }
+        self.compact_all(now);
+    }
+
     /// Compacts every attached database after the shared virtual clock advances.
     ///
     /// Handles are collected under the catalog lock and compacted one at a time after that
     /// lock is released, so an unrelated database never waits behind a catalog-wide critical
     /// section. A concurrently detached or poisoned database is skipped; requests through it
     /// already fail independently.
+    ///
+    /// Transactions are pruned on the clock they are stamped with: [`Self::write_time`]. With a
+    /// pinned clock that is `now`; under wall-clock write time `now` may be a virtual instant,
+    /// which transaction times are never compared with (see [`Self::clock_advanced`]).
     pub fn compact_all(&self, now: fireemu_core_types::time::LogicalInstant) {
         let scope =
             fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+        let transactions_now = if self.wall_clock_write_time {
+            self.write_time()
+        } else {
+            now
+        };
         for (key, handle) in self.handles_of(&scope) {
             let _ = handle.with(|state| {
-                state.compact(now);
+                state.compact_with_transaction_clock(now, transactions_now);
                 self.issued_transactions
                     .lock()
                     .map_err(|_| lock_poisoned())?

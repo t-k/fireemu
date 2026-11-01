@@ -2747,6 +2747,37 @@ impl FirestoreState {
         Ok(id)
     }
 
+    /// Ages every transaction this database remembers by `by`, as if `by` more time had passed
+    /// since its begin and its last activity: its idle and total-lifetime deadlines, and the
+    /// retention of a finished one, all move `by` earlier. Snapshot times are untouched. The
+    /// caller prunes afterwards; nothing expires here.
+    ///
+    /// For a backend whose transactions are stamped on the wall clock while the session clock
+    /// is advanced virtually: the advance ages the transactions alive during it, and only them.
+    pub fn age_transactions(&mut self, by: LogicalDuration) {
+        if by.as_nanos() <= 0 {
+            return;
+        }
+        let earlier = |instant: LogicalInstant| {
+            instant
+                .checked_add(LogicalDuration::from_nanos(-by.as_nanos()))
+                .unwrap_or(LogicalInstant::MIN)
+        };
+        for transaction in self.transactions.values_mut() {
+            transaction.started_at = earlier(transaction.started_at);
+            transaction.last_activity = earlier(transaction.last_activity);
+        }
+        self.active_transaction_deadlines = std::mem::take(&mut self.active_transaction_deadlines)
+            .into_iter()
+            .map(|(deadline, id)| (earlier(deadline), id))
+            .collect();
+        self.finished_transaction_deadlines =
+            std::mem::take(&mut self.finished_transaction_deadlines)
+                .into_iter()
+                .map(|(deadline, id)| (earlier(deadline), id))
+                .collect();
+    }
+
     /// Finishes the active transactions whose deadline has passed and forgets the finished ones whose retention has
     /// ended. Returns whether it changed anything.
     fn prune_transactions(&mut self, now: LogicalInstant) -> bool {
@@ -3475,7 +3506,17 @@ impl FirestoreState {
     /// tombstone at or below the floor is dropped entirely: at every version the store can
     /// still be asked about, it is indistinguishable from a path that never existed.
     pub fn compact(&mut self, now: LogicalInstant) -> CommitVersion {
-        self.prune_transactions(now);
+        self.compact_with_transaction_clock(now, now)
+    }
+
+    /// [`Self::compact`] for a database whose transactions are stamped on another clock than
+    /// `now`: transactions are pruned at `transactions_now`, history is compacted at `now`.
+    pub fn compact_with_transaction_clock(
+        &mut self,
+        now: LogicalInstant,
+        transactions_now: LogicalInstant,
+    ) -> CommitVersion {
+        self.prune_transactions(transactions_now);
         let floor = self.retention_floor(now);
         if floor <= self.compaction_floor {
             return self.compaction_floor;

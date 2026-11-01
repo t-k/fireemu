@@ -14062,3 +14062,154 @@ async fn grpc_expression_function_depth_is_limited_to_32() {
         assert!(handle.await.unwrap_err().is_cancelled());
     }
 }
+
+/// A wall-clock-write-time server in the strict or the emulator profile, as an unpinned daemon
+/// runs it: its session clock starts at the host's wall time and moves only when advanced.
+async fn start_unpinned(
+    strict: bool,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    Arc<Mutex<VirtualClock>>,
+    Arc<LocalBackend>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        enforce_limits: strict,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
+        },
+        indexes: IndexSet::default(),
+    };
+    let wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        i128::try_from(wall.as_nanos()).unwrap(),
+    ))));
+    let backend =
+        Arc::new(LocalBackend::new(gateway.clone(), clock.clone(), 7).with_wall_clock_write_time());
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend.clone()));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), clock, backend, handle)
+}
+
+/// Advances the session clock the way the daemon's control API does: the clock moves, then the
+/// backend is told about it.
+fn advance_session_clock(clock: &Mutex<VirtualClock>, backend: &LocalBackend, seconds: i64) {
+    let now = clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(seconds))
+        .unwrap();
+    backend.clock_advanced(now);
+}
+
+/// Begins a read-write transaction, reads `items/a` in it, advances the clock by `idle` seconds
+/// and commits a write with it.
+async fn commit_after_idle(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    clock: &Mutex<VirtualClock>,
+    backend: &LocalBackend,
+    idle: i64,
+) -> Result<(), tonic::Status> {
+    const DATABASE: &str = "projects/demo-app/databases/(default)";
+    let transaction = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DATABASE.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let _ = client
+        .get_document(pb::GetDocumentRequest {
+            name: format!("{DATABASE}/documents/items/a"),
+            consistency_selector: Some(pb::get_document_request::ConsistencySelector::Transaction(
+                transaction.clone(),
+            )),
+            ..Default::default()
+        })
+        .await;
+    advance_session_clock(clock, backend, idle);
+    client
+        .commit(pb::CommitRequest {
+            transaction,
+            ..history_budget_update("demo-app", "(default)", "a", idle)
+        })
+        .await
+        .map(|_| ())
+}
+
+/// A transaction's lifetime is its own age. On an unpinned daemon (wall-clock write time), the
+/// virtual advance made before a transaction began used to be counted as its age at the next
+/// clock change: 130 s of earlier advance expired a 5 s-old transaction, 400 s forgot it.
+#[tokio::test]
+async fn a_transaction_begun_after_a_clock_advance_expires_on_its_own_age() {
+    for strict in [true, false] {
+        for before in [0, 130, 400] {
+            let (mut client, clock, backend, handle) = start_unpinned(strict).await;
+            if before > 0 {
+                advance_session_clock(&clock, &backend, before);
+            }
+            let result = commit_after_idle(&mut client, &clock, &backend, 5).await;
+            assert!(
+                result.is_ok(),
+                "strict {strict}, {before} s advanced before the begin: {result:?}"
+            );
+            handle.abort();
+        }
+    }
+}
+
+/// The idle limit still applies to virtual time that passes while a transaction lives: strict
+/// allows 120 s of idle and the emulator profile 60 s, and the commit just inside each limit is
+/// accepted while the one past it is refused, whatever was advanced before the begin.
+#[tokio::test]
+async fn a_transaction_still_expires_when_the_clock_passes_its_idle_limit() {
+    for (strict, limit) in [(true, 120), (false, 60)] {
+        for before in [0, 400] {
+            for (idle, accepted) in [(limit - 2, true), (limit + 2, false)] {
+                let (mut client, clock, backend, handle) = start_unpinned(strict).await;
+                if before > 0 {
+                    advance_session_clock(&clock, &backend, before);
+                }
+                let result = commit_after_idle(&mut client, &clock, &backend, idle).await;
+                assert_eq!(
+                    result.is_ok(),
+                    accepted,
+                    "strict {strict}, {before} s before the begin, {idle} s idle: {result:?}"
+                );
+                if let Err(status) = result {
+                    assert!(
+                        matches!(
+                            status.code(),
+                            tonic::Code::Aborted | tonic::Code::InvalidArgument
+                        ),
+                        "{status:?}"
+                    );
+                }
+                handle.abort();
+            }
+        }
+    }
+}

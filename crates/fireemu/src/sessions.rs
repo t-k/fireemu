@@ -293,7 +293,7 @@ impl ProjectHooks for Projects {
     }
 
     fn clock_advanced(&self, now: fireemu_core_types::time::LogicalInstant) {
-        self.backend.compact_all(now);
+        self.backend.clock_advanced(now);
         if let Ok(mut pubsub) = self.pubsub.lock() {
             pubsub.expire_all(now);
         }

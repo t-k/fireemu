@@ -6199,6 +6199,33 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
                 ..request(vec![stage("collection", 1)])
             },
         ),
+        // Only auto-commit with no selector at all has a recorded production refusal.
+        (
+            "auto-commit with a transaction and a garbage database",
+            pb::ExecutePipelineRequest {
+                database: "garbage".to_owned(),
+                auto_commit_transaction: true,
+                consistency_selector: Some(
+                    pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]),
+                ),
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
+        (
+            "auto-commit with a read time",
+            pb::ExecutePipelineRequest {
+                auto_commit_transaction: true,
+                consistency_selector: Some(
+                    pb::execute_pipeline_request::ConsistencySelector::ReadTime(
+                        prost_types::Timestamp {
+                            seconds: 1,
+                            nanos: 0,
+                        },
+                    ),
+                ),
+                ..request(vec![stage("collection", 1)])
+            },
+        ),
         (
             "pipeline option",
             pb::ExecutePipelineRequest {
@@ -6215,13 +6242,6 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
                 ..request(vec![])
             },
         ),
-        (
-            "auto-commit without a new transaction",
-            pb::ExecutePipelineRequest {
-                auto_commit_transaction: true,
-                ..request(vec![stage("collection", 1)])
-            },
-        ),
     ] {
         let err = client.execute_pipeline(bad).await.unwrap_err();
         // The stage registry's and the request envelope's texts are fireemu's own, in no shape
@@ -6233,6 +6253,20 @@ async fn execute_pipeline_validates_unsupported_shapes_and_executes_supported_su
             "{what}"
         );
     }
+    // Production answered auto-commit without a transaction selector with this
+    // resource-independent refusal, so it is no longer an unobserved shape.
+    let err = client
+        .execute_pipeline(pb::ExecutePipelineRequest {
+            auto_commit_transaction: true,
+            ..request(vec![stage("collection", 1)])
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument, "{err}");
+    assert_eq!(
+        err.message(),
+        "'auto_commit_transaction' must be used with a transaction."
+    );
     handle.abort();
 }
 

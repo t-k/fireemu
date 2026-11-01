@@ -1811,54 +1811,8 @@ async fn consistency_selector_scope_covers_seeded_cases() {
     }
 }
 
-#[tokio::test]
-async fn pipeline_new_transaction_and_auto_commit_stay_unimplemented() {
-    let case = Case {
-        docs: vec![],
-        m_shapes: vec![],
-        literal: None,
-        select: None,
-        offset: None,
-        limit: None,
-    };
-    let service = service_for(&case);
-    let mut request = pipeline(&case, "");
-    let Some(pb::execute_pipeline_request::PipelineType::StructuredPipeline(ref mut structured)) =
-        request.pipeline_type
-    else {
-        panic!()
-    };
-    structured.pipeline.as_mut().unwrap().stages[0] = stage(
-        "documents",
-        value(pb::value::ValueType::ReferenceValue(
-            "/items/000".to_owned(),
-        )),
-    );
-    request.consistency_selector = Some(
-        pb::execute_pipeline_request::ConsistencySelector::NewTransaction(
-            pb::TransactionOptions::default(),
-        ),
-    );
-    assert_eq!(
-        Firestore::execute_pipeline(&service, Request::new(request.clone()))
-            .await
-            .err()
-            .unwrap()
-            .code(),
-        tonic::Code::Unimplemented
-    );
-    request.consistency_selector =
-        Some(pb::execute_pipeline_request::ConsistencySelector::Transaction(vec![1]));
-    request.auto_commit_transaction = true;
-    assert_eq!(
-        Firestore::execute_pipeline(&service, Request::new(request))
-            .await
-            .err()
-            .unwrap()
-            .code(),
-        tonic::Code::Unimplemented
-    );
-}
+#[path = "pipeline_selector_tests.rs"]
+mod selector_tests;
 
 #[test]
 fn shared_compiler_still_refuses_transaction_selectors() {

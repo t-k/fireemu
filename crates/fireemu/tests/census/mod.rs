@@ -220,6 +220,7 @@ pub fn kill_pid(pid: i32) {
 
 /// Terminates exactly the process observed by a prior census, without signaling a process
 /// group or a different process that later reused the numeric PID.
+#[cfg(unix)]
 pub fn terminate_exact_process(expected: &Proc, grace: Duration) {
     for signal in [rustix::process::Signal::TERM, rustix::process::Signal::KILL] {
         if find(expected.pid).as_ref() != Some(expected) {
@@ -238,6 +239,14 @@ pub fn terminate_exact_process(expected: &Proc, grace: Duration) {
         }
     }
 }
+
+/// Non-Unix fallback of [`terminate_exact_process`], so the census compiles for every target.
+///
+/// `rustix::process` exists only on Unix, and the census itself reads `ps`, which Windows does
+/// not provide, so no census entry can be observed there to terminate. The fallback signals
+/// nothing; the tests that rely on exact process control run on Unix only.
+#[cfg(not(unix))]
+pub fn terminate_exact_process(_expected: &Proc, _grace: Duration) {}
 
 /// Whether `pid` is alive.
 #[must_use]

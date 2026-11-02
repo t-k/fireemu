@@ -1005,12 +1005,12 @@ fn sign_response_tokens(
         return response;
     };
     // A refresh answers one token as both `id_token` and `access_token`; it is signed once.
-    let mut signed: Vec<(String, String)> = Vec::new();
+    let mut signed_tokens: Vec<(String, String)> = Vec::new();
     for field in ["idToken", "id_token", "access_token", "sessionCookie"] {
         let Some(Value::String(token)) = object.get_mut(field) else {
             continue;
         };
-        if let Some((_, reused)) = signed.iter().find(|(unsigned, _)| unsigned == token) {
+        if let Some((_, reused)) = signed_tokens.iter().find(|(unsigned, _)| unsigned == token) {
             token.clone_from(reused);
             continue;
         }
@@ -1043,7 +1043,7 @@ fn sign_response_tokens(
             return error(500, "INTERNAL");
         };
         let result = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
-        signed.push((std::mem::replace(token, result.clone()), result));
+        signed_tokens.push((std::mem::replace(token, result.clone()), result));
     }
     response
 }
@@ -4023,6 +4023,7 @@ fn official_admin_account_handler(handler: routes::Handler) -> bool {
 ///
 /// An empty body `tenantId` is already dropped (`emulator_tenant_id_reading`), as the emulator
 /// reads `""` as no tenant (a project user's token too).
+#[allow(clippy::too_many_arguments)]
 fn emulator_named_tenant(
     state: &AuthState,
     routing: &RoutingIdToken,

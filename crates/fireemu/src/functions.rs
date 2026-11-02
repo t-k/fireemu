@@ -7356,6 +7356,61 @@ root	unchanged	small	firstGen";
         runtime.shutdown().await;
     }
 
+    /// Timing harness for the issue "RTDB trigger events serialize the same snapshot
+    /// repeatedly": under `/{top}`, three one-value writes into a branch of 130,000 small
+    /// objects (about 7.0 MB of JSON, which fits a frame). Run in release with
+    /// `cargo test -p fireemu --release -- --ignored --nocapture large_branch_trigger_write_timing`.
+    #[tokio::test]
+    #[ignore = "a timing harness, not a contract"]
+    async fn large_branch_trigger_write_timing() {
+        use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};
+        let runtime = database_bridge_runtime_with(
+            &json!({"functions":[{"name":"topChanged","generation":2,"region":"us-central1","trigger":{
+                "type":"database","eventType":"google.firebase.database.ref.v1.written","instance":"*","ref":"/{top}"
+            }}]}),
+        )
+        .await;
+        let mut database = Database::new(RestOptions::default(), 1);
+        let big: serde_json::Map<_, _> = (0..130_000)
+            .map(|n| (format!("k{n:06}"), json!({"v": "x".repeat(35)})))
+            .collect();
+        let big = json!({ "big": big });
+        eprintln!(
+            "branch JSON bytes: {}",
+            serde_json::to_vec(&big["big"]).unwrap().len()
+        );
+        assert_eq!(database_bridge_write(&mut database, &big), 200);
+        database.set_change_sink(super::database_sink(
+            &runtime,
+            "demo-app",
+            "us-central1",
+            "firebaseio.com",
+        ));
+        let started = std::time::Instant::now();
+        for n in 0..3 {
+            let write = std::time::Instant::now();
+            let Handled::Response { response, .. } = database.handle(
+                &HttpRequest {
+                    method: "PUT".to_owned(),
+                    target: format!("/big/new{n}.json?ns=demo-app-default-rtdb"),
+                    headers: Vec::new(),
+                    body: b"1".to_vec(),
+                },
+                100_000,
+            ) else {
+                panic!("a PUT must not create a stream")
+            };
+            assert_eq!(response.status, 200);
+            eprintln!("write {n}: {:?}", write.elapsed());
+        }
+        eprintln!("three writes: {:?}", started.elapsed());
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            3
+        );
+        runtime.shutdown().await;
+    }
+
     #[tokio::test]
     async fn database_bridge_oversized_fanout_admits_the_write_and_drops_its_events() {
         use fireemu_adapter_database::rest::{Database, Handled, HttpRequest, RestOptions};

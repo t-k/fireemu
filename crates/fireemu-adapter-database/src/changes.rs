@@ -163,21 +163,13 @@ pub fn prepare_within<R>(
     let publication = if tree.get(scope) == candidate.get(scope) {
         None
     } else if let Some(sink) = sink {
-        let encode = |tree: &Tree, path: &Path| {
-            let value = tree.get_json(path, fireemu_core_database::Format::Export);
-            serde_json::from_str(&crate::json_text::render(
-                &value,
-                crate::json_text::Style::Compact,
-            ))
-            .expect("the database tree renders valid JSON")
-        };
         let data = match sink
             .capture_references_within(&context.namespace, tree, &candidate, scope)
             .map_err(ChangeError::Admission)?
         {
             None => ChangeData::Whole {
-                before: encode(tree, &Path::root()),
-                after: encode(&candidate, &Path::root()),
+                before: export_value(tree, &Path::root()),
+                after: export_value(&candidate, &Path::root()),
             },
             Some(paths) => {
                 let paths: std::collections::BTreeSet<_> = paths.into_iter().collect();
@@ -185,8 +177,8 @@ pub fn prepare_within<R>(
                     .into_iter()
                     .filter(|path| tree.get(path) != candidate.get(path))
                     .map(|reference| ReferenceChange {
-                        before: encode(tree, &reference),
-                        after: encode(&candidate, &reference),
+                        before: export_value(tree, &reference),
+                        after: export_value(&candidate, &reference),
                         reference,
                     })
                     .collect();
@@ -211,4 +203,66 @@ pub fn prepare_within<R>(
             publication,
         },
     ))
+}
+
+/// The export JSON of the value at `path` (`null` when absent), written from the tree into a
+/// `Value` without rendering text: the same `Value` that parsing the compact export text
+/// gives, so the trigger event body keeps its bytes. No `.priority` path reaches here: no
+/// child has that key, so such a reference never differs between the trees.
+fn export_value(tree: &Tree, path: &Path) -> Value {
+    tree.get(path).map_or(Value::Null, node_value)
+}
+
+/// [`Node::to_json`] in the export format, as a `Value`.
+fn node_value(node: &Node) -> Value {
+    use fireemu_core_database::node::VALUE_KEY;
+    use fireemu_core_database::path::PRIORITY_KEY;
+    let priority = node.priority.as_ref().map(priority_value);
+    match &node.content {
+        Content::Leaf(leaf) => {
+            let value = match leaf {
+                Leaf::Bool(value) => Value::Bool(*value),
+                Leaf::Number(number) => number_value(*number),
+                Leaf::String(value) => Value::String(value.clone()),
+            };
+            match priority {
+                None => value,
+                Some(priority) => Value::Object(serde_json::Map::from_iter([
+                    (VALUE_KEY.to_owned(), value),
+                    (PRIORITY_KEY.to_owned(), priority),
+                ])),
+            }
+        }
+        Content::Children(children) => {
+            let mut map: serde_json::Map<String, Value> = children
+                .iter()
+                .map(|(key, child)| (key.clone(), node_value(child)))
+                .collect();
+            if let Some(priority) = priority {
+                map.insert(PRIORITY_KEY.to_owned(), priority);
+            }
+            Value::Object(map)
+        }
+    }
+}
+
+fn priority_value(priority: &fireemu_core_database::Priority) -> Value {
+    match priority {
+        fireemu_core_database::Priority::Number(number) => number_value(*number),
+        fireemu_core_database::Priority::String(value) => Value::String(value.clone()),
+    }
+}
+
+/// A database number as a `Value`.
+fn number_value(number: fireemu_core_database::Number) -> Value {
+    match number {
+        fireemu_core_database::Number::Int(value) => Value::from(value),
+        // A double is read back from its rendered text, as the text path read it:
+        // `serde_json`'s default float parser can land one ULP away from the stored double,
+        // and the event body must not change here.
+        fireemu_core_database::Number::Double(value) => {
+            serde_json::from_str(&crate::json_text::java_double(value))
+                .expect("a finite double renders a JSON number")
+        }
+    }
 }

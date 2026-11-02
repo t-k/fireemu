@@ -10,3 +10,8 @@ paths:
       # workflows restore. scripts/actions-security-contract.rb requires it. Remove this entry once
       # actionlint knows the key.
       - 'unexpected key "cache-mode" for "job" section'
+  .github/workflows/ci.yml:
+    ignore:
+      # Same official key as above: the Python Admin SDK smoke job (sdk-smoke-python) runs
+      # third-party SDK code and takes a read-only cache token. Remove once actionlint knows it.
+      - 'unexpected key "cache-mode" for "job" section'

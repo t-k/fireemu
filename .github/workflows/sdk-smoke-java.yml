@@ -61,19 +61,13 @@ jobs:
       - name: guard tests (offline) and the smoke build
         working-directory: tools/sdk-smoke-java
         run: ./gradlew --no-daemon test installDist
-      # The default configuration (no config file; the default profile is strict) and an
-      # explicit strict profile. The smoke's own clock checks need an unpinned clock, which is
-      # why it does not reuse tools/sdk-smoke/fireemu.smoke.json.
+      # The default configuration (no config file; the default profile is strict). The smoke's own
+      # clock checks need an unpinned clock, which is why it does not reuse
+      # tools/sdk-smoke/fireemu.smoke.json.
       - name: Java Admin SDK smoke under fireemu exec
         run: |
           set -eu
           bin="$PWD/target/debug/fireemu"
           smoke="$PWD/tools/sdk-smoke-java/build/install/sdk-smoke-java/bin/sdk-smoke-java"
-          config="$PWD/tools/sdk-smoke-java/fireemu.strict.json"
           cd "$RUNNER_TEMP"
-          echo "::group::java admin smoke (default configuration)"
           "$bin" exec --project demo-app --hub-port 0 -- "$smoke"
-          echo "::endgroup::"
-          echo "::group::java admin smoke (strict profile)"
-          "$bin" exec --config "$config" --project demo-app --hub-port 0 -- "$smoke"
-          echo "::endgroup::"

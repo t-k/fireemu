@@ -15,3 +15,8 @@ paths:
       # Same official key as above: the Python and Go Admin SDK smoke jobs (sdk-smoke-python,
       # sdk-smoke-go) run third-party SDK code and take a read-only cache token. Remove once actionlint knows it.
       - 'unexpected key "cache-mode" for "job" section'
+  .github/workflows/sdk-smoke-java.yml:
+    ignore:
+      # Same official key as above: the Java Admin SDK smoke job runs third-party SDK code and
+      # takes a read-only cache token. Remove once actionlint knows it.
+      - 'unexpected key "cache-mode" for "job" section'

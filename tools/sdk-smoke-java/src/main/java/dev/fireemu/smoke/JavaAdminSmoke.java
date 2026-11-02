@@ -498,6 +498,24 @@ public final class JavaAdminSmoke {
     require(storage.delete(id), "delete must report the object existed");
   }
 
+  /** The base64 MD5 of {@code content}, as the JSON API reports {@code md5Hash}. */
+  private static String md5Base64(byte[] content) throws java.security.NoSuchAlgorithmException {
+    return java.util.Base64.getEncoder()
+        .encodeToString(java.security.MessageDigest.getInstance("MD5").digest(content));
+  }
+
+  /** The base64 of the big-endian CRC32C of {@code content}, as the JSON API reports it. */
+  private static String crc32cBase64(byte[] content) {
+    java.util.zip.CRC32C crc = new java.util.zip.CRC32C();
+    crc.update(content, 0, content.length);
+    int value = (int) crc.getValue();
+    return java.util.Base64.getEncoder()
+        .encodeToString(
+            new byte[] {
+              (byte) (value >>> 24), (byte) (value >>> 16), (byte) (value >>> 8), (byte) value
+            });
+  }
+
   /**
    * The object lifecycle with gzip request bodies turned off ({@code disableGzipContent}), so
    * the rest of the flow is covered while the default upload is a known mismatch.
@@ -529,7 +547,8 @@ public final class JavaAdminSmoke {
     require(
         Map.of("origin", "java-smoke").equals(meta.getMetadata()),
         "custom metadata: " + meta.getMetadata());
-    require(meta.getMd5() != null && meta.getCrc32c() != null, "hashes: " + meta);
+    require(md5Base64(content).equals(meta.getMd5()), "md5: " + meta.getMd5());
+    require(crc32cBase64(content).equals(meta.getCrc32c()), "crc32c: " + meta.getCrc32c());
 
     require(storage.delete(id), "delete must report the object existed");
     require(storage.get(id) == null, "deleted object must be gone");

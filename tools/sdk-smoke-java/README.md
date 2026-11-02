@@ -9,18 +9,15 @@ cd tools/sdk-smoke-java
 cd "$(mktemp -d)"                   # no fireemu config is discovered here
 fireemu exec --project demo-app --hub-port 0 -- \
   /path/to/fireemu/tools/sdk-smoke-java/build/install/sdk-smoke-java/bin/sdk-smoke-java
-fireemu exec --config /path/to/fireemu/tools/sdk-smoke-java/fireemu.strict.json \
-  --project demo-app --hub-port 0 -- \
-  /path/to/fireemu/tools/sdk-smoke-java/build/install/sdk-smoke-java/bin/sdk-smoke-java
 ```
 
 The JVM is started directly by `fireemu exec` (not through `./gradlew run`, whose daemon may
 hold another environment). The `sdk-smoke-java` workflow runs exactly these steps. Exit status:
 0 when every step passed, 1 when one failed, 2 when the guard refused to start.
 
-`fireemu.strict.json` names the strict profile explicitly; the default configuration is the
-same profile. The smoke needs an unpinned clock (`verifyIdToken` checks `exp` and `iat`
-against the JVM's clock), so it does not reuse `tools/sdk-smoke/fireemu.smoke.json`.
+The default configuration is the strict profile, so one run covers it. The smoke needs an
+unpinned clock (`verifyIdToken` checks `exp` and `iat` against the JVM's clock), so it does not
+reuse `tools/sdk-smoke/fireemu.smoke.json`.
 
 ## What it covers
 
@@ -29,13 +26,18 @@ against the JVM's clock), so it does not reuse `tools/sdk-smoke/fireemu.smoke.js
   automatic single-field index, so the strict profile needs no composite index); a
   read-then-write transaction; a batch of set, set, update and delete; a collection snapshot
   listener that receives one `ADDED` change after its empty initial snapshot.
-- Auth (`FirebaseAuth`): create, get, get by email, custom claims; a custom token exchanged at
-  `accounts:signInWithCustomToken` and the resulting ID token verified; an ID token from
+- Auth (`FirebaseAuth`): create, get, get by email, custom claims; a custom token is created and
+  sent to `accounts:signInWithCustomToken`, but that step stops at the known mismatch below
+  (`INVALID_CUSTOM_TOKEN`), so the ID token it would return is never verified; an ID token from
   `accounts:signInWithPassword` verified with and without `checkRevoked`; delete, then
   `USER_NOT_FOUND`. The sign-in calls are the REST calls a client SDK makes, since the Admin SDK
   has none.
-- Storage (`google-cloud-storage`, JSON API): upload with the SDK defaults; upload, download,
-  metadata read and delete; a metadata update (`storage.update`).
+- Storage (`google-cloud-storage`, JSON API): upload with gzip off, download, a metadata read
+  (size, content type, custom metadata, and MD5 and CRC32C checked against the uploaded bytes)
+  and delete. Two steps stop at a known mismatch below and cover less than they name: the upload
+  with the SDK defaults is refused at the upload, so its download and delete are not reached; the
+  metadata update (`storage.update`) is refused at the update, so the updated metadata is never
+  read back.
 
 ## Emulator routing and the guard
 

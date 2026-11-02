@@ -1,11 +1,14 @@
 //! Virtual clock (spec 11.1, 11.2, ADR-004).
 //!
 //! The runtime never calls `SystemTime::now()`. Every session owns a `VirtualClock`; wall-clock
-//! adapters for the `compat` profile live outside the core.
+//! adapters for the `compat` profile live outside the core. A clock made with
+//! [`VirtualClock::following`] counts the monotonic time that passes since its last move, so it
+//! runs at the pace of real time without the core ever reading the wall clock.
 
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 /// One published clock state; elapsed time counts forward movement only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +63,12 @@ impl core::fmt::Display for ClockError {
 
 impl std::error::Error for ClockError {}
 
-/// A deterministic clock that only moves when told to.
+/// A deterministic clock that only moves when told to, or that runs on from its last move at
+/// the pace of real time ([`VirtualClock::following`]).
 pub struct VirtualClock {
     now: LogicalInstant,
+    /// The monotonic instant `now` was published at, for a clock that follows real time.
+    anchor: Option<Instant>,
     backwards_sets: u32,
     elapsed_nanos: u128,
     revision: u64,
@@ -74,6 +80,7 @@ impl Clone for VirtualClock {
     fn clone(&self) -> Self {
         Self {
             now: self.now,
+            anchor: self.anchor,
             backwards_sets: self.backwards_sets,
             elapsed_nanos: self.elapsed_nanos,
             revision: self.revision,
@@ -108,6 +115,7 @@ impl VirtualClock {
     pub const fn new(start: LogicalInstant) -> Self {
         Self {
             now: start,
+            anchor: None,
             backwards_sets: 0,
             elapsed_nanos: 0,
             revision: 0,
@@ -116,12 +124,71 @@ impl VirtualClock {
         }
     }
 
+    /// Creates a clock at `start` that keeps running at the pace of real time. A move by hand
+    /// (`advance`, `advance_to`, a set) is an offset on top: the clock runs on from where it
+    /// lands.
+    #[must_use]
+    pub fn following(start: LogicalInstant) -> Self {
+        Self::following_since(start, Instant::now())
+    }
+
+    /// [`Self::following`] for a clock that was at `start` when the monotonic clock read
+    /// `since` (a clock that has already run for a while).
+    #[must_use]
+    pub const fn following_since(start: LogicalInstant, since: Instant) -> Self {
+        let mut clock = Self::new(start);
+        clock.anchor = Some(since);
+        clock
+    }
+
+    /// Whether the clock runs with real time.
+    #[must_use]
+    pub const fn is_following(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Nanoseconds the clock has run since its last move (zero for a frozen clock).
+    fn drift_nanos(&self) -> i128 {
+        self.anchor.map_or(0, |anchor| {
+            i128::try_from(anchor.elapsed().as_nanos()).unwrap_or(i128::MAX)
+        })
+    }
+
+    /// The instant now: the last move plus the real time that has passed since.
+    fn live(&self) -> LogicalInstant {
+        let drift = self.drift_nanos();
+        if drift == 0 {
+            return self.now;
+        }
+        self.now
+            .checked_add(LogicalDuration::from_nanos(drift))
+            .unwrap_or(self.now)
+    }
+
+    /// Publishes the running time to the observers when a following clock has moved since its
+    /// last publication, so a schedule or a waiting task notices that time has passed.
+    /// Returns whether anything was published; a frozen clock has nothing to publish.
+    pub fn sync(&mut self) -> bool {
+        if self.anchor.is_none() {
+            return false;
+        }
+        let live = self.live();
+        if live <= self.now || self.validate_target(live).is_err() {
+            return false;
+        }
+        self.publish(live);
+        true
+    }
+
     /// Advances by `duration` and returns the new instant.
     pub fn advance(&mut self, duration: LogicalDuration) -> Result<LogicalInstant, ClockError> {
         if duration.as_nanos() < 0 {
             return Err(ClockError::NegativeDuration);
         }
-        let next = self.now.checked_add(duration).ok_or(ClockError::Overflow)?;
+        let next = self
+            .live()
+            .checked_add(duration)
+            .ok_or(ClockError::Overflow)?;
         self.validate_target(next)?;
         self.publish(next);
         Ok(next)
@@ -129,9 +196,10 @@ impl VirtualClock {
 
     /// Advances to `instant`; rejects going backwards.
     pub fn advance_to(&mut self, instant: LogicalInstant) -> Result<LogicalInstant, ClockError> {
-        if instant < self.now {
+        let current = self.live();
+        if instant < current {
             return Err(ClockError::WouldMoveBackwards {
-                current: self.now,
+                current,
                 requested: instant,
             });
         }
@@ -156,7 +224,7 @@ impl VirtualClock {
     /// Checked rewind for clocks with configured runtime representation bounds.
     pub fn try_set_allow_backwards(&mut self, instant: LogicalInstant) -> Result<(), ClockError> {
         self.validate_target(instant)?;
-        if instant < self.now {
+        if instant < self.live() {
             self.backwards_sets = self.backwards_sets.saturating_add(1);
         }
         self.publish(instant);
@@ -172,7 +240,8 @@ impl VirtualClock {
         let (minimum, maximum) = self.range.map_or((minimum, maximum), |(low, high)| {
             (low.max(minimum), high.min(maximum))
         });
-        if minimum > maximum || self.now < minimum || self.now > maximum {
+        let now = self.live();
+        if minimum > maximum || now < minimum || now > maximum {
             return Err(ClockError::OutOfRange);
         }
         self.range = Some((minimum, maximum));
@@ -181,11 +250,13 @@ impl VirtualClock {
 
     /// Validate without changing the wall, elapsed, revision or observer state.
     pub fn validate_target(&self, instant: LogicalInstant) -> Result<(), ClockError> {
+        let now = self.live();
         if self.revision == u64::MAX
-            || (instant > self.now
+            || (instant > now
                 && self
                     .elapsed_nanos
-                    .checked_add(instant.as_nanos().abs_diff(self.now.as_nanos()))
+                    .saturating_add(self.drift_elapsed())
+                    .checked_add(instant.as_nanos().abs_diff(now.as_nanos()))
                     .is_none())
         {
             return Err(ClockError::Overflow);
@@ -207,21 +278,32 @@ impl VirtualClock {
 
     /// Current instant and monotonic timer/revision axes.
     #[must_use]
-    pub const fn snapshot(&self) -> ClockSnapshot {
+    pub fn snapshot(&self) -> ClockSnapshot {
         ClockSnapshot {
-            instant: self.now,
-            elapsed_nanos: self.elapsed_nanos,
+            instant: self.live(),
+            elapsed_nanos: self.elapsed_nanos.saturating_add(self.drift_elapsed()),
             revision: self.revision,
         }
     }
 
+    /// The real time a following clock has run since its last move, as elapsed time.
+    fn drift_elapsed(&self) -> u128 {
+        u128::try_from(self.drift_nanos()).unwrap_or(0)
+    }
+
     fn publish(&mut self, instant: LogicalInstant) {
-        if instant > self.now {
+        // Fold in the time that has passed since the last move, then the move itself.
+        let live = self.live();
+        self.elapsed_nanos = self.elapsed_nanos.saturating_add(self.drift_elapsed());
+        if instant > live {
             self.elapsed_nanos = self
                 .elapsed_nanos
-                .saturating_add(instant.as_nanos().abs_diff(self.now.as_nanos()));
+                .saturating_add(instant.as_nanos().abs_diff(live.as_nanos()));
         }
         self.now = instant;
+        if self.anchor.is_some() {
+            self.anchor = Some(Instant::now());
+        }
         self.revision = self.revision.saturating_add(1);
         let snapshot = self.snapshot();
         self.observers.retain(|weak| {
@@ -235,8 +317,8 @@ impl VirtualClock {
 
     /// Current instant (same as [`Clock::now`]; convenient where the trait is not imported).
     #[must_use]
-    pub const fn now_for_test(&self) -> LogicalInstant {
-        self.now
+    pub fn now_for_test(&self) -> LogicalInstant {
+        self.live()
     }
 
     /// Number of times the clock was explicitly moved backwards.
@@ -254,7 +336,7 @@ impl VirtualClock {
 
 impl Clock for VirtualClock {
     fn now(&self) -> LogicalInstant {
-        self.now
+        self.live()
     }
 }
 

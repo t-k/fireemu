@@ -161,7 +161,7 @@ export async function snapshotInputs(options, root) {
       throw Error(`Cannot snapshot NODE_PATH entry ${JSON.stringify(entry)} (copy root ${JSON.stringify(original)}): ${cause.message}. If this global package is unused, exclude its name with nodePathExcludes; if all global roots are unused, set env.NODE_PATH to an empty string`,{cause});
     }
   }
-  config.daemon={...config.daemon,clockStart:options.clockStart??config.daemon?.clockStart??'2026-01-01T00:00:00Z',seed:options.seed??config.daemon?.seed??1,authProject:options.projectId??config.daemon?.authProject??'demo-test-world'};
+  config.daemon={...config.daemon,clockStart:options.clockStart??config.daemon?.clockStart??'2026-01-01T00:00:00Z',clock:config.daemon?.clock??'frozen',seed:options.seed??config.daemon?.seed??1,authProject:options.projectId??config.daemon?.authProject??'demo-test-world'};
   for(const service of ['firestore','http','storage','functions','eventarc','tasks','pubsub','database','hub','ui','logging'])config.daemon[`${service}Port`]=0;
   config.functions={...config.functions,clock:{date:'virtual',timers:'real',tasks:'virtual',...config.functions?.clock,...options.clock}};
   await writeFile(join(baseline,'fireemu.json'),JSON.stringify(config),{mode:0o600});

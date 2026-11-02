@@ -1269,3 +1269,90 @@ fn a_deep_rule_built_from_shallow_pieces_never_stops_the_daemon() {
         assert_eq!(request(port, "GET", "/.json?ns=other", &[], "").0, 200);
     }
 }
+
+/// `ServerValue.TIMESTAMP` written through REST, read back as milliseconds.
+fn server_timestamp(port: u16, path: &str) -> i64 {
+    let ns = "ns=demo-rtdb-default-rtdb";
+    let (status, _) = request(
+        port,
+        "PUT",
+        &format!("/{path}.json?{ns}"),
+        &[],
+        r#"{".sv":"timestamp"}"#,
+    );
+    assert_eq!(status, 200);
+    request(port, "GET", &format!("/{path}.json?{ns}"), &[], "")
+        .1
+        .parse()
+        .unwrap()
+}
+
+fn wall_millis() -> i64 {
+    i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_default_clock_follows_real_time() {
+    let daemon = Daemon::start(&["--only", "database", "--database-port", "0"]);
+    let port = daemon.database_port();
+    let before = wall_millis();
+    let first = server_timestamp(port, "t/a");
+    std::thread::sleep(Duration::from_millis(120));
+    let second = server_timestamp(port, "t/b");
+    let after = wall_millis();
+    assert!(
+        before <= first && first <= after,
+        "{before} {first} {after}"
+    );
+    assert!(second - first >= 100, "{first} {second}");
+    assert!(second <= after, "{second} {after}");
+}
+
+#[test]
+fn a_pinned_start_runs_on_from_its_instant_and_frozen_stands_still() {
+    const START_MILLIS: i64 = 1_767_225_600_000; // 2026-01-01T00:00:00Z
+    let dir = Scratch::new("database", "clock-modes");
+    for (clock, frozen) in [
+        (None, false),
+        (Some("frozen"), true),
+        (Some("realtime"), false),
+    ] {
+        let mut daemon_section = serde_json::json!({"clockStart": "2026-01-01T00:00:00Z"});
+        if let Some(clock) = clock {
+            daemon_section["clock"] = serde_json::json!(clock);
+        }
+        let config = dir.join(&format!("fireemu-{}.json", clock.unwrap_or("default")));
+        std::fs::write(
+            &config,
+            serde_json::json!({"schemaVersion": 1, "daemon": daemon_section}).to_string(),
+        )
+        .unwrap();
+        let daemon = Daemon::start(&[
+            "--config",
+            config.to_str().unwrap(),
+            "--only",
+            "database",
+            "--database-port",
+            "0",
+        ]);
+        let port = daemon.database_port();
+        let first = server_timestamp(port, "t/a");
+        std::thread::sleep(Duration::from_millis(150));
+        let second = server_timestamp(port, "t/b");
+        if frozen {
+            assert_eq!((first, second), (START_MILLIS, START_MILLIS), "{clock:?}");
+        } else {
+            assert!(
+                first >= START_MILLIS && first < START_MILLIS + 60_000,
+                "{clock:?} {first}"
+            );
+            assert!(second - first >= 100, "{clock:?} {first} {second}");
+        }
+    }
+}

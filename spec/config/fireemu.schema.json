@@ -798,6 +798,10 @@
           "description": "Port of the web UI, the same setting as emulators.ui.port in firebase.json and --ui-port. The default is the official 4000, best effort: a busy default disables the UI, a busy explicit port is an error. 0 turns the UI off."
         },
         "clockStart": { "type": "string", "format": "date-time" },
+        "clock": {
+          "enum": ["realtime", "frozen"],
+          "description": "How the virtual clock moves. realtime (the default) runs it with real time from daemon.clockStart, or from the start time when that is unset; clock:advance, clock:advanceTo and clock:set add an offset on top. frozen keeps it still until it is moved. A virtual functions.clock needs a clock that only moves when told to, so it makes frozen the default."
+        },
         "seed": { "type": "integer", "minimum": 0 },
         "authProject": { "type": "string", "pattern": "^[a-z0-9-]+$" },
         "authProjectNumbers": { "type": "object", "propertyNames": { "pattern": "^[a-z0-9-]+$" }, "additionalProperties": { "$ref": "#/$defs/authProjectNumber" } }

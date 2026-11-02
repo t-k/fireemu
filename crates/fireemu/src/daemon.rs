@@ -1918,6 +1918,22 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|e| format!("cannot start runtime: {e}"))
 }
 
+/// How often a clock that follows real time publishes its running time to its observers.
+const CLOCK_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Publishes the running time of a clock that follows real time until the clock is gone.
+async fn clock_ticker(clock: std::sync::Weak<Mutex<VirtualClock>>) {
+    let mut interval = tokio::time::interval(CLOCK_TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let Some(shared) = clock.upgrade() else {
+            return;
+        };
+        let _ = shared.lock().map(|mut running| running.sync());
+    }
+}
+
 pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     let Options {
         mut cfg,
@@ -1953,7 +1969,16 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // can advertise readiness, and a SIGTERM that arrives before its handler exists
         // terminates the process without running a destructor.
         let signals = ShutdownSignals::install();
-        let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        // The clock follows real time unless `daemon.clock` freezes it; a ticker tells its
+        // observers (schedules, waiting tasks) that time has passed.
+        let clock = Arc::new(Mutex::new(if cfg.clock_frozen() {
+            VirtualClock::new(cfg.clock_start)
+        } else {
+            VirtualClock::following(cfg.clock_start)
+        }));
+        if !cfg.clock_frozen() {
+            tokio::spawn(clock_ticker(Arc::downgrade(&clock)));
+        }
         let created_at = cfg.database_create_time.unwrap_or(cfg.clock_start);
         if created_at > cfg.clock_start {
             return Err(format!(

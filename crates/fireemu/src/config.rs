@@ -15,6 +15,16 @@ use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{Map, Value};
 
+/// `daemon.clock`: how the virtual clock moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockMode {
+    /// The clock runs with real time from its start; `clock:advance` and the like add an
+    /// offset on top. The default.
+    Realtime,
+    /// The clock stands still until it is moved, for tests that need exact times.
+    Frozen,
+}
+
 /// The compatibility profile (`profile`), the one switch that decides whether fireemu
 /// reproduces the pinned official emulators or production Firebase.
 ///
@@ -1074,6 +1084,9 @@ pub struct RuntimeConfig {
     /// expiry against real time (the Admin SDK's `verifyIdToken`); a pinned start keeps
     /// runs reproducible.
     pub clock_start_pinned: bool,
+    /// `daemon.clock`, when set. The virtual clock follows real time unless `frozen` (see
+    /// [`Self::clock_frozen`]).
+    pub clock_mode: Option<ClockMode>,
     /// Deterministic seed.
     pub seed: u64,
     /// Project ID used for Auth token issuance.
@@ -1641,6 +1654,7 @@ impl Default for RuntimeConfig {
             refuse_unknown_projects: false,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
+            clock_mode: None,
             seed: 42,
             auth_project: "demo-app".to_owned(),
             auth_project_numbers: BTreeMap::new(),
@@ -1994,6 +2008,7 @@ impl RuntimeConfig {
                 fireemu_adapter_http::storage::DefaultBuckets::AppspotCom => "appspot.com",
             })),
             "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
+            "daemon.clock" => Some(json!(if self.clock_frozen() { "frozen" } else { "realtime" })),
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
             "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
@@ -2078,7 +2093,7 @@ impl RuntimeConfig {
 }
 
 /// The keys of the `daemon` section (spec/config/fireemu.schema.json).
-pub(crate) const DAEMON_KEYS: [&str; 15] = [
+pub(crate) const DAEMON_KEYS: [&str; 16] = [
     "firestorePort",
     "storagePort",
     "httpPort",
@@ -2091,6 +2106,7 @@ pub(crate) const DAEMON_KEYS: [&str; 15] = [
     "uiPort",
     "loggingPort",
     "clockStart",
+    "clock",
     "seed",
     "authProject",
     "authProjectNumbers",
@@ -4326,6 +4342,17 @@ impl RuntimeConfig {
             cfg.clock_start = LogicalInstant::parse_rfc3339(start)
                 .map_err(|e| ConfigError(format!("daemon.clockStart: {e}")))?;
         }
+        if let Some(mode) = d.get("clock") {
+            cfg.clock_mode = Some(match mode.as_str() {
+                Some("realtime") => ClockMode::Realtime,
+                Some("frozen") => ClockMode::Frozen,
+                _ => {
+                    return Err(ConfigError(
+                        "daemon.clock must be \"realtime\" or \"frozen\"".to_owned(),
+                    ))
+                }
+            });
+        }
         if let Some(seed) = d.get("seed").and_then(Value::as_u64) {
             cfg.seed = seed;
         }
@@ -4973,6 +5000,17 @@ impl RuntimeConfig {
         let cfg = Self::inspect_json(json)?;
         cfg.validate_startup()?;
         Ok(cfg)
+    }
+
+    /// Whether the virtual clock stands still until moved. Unless `daemon.clock` says so, it
+    /// follows real time, except that a virtual `functions.clock` needs a clock that only
+    /// moves when told to.
+    #[must_use]
+    pub fn clock_frozen(&self) -> bool {
+        match self.clock_mode {
+            Some(mode) => mode == ClockMode::Frozen,
+            None => self.functions_clock.any_virtual(),
+        }
     }
 
     /// Checks requirements that are only needed when starting a daemon.
@@ -5961,6 +5999,7 @@ mod tests {
             ("daemon.databasePort", json!(9000), "default"),
             ("daemon.loggingPort", json!(4500), "default"),
             ("daemon.clockStart", json!(null), "unset"),
+            ("daemon.clock", json!("realtime"), "default"),
             ("daemon.seed", json!(42), "default"),
             ("daemon.authProject", json!("demo-app"), "default"),
             ("daemon.authProjectNumbers", json!({}), "default"),
@@ -6902,6 +6941,40 @@ mod tests {
     }
 
     #[test]
+    fn daemon_clock_defaults_to_real_time_and_frozen_is_chosen_or_implied() {
+        let build = |body: Value| {
+            let mut full = json!({"schemaVersion": 1});
+            full.as_object_mut()
+                .unwrap()
+                .extend(body.as_object().unwrap().clone());
+            RuntimeConfig::inspect_json(&full)
+        };
+        assert!(!build(json!({})).unwrap().clock_frozen());
+        assert!(
+            !build(json!({"daemon": {"clockStart": "2026-01-01T00:00:00Z"}}))
+                .unwrap()
+                .clock_frozen()
+        );
+        assert!(build(json!({"daemon": {"clock": "frozen"}}))
+            .unwrap()
+            .clock_frozen());
+        assert!(!build(json!({"daemon": {"clock": "realtime"}}))
+            .unwrap()
+            .clock_frozen());
+        // A virtual functions clock needs one that only moves when told to, unless the
+        // configuration says otherwise.
+        let virtual_date = json!({"functions": {"clock": {"date": "virtual"}}});
+        assert!(build(virtual_date.clone()).unwrap().clock_frozen());
+        let mut explicit = virtual_date;
+        explicit["daemon"] = json!({"clock": "realtime"});
+        assert!(!build(explicit).unwrap().clock_frozen());
+        for bad in [json!("virtual"), json!(true), json!(null), json!("Frozen")] {
+            let error = build(json!({"daemon": {"clock": bad}})).unwrap_err();
+            assert!(error.0.contains("daemon.clock"), "{bad}: {error:?}");
+        }
+    }
+
+    #[test]
     fn daemon_clock_start_pins_the_clock_and_refuses_what_is_not_a_time() {
         let parse = |daemon: Value| {
             RuntimeConfig::from_json(&json!({"schemaVersion": 1, "daemon": daemon}))
@@ -7052,8 +7125,8 @@ mod tests {
                 "unknown config key scheduler.clockStart",
             ),
             (
-                json!({"daemon": {"clock": "virtual"}}),
-                "unknown config key daemon.clock",
+                json!({"daemon": {"clockMode": "frozen"}}),
+                "unknown config key daemon.clockMode",
             ),
             (
                 json!({"daemon": {"defaultTimeZone": "UTC"}}),

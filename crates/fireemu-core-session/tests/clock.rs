@@ -200,7 +200,10 @@ fn a_following_clock_runs_from_its_start_and_a_frozen_one_does_not() {
     let now = clock.now().as_nanos() - start.as_nanos();
     assert!((5_000_000_000..6_000_000_000).contains(&now), "{now}");
     let snapshot = clock.snapshot();
-    assert!(snapshot.instant >= clock.now() || snapshot.instant.as_nanos() >= start.as_nanos() + 5_000_000_000);
+    assert!(
+        snapshot.instant >= clock.now()
+            || snapshot.instant.as_nanos() >= start.as_nanos() + 5_000_000_000
+    );
     assert!(snapshot.elapsed_nanos >= 5_000_000_000);
     assert_eq!(snapshot.revision, 0, "reading publishes nothing");
     let frozen = VirtualClock::new(start);

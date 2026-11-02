@@ -2599,8 +2599,8 @@ mod tests {
         use std::time::{Duration, SystemTime, UNIX_EPOCH};
         assert_eq!(super::wall_nanos_of(UNIX_EPOCH), 0);
         assert_eq!(
-            super::wall_nanos_of(UNIX_EPOCH + Duration::new(1_800_000_000, 5)),
-            1_800_000_000_000_000_005
+            super::wall_nanos_of(UNIX_EPOCH + Duration::new(1_800_000_000, 100)),
+            1_800_000_000_000_000_100
         );
         assert_eq!(super::wall_nanos_of(UNIX_EPOCH - Duration::from_secs(1)), 0);
         assert!(super::wall_nanos_of(SystemTime::now()) > 1_700_000_000_000_000_000);

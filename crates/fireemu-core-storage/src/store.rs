@@ -2448,48 +2448,7 @@ impl StorageState {
             delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
         };
         if max == 0 {
-            let lower = (bucket.clone(), ObjectName::range_start(prefix));
-            let token_is_item = page_token.is_some_and(|token| {
-                self.objects
-                    .get(&(bucket.clone(), ObjectName::range_start(token)))
-                    .is_some_and(|metadata| {
-                        let name = metadata.name.as_str();
-                        name.starts_with(prefix) && matches(name) && fold(name).is_none()
-                    })
-            });
-            let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
-            // Without a delimiter there are no prefixes to collect, so the answer is the first
-            // accepted name at or after `item_start` and the walk starts and ends there.
-            let lower = if delimiter.is_none() {
-                (bucket.clone(), ObjectName::range_start(item_start))
-            } else {
-                lower
-            };
-            let mut prefixes = Vec::new();
-            let mut next_page_token = None;
-            for ((candidate_bucket, name), _) in self.objects.range(lower..) {
-                if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
-                    break;
-                }
-                if !matches(name.as_str()) {
-                    continue;
-                }
-                if let Some(folded) = fold(name.as_str()) {
-                    if prefixes.last() != Some(&folded) {
-                        prefixes.push(folded);
-                    }
-                } else if name.as_str() >= item_start && next_page_token.is_none() {
-                    next_page_token = Some(name.as_str().to_owned());
-                    if delimiter.is_none() {
-                        break;
-                    }
-                }
-            }
-            return ListPage {
-                items: Vec::new(),
-                prefixes,
-                next_page_token,
-            };
+            return self.empty_list_page(bucket, prefix, delimiter, page_token, matches, &fold);
         }
         let token_is_entry = page_token.is_some_and(|token| {
             if !token.starts_with(prefix) {
@@ -2546,6 +2505,62 @@ impl StorageState {
         }
         ListPage {
             items,
+            prefixes,
+            next_page_token,
+        }
+    }
+
+    /// The page for `max_results == 0`: the official emulator's empty page, with every folded
+    /// prefix and a token naming the first accepted object at or after a token that names an
+    /// object (else the first accepted object).
+    fn empty_list_page(
+        &self,
+        bucket: &BucketName,
+        prefix: &str,
+        delimiter: Option<&str>,
+        page_token: Option<&str>,
+        matches: &dyn Fn(&str) -> bool,
+        fold: &dyn Fn(&str) -> Option<String>,
+    ) -> ListPage {
+        let token_is_item = page_token.is_some_and(|token| {
+            self.objects
+                .get(&(bucket.clone(), ObjectName::range_start(token)))
+                .is_some_and(|metadata| {
+                    let name = metadata.name.as_str();
+                    name.starts_with(prefix) && matches(name) && fold(name).is_none()
+                })
+        });
+        let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
+        // Without a delimiter there are no prefixes to collect, so the answer is the first
+        // accepted name at or after `item_start` and the walk starts and ends there.
+        let walk_start = if delimiter.is_none() {
+            item_start
+        } else {
+            prefix
+        };
+        let lower = (bucket.clone(), ObjectName::range_start(walk_start));
+        let mut prefixes = Vec::new();
+        let mut next_page_token = None;
+        for ((candidate_bucket, name), _) in self.objects.range(lower..) {
+            if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                break;
+            }
+            if !matches(name.as_str()) {
+                continue;
+            }
+            if let Some(folded) = fold(name.as_str()) {
+                if prefixes.last() != Some(&folded) {
+                    prefixes.push(folded);
+                }
+            } else if name.as_str() >= item_start && next_page_token.is_none() {
+                next_page_token = Some(name.as_str().to_owned());
+                if delimiter.is_none() {
+                    break;
+                }
+            }
+        }
+        ListPage {
+            items: Vec::new(),
             prefixes,
             next_page_token,
         }

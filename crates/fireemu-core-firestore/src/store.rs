@@ -616,6 +616,8 @@ fn history_path_usage_from_sizes(
         ..HistoryUsage::default()
     };
     while let Some(size) = sizes.next() {
+        #[cfg(test)]
+        HISTORY_SIZE_VISITS.with(|count| count.set(count.get() + 1));
         let last = sizes.peek().is_none();
         usage.versions = usage.versions.saturating_add(1);
         usage.version_metadata_bytes = usage
@@ -696,6 +698,75 @@ fn projected_history_path_reclaim(
             )
         };
     subtract_history_usage(projected_usage, projected_after_floor)
+}
+
+/// Usage of the versions a compaction at some floor drops from a path, given only those
+/// versions (`sizes`) when the path itself survives.
+///
+/// `history_path_usage(all) - history_path_usage(survivors)` cancels every per-path charge
+/// that only the shared newest version carries (live bytes, path and index bytes, the path
+/// count), leaving the dropped prefix charged as historical versions. The two are equal while
+/// the whole path's usage is unsaturated; the caller certifies that before using this.
+fn history_dropped_prefix_usage(sizes: impl IntoIterator<Item = Option<u64>>) -> HistoryUsage {
+    let mut usage = HistoryUsage::default();
+    for size in sizes {
+        #[cfg(test)]
+        HISTORY_SIZE_VISITS.with(|count| count.set(count.get() + 1));
+        usage.versions = usage.versions.saturating_add(1);
+        usage.version_metadata_bytes = usage
+            .version_metadata_bytes
+            .saturating_add(HISTORY_VERSION_METADATA_BYTES);
+        if let Some(bytes) = size {
+            usage.historical_document_bytes = usage.historical_document_bytes.saturating_add(bytes);
+        } else {
+            usage.tombstones = usage.tombstones.saturating_add(1);
+            usage.tombstone_bytes = usage
+                .tombstone_bytes
+                .saturating_add(HISTORY_TOMBSTONE_BYTES);
+        }
+    }
+    finish_history_usage(usage)
+}
+
+/// What compacting `versions` at `floor` reclaims, visiting only the versions at or before the
+/// floor. Equal to `history_path_usage - history_path_usage_after_floor` while the path's usage
+/// is unsaturated.
+fn history_path_reclaim_unsaturated(
+    path: &DocumentPath,
+    versions: &[(CommitVersion, Option<RetainedDocument>)],
+    floor: CommitVersion,
+) -> HistoryUsage {
+    let cut = versions
+        .partition_point(|(version, _)| *version <= floor)
+        .saturating_sub(1);
+    if matches!(&versions[cut..], [(version, None)] if *version <= floor) {
+        // The whole path goes; every version is at or before the floor.
+        history_path_usage(path, versions)
+    } else {
+        history_dropped_prefix_usage(history_document_sizes(&versions[..cut]))
+    }
+}
+
+/// [`projected_history_path_reclaim`] visiting only the versions at or before the floor; equal
+/// to it while the projected path's usage is unsaturated.
+fn projected_history_path_reclaim_unsaturated(
+    path: &DocumentPath,
+    existing: &[(CommitVersion, Option<RetainedDocument>)],
+    after_size: Option<u64>,
+    next_version: CommitVersion,
+    floor: CommitVersion,
+) -> HistoryUsage {
+    let prefix = existing.partition_point(|(version, _)| *version <= floor)
+        + usize::from(next_version <= floor);
+    let cut = prefix.saturating_sub(1);
+    if cut == existing.len() && after_size.is_none() && next_version <= floor {
+        history_path_usage_from_sizes(
+            path,
+            history_document_sizes(existing).chain(std::iter::once(after_size)),
+        )
+    } else {
+        history_dropped_prefix_usage(history_document_sizes(&existing[..cut]))
+    }
 }
 
 /// A rejected history-budget dimension.
@@ -3371,6 +3442,7 @@ impl FirestoreState {
     ) -> (HistoryUsage, HistoryUsage, bool) {
         let (uncompacted, projected_capacity_floor, exact) =
             self.projected_uncompacted_usage(staged);
+        let certified = exact && uncompacted.unsaturated();
         let next_version = CommitVersion(self.version.0.saturating_add(1));
         let projected_version = if staged.is_empty() {
             self.version
@@ -3390,21 +3462,37 @@ impl FirestoreState {
                 .get(path)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let existing_reclaim = subtract_history_usage(
-                history_path_usage(path, existing),
-                history_path_usage_after_floor(path, existing, floor),
-            );
-            reclaimed = subtract_history_usage(reclaimed, existing_reclaim);
-
             let after_size = after.as_ref().map(|document| document.logical_bytes);
-            let projected_reclaim =
-                projected_history_path_reclaim(path, existing, after_size, next_version, floor);
+            // An exact, unsaturated projection bounds this path's usage below saturation
+            // before and after the write, so the reclaim can be summed from the versions at
+            // or before the floor alone instead of from every retained version.
+            let (existing_reclaim, projected_reclaim) = if certified {
+                (
+                    history_path_reclaim_unsaturated(path, existing, floor),
+                    projected_history_path_reclaim_unsaturated(
+                        path,
+                        existing,
+                        after_size,
+                        next_version,
+                        floor,
+                    ),
+                )
+            } else {
+                (
+                    subtract_history_usage(
+                        history_path_usage(path, existing),
+                        history_path_usage_after_floor(path, existing, floor),
+                    ),
+                    projected_history_path_reclaim(path, existing, after_size, next_version, floor),
+                )
+            };
+            reclaimed = subtract_history_usage(reclaimed, existing_reclaim);
             reclaimed = add_history_usage(reclaimed, projected_reclaim);
         }
         (
             uncompacted,
             subtract_history_usage(uncompacted, reclaimed),
-            exact && uncompacted.unsaturated(),
+            certified,
         )
     }
 
@@ -8064,6 +8152,7 @@ mod conflict_grouping_tests {
 #[cfg(test)]
 thread_local! {
     static RETAINED_DOCUMENT_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HISTORY_SIZE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

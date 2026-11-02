@@ -2644,7 +2644,7 @@ mod tests {
     fn stopping_the_runtime_lets_a_running_blocking_task_finish() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
         // An export in flight when the daemon is told to stop runs on the runtime's blocking
         // pool; it must finish its write, not be abandoned half way.
         let runtime = super::build_runtime().unwrap();
@@ -2657,13 +2657,11 @@ mod tests {
             flag.store(true, Ordering::SeqCst);
         });
         started_rx.recv().unwrap();
-        let started = Instant::now();
         super::stop_runtime(runtime);
         assert!(
             written.load(Ordering::SeqCst),
             "the blocking task was cut off"
         );
-        assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

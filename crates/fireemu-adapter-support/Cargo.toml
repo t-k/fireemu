@@ -21,11 +21,17 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
 unicode-casefold = "0.2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 http = "1"
 proptest.workspace = true
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "test-util"] }
 tokio-stream = "0.1"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true

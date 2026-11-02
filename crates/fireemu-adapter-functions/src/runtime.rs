@@ -2563,22 +2563,27 @@ impl FunctionsRuntime {
                             crate::events::DatabaseEventShape::Official =>
                                 crate::events::event_id_uuid(&seed),
                         });
-                        if !self.database_invoke_frame_fits(
-                            function,
-                            &payload,
-                            ordinal,
-                            inner.epoch,
-                        ) {
+                        // The event is serialized once, only to count its bytes; that length
+                        // sizes both its invocation frame and its retained bytes.
+                        let mut payload_bytes = FrameByteCount::default();
+                        if serde_json::to_writer(&mut payload_bytes, &payload).is_err()
+                            || !self.database_invoke_frame_fits(
+                                function,
+                                payload_bytes.0,
+                                ordinal,
+                                inner.epoch,
+                            )
+                        {
                             // This event alone can never be delivered; the write's other
                             // events still are (merge review S2).
                             oversized_events.push(function.name.clone());
                             return Ok(());
                         }
-                        let retained_bytes = Self::retained_event_bytes(
+                        let retained_bytes = Self::retained_event_bytes_from_payload_len(
                             &function.name,
                             &event_type,
                             &reference,
-                            &payload,
+                            payload_bytes.0,
                         )
                         .ok_or(SourceEventAdmissionError::Capacity)?;
                         draft_bytes = draft_bytes
@@ -2645,14 +2650,19 @@ impl FunctionsRuntime {
 
     // Reserve the longest delivery metadata supported by the existing types: event ids and
     // epochs are fixed after admission, attempts are u32, and RFC3339 years are 0000-9999
-    // with at most nine fractional digits. Count the actual escaped event and entry point.
+    // with at most nine fractional digits. Count the actual escaped entry point; the event
+    // is `event_bytes` of compact JSON. A `Value` object serializes its members in key order,
+    // as the frame does, so the strict 2nd gen `traceparent` adds exactly one member; the
+    // event never carries its own (`events::database_event_payload` sets no such member).
     fn database_invoke_frame_fits(
         &self,
         function: &FunctionSpec,
-        event: &Value,
+        event_bytes: usize,
         ordinal: u64,
         epoch: Epoch,
     ) -> bool {
+        const TRACEPARENT_MEMBER: &str =
+            r#""traceparent":"00-00000000000000000000000000000000-0000000000000000-01","#;
         let envelope = json!({
             "type":"invoke", "invocationId":format!("{ordinal}-{}", u32::MAX),
             "function":function.name, "entryPoint":function.entry_point, "trigger":"database",
@@ -2664,21 +2674,17 @@ impl FunctionsRuntime {
         if serde_json::to_writer(&mut count, &envelope).is_err() {
             return false;
         }
-        count.0 -= b"null".len();
-        let Some(fields) = event.as_object() else {
-            return false;
-        };
-        let mut fields: BTreeMap<&str, &Value> = fields
-            .iter()
-            .map(|(key, value)| (key.as_str(), value))
-            .collect();
-        let trace = json!("00-00000000000000000000000000000000-0000000000000000-01");
-        if self.profile == FunctionsHttpProfile::Strict
+        let traceparent = if self.profile == FunctionsHttpProfile::Strict
             && function.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
         {
-            fields.insert("traceparent", &trace);
-        }
-        serde_json::to_writer(&mut count, &fields).is_ok()
+            TRACEPARENT_MEMBER.len()
+        } else {
+            0
+        };
+        (count.0 - b"null".len())
+            .checked_add(event_bytes)
+            .and_then(|bytes| bytes.checked_add(traceparent))
+            .is_some_and(|bytes| bytes <= crate::protocol::MAX_FRAME_BYTES)
     }
 
     /// Reserves the complete Firestore trigger fan-out before the source commit is published.
@@ -6522,6 +6528,87 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    /// The admission bound of an RTDB invocation frame is exactly the longest frame a
+    /// delivery of that event can send: the latest representable timestamps, the largest
+    /// attempt, and in the strict profile a 2nd gen `traceparent`.
+    #[tokio::test]
+    async fn the_database_frame_bound_is_the_longest_frame_a_delivery_sends() {
+        use super::{CodebaseSpec, FunctionsHttpProfile};
+        use fireemu_core_types::ids::{Epoch, EventId};
+        use fireemu_core_types::time::LogicalDuration;
+
+        let base = runtime().await;
+        let latest = LogicalInstant::parse_rfc3339("9999-12-31T23:59:59.999999999Z").unwrap();
+        let event = json!({
+            "specversion": "1.0", "id": "event-id", "type": "google.firebase.database.ref.v1.written",
+            "data": {"data": "q\"é😀", "delta": {"k": 1.5, "n": null}},
+        });
+        let event_bytes = serde_json::to_vec(&event).unwrap().len();
+        for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
+            let runtime = FunctionsRuntime::with_codebases(
+                vec![CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest: base.manifest.clone(),
+                    runner: base.runner(),
+                    spawn: None,
+                    cleanup_dir: None,
+                }],
+                base.config.clone(),
+                base.clock.clone(),
+                profile,
+            )
+            .unwrap();
+            for generation in [1, 2] {
+                let spec = parse_manifest(&json!({"functions": [{
+                    "name": "roomChanged", "entryPoint": "rooms.changed", "generation": generation,
+                    "trigger": {"type": "database", "eventType": "google.firebase.database.ref.v1.written",
+                                "instance": "*", "ref": "/rooms/{room}"},
+                }]}))
+                .unwrap()
+                .functions
+                .remove(0);
+                let now = latest
+                    .checked_add(LogicalDuration::from_seconds(-i64::from(
+                        spec.timeout_seconds,
+                    )))
+                    .unwrap();
+                let request = runtime
+                    .invoke_request_at(
+                        EventId::new(7),
+                        &spec,
+                        u32::MAX,
+                        Epoch::initial(),
+                        &event,
+                        latest,
+                        None,
+                        now,
+                    )
+                    .unwrap();
+                // Framed as `Runner::invoke_inner` frames it.
+                let mut frame: std::collections::BTreeMap<
+                    String,
+                    Box<serde_json::value::RawValue>,
+                > = serde_json::from_str(request.get()).unwrap();
+                frame.insert(
+                    "type".to_owned(),
+                    serde_json::value::to_raw_value("invoke").unwrap(),
+                );
+                let frame = serde_json::value::to_raw_value(&frame).unwrap().get().len();
+                let largest = event_bytes + (crate::protocol::MAX_FRAME_BYTES - frame);
+                let case = format!("{profile:?} generation {generation}");
+                assert!(
+                    runtime.database_invoke_frame_fits(&spec, largest, 7, Epoch::initial()),
+                    "{case}"
+                );
+                assert!(
+                    !runtime.database_invoke_frame_fits(&spec, largest + 1, 7, Epoch::initial()),
+                    "{case}"
+                );
+            }
+        }
+        base.shutdown().await;
     }
 
     #[tokio::test]

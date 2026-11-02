@@ -421,3 +421,170 @@ fn realtime_admin_rules_override_keeps_originating_admin_and_never_bypasses_rule
     assert_eq!(captured[0].context.principal.auth_id, None);
     assert_eq!(captured[0].context.principal.auth, None);
 }
+
+/// The snapshots a trigger event carries, as the old path built them: the export JSON rendered
+/// to compact text and parsed back by `serde_json`. Kept as the oracle for byte identity.
+fn rendered_snapshot(tree: &Tree, path: &Path) -> serde_json::Value {
+    let json = tree.get_json(path, fireemu_core_database::Format::Export);
+    serde_json::from_str(&fireemu_adapter_database::json_text::render(
+        &json,
+        fireemu_adapter_database::json_text::Style::Compact,
+    ))
+    .unwrap()
+}
+
+/// A captured reference with the compact JSON of its before and after snapshots.
+type Snapshot = (Path, String, String);
+
+/// Captures the before and after snapshots of `references` for one write of `next` at the root.
+fn captured_snapshots(
+    tree: &Tree,
+    references: Vec<Path>,
+    next: &Json,
+) -> Option<(Tree, Vec<Snapshot>)> {
+    let sink = Sink {
+        references: Some(references),
+        ..Sink::default()
+    };
+    let (_, prepared) = prepare(tree, context(), Some(&sink), |tree| {
+        tree.set(&Path::root(), next, ServerValueContext { now_millis: 100 })
+    })
+    .ok()?;
+    let mut after = tree.clone();
+    prepared.commit(&mut after);
+    let captured = sink.captured.lock().unwrap();
+    let snapshots = captured
+        .iter()
+        .flat_map(|change| match &change.data {
+            changes::ChangeData::References(references) => references.clone(),
+            changes::ChangeData::Whole { .. } => panic!("reference capture expected"),
+        })
+        .map(|change| {
+            (
+                change.reference,
+                serde_json::to_string(&change.before).unwrap(),
+                serde_json::to_string(&change.after).unwrap(),
+            )
+        })
+        .collect();
+    Some((after, snapshots))
+}
+
+/// Pins the bytes of the snapshots handed to the trigger runtime, recorded before snapshots
+/// were exported without rendering text: priorities, `.value` leaves, index-keyed children
+/// (objects in the export form), escapes, integers beyond 2^53 and doubles, among them
+/// `394301.33835633675`, which `serde_json`'s default float parser reads one ULP lower.
+#[test]
+fn trigger_snapshots_keep_their_exact_bytes() {
+    let fixture = fireemu_adapter_database::json_text::parse(
+        r#"{"room":{".priority":1.5,"n":394301.33835633675,"z":-0.0,"e":1e-7,"tiny":1.0715660391465826e-75,
+            "i":-42,"u":9007199254740993,"d":5.0,"s":"q\"\\\n\u0001é😀 ",
+            "list":["x","y"],"sparse":{"0":1,"5":2},
+            "flag":{".value":true,".priority":"p"},"num":{".value":2,".priority":3}}}"#,
+    )
+    .unwrap();
+    let mut tree = Tree::default();
+    tree.set(
+        &Path::root(),
+        &fixture,
+        ServerValueContext { now_millis: 100 },
+    )
+    .unwrap();
+    let mut next = fixture.clone();
+    let Json::Object(top) = &mut next else {
+        unreachable!()
+    };
+    let Some(Json::Object(room)) = top.get_mut("room") else {
+        unreachable!()
+    };
+    room.insert(
+        "added".to_owned(),
+        Json::Number(fireemu_core_database::Number::Double(0.1)),
+    );
+    let (_, snapshots) = captured_snapshots(&tree, vec![Path::from_keys(["room"])], &next).unwrap();
+    let before = "{\".priority\":1.5,\"d\":5.0,\"e\":1e-7,\"flag\":{\".priority\":\"p\",\".value\":true},\"i\":-42,\"list\":{\"0\":\"x\",\"1\":\"y\"},\"n\":394301.3383563367,\"num\":{\".priority\":3.0,\".value\":2},\"s\":\"q\\\"\\\\\\n\\u0001é😀\u{2028}\",\"sparse\":{\"0\":1,\"5\":2},\"tiny\":1.0715660391465825e-75,\"u\":9007199254740993,\"z\":-0.0}";
+    let after = "{\".priority\":1.5,\"added\":0.1,\"d\":5.0,\"e\":1e-7,\"flag\":{\".priority\":\"p\",\".value\":true},\"i\":-42,\"list\":{\"0\":\"x\",\"1\":\"y\"},\"n\":394301.3383563367,\"num\":{\".priority\":3.0,\".value\":2},\"s\":\"q\\\"\\\\\\n\\u0001é😀\u{2028}\",\"sparse\":{\"0\":1,\"5\":2},\"tiny\":1.0715660391465825e-75,\"u\":9007199254740993,\"z\":-0.0}";
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].1, before);
+    assert_eq!(snapshots[0].2, after);
+}
+
+fn arbitrary_json() -> impl proptest::strategy::Strategy<Value = Json> {
+    use fireemu_core_database::Number;
+    use proptest::prelude::*;
+    let leaf = prop_oneof![
+        Just(Json::Null),
+        any::<bool>().prop_map(Json::Bool),
+        any::<i64>().prop_map(Json::int),
+        // Every finite double, including subnormals and both zeros.
+        any::<u64>().prop_filter_map("a finite double", |bits| {
+            let value = f64::from_bits(bits);
+            value
+                .is_finite()
+                .then_some(Json::Number(Number::Double(value)))
+        }),
+        (-1.0e9f64..1.0e9).prop_map(|value| Json::Number(Number::Double(value))),
+        "[a-z\"\\\\\u{0}-\u{1f}é😀\u{2028}]{0,6}".prop_map(Json::String),
+    ];
+    leaf.prop_recursive(4, 48, 6, |inner| {
+        let key = prop_oneof![
+            Just("a".to_owned()),
+            Just("b".to_owned()),
+            Just("0".to_owned()),
+            Just("1".to_owned()),
+            Just("3".to_owned()),
+            Just("z-é".to_owned()),
+        ];
+        let priority = prop_oneof![
+            Just(Json::Null),
+            any::<i64>().prop_map(Json::int),
+            (-1.0e9f64..1.0e9)
+                .prop_map(|value| Json::Number(fireemu_core_database::Number::Double(value))),
+            "[a-z]{0,3}".prop_map(Json::String),
+        ];
+        prop_oneof![
+            (
+                proptest::collection::btree_map(key, inner.clone(), 0..5),
+                priority.clone()
+            )
+                .prop_map(|(mut map, priority)| {
+                    if priority != Json::Null {
+                        map.insert(".priority".to_owned(), priority);
+                    }
+                    Json::Object(map)
+                }),
+            (inner, priority).prop_map(|(value, priority)| {
+                Json::object([(".value", value), (".priority", priority)])
+            }),
+        ]
+    })
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(512))]
+    /// Every captured snapshot serializes to exactly the bytes of the rendered-and-parsed
+    /// export JSON, whatever the tree holds.
+    #[test]
+    fn trigger_snapshots_match_the_rendered_export_json(
+        first in arbitrary_json(),
+        second in arbitrary_json(),
+    ) {
+        let mut tree = Tree::default();
+        proptest::prop_assume!(tree.set(&Path::root(), &first, ServerValueContext { now_millis: 100 }).is_ok());
+        let references = vec![
+            Path::root(),
+            Path::from_keys(["a"]),
+            Path::from_keys(["0"]),
+            Path::from_keys(["a", "b"]),
+            Path::from_keys(["a", ".priority"]),
+            Path::from_keys([".priority"]),
+        ];
+        let Some((after, snapshots)) = captured_snapshots(&tree, references, &second) else {
+            return Ok(());
+        };
+        for (reference, before, after_text) in snapshots {
+            proptest::prop_assert_eq!(before, serde_json::to_string(&rendered_snapshot(&tree, &reference)).unwrap());
+            proptest::prop_assert_eq!(after_text, serde_json::to_string(&rendered_snapshot(&after, &reference)).unwrap());
+        }
+    }
+}

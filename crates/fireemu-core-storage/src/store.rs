@@ -3611,6 +3611,39 @@ mod tests {
     }
 
     #[test]
+    fn a_token_that_cannot_name_an_entry_costs_no_walk_over_the_names_under_it() {
+        use std::cell::Cell;
+        let bucket = BucketName::try_new("bucket-one").unwrap();
+        let mut state = StorageState::new(1);
+        let mut names: Vec<String> = vec!["a-first".to_owned(), "b-second".to_owned()];
+        names.extend((0..1024).map(|i| format!("object-{i:04}")));
+        for name in &names {
+            state
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(name.clone()).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap();
+        }
+        // `object-` is no object and, with no delimiter, no folded prefix: it names no entry, so
+        // the listing starts from the beginning. The 1024 names under it are all rejected by the
+        // filter; checking the token must not walk them, nor may the page.
+        let visits = Cell::new(0);
+        let page = state.list_matching(&bucket, "", None, Some("object-"), Some(1), &|name| {
+            visits.set(visits.get() + 1);
+            !name.starts_with("object-")
+        });
+        let listed: Vec<&str> = page.items.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(listed, ["a-first"]);
+        assert_eq!(page.next_page_token.as_deref(), Some("b-second"));
+        assert!(visits.get() <= 4, "visited {} names", visits.get());
+    }
+
+    #[test]
     fn making_an_object_public_checks_only_that_object() {
         for count in [256, 16, 1] {
             let mut state = StorageState::new(1);

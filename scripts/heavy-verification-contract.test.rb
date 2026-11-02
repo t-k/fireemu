@@ -186,6 +186,7 @@ class HeavyVerificationContractTest < Minitest::Test
     install = "      - name: the pinned real SDKs for the suites that run them\n        run: pnpm -C conformance install --frozen-lockfile\n"
     assert_violation(REAL.sub(install, ""), "mutants must install the conformance SDKs")
     assert_violation(REAL.gsub("--gitignore=false", "--gitignore=true"), "--gitignore=false")
+    assert_violation(REAL.gsub("--copy-vcs=true", "--copy-vcs=false"), "--copy-vcs=true")
   end
 
   def test_an_unpinned_pnpm_version_is_refused

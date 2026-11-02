@@ -344,9 +344,9 @@ jobs:
           set -euo pipefail
           mapfile -t args < "$RUNNER_TEMP/mutants.args"
           set +e
-          # --gitignore=false: the copy of the tree under test must keep the ignored conformance/node_modules
-          # the SDK suites load (cargo-mutants leaves target/ and .git out of the copy either way).
-          cargo mutants --gitignore=false --test-tool nextest --cargo-arg=--locked "${args[@]}" \
+          # The copy of the tree under test keeps what the suites load: the ignored conformance/node_modules
+          # (--gitignore=false) and the git history the build-report tests read (--copy-vcs=true).
+          cargo mutants --gitignore=false --copy-vcs=true --test-tool nextest --cargo-arg=--locked "${args[@]}" \
             --shard "$SHARD/$TOTAL" --sharding slice --output "mutants-out-$SHARD"
           code=$?
           set -e

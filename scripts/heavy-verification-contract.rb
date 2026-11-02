@@ -183,7 +183,7 @@ def violations(source, toolchain_channel: nil)
   installed_for_mutants = mutants_runs.index { |run| run.include?("pnpm -C conformance install --frozen-lockfile") }
   mutating = mutants_runs.index { |run| run.include?("--shard ") }
   errors << "mutants must install the conformance SDKs before the shards mutate (pnpm -C conformance install --frozen-lockfile)" unless installed_for_mutants && mutating && installed_for_mutants < mutating
-  errors << "mutants must keep ignored files in the copy under test (--gitignore=false) so the installed SDKs are there" unless mutants_runs.any? { |run| run.include?("--shard ") && run.include?("--gitignore=false") }
+  errors << "mutants must keep ignored files in the copy under test (--gitignore=false) and the git history (--copy-vcs=true) so the suites find the SDKs and the commit" unless mutants_runs.any? { |run| run.include?("--shard ") && run.include?("--gitignore=false") && run.include?("--copy-vcs=true") }
   # Inputs are validated where they enter, and everything downstream takes the validated outputs.
   plan = workflow.dig("jobs", "plan", "steps") || []
   validate = plan.find { |step| step["id"] == "validate" }

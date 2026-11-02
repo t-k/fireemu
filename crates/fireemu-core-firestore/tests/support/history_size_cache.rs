@@ -376,3 +376,205 @@ fn projected_usage_equals_tree_reference_at_capacity_and_time_floors() {
         }
     }
 }
+
+#[test]
+fn admission_cost_does_not_grow_with_retained_versions_inside_the_window() {
+    let write = |score| Write {
+        op: WriteOp::Set {
+            path: path(0),
+            fields: BTreeMap::from([("score".into(), Value::Integer(score))]),
+            update_mask: None,
+        },
+        precondition: None,
+        transforms: Vec::new(),
+    };
+    let mut measurements = Vec::new();
+    for history in [1, 100, 1000] {
+        let mut state = FirestoreState::default();
+        for score in 0..history {
+            state
+                .commit(&[write(score)], None, LogicalInstant::UNIX_EPOCH)
+                .unwrap();
+        }
+        HISTORY_SIZE_VISITS.with(|count| count.set(0));
+        state
+            .commit(&[write(history)], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let visits = HISTORY_SIZE_VISITS.with(std::cell::Cell::get);
+        eprintln!("history={history} retained_size_visits={visits}");
+        measurements.push((history, visits));
+        assert_eq!(state.history_usage(), reference_usage(&state));
+    }
+    for (history, visits) in measurements {
+        assert!(visits <= 4, "history={history} visits={visits}");
+    }
+}
+
+fn sized_history(
+    path: &DocumentPath,
+    entries: &[(u64, Option<u64>)],
+) -> Vec<(CommitVersion, Option<RetainedDocument>)> {
+    let mut version = 0;
+    entries
+        .iter()
+        .map(|&(gap, size)| {
+            version += gap;
+            let document = size.map(|logical_bytes| RetainedDocument {
+                document: Arc::new(Document {
+                    path: path.clone(),
+                    fields: BTreeMap::new(),
+                    create_time: LogicalInstant::UNIX_EPOCH,
+                    update_time: LogicalInstant::UNIX_EPOCH,
+                    version: CommitVersion(version),
+                }),
+                logical_bytes,
+            });
+            (CommitVersion(version), document)
+        })
+        .collect()
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(1024))]
+    #[test]
+    fn floor_prefix_reclaim_matches_whole_path_subtraction(
+        entries in proptest::collection::vec(
+            (
+                1u64..4,
+                proptest::option::of(proptest::prop_oneof![0u64..64, 0u64..(1 << 56)]),
+            ),
+            0..48,
+        ),
+        after_size in proptest::option::of(proptest::prop_oneof![0u64..64, 0u64..(1 << 56)]),
+        floor_offset in 0u64..200,
+    ) {
+        let path = path(0);
+        let existing = sized_history(&path, &entries);
+        let last = existing.last().map_or(0, |(version, _)| version.0);
+        let next_version = CommitVersion(last + 1);
+        let floor = CommitVersion(floor_offset.min(last + 2));
+        let full = history_path_usage_from_sizes(
+            &path,
+            history_document_sizes(&existing).chain(std::iter::once(after_size)),
+        );
+        // The certificate the fast path relies on: the projected path is unsaturated, so
+        // its current history is too.
+        proptest::prop_assert!(full.unsaturated());
+
+        let expected_existing = subtract_history_usage(
+            history_path_usage(&path, &existing),
+            history_path_usage_after_floor(&path, &existing, floor),
+        );
+        proptest::prop_assert_eq!(
+            history_path_reclaim_unsaturated(&path, &existing, floor),
+            expected_existing
+        );
+        proptest::prop_assert_eq!(
+            projected_history_path_reclaim_unsaturated(
+                &path,
+                &existing,
+                after_size,
+                next_version,
+                floor,
+            ),
+            projected_history_path_reclaim(&path, &existing, after_size, next_version, floor)
+        );
+    }
+}
+
+#[test]
+fn saturated_accounting_keeps_the_whole_path_reclaim() {
+    let write = |score| Write {
+        op: WriteOp::Set {
+            path: path(0),
+            fields: BTreeMap::from([("score".into(), Value::Integer(score))]),
+            update_mask: None,
+        },
+        precondition: None,
+        transforms: Vec::new(),
+    };
+    let mut state = FirestoreState::default();
+    for score in 0..3 {
+        state
+            .commit(
+                &[write(score)],
+                None,
+                LogicalInstant::from_unix_seconds(score),
+            )
+            .unwrap();
+    }
+    // Saturate the oldest retained size so the whole-path sums clamp. The commit admission
+    // must then keep the legacy subtraction instead of the floor-prefix sum.
+    state.history.get_mut(&path(0)).unwrap()[0]
+        .1
+        .as_mut()
+        .unwrap()
+        .logical_bytes = u64::MAX;
+    state.rebuild_history_usage();
+    assert!(!state.history_accounting_exact);
+    state.history_limits.max_bytes = u64::MAX;
+    state.history_limits.max_versions = u64::MAX;
+
+    let now = LogicalInstant::from_unix_seconds(READ_TIME_RETENTION_SECONDS + 1);
+    let next_version = CommitVersion(state.version.0 + 1);
+    let floor = state.projected_retention_floor(state.capacity_floor, next_version, now);
+    let existing = state.history[&path(0)].clone();
+    let cut = existing.partition_point(|(version, _)| *version <= floor);
+    assert!(cut >= 2 && cut < existing.len() + 1, "floor {floor:?} must cut a saturated prefix");
+    let base = state.clone().base_compaction_reclaim(floor);
+    let mut committed = state.clone();
+    let (_, projection) = committed
+        .commit_with_history_admission(&[write(3)], None, now, |_, projection| Ok(projection))
+        .unwrap();
+    let after = committed.history[&path(0)].last().unwrap().1.clone();
+    let after_size = after.as_ref().map(|document| document.logical_bytes);
+    let staged = [(path(0), existing.last().unwrap().1.clone(), after)];
+    let (uncompacted, projected, exact) = state.clone().projected_history_usage(&staged, now);
+    assert!(!exact);
+    assert_eq!(projected, projection.after);
+    let reclaim = |existing_reclaim, projected_reclaim| {
+        subtract_history_usage(
+            uncompacted,
+            add_history_usage(subtract_history_usage(base, existing_reclaim), projected_reclaim),
+        )
+    };
+    let legacy = reclaim(
+        subtract_history_usage(
+            history_path_usage(&path(0), &existing),
+            history_path_usage_after_floor(&path(0), &existing, floor),
+        ),
+        projected_history_path_reclaim(&path(0), &existing, after_size, next_version, floor),
+    );
+    let prefix_only = reclaim(
+        history_path_reclaim_unsaturated(&path(0), &existing, floor),
+        projected_history_path_reclaim_unsaturated(
+            &path(0),
+            &existing,
+            after_size,
+            next_version,
+            floor,
+        ),
+    );
+    assert_ne!(legacy, prefix_only, "the saturated case must distinguish the two");
+    assert_eq!(projected, legacy);
+}
+
+#[test]
+fn floor_prefix_reclaim_drops_a_path_whose_only_survivor_is_a_reclaimable_tombstone() {
+    let path = path(0);
+    for entries in [vec![(1, None)], vec![(1, Some(7)), (1, None)]] {
+        let existing = sized_history(&path, &entries);
+        let floor = existing.last().unwrap().0;
+        let whole = history_path_usage(&path, &existing);
+        assert_eq!(whole.paths, 1);
+        assert_eq!(history_path_reclaim_unsaturated(&path, &existing, floor), whole);
+        let next_version = CommitVersion(floor.0 + 1);
+        assert_eq!(
+            projected_history_path_reclaim_unsaturated(&path, &existing, None, next_version, next_version),
+            history_path_usage_from_sizes(
+                &path,
+                history_document_sizes(&existing).chain(std::iter::once(None)),
+            )
+        );
+    }
+}

@@ -1227,3 +1227,136 @@ proptest::proptest! {
         proptest::prop_assert!(!guard.can_read(tree.root(), &p("/t"), None, &requester));
     }
 }
+
+/// A snapshot in a `.write` rule at `/t`: `root`, `data` or `newData`, then `child` and
+/// `parent` steps.
+#[derive(Debug, Clone)]
+struct SnapshotExpr {
+    base: usize,
+    steps: Vec<Option<&'static str>>,
+}
+
+impl SnapshotExpr {
+    const BASES: [&'static str; 3] = ["root", "data", "newData"];
+
+    fn text(&self) -> String {
+        let mut text = Self::BASES[self.base].to_owned();
+        for step in &self.steps {
+            match step {
+                Some(key) => {
+                    text.push_str(".child('");
+                    text.push_str(key);
+                    text.push_str("')");
+                }
+                None => text.push_str(".parent()"),
+            }
+        }
+        text
+    }
+
+    /// The version it reads (`newData`'s or the tree before the write) and its keys, or
+    /// `None` when a `parent()` of the root makes it an error.
+    fn identity(&self) -> Option<(bool, Vec<&'static str>)> {
+        let mut keys = if self.base == 0 {
+            Vec::new()
+        } else {
+            vec!["t"]
+        };
+        for step in &self.steps {
+            match step {
+                Some(key) => keys.push(key),
+                None => {
+                    keys.pop()?;
+                }
+            }
+        }
+        Some((self.base == 2, keys))
+    }
+}
+
+fn snapshot_expr() -> impl proptest::strategy::Strategy<Value = SnapshotExpr> {
+    use proptest::prelude::*;
+    let step = prop_oneof![
+        Just(Some("t")),
+        Just(Some("o")),
+        Just(Some("k")),
+        Just(None::<&'static str>),
+    ];
+    (0..3usize, proptest::collection::vec(step, 0..4))
+        .prop_map(|(base, steps)| SnapshotExpr { base, steps })
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+
+    /// Two snapshots are equal when they read the same version of the tree at the same
+    /// location, as the official emulator compares them (review r9 M25, option (a)); a
+    /// ternary lets the comparison past the static check.
+    #[test]
+    fn snapshots_are_equal_when_they_read_one_version_at_one_location(
+        left in snapshot_expr(),
+        right in snapshot_expr(),
+        signed_in in proptest::prelude::any::<bool>(),
+    ) {
+        let before = seed();
+        let mut after = before.clone();
+        after.set(&p("/t/o/k"), &j(serde_json::json!("w")), support::NOW).unwrap();
+        let auth = if signed_in { auth() } else { Json::Null };
+        let requester = Requester { auth: &auth, now: 0 };
+        let expected = match (left.identity(), right.identity()) {
+            (Some(l), Some(r)) => Some(l == r),
+            _ => None,
+        };
+        for (op, holds) in [("==", expected), ("!=", expected.map(|equal| !equal))] {
+            let text = format!(
+                "(auth != null ? {} : 'a') {op} (auth != null ? {} : 'a')",
+                left.text(),
+                right.text()
+            );
+            let mut t = RuleSpec::default();
+            t.write = Some(expr(&text));
+            let mut root = RuleSpec::default();
+            root.children.insert("t".to_owned(), t);
+            let rules = Rules::compile(&root).unwrap();
+            let allowed =
+                rules.can_write(before.root(), after.root(), &[p("/t/o/k")], &requester);
+            // Anonymously both sides are 'a'.
+            let holds = if signed_in { holds == Some(true) } else { op == "==" };
+            proptest::prop_assert_eq!(allowed, holds, "{}", text);
+        }
+    }
+}
+
+#[test]
+fn query_equals_itself_through_a_ternary() {
+    let tree = seed();
+    let auth = auth();
+    let requester = Requester {
+        auth: &auth,
+        now: 0,
+    };
+    for (text, allowed) in [
+        ("(true ? query : 'a') == (true ? query : 'a')", true),
+        ("(true ? query : 'a') != (true ? query : 'a')", false),
+        ("(true ? query : 'a') == (true ? data : 'a')", false),
+        (
+            "(true ? data : 'a') == (true ? root.child('t') : 'a')",
+            true,
+        ),
+        (
+            "(true ? data.val() : 'a') == (true ? data.val() : 'a')",
+            false,
+        ),
+        (
+            "(true ? auth.token : 'a') == (true ? auth.token : 'a')",
+            false,
+        ),
+    ] {
+        let rules = Rules::compile(&read_rule_at_t(text)).unwrap();
+        assert_eq!(
+            rules.can_read(tree.root(), &p("/t"), None, &requester),
+            allowed,
+            "{text}"
+        );
+    }
+}

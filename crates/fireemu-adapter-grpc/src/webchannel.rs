@@ -2993,6 +2993,156 @@ mod tests {
         assert_eq!(buffered_map_bytes(&second), map.len());
     }
 
+    /// One forward request of the model-based property below: `maps` sizes in quarters of a
+    /// budget unit, delivered at `ofs` on session `session`.
+    #[derive(Debug, Clone)]
+    struct ForwardStep {
+        session: usize,
+        ofs: u64,
+        maps: Vec<usize>,
+    }
+
+    /// The reference model of one session's forward channel: next expected id, the buffered
+    /// maps' sizes, and the ids delivered so far.
+    #[derive(Default)]
+    struct ModelSession {
+        next: u64,
+        buffered: BTreeMap<u64, usize>,
+        delivered: Vec<u64>,
+    }
+
+    /// Applies `step` to the model the way the budget contract says: a request is refused whole
+    /// when the bytes it would leave buffered exceed the session budget, or its newly buffered
+    /// bytes do not fit the Hub budget; otherwise its maps are stored and the contiguous prefix
+    /// is delivered in id order. Returns whether it was accepted.
+    fn model_apply(
+        sessions: &mut [ModelSession],
+        process_free: &mut usize,
+        step: &ForwardStep,
+        sizes: &[usize],
+    ) -> bool {
+        let session = &mut sessions[step.session];
+        let mut incoming = BTreeMap::new();
+        for (n, size) in sizes.iter().enumerate() {
+            let id = step.ofs + n as u64;
+            if id >= session.next && !session.buffered.contains_key(&id) {
+                incoming.entry(id).or_insert(*size);
+            }
+        }
+        let mut gap = session.next;
+        while session.buffered.contains_key(&gap) || incoming.contains_key(&gap) {
+            gap += 1;
+        }
+        let remaining: usize = session
+            .buffered
+            .range(gap..)
+            .chain(incoming.range(gap..))
+            .map(|(_, size)| size)
+            .sum();
+        let reserved: usize = incoming.range(gap..).map(|(_, size)| size).sum();
+        if remaining > MAX_BUFFERED_MAP_BYTES || reserved > *process_free {
+            return false;
+        }
+        *process_free -= reserved;
+        for id in session.next..gap {
+            let size = session
+                .buffered
+                .remove(&id)
+                .or_else(|| incoming.get(&id).copied())
+                .expect("contiguous");
+            if !incoming.contains_key(&id) {
+                // A map buffered by an earlier request releases its reservation when drained.
+                *process_free += size;
+            }
+            session.delivered.push(id);
+        }
+        for (id, size) in incoming.range(gap..) {
+            session.buffered.insert(*id, *size);
+        }
+        session.next = gap;
+        true
+    }
+
+    fn forward_step() -> impl proptest::strategy::Strategy<Value = ForwardStep> {
+        use proptest::strategy::Strategy;
+        (
+            0usize..2,
+            0u64..10,
+            proptest::collection::vec(0usize..=4, 1..4),
+        )
+            .prop_map(|(session, ofs, maps)| ForwardStep { session, ofs, maps })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+
+        /// Model-based check of the out-of-order map budgets over random request sequences on
+        /// two sessions sharing one Hub budget (smaller than two session budgets): every
+        /// accept/refuse decision, every session's buffered bytes, the Hub budget's use and the
+        /// delivered order match the reference model, and buffered bytes never exceed either
+        /// bound.
+        #[test]
+        fn forward_map_budgets_match_the_reference_model(
+            steps in proptest::collection::vec(forward_step(), 1..24),
+        ) {
+            // A quarter unit is 1/32 of the session budget, so a few requests cross it.
+            let quarter = MAX_BUFFERED_MAP_BYTES / 32;
+            let process_budget = MAX_BUFFERED_MAP_BYTES * 3 / 2;
+            let budgets = WebChannelBudgets {
+                maps: Arc::new(Semaphore::new(process_budget)),
+                ..WebChannelBudgets::default()
+            };
+            let mut receivers = Vec::new();
+            let sessions: Vec<Session> = (0..2)
+                .map(|n| {
+                    let (inbound, receiver) = mpsc::channel(4096);
+                    receivers.push(receiver);
+                    let session = test_session(&format!("model-{n}"), DeliveryState::with_budgets(&budgets));
+                    *session.inbound.lock().unwrap() = Some(inbound);
+                    session
+                })
+                .collect();
+            let mut model: Vec<ModelSession> = (0..2).map(|_| ModelSession::default()).collect();
+            let mut process_free = process_budget;
+            for step in &steps {
+                // Each map is a JSON string naming its id, padded to its size.
+                let raws: Vec<String> = step
+                    .maps
+                    .iter()
+                    .enumerate()
+                    .map(|(n, quarters)| {
+                        let id = step.ofs + n as u64;
+                        let head = format!("\"{id}:");
+                        let size = (quarters * quarter).max(head.len() + 1);
+                        format!("{head}{}\"", "p".repeat(size - head.len() - 1))
+                    })
+                    .collect();
+                let sizes: Vec<usize> = raws.iter().map(String::len).collect();
+                let refs: Vec<&str> = raws.iter().map(String::as_str).collect();
+                let actual = session_deliver(&sessions[step.session], &map_form(step.ofs, &refs));
+                let expected = model_apply(&mut model, &mut process_free, step, &sizes);
+                proptest::prop_assert_eq!(actual.is_ok(), expected, "{:?}: {:?}", step, actual);
+                for (n, session) in sessions.iter().enumerate() {
+                    let maps = session.maps.lock().unwrap();
+                    let bytes: usize = maps.1.values().map(|map| map.raw.len()).sum();
+                    let expected_bytes: usize = model[n].buffered.values().sum();
+                    proptest::prop_assert_eq!(bytes, expected_bytes);
+                    proptest::prop_assert!(bytes <= MAX_BUFFERED_MAP_BYTES);
+                    proptest::prop_assert_eq!(maps.0, model[n].next);
+                }
+                proptest::prop_assert_eq!(budgets.maps.available_permits(), process_free);
+            }
+            for (n, receiver) in receivers.iter_mut().enumerate() {
+                let mut delivered = Vec::new();
+                while let Ok(Ok(value)) = receiver.try_recv() {
+                    let text = value.as_str().unwrap().to_owned();
+                    delivered.push(text.split(':').next().unwrap().parse::<u64>().unwrap());
+                }
+                proptest::prop_assert_eq!(&delivered, &model[n].delivered);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn process_replay_budget_is_shared_until_response_bytes_are_dropped() {
         let text = "[1,[\"payload\"]]".to_owned();

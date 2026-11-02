@@ -497,6 +497,16 @@
       "id": "M-FORMAL-LIMIT-STAGE-001",
       "fault": "a staged write becomes visible before limit validation",
       "critical": true
+    },
+    {
+      "id": "M-RULES-SET-001",
+      "fault": "an integral float keyed apart from the equal integer (equality key finer than Rules equality)",
+      "critical": false
+    },
+    {
+      "id": "M-RULES-SET-002",
+      "fault": "a mixed-scalar index hit accepted without confirming Rules equality",
+      "critical": false
     }
   ]
 }

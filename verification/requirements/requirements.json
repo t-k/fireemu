@@ -631,6 +631,25 @@
       }
     },
     {
+      "id": "INV-RULES-SET-001",
+      "statement": "Rules set operations (toSet, union, intersection, difference, hasAll, hasAny, hasOnly, removeAll) decide membership by Rules equality whatever index they use: an indexed operation keeps, finds and orders exactly the members the linear equality scan would.",
+      "criticality": "important",
+      "owner": "core-rules",
+      "status": "implemented",
+      "note": "The hash indexes key a scalar by EqualityKey, which must be exactly as fine as Rules equality; every index hit is still confirmed with the equality itself, so a coarser key costs work only, while a finer key would separate equal members. The Kani artifact proves the numeric part (every int / float pair, NaN included) without bounds; the property artifact drives large mixed collections through the evaluator; crate tests in eval.rs compare every operation with the linear reference, in order.",
+      "artifacts": {
+        "kani": "rules_numeric_equality_key_matches_equality",
+        "property": "prop_rules_large_mixed_set_operations_agree_with_equality",
+        "mutation": [
+          "M-RULES-SET-001",
+          "M-RULES-SET-002"
+        ],
+        "integration": [
+          "crates/fireemu-core-rules/tests/eval.rs"
+        ]
+      }
+    },
+    {
       "id": "INV-TEXT-001",
       "statement": "A READY Text Index represents every document version its visibility policy and watermark require.",
       "criticality": "critical",

@@ -5982,7 +5982,7 @@ fn list_to_set(items: &[RulesValue]) -> RulesValue {
 /// A set with each member kept once, in first-seen order.
 ///
 /// Once 32 distinct members are kept, membership is looked up through a fingerprint of each
-/// member's [`ScalarKey`] and confirmed with [`values_equal`], as long as every member so far has
+/// member's [`EqualityKey`] and confirmed with [`values_equal`], as long as every member so far has
 /// one; a member without a key (NaN, a list, map or set, ...) drops the index and the rest of the
 /// collection uses the linear scan, so nested values keep the conservative path.
 fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
@@ -5990,7 +5990,7 @@ fn make_set(items: impl IntoIterator<Item = RulesValue>) -> RulesValue {
     let mut index: Option<HashMap<u64, Vec<usize>>> = None;
     let mut indexable = true;
     for item in items {
-        if scalar_key(&item).is_none() {
+        if equality_key(&item).is_none() {
             indexable = false;
             index = None;
         }
@@ -6038,42 +6038,54 @@ fn scalar_kind(value: &RulesValue) -> Option<ScalarKind> {
     }
 }
 
-/// A hashable key that is equal for two scalars exactly when [`values_equal`] says they are
-/// equal, so a hash index over it never merges or separates members differently from the linear
-/// scan. Numbers are keyed by their exact value: an integral float inside the `i64` range takes
-/// the integer's key (`1.0` is `1`, `-0.0` is `0`), any other float its bits (`0.5`, `2^63`,
-/// infinities), matching `cmp_int_double` and float equality. NaN equals nothing, itself
-/// included, and lists, maps, sets and the remaining types are compared structurally, so they
-/// have no key and stay on the linear path.
-#[derive(PartialEq, Eq, Hash)]
-enum ScalarKey<'a> {
+/// A hashable key that is equal for two scalars exactly when Rules equality (`==`) says they
+/// are equal, so a hash index over it never merges or separates members differently from the
+/// linear scan. Set operations (`toSet`, `union`, `intersection`, `difference`, `hasAll`,
+/// `hasAny`, `hasOnly`, `removeAll`) index their members by it.
+///
+/// Numbers are keyed by their exact value: an integral float inside the `i64` range takes the
+/// integer's key (`1.0` is `1`, `-0.0` is `0`), any other float its bits (`0.5`, `2^63`,
+/// infinities), matching the integer/float comparison and float equality. NaN equals nothing,
+/// itself included, and lists, maps, sets and the remaining types are compared structurally, so
+/// they have no key (see [`equality_key`]) and stay on the linear path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EqualityKey<'a> {
+    /// `null`.
     Null,
+    /// A boolean.
     Bool(bool),
+    /// An integer, or a float with an integral value inside the `i64` range.
     Int(i64),
+    /// The bits of any other non-NaN float.
     Float(u64),
+    /// A string.
     String(&'a str),
+    /// Bytes.
     Bytes(&'a [u8]),
+    /// A timestamp, in Unix nanoseconds.
     Timestamp(i128),
 }
 
+/// The [`EqualityKey`] of a scalar; `None` for NaN and for every value compared structurally.
+#[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
-fn scalar_key(value: &RulesValue) -> Option<ScalarKey<'_>> {
+pub fn equality_key(value: &RulesValue) -> Option<EqualityKey<'_>> {
     Some(match value {
-        RulesValue::Null => ScalarKey::Null,
-        RulesValue::Bool(value) => ScalarKey::Bool(*value),
-        RulesValue::Int(value) => ScalarKey::Int(*value),
+        RulesValue::Null => EqualityKey::Null,
+        RulesValue::Bool(value) => EqualityKey::Bool(*value),
+        RulesValue::Int(value) => EqualityKey::Int(*value),
         RulesValue::Float(value) if value.is_nan() => return None,
         RulesValue::Float(value)
             if value.trunc() == *value
                 && *value >= -9_223_372_036_854_775_808.0
                 && *value < 9_223_372_036_854_775_808.0 =>
         {
-            ScalarKey::Int(*value as i64)
+            EqualityKey::Int(*value as i64)
         }
-        RulesValue::Float(value) => ScalarKey::Float(value.to_bits()),
-        RulesValue::String(value) => ScalarKey::String(value),
-        RulesValue::Bytes(value) => ScalarKey::Bytes(value),
-        RulesValue::Timestamp(value) => ScalarKey::Timestamp(*value),
+        RulesValue::Float(value) => EqualityKey::Float(value.to_bits()),
+        RulesValue::String(value) => EqualityKey::String(value),
+        RulesValue::Bytes(value) => EqualityKey::Bytes(value),
+        RulesValue::Timestamp(value) => EqualityKey::Timestamp(*value),
         _ => return None,
     })
 }
@@ -6084,7 +6096,7 @@ fn scalar_fingerprint(value: &RulesValue) -> u64 {
         return 0;
     }
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    scalar_key(value)
+    equality_key(value)
         .expect("only collections of keyed scalars are indexed")
         .hash(&mut hash);
     hash.finish()
@@ -6113,7 +6125,7 @@ impl<'a> MembershipIndex<'a> {
             if !items
                 .iter()
                 .chain(other)
-                .all(|value| scalar_key(value).is_some())
+                .all(|value| equality_key(value).is_some())
             {
                 return None;
             }
@@ -6978,6 +6990,157 @@ service cloud.firestore {
         ]
     }
 
+    /// The equality key is exactly as fine as Rules equality: every scalar except NaN has one,
+    /// two keys are equal exactly when the values are, and the boundaries of the integer/float
+    /// equivalence fall on the right side.
+    #[test]
+    fn equality_keys_agree_with_rules_equality_at_the_boundaries() {
+        use RulesValue as V;
+        let two_63 = 9_223_372_036_854_775_808.0;
+        for value in [
+            V::Null,
+            V::Bool(false),
+            V::Bool(true),
+            V::Int(0),
+            V::Float(0.25),
+            V::Float(f64::INFINITY),
+            V::String(String::new()),
+            V::Bytes(vec![1]),
+            V::Timestamp(-1),
+        ] {
+            assert!(super::equality_key(&value).is_some(), "{value:?}");
+        }
+        for value in [
+            V::Float(f64::NAN),
+            V::List(vec![V::Int(1)]),
+            V::Set(vec![V::Int(1)]),
+            V::Map(BTreeMap::new()),
+            V::Path(vec!["a".into()]),
+        ] {
+            assert!(super::equality_key(&value).is_none(), "{value:?}");
+        }
+        for (a, b) in [
+            (V::Int(1), V::Float(1.0)),
+            (V::Int(0), V::Float(-0.0)),
+            (V::Float(0.0), V::Float(-0.0)),
+            (V::Int(i64::MIN), V::Float(-two_63)),
+            (
+                V::Int(9_007_199_254_740_992),
+                V::Float(9_007_199_254_740_992.0),
+            ),
+            (V::Float(two_63), V::Float(two_63)),
+            (V::Timestamp(5), V::Timestamp(5)),
+        ] {
+            assert!(super::values_equal(&a, &b), "{a:?} {b:?}");
+            assert_eq!(
+                super::equality_key(&a),
+                super::equality_key(&b),
+                "{a:?} {b:?}"
+            );
+        }
+        for (a, b) in [
+            (V::Int(0), V::Float(0.5)),
+            (V::Int(0), V::Float(0.25)),
+            (V::Int(1), V::Float(1.5)),
+            (V::Int(i64::MAX), V::Float(two_63)),
+            (V::Int(i64::MIN), V::Float(-two_63 * 2.0)),
+            (
+                V::Int(9_007_199_254_740_993),
+                V::Float(9_007_199_254_740_992.0),
+            ),
+            (V::Null, V::Bool(false)),
+            (V::Bool(true), V::Bool(false)),
+            (V::Bool(true), V::Int(1)),
+            (V::Timestamp(1), V::Int(1)),
+            (V::Timestamp(1), V::Timestamp(2)),
+            (V::String("1".into()), V::Int(1)),
+            (V::Bytes(vec![]), V::String(String::new())),
+        ] {
+            assert!(!super::values_equal(&a, &b), "{a:?} {b:?}");
+            assert_ne!(
+                super::equality_key(&a),
+                super::equality_key(&b),
+                "{a:?} {b:?}"
+            );
+        }
+    }
+
+    /// With every fingerprint colliding, the mixed membership index still answers exactly:
+    /// each bucket hit is confirmed with Rules equality (M-RULES-SET-002).
+    #[test]
+    fn mixed_membership_index_confirms_every_collision() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(false));
+            }
+        }
+        super::FORCE_SCALAR_COLLISION.with(|enabled| enabled.set(true));
+        let _reset = Reset;
+        let items: Vec<_> = (0..64)
+            .map(|i| {
+                if i % 2 == 0 {
+                    RulesValue::Int(i)
+                } else {
+                    RulesValue::String(i.to_string())
+                }
+            })
+            .collect();
+        let other: Vec<_> = [
+            RulesValue::Float(2.0),
+            RulesValue::Float(2.5),
+            RulesValue::Int(3),
+            RulesValue::String("3".into()),
+            RulesValue::String("2".into()),
+            RulesValue::Bool(true),
+            RulesValue::Null,
+            RulesValue::Int(100),
+        ]
+        .into();
+        assert!(matches!(
+            super::MembershipIndex::for_operands(&items, &other),
+            Some(super::MembershipIndex::Mixed(..))
+        ));
+        let kept = super::filter_members(&other, &items, true);
+        assert_eq!(
+            kept,
+            vec![RulesValue::Float(2.0), RulesValue::String("3".into())]
+        );
+        assert!(!super::all_members_present(&items, &other, false).unwrap());
+        assert!(super::membership_any(&items, &other, false).unwrap());
+        assert!(!super::membership_any(&items, &other[5..], false).unwrap());
+    }
+
+    /// A homogeneous collection keeps the specialised integer or string index; only a mix of
+    /// keyed scalars takes the confirmed fingerprint index, and anything unkeyed takes none.
+    #[test]
+    fn membership_index_variant_follows_the_operands() {
+        let ints: Vec<_> = (0..64).map(RulesValue::Int).collect();
+        let strings: Vec<_> = (0..64).map(|i| RulesValue::String(i.to_string())).collect();
+        let mut mixed = ints.clone();
+        mixed[63] = RulesValue::Null;
+        let mut nested = ints.clone();
+        nested[63] = RulesValue::List(vec![]);
+        assert!(matches!(
+            super::MembershipIndex::for_operands(&ints, &ints[..8]),
+            Some(super::MembershipIndex::Int(_))
+        ));
+        assert!(matches!(
+            super::MembershipIndex::for_operands(&strings, &strings[..8]),
+            Some(super::MembershipIndex::String(_))
+        ));
+        assert!(matches!(
+            super::MembershipIndex::for_operands(&mixed, &ints[..8]),
+            Some(super::MembershipIndex::Mixed(..))
+        ));
+        assert!(matches!(
+            super::MembershipIndex::for_operands(&ints, &strings[..8]),
+            Some(super::MembershipIndex::Mixed(..))
+        ));
+        assert!(super::MembershipIndex::for_operands(&nested, &ints[..8]).is_none());
+        assert!(super::MembershipIndex::for_operands(&ints[..63], &ints[..8]).is_none());
+    }
+
     /// The work of deduplicating and intersecting distinct mixed scalars grows linearly, not with
     /// the square of the size: the linear scan needs about n^2/2 comparisons for this input.
     #[test]
@@ -7071,6 +7234,18 @@ service cloud.firestore {
                 "[a-z]{0,4}".prop_map(RulesValue::String),
             ], 0..256)) {
             proptest::prop_assert_eq!(super::list_to_set(&values), linear_set(values.iter().cloned()));
+        }
+
+        /// Two keyed scalars have equal keys exactly when Rules equality holds, and only NaN and
+        /// structured values have no key.
+        #[test]
+        fn equality_keys_match_rules_equality(a in mixed_scalar(), b in mixed_scalar()) {
+            let structured = |value: &RulesValue| matches!(value, RulesValue::List(_))
+                || matches!(value, RulesValue::Float(f) if f.is_nan());
+            proptest::prop_assert_eq!(super::equality_key(&a).is_none(), structured(&a));
+            if let (Some(left), Some(right)) = (super::equality_key(&a), super::equality_key(&b)) {
+                proptest::prop_assert_eq!(left == right, super::values_equal(&a, &b), "{:?} {:?}", a, b);
+            }
         }
 
         /// Mixed scalars (numbers of both representations at the exactness boundaries, strings,

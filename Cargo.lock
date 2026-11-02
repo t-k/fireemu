@@ -961,6 +961,7 @@ dependencies = [
  "fireemu-core-events",
  "fireemu-core-firestore",
  "fireemu-core-limits",
+ "fireemu-core-rules",
  "fireemu-core-session",
  "fireemu-core-types",
 ]

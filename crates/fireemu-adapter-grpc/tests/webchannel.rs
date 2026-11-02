@@ -10,7 +10,7 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::webchannel::{
     ChannelRequest, ChannelResponse, Hub, StreamKind, EMULATOR_UNKNOWN_SESSION_BODY,
-    STRICT_UNKNOWN_SESSION_BODY,
+    MAX_BUFFERED_MAP_BYTES, STRICT_UNKNOWN_SESSION_BODY,
 };
 use fireemu_core_auth::jwt::{base64url_encode, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -347,6 +347,68 @@ async fn read_long_poll_kind(hub: &Hub, kind: StreamKind, sid: &str, aid: u64) -
     let parsed = chunks(std::str::from_utf8(&chunk).unwrap());
     assert_eq!(parsed.len(), 1);
     parsed.into_iter().next().unwrap()
+}
+
+fn forward_maps(hub: &Hub, sid: &str, rid: &str, offset: u64, data: &str) -> (u16, String) {
+    let (status, _, body) = full(hub.handle(&ChannelRequest {
+        kind: StreamKind::Listen,
+        method: "POST".to_owned(),
+        params: params(&[("SID", sid), ("RID", rid), ("AID", "0")]),
+        authorization: None,
+        app_check: Vec::new(),
+        origin: None,
+        body: form(&[
+            ("count", "1"),
+            ("ofs", &offset.to_string()),
+            ("req0___data__", data),
+        ]),
+    }));
+    (status, body)
+}
+
+/// WCMAP-1: maps parked after a gap are bounded per session. A client that never sends map 1
+/// can buffer large maps only up to `MAX_BUFFERED_MAP_BYTES`; the map that would cross it is
+/// refused with a 400, and in-budget out-of-order traffic is still delivered in id order.
+#[tokio::test]
+async fn out_of_order_forward_maps_are_bounded_per_session() {
+    let hub = hub(None);
+    let sid = open_listen_session(&hub, &listen_target(2, "open"));
+    // Each map is just over 8 MiB, so fifteen fit in the 128 MiB limit and the sixteenth does not.
+    let map = json!("x".repeat(8 * 1024 * 1024 + 1)).to_string();
+    let fit = MAX_BUFFERED_MAP_BYTES / map.len();
+    assert_eq!(fit, 15);
+    for offset in 2..2 + fit as u64 {
+        let (status, body) = forward_maps(&hub, &sid, &offset.to_string(), offset, &map);
+        assert_eq!(status, 200, "map {offset}: {body}");
+    }
+    let overflow = 2 + fit as u64;
+    let (status, body) = forward_maps(&hub, &sid, "overflow", overflow, &map);
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("out-of-order map bytes"), "{body}");
+    // A retry of an already buffered map is still a harmless duplicate, not a refusal.
+    assert_eq!(forward_maps(&hub, &sid, "retry", 2, &map).0, 200);
+
+    // In budget: map 2 before map 1 on a fresh session is buffered and delivered in id order.
+    let sid = open_listen_session(&hub, &listen_target(2, "open"));
+    assert_eq!(
+        forward_maps(&hub, &sid, "2", 2, &listen_target(6, "open")).0,
+        200
+    );
+    assert_eq!(
+        forward_maps(&hub, &sid, "3", 1, &listen_target(4, "open")).0,
+        200
+    );
+    let batch = read_long_poll(&hub, &sid, 0).await;
+    let adds: Vec<i64> = batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| {
+            let tc = &a[1][0]["targetChange"];
+            (tc["targetChangeType"] == "ADD").then(|| tc["targetIds"][0].as_i64().unwrap())
+        })
+        .collect();
+    assert_eq!(adds, vec![2, 4, 6], "maps delivered in id order");
 }
 
 fn open_write_session(hub: &Hub) -> String {

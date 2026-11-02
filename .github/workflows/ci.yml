@@ -280,6 +280,43 @@ jobs:
       - name: database smoke tests
         run: npm test --prefix tools/sdk-smoke-database
 
+  # tools/sdk-smoke-python: the Python Admin SDK (firebase-admin, google-cloud-firestore) against a
+  # fireemu built from this commit, under `fireemu exec` so the clients get the emulator hosts the
+  # command really receives. ubuntu-24.04's system python3 is 3.12, so no setup action is needed; the
+  # requirements are hash-locked. The suite runs under the default profile and under strict.
+  sdk-smoke-python:
+    # Bound cache tokens even when the Python SDK code under `fireemu exec` calls the cache API.
+    cache-mode: read
+    name: Python Admin SDK smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # Keep the action-level save guard too, as sdk-latest.yml does.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: sdk-smoke-python
+          save-if: "false"
+      - name: build fireemu from this commit
+        run: cargo build --locked -p fireemu
+      - name: the pinned Python SDKs
+        run: |
+          set -eu
+          python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+          python3 -m venv "$RUNNER_TEMP/sdk-smoke-python"
+          "$RUNNER_TEMP/sdk-smoke-python/bin/pip" install --require-hashes -r tools/sdk-smoke-python/requirements.txt
+      - name: Python Admin SDK smoke (default profile)
+        run: |
+          target/debug/fireemu exec --project demo-app --hub-port 0 -- \
+            "$RUNNER_TEMP/sdk-smoke-python/bin/python" -m pytest -p no:cacheprovider tools/sdk-smoke-python
+      - name: Python Admin SDK smoke (strict profile)
+        run: |
+          target/debug/fireemu exec --config tools/sdk-smoke-python/fireemu.strict.json --project demo-app --hub-port 0 -- \
+            "$RUNNER_TEMP/sdk-smoke-python/bin/python" -m pytest -p no:cacheprovider tools/sdk-smoke-python
+
   # The packages a release would publish, built from this commit and installed the way a user
   # installs them: offline, from the packed tarballs, under a path with a space and non-ASCII
   # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a

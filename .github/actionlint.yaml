@@ -1,0 +1,17 @@
+# actionlint configuration. Keep every suppression narrow: one path, one message, one reason.
+paths:
+  .github/workflows/sdk-latest.yml:
+    ignore:
+      # `jobs.<job_id>.cache-mode` is an official GitHub Actions key (workflow syntax reference:
+      # "Use jobs.<job_id>.cache-mode to set the level of GitHub Actions cache access for a single
+      # job"; values read, write, write-only, none). actionlint 1.7.12 predates it and reports it
+      # as an unknown job key. The key is load-bearing: it makes the cache token the latest-SDK job
+      # receives read-only, so third-party SDK code cannot write the main-scope caches that other
+      # workflows restore. scripts/actions-security-contract.rb requires it. Remove this entry once
+      # actionlint knows the key.
+      - 'unexpected key "cache-mode" for "job" section'
+  .github/workflows/ci.yml:
+    ignore:
+      # Same official key as above: the Python Admin SDK smoke job (sdk-smoke-python) runs
+      # third-party SDK code and takes a read-only cache token. Remove once actionlint knows it.
+      - 'unexpected key "cache-mode" for "job" section'

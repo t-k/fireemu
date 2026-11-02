@@ -3,6 +3,7 @@
 //! status, and that nothing keeps listening or running afterwards.
 
 mod census;
+mod listener;
 mod scratch;
 
 use scratch::Scratch;
@@ -59,6 +60,23 @@ fn env_file(path: &Path) -> BTreeMap<String, String> {
 
 fn refused(addr: &str) -> bool {
     TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_err()
+}
+
+/// The evidence a "still listens" failure carries: the `exec` child pid, the processes holding
+/// the listener (best effort), and the census of this test's surviving descendants. It lists
+/// facts only; the reader judges who the owners are.
+fn listener_evidence(addr: &str, exec_pid: i32) -> String {
+    let me = i32::try_from(std::process::id()).expect("pid fits in i32");
+    let descendants = census::descendants_of(me);
+    let port = addr
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .expect("an emulator address names a port");
+    format!(
+        "exec child pid {exec_pid}; {}\nsurviving descendants of the test:\n{}",
+        listener::owners(port),
+        census::table(&descendants)
+    )
 }
 
 fn alive(pid: &str) -> bool {
@@ -173,11 +191,13 @@ impl Drop for PidGuard {
 fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     let dir = scratch("env");
     let out = dir.join("env.txt");
-    let output = daemon()
+    let child = daemon()
         .args(["--project", "demo-exec", "--", "/bin/sh", "-c"])
         .arg(format!("env > {}", out.display()))
-        .output()
+        .spawn()
         .unwrap();
+    let exec_pid = i32::try_from(child.id()).expect("pid fits in i32");
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -201,7 +221,11 @@ fn the_command_gets_the_emulator_hosts_and_the_services_stop_with_it() {
     ] {
         let addr = &env[key];
         assert!(addr.starts_with("127.0.0.1:"), "{key}={addr}");
-        assert!(refused(addr), "{key}={addr} still listens after exec");
+        assert!(
+            refused(addr),
+            "{key}={addr} still listens after exec: {}",
+            listener_evidence(addr, exec_pid)
+        );
     }
     assert!(!env.contains_key("FIREEMU_FUNCTIONS_HOST"));
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1278,4 +1302,16 @@ fn an_occupied_port_of_a_selected_service_fails_before_the_command_runs() {
         String::from_utf8_lossy(&output.stderr)
     );
     drop(busy);
+}
+
+/// The owner evidence names the process holding a listener. The socket stays open for the
+/// whole check, so its owner is this test process.
+#[cfg(target_os = "linux")]
+#[test]
+fn listener_owners_name_the_holding_process() {
+    let me = std::process::id();
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let evidence = listener::owners(port);
+    assert!(evidence.contains(&format!("[pid {me} ")), "{evidence}");
 }

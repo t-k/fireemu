@@ -293,8 +293,16 @@ fn app_check_problems(cfg: &Value) -> Vec<String> {
 }
 
 /// The keys one `firestore` entry of a `firebase.json` may carry; the Rust loader rejects
-/// the rest, so a typo can never be read as "no rules file".
-const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"];
+/// the rest, so a typo can never be read as "no rules file". The deploy hooks belong to
+/// `firebase deploy` and are accepted and ignored.
+const FIRESTORE_ENTRY_KEYS: [&str; 6] = [
+    "database",
+    "rules",
+    "indexes",
+    "index",
+    "predeploy",
+    "postdeploy",
+];
 
 /// The keys one `functions` codebase may carry.
 const FUNCTIONS_ENTRY_KEYS: [&str; 6] = [

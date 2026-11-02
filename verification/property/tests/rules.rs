@@ -1,4 +1,4 @@
-//! Property artifacts for REQ-RULES-PARITY-01 and REQ-RULES-PARITY-03.
+//! Property artifacts for REQ-RULES-PARITY-01, REQ-RULES-PARITY-03 and INV-RULES-SET-001.
 //!
 //! The differential matrix in `conformance/src/rules-probe` decides what the language *is*
 //! by asking the official runtime. These properties then hold fireemu to that answer over
@@ -312,6 +312,47 @@ service cloud.firestore {
         }
     }
 
+    /// INV-RULES-SET-001: set operations on collections large enough to take the hash
+    /// indexes (at least 64 members, at least 32 distinct) and mixing scalar types decide
+    /// membership by Rules equality: an integer equals the float of the same value, nothing
+    /// else crosses a type, and duplicates collapse. Sizes and membership answers agree with a
+    /// reference computed from that equality.
+    #[test]
+    fn prop_rules_large_mixed_set_operations_agree_with_equality(
+        a in prop::collection::vec(mixed_member(), 64..120),
+        b in prop::collection::vec(mixed_member(), 8..80),
+    ) {
+        let list = |xs: &[Member]| format!("[{}]", xs.iter().map(Member::literal).collect::<Vec<_>>().join(", "));
+        let distinct = |xs: &[Member]| {
+            let mut out: Vec<Member> = Vec::new();
+            for x in xs {
+                if !out.iter().any(|y| y.equals(x)) {
+                    out.push(x.clone());
+                }
+            }
+            out
+        };
+        let (da, db) = (distinct(&a), distinct(&b));
+        let in_b = |x: &Member| db.iter().any(|y| y.equals(x));
+        let in_a = |x: &Member| da.iter().any(|y| y.equals(x));
+        let union = distinct(&a.iter().chain(&b).cloned().collect::<Vec<_>>()).len();
+        let intersection = da.iter().filter(|x| in_b(x)).count();
+        let difference = da.len() - intersection;
+        let (set_a, set_b) = (format!("{}.toSet()", list(&a)), format!("{}.toSet()", list(&b)));
+        for (claim, expected) in [
+            (format!("{set_a}.size() == {}", da.len()), true),
+            (format!("{set_a}.union({set_b}).size() == {union}"), true),
+            (format!("{set_a}.intersection({set_b}).size() == {intersection}"), true),
+            (format!("{set_a}.difference({set_b}).size() == {difference}"), true),
+            (format!("{set_a}.hasAll({})", list(&b)), db.iter().all(&in_a)),
+            (format!("{set_a}.hasAny({})", list(&b)), db.iter().any(&in_a)),
+            (format!("{}.hasAll({})", list(&a), list(&b)), db.iter().all(&in_a)),
+            (format!("{}.hasOnly({})", list(&b), list(&a)), db.iter().all(&in_a)),
+            (format!("{}.removeAll({}).size() == {}", list(&a), list(&b), a.iter().filter(|x| !in_b(x)).count()), true),
+        ] {
+            prop_assert_eq!(holds(&claim), expected, "{}", claim);
+        }
+    }
     /// REQ-RULES-PARITY-01: `&&` and `||` are the official three-valued operators. A
     /// deciding operand -- `false` for `&&`, `true` for `||` -- settles the answer whatever
     /// the other operand did, including when the other one raised.
@@ -362,4 +403,60 @@ service cloud.firestore {
         let error = LoadedRules::from_source(&recursive).unwrap_err();
         prop_assert_eq!(error.message, "Recursive call is not allowed.");
     }
+}
+
+/// A scalar member of the large set property, with its Rules literal and Rules equality.
+#[derive(Clone, Debug)]
+enum Member {
+    Int(i64),
+    /// Halves, so integral and non-integral floats both occur and stay exact.
+    Half(i64),
+    Str(u8),
+    Bool(bool),
+    Null,
+}
+
+impl Member {
+    fn literal(&self) -> String {
+        match self {
+            Self::Int(i) => i.to_string(),
+            Self::Half(h) if h % 2 == 0 => format!("{}.0", h / 2),
+            Self::Half(h) => format!("{}.5", h / 2),
+            Self::Str(c) => format!("'s{c}'"),
+            Self::Bool(b) => b.to_string(),
+            Self::Null => "null".to_owned(),
+        }
+    }
+
+    /// Twice the numeric value, when numeric.
+    fn doubled(&self) -> Option<i64> {
+        match self {
+            Self::Int(i) => Some(i * 2),
+            Self::Half(h) => Some(*h),
+            _ => None,
+        }
+    }
+
+    fn equals(&self, other: &Self) -> bool {
+        match (self.doubled(), other.doubled()) {
+            (Some(x), Some(y)) => x == y,
+            (None, None) => match (self, other) {
+                (Self::Str(x), Self::Str(y)) => x == y,
+                (Self::Bool(x), Self::Bool(y)) => x == y,
+                (Self::Null, Self::Null) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+fn mixed_member() -> impl Strategy<Value = Member> {
+    prop_oneof![
+        4 => (0i64..40).prop_map(Member::Int),
+        3 => (0i64..80).prop_map(Member::Half),
+        3 => (0u8..30).prop_map(Member::Str),
+        1 => any::<bool>().prop_map(Member::Bool),
+        1 => Just(Member::Null),
+    ]
 }

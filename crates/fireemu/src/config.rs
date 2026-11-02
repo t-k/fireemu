@@ -2463,11 +2463,22 @@ pub struct FirebaseJsonReport {
     pub notices: Vec<String>,
 }
 
-/// The `firebase.json` keys that name a Firestore database entry.
-const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"];
+/// The `firebase.json` keys that name a Firestore database entry. The deploy hooks
+/// (`predeploy`, `postdeploy`) belong to `firebase deploy`; firebase-tools 15.28.2 accepts them
+/// here, so they are accepted and ignored, as for Functions.
+const FIRESTORE_ENTRY_KEYS: [&str; 6] = [
+    "database",
+    "rules",
+    "indexes",
+    "index",
+    "predeploy",
+    "postdeploy",
+];
 
-/// The official keys of one Cloud Storage configuration entry.
-const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
+/// The official keys of one Cloud Storage configuration entry. The deploy hooks (`predeploy`,
+/// `postdeploy`) belong to `firebase deploy`; firebase-tools 15.28.2 accepts them here, so they
+/// are accepted and ignored, as for Functions.
+const STORAGE_ENTRY_KEYS: [&str; 4] = ["target", "rules", "predeploy", "postdeploy"];
 
 /// The official keys of one Realtime Database configuration entry: `rules` for every
 /// instance, or `instance` / `target` naming the instance an entry of the array form serves.
@@ -8712,6 +8723,111 @@ mod tests {
             cfg.functions_source.as_deref(),
             Some(under_proj("fb-functions").as_str())
         );
+    }
+
+    /// firebase-tools 15.28.2 accepts the deploy hooks in every product section; they belong to
+    /// `firebase deploy`, so the loader accepts and ignores them wherever they appear.
+    #[test]
+    fn deploy_hooks_are_accepted_in_every_product_section() {
+        let base = std::path::Path::new("/proj");
+        for ok in [
+            json!({"firestore": {"rules": "firestore.rules", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"firestore": [
+                {"database": "(default)", "rules": "a.rules", "predeploy": "echo a"},
+                {"database": "other", "rules": "b.rules", "postdeploy": ["x", "y"]}
+            ]}),
+            json!({"storage": {"rules": "storage.rules", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"storage": [
+                {"target": "main", "rules": "a.rules", "predeploy": "echo a", "postdeploy": ["x"]}
+            ]}),
+            json!({"database": {"rules": "database.rules.json", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"functions": {"source": "functions", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            let result = cfg.apply_firebase_json(&ok, base, &Selection::default());
+            assert!(result.is_ok(), "{ok}: {result:?}");
+        }
+    }
+
+    proptest::proptest! {
+        /// Every product section accepts any combination of the two deploy hooks, in the
+        /// object and the array form, and refuses the entry as soon as it carries a near-miss
+        /// spelling of one, naming that key.
+        #[test]
+        fn deploy_hook_keys_are_accepted_exactly_by_their_names(
+            section in 0usize..4,
+            array in proptest::bool::ANY,
+            predeploy in proptest::bool::ANY,
+            postdeploy in proptest::bool::ANY,
+            near_miss in proptest::option::of(proptest::sample::select(vec![
+                "preDeploy", "postDeploy", "pre_deploy", "predeploys", "deploy", "predeploy ", "Predeploy",
+            ])),
+        ) {
+            let (name, mut entry) = match section {
+                0 => ("firestore", json!({"rules": "firestore.rules"})),
+                1 => ("storage", json!({"rules": "storage.rules"})),
+                2 => ("database", json!({"rules": "database.rules.json"})),
+                _ => ("functions", json!({"source": "functions"})),
+            };
+            if array && section == 1 {
+                entry["target"] = json!("main");
+            }
+            if array && section == 2 {
+                entry["instance"] = json!("demo-default-rtdb");
+            }
+            if predeploy {
+                entry["predeploy"] = json!(["echo a"]);
+            }
+            if postdeploy {
+                entry["postdeploy"] = json!("echo b");
+            }
+            if let Some(key) = near_miss {
+                entry[key] = json!("echo c");
+            }
+            let value = if array { json!([entry]) } else { entry };
+            let result = RuntimeConfig::default().apply_firebase_json(
+                &json!({ name: value }),
+                std::path::Path::new("/proj"),
+                &Selection::default(),
+            );
+            match near_miss {
+                None => proptest::prop_assert!(result.is_ok(), "{name}: {result:?}"),
+                Some(key) => {
+                    let error = result.expect_err("a near-miss key is refused").0;
+                    proptest::prop_assert!(error.contains(&format!("unknown key {name}")), "{error}");
+                    proptest::prop_assert!(error.contains(key), "{error}");
+                }
+            }
+        }
+    }
+
+    /// Accepting the deploy hooks does not weaken the allow-lists: any other key is refused.
+    #[test]
+    fn unknown_keys_beside_deploy_hooks_are_still_refused() {
+        let base = std::path::Path::new("/proj");
+        for (bad, message) in [
+            (
+                json!({"firestore": {"rules": "r", "predeploy": "echo", "bogus": 1}}),
+                "unknown key firestore.bogus",
+            ),
+            (
+                json!({"firestore": [{"rules": "r", "postdeploy": "echo", "bogus": 1}]}),
+                "unknown key firestore[0].bogus",
+            ),
+            (
+                json!({"storage": {"rules": "r", "predeploy": "echo", "bogus": 1}}),
+                "unknown key storage.bogus",
+            ),
+            (
+                json!({"storage": [{"target": "t", "rules": "r", "postdeploy": "echo", "bogus": 1}]}),
+                "unknown key storage[0].bogus",
+            ),
+        ] {
+            let error = RuntimeConfig::default()
+                .apply_firebase_json(&bad, base, &Selection::default())
+                .expect_err(&bad.to_string());
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
     }
 
     #[test]

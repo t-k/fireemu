@@ -91,6 +91,110 @@ struct Parser<'a> {
     src: &'a str,
     pos: usize,
     expr_depth: u32,
+    index: SourceIndex,
+}
+
+/// How many source bytes one character-count checkpoint of [`SourceIndex`] covers.
+const CHECKPOINT_BYTES: usize = 64;
+
+/// Line and column lookup for one source, built once per parse.
+///
+/// Every AST node records the line and column of its start. Counting them by walking the source
+/// from its beginning made each span cost the length of the source before it, so parsing grew
+/// with the square of the source size. The index answers a span with a binary search over the
+/// newline offsets and a character count of at most [`CHECKPOINT_BYTES`] bytes.
+struct SourceIndex {
+    /// Byte offset of every `\n`, in order.
+    newlines: Vec<usize>,
+    /// Characters starting before byte `k * CHECKPOINT_BYTES`, for every `k` up to the end.
+    char_checkpoints: Vec<u32>,
+}
+
+/// Whether `byte` begins a UTF-8 character (is not a continuation byte).
+const fn starts_char(byte: u8) -> bool {
+    byte & 0xC0 != 0x80
+}
+
+impl SourceIndex {
+    fn new(src: &str) -> Self {
+        let bytes = src.as_bytes();
+        let newlines = bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, byte)| (*byte == b'\n').then_some(offset))
+            .collect();
+        let mut char_checkpoints = Vec::with_capacity(bytes.len() / CHECKPOINT_BYTES + 1);
+        let mut chars = 0u32;
+        char_checkpoints.push(0);
+        for chunk in bytes.chunks(CHECKPOINT_BYTES) {
+            let starts = chunk.iter().filter(|byte| starts_char(**byte)).count();
+            chars = chars.saturating_add(u32::try_from(starts).unwrap_or(u32::MAX));
+            char_checkpoints.push(chars);
+        }
+        Self {
+            newlines,
+            char_checkpoints,
+        }
+    }
+
+    /// Characters that start before byte `offset` (at most the source length).
+    fn chars_before(&self, bytes: &[u8], offset: usize) -> u32 {
+        let checkpoint = offset / CHECKPOINT_BYTES;
+        let tail = &bytes[checkpoint * CHECKPOINT_BYTES..offset];
+        #[cfg(test)]
+        SPAN_BYTES_SCANNED.with(|scanned| scanned.set(scanned.get() + tail.len()));
+        let starts = tail.iter().filter(|byte| starts_char(**byte)).count();
+        self.char_checkpoints[checkpoint].saturating_add(u32::try_from(starts).unwrap_or(u32::MAX))
+    }
+
+    /// The 1-based line and column of byte `offset`: lines are separated by `\n`, and the column
+    /// counts the characters before `offset` on its line. An offset past the end is placed at
+    /// the end of the source.
+    fn span(&self, src: &str, offset: usize) -> Span {
+        let end = offset.min(src.len());
+        let preceding_newlines = self.newlines.partition_point(|newline| *newline < end);
+        let line_start = preceding_newlines
+            .checked_sub(1)
+            .map_or(0, |last| self.newlines[last] + 1);
+        let bytes = src.as_bytes();
+        let column = self.chars_before(bytes, end) - self.chars_before(bytes, line_start) + 1;
+        Span {
+            line: u32::try_from(preceding_newlines + 1).unwrap_or(u32::MAX),
+            column,
+            offset,
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Source bytes scanned by span lookups, outside the one-time index build.
+    static SPAN_BYTES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Span lookups made.
+    static SPAN_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The line and column computation the index replaced, kept as the reference it must match.
+#[cfg(test)]
+fn span_at_reference(src: &str, offset: usize) -> Span {
+    let mut line = 1u32;
+    let mut column = 1u32;
+    for (i, c) in src.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    Span {
+        line,
+        column,
+        offset,
+    }
 }
 
 fn compile_literal_pattern(
@@ -167,6 +271,7 @@ fn parse_ruleset_on_this_thread(src: &str) -> Result<Ruleset, ParseError> {
             src,
             pos: offset,
             expr_depth: 0,
+            index: SourceIndex::new(src),
         };
         return Err(p.error("control character in source"));
     }
@@ -174,6 +279,7 @@ fn parse_ruleset_on_this_thread(src: &str) -> Result<Ruleset, ParseError> {
         src,
         pos: 0,
         expr_depth: 0,
+        index: SourceIndex::new(src),
     };
     let mut ruleset = p.ruleset()?;
     check_expression_tree_depth(&ruleset)?;
@@ -388,24 +494,9 @@ fn compiled_depth(expr: &Expr) -> u32 {
 
 impl<'a> Parser<'a> {
     fn span_at(&self, offset: usize) -> Span {
-        let mut line = 1u32;
-        let mut column = 1u32;
-        for (i, c) in self.src.char_indices() {
-            if i >= offset {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
-            }
-        }
-        Span {
-            line,
-            column,
-            offset,
-        }
+        #[cfg(test)]
+        SPAN_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+        self.index.span(self.src, offset)
     }
 
     fn error(&self, message: impl Into<String>) -> ParseError {
@@ -1202,6 +1293,115 @@ impl<'a> Parser<'a> {
             t => {
                 self.pos = at;
                 Err(self.error(format!("expected expression, found {}", t.describe())))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod span_index_tests {
+    use super::*;
+    use proptest::strategy::Strategy;
+
+    /// A ruleset of `blocks` match blocks, each allowing `get` on a balanced `&&` tree of
+    /// `leaves` `true` leaves, laid out over several lines as a generated ruleset is.
+    fn balanced_ruleset(blocks: usize, leaves: usize) -> String {
+        fn expression(leaves: usize) -> String {
+            if leaves == 1 {
+                return "true".into();
+            }
+            format!(
+                "({} && {})",
+                expression(leaves / 2),
+                expression(leaves - leaves / 2)
+            )
+        }
+        let mut source = String::from("rules_version = '2';\nservice cloud.firestore {\n");
+        for block in 0..blocks {
+            use std::fmt::Write as _;
+            let _ = write!(
+                source,
+                "  match /c{block}/{{id}} {{\n    allow get: if {};\n  }}\n",
+                expression(leaves)
+            );
+        }
+        source.push_str("}\n");
+        source
+    }
+
+    /// Spans cost at most two checkpoint tails each, whatever the source size: the scan that
+    /// walked from the start of the source for every span made parsing quadratic.
+    #[test]
+    fn span_lookups_scan_a_bounded_number_of_bytes() {
+        let source = balanced_ruleset(10, 700);
+        assert!(source.len() > 70_000, "{}", source.len());
+        SPAN_BYTES_SCANNED.with(|scanned| scanned.set(0));
+        SPAN_LOOKUPS.with(|lookups| lookups.set(0));
+        parse_ruleset_on_this_thread(&source).unwrap();
+        let scanned = SPAN_BYTES_SCANNED.with(std::cell::Cell::get);
+        let lookups = SPAN_LOOKUPS.with(std::cell::Cell::get);
+        assert!(lookups > 10 * 700, "{lookups} spans");
+        assert!(
+            scanned <= 2 * CHECKPOINT_BYTES * lookups,
+            "{scanned} bytes scanned for {lookups} spans of a {}-byte source",
+            source.len()
+        );
+    }
+
+    /// Every span the parser records matches the reference scan, so diagnostics and coverage
+    /// identifiers, which carry these spans, are unchanged.
+    #[test]
+    fn parsed_spans_match_the_reference_scan() {
+        let source = format!(
+            "{}// é 日本 🙂\r\n{}",
+            balanced_ruleset(3, 9),
+            "service firebase.storage {\n  match /b/{bucket}/o {\n    allow read: if request.auth != null\n      && 'é日🙂' == 'é日🙂';\n  }\n}\n"
+        );
+        let index = SourceIndex::new(&source);
+        for offset in 0..=source.len() + 2 {
+            assert_eq!(
+                index.span(&source, offset),
+                span_at_reference(&source, offset),
+                "offset {offset}"
+            );
+        }
+        let error = parse_ruleset_on_this_thread(
+            "service cloud.firestore {\n  match /a {\n    allow read: if é;\n  }\n}",
+        )
+        .unwrap_err();
+        let span = span_at_reference(
+            "service cloud.firestore {\n  match /a {\n    allow read: if é;\n  }\n}",
+            error.offset,
+        );
+        assert_eq!((error.line, error.column), (span.line, span.column));
+    }
+
+    proptest::proptest! {
+        /// The index answers every offset, on or off a character boundary and past the end,
+        /// exactly as the scan it replaced.
+        #[test]
+        fn source_index_matches_the_reference_scan(
+            source in proptest::collection::vec(
+                proptest::prop_oneof![
+                    proptest::strategy::Just("a"),
+                    proptest::strategy::Just(" "),
+                    proptest::strategy::Just("\n"),
+                    proptest::strategy::Just("\r"),
+                    proptest::strategy::Just("é"),
+                    proptest::strategy::Just("日本"),
+                    proptest::strategy::Just("🙂"),
+                    proptest::strategy::Just("abcdefghijklmnopqrstuvwxyz0123456789"),
+                ],
+                0..200,
+            ).prop_map(|parts| parts.concat()),
+        ) {
+            let index = SourceIndex::new(&source);
+            for offset in 0..=source.len() + 2 {
+                proptest::prop_assert_eq!(
+                    index.span(&source, offset),
+                    span_at_reference(&source, offset),
+                    "offset {}", offset
+                );
             }
         }
     }

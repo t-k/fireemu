@@ -6616,22 +6616,26 @@ mod task_completion_tests {
             .fields
             .insert("blob".to_owned(), FsValue::String("x".repeat(256 * 1024)));
         let mut before = after.clone();
+        let created = change.clone();
         before
             .fields
             .insert("blob".to_owned(), FsValue::String("y".repeat(1024)));
         change.before = Some(Arc::new(before));
-        commit.changes = Arc::from([change]);
-        let held = locks_held_while_encoding(&runtime);
-        let reservation = runtime.reserve_commit_events(&commit);
-        crate::events::PAYLOAD_ENCODING_PROBE.set(None);
-        let reservation = reservation.unwrap();
-        let deliveries = reservation.deliveries.as_deref().unwrap();
-        assert!(!deliveries.is_empty());
-        for delivery in deliveries {
-            assert!(delivery.payload.raw_data.as_deref().unwrap().len() > 256 * 1024);
+        // A create (no old document) and an update (both documents).
+        for change in [created, change] {
+            commit.changes = Arc::from([change]);
+            let held = locks_held_while_encoding(&runtime);
+            let reservation = runtime.reserve_commit_events(&commit);
+            crate::events::PAYLOAD_ENCODING_PROBE.set(None);
+            let reservation = reservation.unwrap();
+            let deliveries = reservation.deliveries.as_deref().unwrap();
+            assert!(!deliveries.is_empty());
+            for delivery in deliveries {
+                assert!(delivery.payload.raw_data.as_deref().unwrap().len() > 256 * 1024);
+            }
+            // One encoding for the one change, with the runtime lock free.
+            assert_eq!(*held.lock().unwrap(), [(false, false)]);
         }
-        // One encoding for the one change, with the runtime lock free.
-        assert_eq!(*held.lock().unwrap(), [(false, false)]);
     }
 
     #[tokio::test]

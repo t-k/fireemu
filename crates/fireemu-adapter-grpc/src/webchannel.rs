@@ -2954,8 +2954,9 @@ mod tests {
     #[test]
     fn the_production_limit_covers_the_sdk_write_pipeline_and_stays_bounded() {
         const MIB: usize = 1024 * 1024;
-        assert!(MAX_BUFFERED_MAP_BYTES >= 10 * 10 * MIB);
-        assert!(MAX_BUFFERED_MAP_BYTES <= 256 * MIB);
+        let limit = std::hint::black_box(MAX_BUFFERED_MAP_BYTES);
+        assert!(limit >= 10 * 10 * MIB);
+        assert!(limit <= 256 * MIB);
     }
 
     /// `session_deliver` applies the production limit and reports that the stream took the maps.

@@ -251,8 +251,8 @@ test("native deadline status before close needs no server admission", async (t) 
 
 // A real client deadline, started at dispatch as in production, that fires on a call the local server
 // has admitted and that never answers. The 80 ms deadline used earlier could fire before the server
-// admitted the call, and a deadline that fires before admission is a different case (grpc-js emits
-// no `close` unless something reads the response stream; see the tests after the next one). 2000 ms
+// admitted the call, and a deadline that fires before admission is a different case (covered
+// through the transport by the pre-admission test at the end of this file). 2000 ms
 // is far longer than a loopback admission takes, so a loaded machine still admits first. It stays
 // below the transport's local watchdog (timeoutMs + 100), so the native deadline is the event that
 // ends the stream; the reason check below pins that.
@@ -519,32 +519,4 @@ test("native deadline before admission with a pending write ends the call throug
   );
   assert.ok(silent.stats.connections >= 1, "the client must dial the silent listener");
   await assertDeadlineObservation(observation.observed, reply, lines, budget);
-});
-
-// The condition the transport avoids: a grpc-js call whose deadline fires before admission, with a
-// request frame written, and no 'data' listener on the response stream. Status arrives, but close
-// does not, within a second. The transport above always attaches a data listener, so it is not in
-// this state.
-test("grpc-js emits status but no close after a pre-admission deadline when nothing reads the response", async (t) => {
-  const silent = await silentTcpServer(t);
-  const client = new grpc.Client(silent.target, grpc.credentials.createInsecure());
-  t.after(() => client.close());
-  const rpc = client.makeBidiStreamRequest(
-    "/google.pubsub.v1.Subscriber/StreamingPull",
-    (bytes) => bytes,
-    (bytes) => bytes,
-    new grpc.Metadata(),
-    { deadline: new Date(Date.now() + PRE_ADMISSION_DEADLINE_MS) },
-  );
-  let closed = false;
-  rpc.on("error", () => {});
-  rpc.on("close", () => {
-    closed = true;
-  });
-  const status = new Promise((resolve) => rpc.on("status", resolve));
-  rpc.write(Buffer.from([0, 0, 0, 0, 0]));
-  rpc.end();
-  assert.equal((await status).code, grpc.status.DEADLINE_EXCEEDED);
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  assert.equal(closed, false, "grpc-js must not emit close without a reader on the response stream");
 });

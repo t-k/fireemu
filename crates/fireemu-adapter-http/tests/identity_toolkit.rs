@@ -10528,6 +10528,81 @@ fn form_encoded_token_refresh_is_accepted_by_the_server_layer() {
     assert!(body["id_token"].as_str().is_some());
 }
 
+/// ITKT-4: `accounts:update` refuses the fields this runtime does not model instead of dropping
+/// them, and refuses before it changes anything. `mfaInfo` counts as present unless it is null or
+/// an empty array, object or string; `deleteProvider: "emailLink"` is refused by name.
+#[test]
+fn account_updates_refuse_unmodelled_fields_without_changing_the_account() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "unmodelled@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let id_token = account["idToken"].as_str().unwrap().to_owned();
+    let uid = account["localId"].as_str().unwrap().to_owned();
+    let display_name = || {
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_id(&uid)
+            .unwrap()
+            .display_name
+            .clone()
+    };
+    let mfa_refusal = "UNSUPPORTED_FIELD : mfaInfo is not supported by this runtime";
+    for mfa_info in [
+        json!([{"phoneInfo": "+15555550100"}]),
+        json!({"phoneInfo": "+15555550100"}),
+        json!("x"),
+        json!(1),
+        json!(false),
+    ] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, "displayName": "changed", "mfaInfo": mfa_info}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].clone()),
+            (400, json!(mfa_refusal)),
+            "mfaInfo {mfa_info}"
+        );
+        assert_eq!(display_name(), None, "mfaInfo {mfa_info}");
+    }
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "changed", "deleteProvider": ["emailLink"]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (
+            400,
+            json!("UNSUPPORTED_FIELD : deleteProvider \"emailLink\" is not supported")
+        )
+    );
+    assert_eq!(display_name(), None);
+    for (index, empty) in [json!(null), json!([]), json!({}), json!("")]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("accepted-{index}");
+        let (status, updated) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, "displayName": name, "mfaInfo": empty}),
+        );
+        assert_eq!(status, 200, "mfaInfo {empty}: {updated}");
+        assert_eq!(
+            display_name().as_deref(),
+            Some(name.as_str()),
+            "mfaInfo {empty}"
+        );
+    }
+}
+
 #[test]
 fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
     let s = state();

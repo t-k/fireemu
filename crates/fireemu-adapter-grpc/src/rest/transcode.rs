@@ -457,6 +457,11 @@ static RUN_QUERY: Schema = Schema {
             "explain_options",
             Kind::Message(&EXPLAIN_OPTIONS),
         ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
+        ),
     ],
 };
 static RUN_AGGREGATION_QUERY: Schema = Schema {
@@ -491,6 +496,11 @@ static RUN_AGGREGATION_QUERY: Schema = Schema {
             "explainOptions",
             "explain_options",
             Kind::Message(&EXPLAIN_OPTIONS),
+        ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
         ),
     ],
 };
@@ -559,6 +569,11 @@ static PARTITION_QUERY: Schema = Schema {
             "read_time",
             Kind::Timestamp,
             "consistency_selector",
+        ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
         ),
     ],
 };

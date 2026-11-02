@@ -1004,10 +1004,16 @@ fn sign_response_tokens(
     let Some(object) = response.body.as_object_mut() else {
         return response;
     };
+    // A refresh answers one token as both `id_token` and `access_token`; it is signed once.
+    let mut signed: Vec<(String, String)> = Vec::new();
     for field in ["idToken", "id_token", "access_token", "sessionCookie"] {
         let Some(Value::String(token)) = object.get_mut(field) else {
             continue;
         };
+        if let Some((_, reused)) = signed.iter().find(|(unsigned, _)| unsigned == token) {
+            token.clone_from(reused);
+            continue;
+        }
         let mut parts = token.split('.');
         let Some(header) = parts.next() else {
             return error(500, "INTERNAL");
@@ -1036,7 +1042,8 @@ fn sign_response_tokens(
         let Ok(payload) = std::str::from_utf8(&payload) else {
             return error(500, "INTERNAL");
         };
-        *token = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
+        let result = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
+        signed.push((std::mem::replace(token, result.clone()), result));
     }
     response
 }

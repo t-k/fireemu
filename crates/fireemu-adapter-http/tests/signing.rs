@@ -207,7 +207,8 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(refreshed.status, 200, "{}", refreshed.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 3);
+    // One signature serves both `id_token` and `access_token` (ITKT-6).
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 2);
 
     let cookie = handle_with(
         &state,
@@ -220,7 +221,7 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"idToken": response.body["idToken"], "validDuration": "3600"}),
     );
     assert_eq!(cookie.status, 200, "{}", cookie.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 4);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 3);
 
     state.blocking = Some(Arc::new(PassthroughBlockingHook));
     let blocked = handle(
@@ -230,7 +231,73 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"email": "outside-lock-blocking@example.com", "password": "password1"}),
     );
     assert_eq!(blocked.status, 200, "{}", blocked.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 5);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 4);
+}
+
+/// Counts private-key operations of a real RS256 signer.
+struct CountingSigner {
+    inner: Arc<RsaSigner>,
+    signs: AtomicUsize,
+}
+
+impl IdTokenSigner for CountingSigner {
+    fn alg(&self) -> &'static str {
+        self.inner.alg()
+    }
+
+    fn kid(&self) -> &str {
+        self.inner.kid()
+    }
+
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        self.signs.fetch_add(1, Ordering::SeqCst);
+        self.inner.sign(signing_input)
+    }
+
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.inner.verify(signing_input, signature)
+    }
+
+    fn public_jwk_json(&self) -> String {
+        self.inner.public_jwk_json()
+    }
+}
+
+/// ITKT-6: a refresh answers the same ID token as `id_token` and `access_token`; it is signed
+/// once and both fields carry that one signed token.
+#[test]
+fn a_refresh_signs_its_id_token_once() {
+    let store = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(47),
+        TotpPolicy::default(),
+    )));
+    let signer = Arc::new(CountingSigner {
+        inner: fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX),
+        signs: AtomicUsize::new(0),
+    });
+    store.lock().unwrap().set_signer(signer.clone());
+    let state = auth_state(store);
+    let signed_up = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+        &json!({"email": "sign-once@example.com", "password": "password1"}),
+    );
+    assert_eq!(signed_up.status, 200, "{}", signed_up.body);
+    let before = signer.signs.load(Ordering::SeqCst);
+
+    let refreshed = handle(
+        &state,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed_up.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_eq!(signer.signs.load(Ordering::SeqCst) - before, 1);
+    assert_eq!(refreshed.body["id_token"], refreshed.body["access_token"]);
+    let token = refreshed.body["id_token"].as_str().unwrap();
+    assert!(verify_id_token(token, &state.store.lock().unwrap(), START).is_ok());
 }
 
 #[test]

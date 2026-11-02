@@ -1833,11 +1833,24 @@ async fn serve_suite(
         // New source requests can enter after this short critical section, but their runtime
         // reservation fails before the source state changes.
         close_functions_source_admission(&backend.barrier(), || runtime.begin_shutdown());
-        runtime.shutdown().await;
+        bounded_stage(
+            "the Functions runtime",
+            FUNCTIONS_STAGE_BOUND,
+            runtime.shutdown(),
+        )
+        .await;
     }
-    pubsub.shutdown_push_dispatcher().await;
+    bounded_stage(
+        "the Pub/Sub push dispatcher",
+        STAGE_BOUND,
+        pubsub.shutdown_push_dispatcher(),
+    )
+    .await;
     servers.abort_all();
-    while servers.join_next().await.is_some() {}
+    bounded_stage("the servers", STAGE_BOUND, async {
+        while servers.join_next().await.is_some() {}
+    })
+    .await;
     // Discovery is retired as an explicit, ordered step of shutdown, while the runtime is
     // still up and every server that answered on the advertised origin has stopped. Dropping
     // the locator on the way out is kept as a fallback, not as the mechanism: a destructor
@@ -1921,6 +1934,49 @@ fn make_clock(cfg: &RuntimeConfig, reading: Option<i128>) -> Arc<Mutex<VirtualCl
     )));
     tokio::spawn(clock_ticker(Arc::downgrade(&clock)));
     clock
+}
+
+/// How long shutdown gives each stage that waits on other tasks: the Functions runtime (which
+/// lets its running invocations finish), the Pub/Sub push dispatcher and the servers it aborts.
+const FUNCTIONS_STAGE_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+const STAGE_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long the runtime is given to finish its blocking tasks once the daemon has stopped. They
+/// hold nothing that persists (the largest is the App Check key generation, which a debug build
+/// takes seconds for), so they are left behind rather than waited for.
+const BLOCKING_DRAIN: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Runs one shutdown stage for at most `bound`, saying so when it does not finish.
+async fn bounded_stage<T>(
+    stage: &str,
+    bound: std::time::Duration,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    if let Ok(done) = tokio::time::timeout(bound, work).await {
+        Some(done)
+    } else {
+        eprintln!(
+            "warning: shutdown: {stage} did not finish within {} ms; going on without it",
+            bound.as_millis()
+        );
+        None
+    }
+}
+
+/// Stops the runtime, waiting at most `bound` for its blocking tasks. Returns whether some were
+/// still running, which it has said so about.
+fn drain_runtime(runtime: tokio::runtime::Runtime, bound: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    runtime.shutdown_timeout(bound);
+    let left_behind = started.elapsed() >= bound;
+    if left_behind {
+        eprintln!(
+            "warning: shutdown: background tasks (such as the App Check key generation) were still \
+             running after {} ms and are left behind",
+            bound.as_millis()
+        );
+    }
+    left_behind
 }
 
 /// How often a clock that follows real time publishes its running time to its observers.
@@ -2427,6 +2483,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let ready = assemble_suite(assembly, exec.is_some())?;
         serve_suite(ready, exec, signals, ready_file, owner_stdin).await
     });
+    drain_runtime(runtime, BLOCKING_DRAIN);
     match result {
         Ok(code) => ExitCode::from(reportable_exit_code(code)),
         Err(e) => {
@@ -2565,6 +2622,53 @@ mod tests {
         tokio::time::sleep(super::CLOCK_TICK * 3).await;
         assert_eq!(frozen.lock().unwrap().now_for_test(), start);
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_stage_is_bounded_and_says_so() {
+        use std::time::Duration;
+        let done = super::bounded_stage("a quick stage", Duration::from_secs(5), async { 7 }).await;
+        assert_eq!(done, Some(7));
+        let started = std::time::Instant::now();
+        let late = super::bounded_stage(
+            "a stuck stage",
+            Duration::from_millis(50),
+            std::future::pending::<()>(),
+        )
+        .await;
+        assert_eq!(late, None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_runtime_does_not_wait_for_blocking_tasks_past_its_drain() {
+        use std::time::{Duration, Instant};
+        let build = || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap()
+        };
+        // Nothing left running: it stops at once and reports nothing left behind.
+        let idle = build();
+        let started = Instant::now();
+        assert!(!super::drain_runtime(idle, Duration::from_millis(500)));
+        assert!(started.elapsed() < Duration::from_millis(400));
+        // A blocking task that outlives the drain is left behind, and the stop does not wait.
+        let busy = build();
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        busy.spawn_blocking(move || {
+            let _ = held.recv_timeout(Duration::from_secs(30));
+        });
+        let started = Instant::now();
+        assert!(super::drain_runtime(busy, Duration::from_millis(100)));
+        let took = started.elapsed();
+        assert!(
+            took >= Duration::from_millis(100) && took < Duration::from_secs(2),
+            "{took:?}"
+        );
+        drop(release);
     }
 
     #[test]

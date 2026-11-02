@@ -11,6 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Fixed
 
 - Realtime Database Rules compare snapshots, `auth` and `query` by identity, as the official emulator does: two snapshots are equal when they read the same version of the tree (`data` or `newData`) at the same location, and `query` equals itself. Such a comparison behind a ternary was a rule error that denied the request in both polarities.
+  The production Realtime Database checked on 2026-10-31 load-rejects (400) a direct comparison of snapshots or queries, as fireemu does, and evaluates `auth == auth` as true, matching the official emulator, so the runtime results of comparisons hidden behind a ternary are taken as production's.
 
 ### Changed
 

@@ -44,7 +44,7 @@ impl Drop for Daemon {
 /// Starts `fireemu up` under `ulimit -n DAEMON_NOFILE`, returning it with its control port.
 fn start(hub_port: u16) -> (Daemon, u16) {
     let namespace = TrustedTempDir::new("accept-backoff");
-    let mut child = Command::new("sh")
+    let mut child = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!("ulimit -n {DAEMON_NOFILE} && exec \"$0\" \"$@\""))
         .arg(env!("CARGO_BIN_EXE_fireemu"))

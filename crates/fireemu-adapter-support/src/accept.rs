@@ -89,6 +89,13 @@ pub fn backoff(failures: u32) -> Duration {
         .min(MAX_BACKOFF)
 }
 
+/// Whether the `failures`-th consecutive resource error is reported: only the first of a run, so
+/// a listener stuck out of descriptors does not flood stderr.
+#[must_use]
+pub fn reports(failures: u32) -> bool {
+    failures == 1
+}
+
 /// Calls `accept` until it yields a connection or an error that ends the listener.
 ///
 /// A connection error is skipped at once. A resource error is reported on stderr, tagged with
@@ -107,7 +114,7 @@ where
                 AcceptError::Connection => {}
                 AcceptError::Resources => {
                     resource_failures = resource_failures.saturating_add(1);
-                    if resource_failures == 1 {
+                    if reports(resource_failures) {
                         eprintln!(
                             "[{listener}] cannot accept a connection ({error}); retrying until resources are free"
                         );
@@ -187,6 +194,13 @@ mod tests {
         assert_eq!(backoff(4), Duration::from_millis(800));
         assert_eq!(backoff(5), MAX_BACKOFF);
         assert_eq!(backoff(u32::MAX), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn only_the_first_resource_error_of_a_run_is_reported() {
+        assert!(reports(1));
+        assert!(!reports(2));
+        assert!(!reports(u32::MAX));
     }
 
     /// ACCEPT-2: aborted and reset connections are skipped without waiting, descriptor

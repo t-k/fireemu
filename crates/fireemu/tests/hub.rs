@@ -7,8 +7,10 @@
 
 #[cfg(unix)]
 mod census;
+#[cfg(not(unix))]
 mod scratch;
 
+#[cfg(not(unix))]
 use scratch::Scratch;
 
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -55,6 +57,7 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+#[cfg(not(unix))]
 fn scratch(name: &str) -> Scratch {
     Scratch::new("hub", name)
 }
@@ -119,6 +122,10 @@ fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
     assert_eq!(status, 200, "{method} {path} -> {body}");
     serde_json::from_str(&body).unwrap_or_else(|e| panic!("{method} {path}: {e}\n{body}"))
 }
+
+/// How long `Daemon::cleanup` waits for the daemon to exit on SIGTERM before it kills it. A
+/// daemon stops in milliseconds, so this is only the bound for one that ignores the signal.
+const SIGTERM_GRACE: Duration = Duration::from_secs(5);
 
 /// A daemon serving until it is stopped, with the Hub on `hub_port`.
 struct Daemon {
@@ -354,10 +361,15 @@ impl Daemon {
             .is_ok_and(|metadata| metadata.file_type().is_file());
         let mut exited = self.child.try_wait().is_ok_and(|status| status.is_some());
         if !exited {
-            let _ = Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-            let deadline = Instant::now() + Duration::from_secs(5);
+            #[cfg(unix)]
+            if let Some(pid) = i32::try_from(pid)
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+            {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            }
+            // Only an upper bound: the loop returns as soon as the daemon exits.
+            let deadline = Instant::now() + SIGTERM_GRACE;
             while Instant::now() < deadline {
                 if self.child.try_wait().is_ok_and(|status| status.is_some()) {
                     exited = true;
@@ -391,6 +403,27 @@ impl Daemon {
         status
     }
 
+    /// Fails when `cleanup` had to fall back to SIGKILL, that is when the daemon did not stop
+    /// on SIGTERM within `SIGTERM_GRACE`. Only that fallback sends SIGKILL.
+    fn assert_not_killed(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+            let signal = self
+                .child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.signal());
+            assert_ne!(
+                signal,
+                Some(rustix::process::Signal::KILL.as_raw()),
+                "daemon {} did not exit on SIGTERM within {SIGTERM_GRACE:?} and was killed",
+                self.child.id()
+            );
+        }
+    }
+
     fn stop(mut self) {
         let graceful = self.cleanup();
         assert!(
@@ -398,6 +431,7 @@ impl Daemon {
             "daemon {} survived explicit cleanup",
             self.child.id()
         );
+        self.assert_not_killed();
         if graceful {
             assert!(
                 !self.locator().exists(),
@@ -411,17 +445,18 @@ impl Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.cleanup();
+        // A second panic while unwinding would abort the whole test binary.
+        if !std::thread::panicking() {
+            self.assert_not_killed();
+        }
     }
 }
 
+/// Whether `pid` is still in the process table, zombies included. The census reads `ps`, so
+/// a `kill` binary that is missing or answers differently cannot make a survivor look gone.
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
-    Command::new("/bin/kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    census::find(i32::try_from(pid).expect("a pid fits in i32")).is_some()
 }
 
 #[cfg(unix)]
@@ -735,18 +770,25 @@ fn the_hub_switches_background_triggers_and_says_so() {
         "{body}"
     );
     daemon.stop();
+}
 
-    // With a codebase loaded, both routes answer the official `{"enabled": ...}` body.
+/// With a codebase loaded, both routes answer the official `{"enabled": ...}` body.
+///
+/// The codebase resolves firebase-functions through `tools/sdk-smoke/node_modules`, so this
+/// scenario is ignored by default and the functions-sdk-discovery workflow runs it after
+/// `npm ci`. Run with `--ignored` but without the install, it fails instead of passing
+/// without having started the Functions emulator.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
+fn the_hub_switches_background_triggers_of_a_loaded_codebase() {
     let functions = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tools/sdk-smoke/functions-project");
-    // The codebase resolves firebase-functions through tools/sdk-smoke/node_modules; without
-    // an install this half of the scenario cannot run, and the smoke there covers it instead.
-    if !functions
-        .join("../node_modules/firebase-functions")
-        .is_dir()
-    {
-        return;
-    }
+    let sdk = functions.join("../node_modules/firebase-functions");
+    assert!(
+        sdk.is_dir(),
+        "{} is missing; run `npm ci --prefix tools/sdk-smoke --ignore-scripts` first",
+        sdk.display()
+    );
     let daemon = Daemon::start(
         "demo-hub-triggers-fn",
         &[
@@ -935,14 +977,47 @@ fn hub_mutations_require_a_local_browser_origin_and_the_control_capability() {
     daemon.stop();
 }
 
+/// `fireemu exec` with TMPDIR pointed at `namespace`, where the run writes its Hub locator.
+fn exec_command(namespace: &DaemonNamespace) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+    #[cfg(unix)]
+    command.env("TMPDIR", namespace.path());
+    #[cfg(not(unix))]
+    let _ = namespace;
+    command
+}
+
+/// Where an exec scenario keeps the files its own command writes: its namespace on Unix, where
+/// that is private, and a scratch directory of its own elsewhere, where the namespace is the
+/// shared temp directory and two scenarios would write the same file.
+#[cfg(unix)]
+fn exec_files(namespace: &DaemonNamespace, _label: &str) -> PathBuf {
+    namespace.path()
+}
+
+#[cfg(not(unix))]
+fn exec_files(_namespace: &DaemonNamespace, label: &str) -> (Scratch, PathBuf) {
+    let scratch = scratch(label);
+    let path = scratch.to_path_buf();
+    (scratch, path)
+}
+
 #[test]
 fn exec_exports_the_hub_address_to_its_command() {
-    let dir = scratch("env");
-    let out = dir.join("env.txt");
+    // The run gets its own TMPDIR, so the locator it writes (control token included) never
+    // lands in the shared temp directory and the check below looks where it was written.
+    let namespace = DaemonNamespace::new("hub-exec-env");
+    #[cfg(not(unix))]
+    let (_scratch, files) = exec_files(&namespace, "env");
+    #[cfg(unix)]
+    let files = exec_files(&namespace, "env");
+    let out = files.join("env.txt");
+    let locator = namespace.path().join("hub-demo-hub-env.json");
+    let seen = files.join("locator-seen");
     let (port, output) = (0..8)
         .find_map(|attempt| {
             let port = free_port();
-            let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            let output = exec_command(&namespace)
                 .args([
                     "exec",
                     "--firestore-port",
@@ -961,7 +1036,12 @@ fn exec_exports_the_hub_address_to_its_command() {
                 ])
                 .arg(port.to_string())
                 .args(["--", "/bin/sh", "-c"])
-                .arg(format!("env > {}", out.display()))
+                .arg(format!(
+                    "env > '{}'; if test -f '{}'; then : > '{}'; fi",
+                    out.display(),
+                    locator.display(),
+                    seen.display()
+                ))
                 .stdin(Stdio::null())
                 .output()
                 .unwrap();
@@ -985,16 +1065,24 @@ fn exec_exports_the_hub_address_to_its_command() {
     // it with `new URL("http://" + value)`, so a scheme here would break discovery.
     assert_eq!(env["FIREBASE_EMULATOR_HUB"], format!("127.0.0.1:{port}"));
 
-    // The locator the run wrote is gone with it.
-    let locator = std::env::temp_dir().join("hub-demo-hub-env.json");
+    // The locator was written in the run's own TMPDIR while the command ran, and is gone with it.
+    assert!(
+        seen.exists(),
+        "{} was not written while the command ran",
+        locator.display()
+    );
     assert!(!locator.exists(), "{} outlived exec", locator.display());
 }
 
 #[test]
 fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
-    let dir = scratch("off");
-    let out = dir.join("env.txt");
-    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+    let namespace = DaemonNamespace::new("hub-exec-off");
+    #[cfg(not(unix))]
+    let (_scratch, files) = exec_files(&namespace, "off");
+    #[cfg(unix)]
+    let files = exec_files(&namespace, "off");
+    let out = files.join("env.txt");
+    let output = exec_command(&namespace)
         .args([
             "exec",
             "--firestore-port",
@@ -1029,7 +1117,7 @@ fn turning_the_hub_off_leaves_no_listener_and_no_variable() {
         !text.contains("FIREBASE_EMULATOR_HUB"),
         "the Hub was turned off but its variable was still exported"
     );
-    assert!(!std::env::temp_dir().join("hub-demo-hub-off.json").exists());
+    assert!(!namespace.path().join("hub-demo-hub-off.json").exists());
 }
 
 /// The export route is the one Hub route that writes to disk. Its CSRF wall is the refusal of
@@ -1046,9 +1134,9 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     #[cfg(unix)]
     let dir = trusted.join("export");
     #[cfg(not(unix))]
-    let dir = std::env::temp_dir().join(format!("fireemu-hub-export-{}", std::process::id()));
+    let scratch = scratch("export");
     #[cfg(not(unix))]
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = scratch.join("export");
     let daemon = Daemon::start("demo-hub-export", &[]);
     let port = daemon.hub_port();
     let token = daemon.control_token();
@@ -1114,8 +1202,6 @@ fn the_export_route_requires_the_control_capability_and_refuses_browser_origins(
     );
     assert!(dir.join("firebase-export-metadata.json").is_file());
     drop(daemon);
-    #[cfg(not(unix))]
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// HUBREL-1: the export route takes a path from a client that need not know the daemon's

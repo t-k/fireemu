@@ -13,12 +13,14 @@ on:
       - crates/fireemu/src/config.rs
       - crates/fireemu/src/config_discovery.rs
       - crates/fireemu/src/daemon.rs
+      - crates/fireemu/src/hub.rs
       - crates/fireemu/src/functions*.rs
       - crates/fireemu/tests/functions_discovery.rs
       - crates/fireemu/tests/functions_codebases.rs
       - crates/fireemu/tests/functions_environment.rs
       - crates/fireemu/tests/functions_admin_app_check.rs
       - crates/fireemu/tests/functions_runtime_selection.rs
+      - crates/fireemu/tests/hub.rs
       - crates/fireemu/tests/census/**
       - crates/fireemu-adapter-functions/**
       - crates/fireemu-adapter-http/src/identity_toolkit.rs
@@ -41,12 +43,14 @@ on:
       - crates/fireemu/src/config.rs
       - crates/fireemu/src/config_discovery.rs
       - crates/fireemu/src/daemon.rs
+      - crates/fireemu/src/hub.rs
       - crates/fireemu/src/functions*.rs
       - crates/fireemu/tests/functions_discovery.rs
       - crates/fireemu/tests/functions_codebases.rs
       - crates/fireemu/tests/functions_environment.rs
       - crates/fireemu/tests/functions_admin_app_check.rs
       - crates/fireemu/tests/functions_runtime_selection.rs
+      - crates/fireemu/tests/hub.rs
       - crates/fireemu/tests/census/**
       - crates/fireemu-adapter-functions/**
       - crates/fireemu-adapter-http/src/identity_toolkit.rs
@@ -105,6 +109,8 @@ jobs:
         run: cargo test -p fireemu --test functions_environment -- --include-ignored
       - name: verify Admin SDK App Check verification in HTTP functions
         run: cargo test -p fireemu --test functions_admin_app_check -- --ignored --test-threads=1
+      - name: verify the Hub background-trigger switch with a loaded codebase
+        run: cargo test -p fireemu --test hub -- --ignored --test-threads=1
       - name: verify Node runtime selection with the installed loader
         run: cargo test -p fireemu --test functions_runtime_selection
       - name: verify runner trust boundaries and log attribution

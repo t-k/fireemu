@@ -9858,23 +9858,34 @@ fn query_selectors_reading(
     Ok((api_key, tenant))
 }
 
-fn custom_token_uid(body: &Value) -> Option<String> {
+/// The claims of a request's custom token as routing reads them, before sign-in validates it: a
+/// strict-JSON fake token, or an unsigned JWT for the custom-token audience. Anything else (a
+/// signed token included) is `None` and keeps the default routing.
+fn routing_custom_token_payload(body: &Value) -> Option<JsonValue> {
     let token = str_field(body, "token")?;
-    let payload = if token.trim_start().starts_with('{') {
-        fireemu_core_types::json::parse(token).ok()?
-    } else {
-        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
-        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
-            .then_some(decoded.payload)?
-    };
-    payload
-        .get("uid")
-        .or_else(|| payload.get("user_id"))
-        .and_then(|value| match value {
-            JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
-            JsonValue::Int(value) => Some(value.to_string()),
-            _ => None,
-        })
+    if token.trim_start().starts_with('{') {
+        return fireemu_core_types::json::parse(token).ok();
+    }
+    let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
+    (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
+        .then_some(decoded.payload)
+}
+
+/// A custom token's user: its `uid` claim, else its `user_id`, a string or an integer. Request
+/// routing and sign-in both read the user here, so they cannot disagree on it (ITKT-5).
+fn custom_token_payload_uid(payload: &JsonValue) -> Option<String> {
+    match payload.get("uid").or_else(|| payload.get("user_id"))? {
+        JsonValue::String(uid) => Some(uid.clone()),
+        JsonValue::Int(uid) => Some(uid.to_string()),
+        _ => None,
+    }
+}
+
+fn custom_token_uid(body: &Value) -> Option<String> {
+    routing_custom_token_payload(body)
+        .as_ref()
+        .and_then(custom_token_payload_uid)
+        .filter(|uid| !uid.is_empty())
 }
 
 /// Returns the tenant scope of a syntactically valid custom token. `None` means that the token is
@@ -9889,14 +9900,7 @@ enum CustomTokenTenant {
 }
 
 fn custom_token_tenant(body: &Value) -> Option<CustomTokenTenant> {
-    let token = str_field(body, "token")?;
-    let payload = if token.trim_start().starts_with('{') {
-        fireemu_core_types::json::parse(token).ok()?
-    } else {
-        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
-        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
-            .then_some(decoded.payload)?
-    };
+    let payload = routing_custom_token_payload(body)?;
     match payload.get("tenant_id") {
         None => Some(CustomTokenTenant::ProjectScoped),
         Some(JsonValue::String(tenant)) => Some(CustomTokenTenant::Tenant(tenant.clone())),
@@ -10132,12 +10136,7 @@ fn sign_in_with_custom_token(
             return error(400, "TENANT_ID_MISMATCH");
         }
     }
-    let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
-        Some(JsonValue::String(s)) => Some(s.clone()),
-        Some(JsonValue::Int(i)) => Some(i.to_string()),
-        _ => None,
-    };
-    let Some(uid) = uid else {
+    let Some(uid) = custom_token_payload_uid(&payload) else {
         return error(400, "MISSING_IDENTIFIER");
     };
     // Production bounds the uid to 1..=128 characters (sandbox recording 2026-09-24).

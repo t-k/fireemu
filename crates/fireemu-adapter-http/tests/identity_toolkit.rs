@@ -9340,6 +9340,72 @@ fn custom_token(uid: &str, claims: &Value, exp: i64) -> String {
     }))
 }
 
+/// ITKT-5: a compatibility custom-token exchange is routed to the store holding the token's user
+/// and then signs in that user, and both read the uid alike: a string or an integer `uid`, in a
+/// strict-JSON fake token or an unsigned JWT. Were the routing reading to differ from the
+/// sign-in's (an integer it does not see), the default project would make a new account.
+#[test]
+fn a_routed_custom_token_signs_in_the_user_its_routing_found() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+
+    let mut s = state();
+    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    s.allow_routed_projects = true;
+    // The first Admin write installs the routed project, whose users the exchange may find.
+    for uid in ["12345", "routed-user"] {
+        let (status, made) = admin(
+            &s,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-routed/accounts",
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{made}");
+    }
+    let now = 1_788_004_860;
+    let jwt = |uid: Value| {
+        custom_token_from_payload(&json!({
+            "aud": CUSTOM_TOKEN_AUDIENCE,
+            "iss": "firebase-auth-emulator@example.com",
+            "sub": "firebase-auth-emulator@example.com",
+            "uid": uid,
+            "iat": now,
+            "exp": now + 3600,
+        }))
+    };
+    for (token, uid) in [
+        (r#"{"uid":12345}"#.to_owned(), "12345"),
+        (r#"{"user_id":"routed-user"}"#.to_owned(), "routed-user"),
+        (jwt(json!(12345)), "12345"),
+        (jwt(json!("routed-user")), "routed-user"),
+    ] {
+        // Keyless: an API key selects its own project before this routing applies.
+        let response = handle(
+            &s,
+            "POST",
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        let (status, body) = (response.status, response.body);
+        assert_eq!(status, 200, "{token}: {body}");
+        assert_eq!(body["isNewUser"], false, "{token}: {body}");
+        let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+            .unwrap()
+            .payload;
+        assert_eq!(
+            claims.get("user_id").and_then(|v| v.as_str()),
+            Some(uid),
+            "{token}"
+        );
+        assert_eq!(
+            claims.get("aud").and_then(|v| v.as_str()),
+            Some("demo-routed"),
+            "{token}"
+        );
+    }
+    assert!(s.store.lock().unwrap().user_by_id("12345").is_none());
+    assert!(s.store.lock().unwrap().user_by_id("routed-user").is_none());
+}
+
 fn custom_token_from_payload(payload: &Value) -> String {
     use fireemu_core_auth::jwt::base64url_encode;
     let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);

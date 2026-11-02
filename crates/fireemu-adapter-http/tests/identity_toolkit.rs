@@ -10596,11 +10596,12 @@ fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
     );
     let uid = looked["users"][0]["localId"].as_str().unwrap().to_owned();
     let token = custom_token(&uid, &json!({}), now_secs + 3600);
-    let (_, body) = post(
+    let (status, body) = post(
         &s,
         &format!("{V1}/accounts:signInWithCustomToken"),
         &json!({"token": token}),
     );
+    assert_eq!(status, 200, "{body}");
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -10611,7 +10612,12 @@ fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
             .and_then(|v| v.as_str()),
         Some("custom")
     );
-    assert!(looked["users"][0]["lastLoginAt"].is_string() || body["localId"] == uid);
+    // The session is the existing password user's, not a new account.
+    assert_eq!(body["isNewUser"], false, "{body}");
+    assert_eq!(
+        decoded.payload.get("user_id").and_then(|v| v.as_str()),
+        Some(uid.as_str())
+    );
 }
 
 /// Account records and sign-in bodies follow production's field omissions and additions

@@ -8,18 +8,31 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
-### Fixed
+## [0.42.0] - 2026-11-02
 
-- Realtime Database Rules compare snapshots, `auth` and `query` by identity, as the official emulator does: two snapshots are equal when they read the same version of the tree (`data` or `newData`) at the same location, and `query` equals itself. Such a comparison behind a ternary was a rule error that denied the request in both polarities.
-  The production Realtime Database checked on 2026-10-31 load-rejects (400) a direct comparison of snapshots or queries, as fireemu does, and evaluates `auth == auth` as true, matching the official emulator, so the runtime results of comparisons hidden behind a ternary are taken as production's.
+### Added
+
+- Firestore Enterprise `ExecutePipeline` runs with the transaction and read-time selectors of `documents`, `collection` and `collection_group` inputs, over native gRPC and REST: a read time, an existing transaction, a new transaction (default, read-only or read-write) and auto-commit of an existing or new transaction, a default or read-only one included. The answers follow the recordings taken on 2026-11-01: an existing or read-time snapshot reports the execution time of that snapshot, and an auto-committed answer carries no transaction. A new transaction that is not auto-committed is announced once, on the first response; the stream owns it until the client has received it, and a transaction the caller passed in is never rolled back by the stream. A read time with auto-commit, and `database`, `union` and `search` inputs with a selector, keep their refusal.
+- `daemon.clock` (`"realtime"` or `"frozen"`) chooses how the virtual clock moves; see Changed.
+- `firebase.json` accepts `predeploy` and `postdeploy` hooks in the `firestore` and `storage` sections, as firebase-tools 15.28.2 does. They are ignored, like the hooks of the `database` and `functions` sections. Any other unknown key is still refused.
+- Go, Java and Python Admin SDK smoke suites run under `fireemu exec` (`tools/sdk-smoke-go`, `tools/sdk-smoke-java`, `tools/sdk-smoke-python`), in addition to the Node suites.
 
 ### Changed
 
 - The daemon's virtual clock now follows real time from the daemon's start time by default. `clock:advance`, `clock:advanceTo` and `clock:set` add an offset on top. Realtime Database `ServerValue.TIMESTAMP`, Firestore and Storage times, token expiry, Rules `request.time` and schedules all read this clock, so they move as they do in production. A pinned `daemon.clockStart` still gives a clock that stands still until it is moved, so reproducible runs and `fireemu/testing` worlds are unchanged; `daemon.clock` (`"realtime"` or `"frozen"`) chooses either way explicitly.
+- Out-of-order WebChannel forward maps are bounded by bytes per session (128 MiB, sized from the SDK's ten pending write batches). The Hub-wide limit that coupled independent sessions is removed.
 
 ### Fixed
 
+- Committing a read-only transaction after a query that returned rows no longer aborts with "Transaction was aborted due to a concurrent modification." A read-only snapshot keeps no query observation, and the commit compared the query's current rows with that empty observation.
 - `fireemu up` stops within a fraction of a second of SIGTERM or SIGINT. It used to wait, for up to several seconds in a debug build, for the App Check signing key that is generated in the background; that key generation now runs on a thread of its own that the exit ends. Exports and snapshot copies in flight still finish. The stages that wait on other tasks during shutdown (Functions, the Pub/Sub push dispatcher, the servers) now have bounds and say so on stderr when they reach one.
+- Realtime Database Rules compare snapshots, `auth` and `query` by identity, as the official emulator does: two snapshots are equal when they read the same version of the tree (`data` or `newData`) at the same location, and `query` equals itself. Such a comparison behind a ternary was a rule error that denied the request in both polarities.
+  The production Realtime Database checked on 2026-10-31 load-rejects (400) a direct comparison of snapshots or queries, as fireemu does, and evaluates `auth == auth` as true, matching the official emulator, so the runtime results of comparisons hidden behind a ternary are taken as production's.
+- Cloud Storage forwards `x-goog-api-client`, so the anonymous XML object download of Google client libraries (the Go library, for one) is admitted.
+- A Storage list with a page token that cannot be a folded prefix, or with `maxResults=0`, no longer walks the whole bucket; the answers are unchanged.
+- Storage path segments are decoded with the shared percent codec: a malformed escape such as `%+f` is refused with 400 instead of decoding to a control character and being routed.
+- REST `runQuery`, `runAggregationQuery` and `partitionQuery` accept `requestOptions` (the strict transcoder refused it as an unknown name). It has no local effect.
+- The servers keep serving through transient `accept` errors (`ECONNABORTED`, `EMFILE`, `ENFILE` and the like) with a bounded backoff, instead of one error stopping the whole suite and signalling the `exec` child.
 
 ## [0.41.0] - 2026-10-31
 
@@ -1116,7 +1129,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/t-k/fireemu/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/t-k/fireemu/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/t-k/fireemu/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/t-k/fireemu/compare/v0.38.1...v0.39.0

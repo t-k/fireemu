@@ -45,6 +45,7 @@ use fireemu_core_storage::store::{
     StorageError, StorageEvent, StorageState as ObjectStore, UploadAdmission, UploadId,
     UploadOptions, UploadPhase, VersionsCursor, DEFAULT_LIST_PAGE_SIZE,
 };
+use fireemu_core_types::codec::{percent_decode_bytes, percent_escapes_are_well_formed, PlusMode};
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::ids::ProjectId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -1558,25 +1559,17 @@ fn fb_core_err(e: StorageError) -> StorageResponse {
 // decoding helpers
 // ------------------------------------------------------------------------------------------
 
-/// Percent-decodes one URL segment exactly once (invalid UTF-8 is an error).
+/// Percent-decodes one URL segment exactly once.
+///
+/// A malformed escape and a sequence that is not UTF-8 are errors. The escape itself is
+/// the shared codec's: two ASCII hexadecimal digits, so `%+f` is malformed, and `+` stays a
+/// plus.
 fn decode_segment(s: &str) -> Result<String, String> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = s
-                .get(i + 1..i + 3)
-                .and_then(|h| u8::from_str_radix(h, 16).ok())
-                .ok_or_else(|| "malformed percent escape".to_owned())?;
-            out.push(hex);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
+    if !percent_escapes_are_well_formed(s) {
+        return Err("malformed percent escape".to_owned());
     }
-    String::from_utf8(out).map_err(|_| "path is not UTF-8".to_owned())
+    String::from_utf8(percent_decode_bytes(s, PlusMode::Literal))
+        .map_err(|_| "path is not UTF-8".to_owned())
 }
 
 fn form_decode(s: &str) -> String {

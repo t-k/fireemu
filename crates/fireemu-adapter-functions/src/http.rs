@@ -1845,7 +1845,9 @@ async fn serve_surface(
 ) -> std::io::Result<()> {
     // The channels created through the strict Eventarc surface live as long as the listener.
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (stream, peer) =
+            fireemu_adapter_support::accept::accept_with_backoff("functions", || listener.accept())
+                .await?;
         let connection = admission
             .connections
             .clone()

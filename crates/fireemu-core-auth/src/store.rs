@@ -3212,6 +3212,19 @@ impl AuthStore {
             .fold(0u64, u64::saturating_add)
     }
 
+    /// Number of live refresh sessions in this namespace.
+    #[must_use]
+    pub fn refresh_session_count(&self) -> usize {
+        self.refresh_tokens.len()
+    }
+
+    /// The creation sequence the next account will take. An account whose
+    /// [`UserRecord::sequence`] is at least this value was created after it was read.
+    #[must_use]
+    pub fn next_user_sequence(&self) -> u64 {
+        self.next_sequence.saturating_add(1)
+    }
+
     /// Number of copy-on-write transient registries this store shares with `other`.
     ///
     /// The seven registries are refresh sessions, deletion digests, their per-user index,

@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "auth_index_scaling"
 harness = false
+
+[[bench]]
+name = "auth_blocking_hook_scaling"
+harness = false

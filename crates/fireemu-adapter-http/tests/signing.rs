@@ -207,7 +207,8 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
     );
     assert_eq!(refreshed.status, 200, "{}", refreshed.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 3);
+    // One signature serves both `id_token` and `access_token` (ITKT-6).
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 2);
 
     let cookie = handle_with(
         &state,
@@ -220,7 +221,7 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"idToken": response.body["idToken"], "validDuration": "3600"}),
     );
     assert_eq!(cookie.status, 200, "{}", cookie.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 4);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 3);
 
     state.blocking = Some(Arc::new(PassthroughBlockingHook));
     let blocked = handle(
@@ -230,7 +231,76 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
         &json!({"email": "outside-lock-blocking@example.com", "password": "password1"}),
     );
     assert_eq!(blocked.status, 200, "{}", blocked.body);
-    assert_eq!(signer.calls.load(Ordering::Relaxed), 5);
+    assert_eq!(signer.calls.load(Ordering::Relaxed), 4);
+}
+
+/// Counts private-key operations of a real RS256 signer.
+struct CountingSigner {
+    inner: Arc<RsaSigner>,
+    signs: AtomicUsize,
+    verifies: AtomicUsize,
+}
+
+impl IdTokenSigner for CountingSigner {
+    fn alg(&self) -> &'static str {
+        self.inner.alg()
+    }
+
+    fn kid(&self) -> &str {
+        self.inner.kid()
+    }
+
+    fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
+        self.signs.fetch_add(1, Ordering::SeqCst);
+        self.inner.sign(signing_input)
+    }
+
+    fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.verifies.fetch_add(1, Ordering::SeqCst);
+        self.inner.verify(signing_input, signature)
+    }
+
+    fn public_jwk_json(&self) -> String {
+        self.inner.public_jwk_json()
+    }
+}
+
+/// ITKT-6: a refresh answers the same ID token as `id_token` and `access_token`; it is signed
+/// once and both fields carry that one signed token.
+#[test]
+fn a_refresh_signs_its_id_token_once() {
+    let store = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(47),
+        TotpPolicy::default(),
+    )));
+    let signer = Arc::new(CountingSigner {
+        inner: fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX),
+        signs: AtomicUsize::new(0),
+        verifies: AtomicUsize::new(0),
+    });
+    store.lock().unwrap().set_signer(signer.clone());
+    let state = auth_state(store);
+    let signed_up = handle(
+        &state,
+        "POST",
+        "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+        &json!({"email": "sign-once@example.com", "password": "password1"}),
+    );
+    assert_eq!(signed_up.status, 200, "{}", signed_up.body);
+    let before = signer.signs.load(Ordering::SeqCst);
+
+    let refreshed = handle(
+        &state,
+        "POST",
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": signed_up.body["refreshToken"]}),
+    );
+    assert_eq!(refreshed.status, 200, "{}", refreshed.body);
+    assert_eq!(signer.signs.load(Ordering::SeqCst) - before, 1);
+    assert_eq!(refreshed.body["id_token"], refreshed.body["access_token"]);
+    let token = refreshed.body["id_token"].as_str().unwrap();
+    assert!(verify_id_token(token, &state.store.lock().unwrap(), START).is_ok());
 }
 
 #[test]
@@ -692,4 +762,64 @@ fn a_lazy_app_check_signer_generates_its_key_on_first_use_and_matches_the_eager_
     assert!(format!("{lazy:?}").contains(&kid));
     assert!(!format!("{lazy:?}").contains("not generated yet"));
     assert!(!format!("{lazy:?}").contains("seed"));
+}
+
+/// ITKT-8: an account request's ID token is checked twice, whatever the profile and whether a
+/// registry routes it: once to route the request (decoded with the default store's signer) and
+/// once by the handler against the selected store. Each routing helper used to decode it again.
+#[test]
+fn an_id_token_is_decoded_once_for_routing_and_verified_once_by_the_handler() {
+    for (registry, emulator_profile) in [(false, true), (true, true), (true, false)] {
+        let store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(53),
+            TotpPolicy::default(),
+        )));
+        let signer = Arc::new(CountingSigner {
+            inner: fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX),
+            signs: AtomicUsize::new(0),
+            verifies: AtomicUsize::new(0),
+        });
+        store.lock().unwrap().set_signer(signer.clone());
+        let mut state = auth_state(store.clone());
+        state.stateless_refresh_tokens = emulator_profile;
+        if registry {
+            state.registry = Some(Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+                "demo-app", store,
+            )));
+        }
+        let signed_up = handle(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+            &json!({"email": "decode-once@example.com", "password": "password1", "returnSecureToken": true}),
+        );
+        assert_eq!(signed_up.status, 200, "{}", signed_up.body);
+        let id_token = &signed_up.body["idToken"];
+        for (method, body) in [
+            ("accounts:lookup", json!({"idToken": id_token})),
+            (
+                "accounts:update",
+                json!({"idToken": id_token, "displayName": "x"}),
+            ),
+            (
+                "accounts:sendOobCode",
+                json!({"idToken": id_token, "requestType": "VERIFY_EMAIL"}),
+            ),
+        ] {
+            let before = signer.verifies.load(Ordering::SeqCst);
+            let response = handle(
+                &state,
+                "POST",
+                &format!("/identitytoolkit.googleapis.com/v1/{method}?key=k"),
+                &body,
+            );
+            assert_eq!(response.status, 200, "{method}: {}", response.body);
+            assert_eq!(
+                signer.verifies.load(Ordering::SeqCst) - before,
+                2,
+                "registry {registry}, emulator profile {emulator_profile}, {method}"
+            );
+        }
+    }
 }

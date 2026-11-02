@@ -420,7 +420,9 @@ async fn serve_inner(
         ))
     });
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
+        let (stream, peer_addr) =
+            fireemu_adapter_support::accept::accept_with_backoff("http", || listener.accept())
+                .await?;
         let peer_ip = Some(peer_addr.ip().to_string());
         let remote_peer = is_remote_peer(peer_addr.ip());
         let state = state.clone();

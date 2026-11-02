@@ -65,15 +65,17 @@ module ActionsSecurityContract
       end
     end
     if name == "ci.yml"
-      # The Python Admin SDK job runs third-party SDK code under `fireemu exec`, like sdk-latest.
-      job = jobs.fetch("sdk-smoke-python")
-      effective = job.fetch("cache-mode", workflow["cache-mode"])
-      errors << "sdk-smoke-python must have effective read-only cache access" unless %w[read none].include?(effective)
-      steps = job.fetch("steps")
-      checkout = steps.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
-      errors << "sdk-smoke-python checkout must not persist credentials" unless checkout&.dig("with", "persist-credentials") == false
-      cache = steps.find { |step| step["uses"].to_s.start_with?("Swatinem/rust-cache@") }
-      errors << "sdk-smoke-python cache action must not save" unless cache&.dig("with", "save-if").to_s == "false"
+      # The Python and Go Admin SDK jobs run third-party SDK code under `fireemu exec`, like sdk-latest.
+      %w[sdk-smoke-python sdk-smoke-go].each do |smoke|
+        job = jobs.fetch(smoke)
+        effective = job.fetch("cache-mode", workflow["cache-mode"])
+        errors << "#{smoke} must have effective read-only cache access" unless %w[read none].include?(effective)
+        steps = job.fetch("steps")
+        checkout = steps.find { |step| step["uses"].to_s.start_with?("actions/checkout@") }
+        errors << "#{smoke} checkout must not persist credentials" unless checkout&.dig("with", "persist-credentials") == false
+        cache = steps.find { |step| step["uses"].to_s.start_with?("Swatinem/rust-cache@") }
+        errors << "#{smoke} cache action must not save" unless cache&.dig("with", "save-if").to_s == "false"
+      end
     end
     if name == "release.yml"
       jobs.each do |job_name, job|

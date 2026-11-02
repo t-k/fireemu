@@ -1,0 +1,73 @@
+name: sdk-smoke-java
+
+# tools/sdk-smoke-java: the Java Admin SDK (firebase-admin with google-cloud-firestore and
+# google-cloud-storage) against fireemu built from this commit, under `fireemu exec --project
+# demo-app` with the environment the command really receives. The offline guard tests run
+# first. Gradle checks its distribution against distributionSha256Sum and every resolved
+# artifact against gradle/verification-metadata.xml; nothing is restored from or saved to a
+# dependency cache, and no credential of any kind is configured.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/sdk-smoke-java.yml
+      - tools/sdk-smoke-java/**
+      - crates/**
+      - Cargo.lock
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sdk-smoke-java.yml
+      - tools/sdk-smoke-java/**
+      - crates/**
+      - Cargo.lock
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  java-admin-sdk-smoke:
+    # Bound cache tokens even if SDK or build code calls the cache API directly.
+    cache-mode: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: sdk-smoke-java
+          save-if: "false"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: build fireemu from this commit
+        run: cargo build --locked -p fireemu
+      # The wrapper jar is the one Gradle publishes for the version in
+      # gradle-wrapper.properties (https://services.gradle.org/distributions/gradle-9.8.2-wrapper.jar.sha256).
+      - name: the committed Gradle wrapper is the published one
+        run: echo "3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98  tools/sdk-smoke-java/gradle/wrapper/gradle-wrapper.jar" | sha256sum --check --strict
+      - name: guard tests (offline) and the smoke build
+        working-directory: tools/sdk-smoke-java
+        run: ./gradlew --no-daemon test installDist
+      # The default configuration (no config file; the default profile is strict). The smoke's own
+      # clock checks need an unpinned clock, which is why it does not reuse
+      # tools/sdk-smoke/fireemu.smoke.json.
+      - name: Java Admin SDK smoke under fireemu exec
+        run: |
+          set -eu
+          bin="$PWD/target/debug/fireemu"
+          smoke="$PWD/tools/sdk-smoke-java/build/install/sdk-smoke-java/bin/sdk-smoke-java"
+          cd "$RUNNER_TEMP"
+          "$bin" exec --project demo-app --hub-port 0 -- "$smoke"

@@ -9857,3 +9857,87 @@ fn signed_xml_put_does_not_capture_unknown_api_routes() {
         );
     }
 }
+
+/// PCT-1 for Storage. A percent escape in a path segment is two ASCII hexadecimal digits
+/// and nothing else, as `fireemu_core_types::codec` defines it, so `%+f` is a malformed
+/// escape and the request is refused with 400 like `%zz` is. A hand-rolled decoder used
+/// `u8::from_str_radix`, which accepts a leading `+`, and read `%+f` as the byte 0x0F.
+#[test]
+fn a_storage_path_segment_takes_two_hexadecimal_digits_per_escape() {
+    let s = state(None);
+    let owner = [("authorization", "Bearer owner")];
+    let status = |path: String| handle(&s, req("GET", &path, &owner, b"")).status;
+    for malformed in ["a%+fb", "a%zzb", "a%2", "a%", "a%FFb"] {
+        for path in [
+            format!("/v0/b/{BUCKET}/o/{malformed}"),
+            format!("/storage/v1/b/{BUCKET}/o/{malformed}"),
+            format!("/{BUCKET}/{malformed}"),
+        ] {
+            assert_eq!(status(path.clone()), 400, "{path}");
+        }
+    }
+    // A well-formed escape and a literal plus still route; the object is simply missing.
+    for name in ["a%2Bb", "a+b", "a%0fb"] {
+        for path in [
+            format!("/v0/b/{BUCKET}/o/{name}"),
+            format!("/storage/v1/b/{BUCKET}/o/{name}"),
+            format!("/{BUCKET}/{name}"),
+        ] {
+            assert_eq!(status(path.clone()), 404, "{path}");
+        }
+    }
+}
+
+/// PCT-1 for Storage, by content: distinct objects whose names differ only in how a plus, a space
+/// and an escape are spelled come back by the right path. `%2B` is a plus, a literal `+` stays a
+/// plus (it is not a space, as in a query string), and an escape is decoded exactly once.
+#[test]
+fn a_storage_path_segment_decodes_to_the_object_it_names() {
+    let s = state(None);
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    // `a%2Bb` is the literal name of the third object: its path spelling `a%252Bb` decodes once.
+    let objects = [
+        ("a+b", "plus"),
+        ("a b", "space"),
+        ("a%2Bb", "escape-left-alone"),
+    ];
+    {
+        let mut store = s.store.lock().unwrap();
+        for (name, content) in objects {
+            store
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(name).unwrap(),
+                    content.as_bytes().to_vec(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+    }
+    let owner = [("authorization", "Bearer owner")];
+    let read = |path: String| {
+        let response = handle(&s, req("GET", &path, &owner, b""));
+        assert_eq!(response.status, 200, "{path}");
+        String::from_utf8(response.body.to_vec()).unwrap()
+    };
+    for (spelling, expected) in [
+        ("a%2Bb", "plus"),
+        ("a%2bb", "plus"),
+        ("a+b", "plus"),
+        ("a%20b", "space"),
+        ("a%252Bb", "escape-left-alone"),
+    ] {
+        assert_eq!(
+            read(format!("/storage/v1/b/{BUCKET}/o/{spelling}?alt=media")),
+            expected,
+            "JSON API {spelling}"
+        );
+        assert_eq!(
+            read(format!("/{BUCKET}/{spelling}")),
+            expected,
+            "XML {spelling}"
+        );
+    }
+}

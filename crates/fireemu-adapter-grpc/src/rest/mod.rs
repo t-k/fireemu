@@ -1875,6 +1875,7 @@ impl RestState {
                 "pageToken",
                 "pageSize",
                 "readTime",
+                "requestOptions",
             ],
         )
         .map_err(|e| bad(&e))?;
@@ -1925,7 +1926,8 @@ impl RestState {
             consistency_selector: json::read_time_from_json(body)
                 .map_err(|e| bad(&e))?
                 .map(pb::partition_query_request::ConsistencySelector::ReadTime),
-            request_options: None,
+            request_options: request_options_from_json(body.get("requestOptions"))
+                .map_err(|e| bad(&e))?,
         })?;
         // proto3 JSON: an empty list and a false `before` are left out, as production does.
         let mut out = json!({});
@@ -2105,6 +2107,7 @@ impl RestState {
                 "newTransaction",
                 "readTime",
                 "explainOptions",
+                "requestOptions",
             ],
         )
         .map_err(|e| bad(&e))?;
@@ -2144,7 +2147,8 @@ impl RestState {
         let req = pb::RunQueryRequest {
             parent: resource.to_owned(),
             explain_options,
-            request_options: None,
+            request_options: request_options_from_json(body.get("requestOptions"))
+                .map_err(|e| bad(&e))?,
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 structured,
             )),
@@ -2184,6 +2188,7 @@ impl RestState {
         Ok(ok(Value::Array(out)))
     }
 
+    #[allow(clippy::too_many_lines)] // Keep the request decoding and refusal mapping in one entry point.
     fn run_aggregation_query(
         &self,
         principal: &Caller,
@@ -2198,6 +2203,7 @@ impl RestState {
                 "newTransaction",
                 "readTime",
                 "explainOptions",
+                "requestOptions",
             ],
         )
         .map_err(|e| bad(&e))?;
@@ -2252,7 +2258,8 @@ impl RestState {
         let req = pb::RunAggregationQueryRequest {
             parent: resource.to_owned(),
             explain_options,
-            request_options: None,
+            request_options: request_options_from_json(body.get("requestOptions"))
+                .map_err(|e| bad(&e))?,
             query_type: Some(
                 pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
                     aggregation,

@@ -104,7 +104,7 @@ The Kani CI gate runs the pinned supported verifier through `verification/kani/r
 | Index field mode | Ascending, Descending, Contains or Vector with dimension 3 |
 | Order direction | Ascending or Descending |
 
-The proof uses fixed-capacity stack arrays with borrowed prefixes and unwind bound 8. It retains unwinding assertions and the default safety and automatic assertion-reachability checks. Twelve explicit covers exercise collection/scope refusal, equality-prefix membership and mode refusal, contains and suffix refusal, explicit/implicit-name refusal, and successful explicit-name, implicit-name, empty/default-name and contains cases.
+The proof uses fixed-capacity stack arrays with borrowed prefixes and unwind bound 6, the least bound under which every unwinding assertion holds (the five-slot field array needs five iterations plus the exit test). It retains unwinding assertions and the default safety and automatic assertion-reachability checks. Twelve explicit covers exercise collection/scope refusal, equality-prefix membership and mode refusal, contains and suffix refusal, explicit/implicit-name refusal, and successful explicit-name, implicit-name, empty/default-name and contains cases.
 
 Runtime FieldPath/string identity adaptation, query normalization, automatic-index selection and merge coverage remain outside this formal claim. The 128-case native bridge checks normalization and full public outcomes separately; those checks do not establish a formal proof of these layers. INV-INDEX-001 therefore remains partial.
 

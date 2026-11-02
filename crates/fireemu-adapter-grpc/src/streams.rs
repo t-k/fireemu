@@ -635,13 +635,14 @@ pub(crate) async fn listen_stream_observed(
                             events = ListenEvents::Database(ctx.local.subscribe_listen(&database));
                         }
                     }
-                    let result = handle_listen_request(
+                    let result = handle_listen_request_with_events(
                         &ctx,
                         &mut parent,
                         &mut targets,
                         &req,
                         &mut database_hash_cache,
                         &mut last_snapshot_version,
+                        Some(&mut events),
                         &mut out,
                     ).map(|()| true);
                     request = Some(req);
@@ -811,6 +812,45 @@ fn merge_refresh_event(
     }
 }
 
+/// The refresh an added target takes. The commits queued on the stream's subscription are
+/// coalesced as the stream loop's commit branch coalesces them, so the targets already current
+/// follow them by their changed paths instead of re-running their queries. The queue is read
+/// only once the target is accepted, so a refused target never takes commits the next refresh
+/// needs. A commit that lands after this read and before the snapshot leaves the delta short of
+/// the snapshot version, and `complete_delta_paths` then refreshes every target in full.
+fn added_target_input(
+    events: Option<&mut ListenEvents>,
+    parent: &Parent,
+    last_snapshot_version: Option<CommitVersion>,
+) -> RefreshInput {
+    events
+        .and_then(|events| queued_refresh_input(events, Some(parent), last_snapshot_version))
+        .unwrap_or(RefreshInput::AddedTarget)
+}
+
+/// The commits already queued on the stream's subscription, coalesced as the commit branch of
+/// the stream loop coalesces them. `None` when none of them is past `last_snapshot_version`.
+fn queued_refresh_input(
+    events: &mut ListenEvents,
+    parent: Option<&Parent>,
+    last_snapshot_version: Option<CommitVersion>,
+) -> Option<RefreshInput> {
+    let mut input = None;
+    loop {
+        match events.try_recv() {
+            Ok(event) => merge_refresh_event(&mut input, parent, last_snapshot_version, &event),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                input = Some(RefreshInput::Full);
+            }
+            Err(
+                tokio::sync::broadcast::error::TryRecvError::Empty
+                | tokio::sync::broadcast::error::TryRecvError::Closed,
+            ) => return input,
+        }
+    }
+}
+
+#[cfg(test)]
 fn handle_listen_request(
     ctx: &StreamContext,
     parent: &mut Option<Parent>,
@@ -818,6 +858,33 @@ fn handle_listen_request(
     req: &pb::ListenRequest,
     database_hash_cache: &mut Option<DatabaseHashCache>,
     last_snapshot_version: &mut Option<CommitVersion>,
+    out: &mut Vec<PendingListenResponse>,
+) -> Result<(), Status> {
+    handle_listen_request_with_events(
+        ctx,
+        parent,
+        targets,
+        req,
+        database_hash_cache,
+        last_snapshot_version,
+        None,
+        out,
+    )
+}
+
+/// Applies one `Listen` request. `events` is the stream's commit subscription: an added target
+/// takes the commits queued on it, so the targets already current are brought to the new
+/// snapshot by the changed paths, as a commit refresh brings them, instead of by re-running
+/// their queries.
+#[allow(clippy::too_many_arguments)]
+fn handle_listen_request_with_events(
+    ctx: &StreamContext,
+    parent: &mut Option<Parent>,
+    targets: &mut BTreeMap<i32, TargetState>,
+    req: &pb::ListenRequest,
+    database_hash_cache: &mut Option<DatabaseHashCache>,
+    last_snapshot_version: &mut Option<CommitVersion>,
+    events: Option<&mut ListenEvents>,
     out: &mut Vec<PendingListenResponse>,
 ) -> Result<(), Status> {
     if parent.is_none() {
@@ -911,11 +978,12 @@ fn handle_listen_request(
                 },
             );
             // Every target is brought to the same snapshot before one global boundary.
+            let input = added_target_input(events, parent, *last_snapshot_version);
             refresh_all(
                 ctx,
                 Some(parent),
                 targets,
-                RefreshInput::AddedTarget,
+                input,
                 database_hash_cache,
                 last_snapshot_version,
                 out,
@@ -3615,6 +3683,126 @@ mod refresh_tests {
                     .expect("unbounded query stays incremental");
         }
         assert_eq!(examined, 50);
+    }
+
+    fn delete(relative: &str) -> Write {
+        Write {
+            op: WriteOp::Delete {
+                path: path(relative),
+            },
+            precondition: None,
+            transforms: Vec::new(),
+        }
+    }
+
+    /// Encoded responses with each resume token replaced by the order it first appeared in:
+    /// tokens differ between backends, their positions in the response sequence do not.
+    fn normalized_responses(
+        out: Vec<PendingListenResponse>,
+        tokens: &mut Vec<Vec<u8>>,
+    ) -> Vec<pb::ListenResponse> {
+        out.into_iter()
+            .map(|response| {
+                let mut response = response.encode();
+                if let Some(pb::listen_response::ResponseType::TargetChange(change)) =
+                    &mut response.response_type
+                {
+                    if !change.resume_token.is_empty() {
+                        let index = tokens
+                            .iter()
+                            .position(|token| *token == change.resume_token)
+                            .unwrap_or_else(|| {
+                                tokens.push(change.resume_token.clone());
+                                tokens.len() - 1
+                            });
+                        change.resume_token = index.to_be_bytes().to_vec();
+                    }
+                }
+                response
+            })
+            .collect()
+    }
+
+    /// Fifty targets added one at a time, each after a commit has moved the snapshot version:
+    /// only the added target runs its query, and every response (the existing targets' changes,
+    /// CURRENT and the boundary) is the one a full refresh of every target gives.
+    #[test]
+    fn fifty_targets_added_after_commits_run_fifty_queries() {
+        let mut fixture = generation_fixture();
+        let mut reference = generation_fixture();
+        let parent = fixture.parent.clone().unwrap();
+        let mut events = ListenEvents::Database(fixture.context.local.subscribe_listen(&parent));
+        let (mut tokens, mut reference_tokens) = (Vec::new(), Vec::new());
+        let (mut full_queries, mut existing_changes, mut existing_removals) = (0, 0, 0);
+        for fixture in [&mut fixture, &mut reference] {
+            fixture.targets.clear();
+            fixture.last_snapshot_version = None;
+        }
+        for id in 1..=50 {
+            let mut writes = vec![set(&format!("restored/r{id:02}"))];
+            if id % 5 == 0 {
+                writes.push(delete(&format!("restored/r{:02}", id - 3)));
+            }
+            for fixture in [&fixture, &reference] {
+                fixture
+                    .context
+                    .local
+                    .commit_writes(fixture.parent.as_ref().unwrap(), &writes, &|_, _, _| Ok(()))
+                    .unwrap();
+            }
+            let request = query_request(id, if id % 2 == 0 { "restored" } else { "items" });
+            let mut out = Vec::new();
+            FULL_TARGET_REFRESHES.with(|counter| counter.set(0));
+            handle_listen_request_with_events(
+                &fixture.context,
+                &mut fixture.parent,
+                &mut fixture.targets,
+                &request,
+                &mut fixture.cache,
+                &mut fixture.last_snapshot_version,
+                Some(&mut events),
+                &mut out,
+            )
+            .unwrap();
+            full_queries += FULL_TARGET_REFRESHES.with(std::cell::Cell::get);
+            let mut expected = Vec::new();
+            handle_listen_request(
+                &reference.context,
+                &mut reference.parent,
+                &mut reference.targets,
+                &request,
+                &mut reference.cache,
+                &mut reference.last_snapshot_version,
+                &mut expected,
+            )
+            .unwrap();
+            let out = normalized_responses(out, &mut tokens);
+            // The existing targets do follow the commits: a change and the removals reach them.
+            for response in &out {
+                match &response.response_type {
+                    Some(pb::listen_response::ResponseType::DocumentChange(change))
+                        if change.target_ids.iter().any(|target| *target != id) =>
+                    {
+                        existing_changes += 1;
+                    }
+                    Some(pb::listen_response::ResponseType::DocumentDelete(_)) => {
+                        existing_removals += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                out,
+                normalized_responses(expected, &mut reference_tokens),
+                "responses to adding target {id}"
+            );
+        }
+        assert!(existing_changes > 0 && existing_removals > 0);
+        assert_eq!(
+            fixture.last_snapshot_version,
+            reference.last_snapshot_version
+        );
+        assert_eq!(full_queries, 50);
     }
     fn global_boundary(out: &[PendingListenResponse]) -> (&[u8], Option<prost_types::Timestamp>) {
         out.iter()

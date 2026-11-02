@@ -1004,10 +1004,16 @@ fn sign_response_tokens(
     let Some(object) = response.body.as_object_mut() else {
         return response;
     };
+    // A refresh answers one token as both `id_token` and `access_token`; it is signed once.
+    let mut signed_tokens: Vec<(String, String)> = Vec::new();
     for field in ["idToken", "id_token", "access_token", "sessionCookie"] {
         let Some(Value::String(token)) = object.get_mut(field) else {
             continue;
         };
+        if let Some((_, reused)) = signed_tokens.iter().find(|(unsigned, _)| unsigned == token) {
+            token.clone_from(reused);
+            continue;
+        }
         let mut parts = token.split('.');
         let Some(header) = parts.next() else {
             return error(500, "INTERNAL");
@@ -1036,7 +1042,8 @@ fn sign_response_tokens(
         let Ok(payload) = std::str::from_utf8(&payload) else {
             return error(500, "INTERNAL");
         };
-        *token = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
+        let result = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
+        signed_tokens.push((std::mem::replace(token, result.clone()), result));
     }
     response
 }
@@ -2448,17 +2455,17 @@ impl Drop for GeneratedLocalIdReservation {
 /// has and `before` did not, with its address and the kind of mail. An unknown address that
 /// improved email privacy answers without a code sends nothing, and an email verification is
 /// not a mail Identity Platform runs `beforeSendEmail` for.
-fn mail_about_to_be_sent(before: &AuthStore, after: &AuthStore) -> Option<(String, &'static str)> {
+fn mail_about_to_be_sent(
+    issued_before: impl Fn(&str) -> bool,
+    after: &AuthStore,
+) -> Option<(String, &'static str)> {
     after.oob_codes().into_iter().find_map(|code| {
         let email_type = match code.request_type {
             OobRequestType::PasswordReset => "PASSWORD_RESET",
             OobRequestType::EmailSignIn => "EMAIL_SIGN_IN",
             OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => return None,
         };
-        before
-            .oob_code(&code.code)
-            .is_none()
-            .then(|| (code.email.clone(), email_type))
+        (!issued_before(&code.code)).then(|| (code.email.clone(), email_type))
     })
 }
 
@@ -2551,7 +2558,24 @@ fn dispatch_with_blocking_hook(
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut candidate = store.clone();
-    let live_snapshot = store.clone();
+    // What the request needs to know about the store as it was before the speculative run: the
+    // candidate is private to this request, so these few facts stand in for a second copy.
+    let project = store.project_id().to_owned();
+    let tenant = store.tenant_id().map(str::to_owned);
+    let first_new_sequence = store.next_user_sequence();
+    let mail_request = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
+    let codes_before: std::collections::BTreeSet<String> = if mail_request {
+        store
+            .oob_codes()
+            .into_iter()
+            .map(|code| code.code.clone())
+            .collect()
+    } else {
+        std::collections::BTreeSet::new()
+    };
     let reset_generation = store.reset_generation();
     let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
         .then(|| candidate.reserve_next_generated_local_id_with_ticket());
@@ -2603,7 +2627,9 @@ fn dispatch_with_blocking_hook(
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
-            live_snapshot.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+            candidate
+                .user_by_id(uid)
+                .is_some_and(|user| user.sequence >= first_new_sequence)
         });
     let signed_in = is_authentication
         && response.status == 200
@@ -2626,8 +2652,6 @@ fn dispatch_with_blocking_hook(
         .any()
         .then(|| inbound_credentials_from_request(body, retained_policy))
         .flatten();
-    let project = live_snapshot.project_id().to_owned();
-    let tenant = live_snapshot.tenant_id().map(str::to_owned);
     // Identity Platform runs no blocking function for an anonymous sign-up or a custom-token
     // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
     // custom-token#custom-*; the official Auth emulator runs none either).
@@ -2636,11 +2660,8 @@ fn dispatch_with_blocking_hook(
     // one (security review S1). A mail request reaches this path only where beforeSendEmail
     // runs (the strict profile, with a function for it: `handler_runs_blocking_auth`), and a
     // refused or failed request has created no code.
-    let speculative_mail = matches!(
-        handler,
-        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
-    )
-    .then(|| mail_about_to_be_sent(&live_snapshot, &candidate));
+    let speculative_mail =
+        mail_request.then(|| mail_about_to_be_sent(|code| codes_before.contains(code), &candidate));
     if let Some(Some(mail)) = &speculative_mail {
         if let Err(refusal) = before_send_email(blocking, mail, &project) {
             return refusal;
@@ -2890,7 +2911,8 @@ fn dispatch_with_blocking_hook(
         // differently from the speculative copy (an address registered meanwhile, a setting
         // changed), and then the request is refused rather than sent unchecked.
         if let Some(expected) = &speculative_mail {
-            if mail_about_to_be_sent(&live, &committed) != *expected {
+            if mail_about_to_be_sent(|code| live.oob_code(code).is_some(), &committed) != *expected
+            {
                 return error(409, "AUTH_STATE_CHANGED");
             }
         }
@@ -3473,16 +3495,48 @@ enum RefreshTokenTenant {
     Tenant(String),
 }
 
+/// The request's ID token as the routing helpers read it: decoded once per request with the
+/// default store's signer (ITKT-8), instead of once per helper, each taking the default store's
+/// lock. Routing only; the handler still verifies the token against the selected store.
+#[derive(Default)]
+struct RoutingIdToken {
+    decoded: std::cell::OnceCell<(String, Option<fireemu_core_auth::jwt::DecodedToken>)>,
+}
+
+impl RoutingIdToken {
+    /// `decode_token(token, default signer)`, memoized for the first token asked about.
+    fn decode(
+        &self,
+        state: &AuthState,
+        token: &str,
+    ) -> Option<fireemu_core_auth::jwt::DecodedToken> {
+        let decode = || {
+            let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+            fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()
+        };
+        let (cached, decoded) = self.decoded.get_or_init(|| (token.to_owned(), decode()));
+        if cached == token {
+            decoded.clone()
+        } else {
+            decode()
+        }
+    }
+}
+
 /// The tenant an ID token names in its `firebase.tenant` claim, and whether the token is one of
 /// `project` that this daemon can verify. Another project's token is refused by its audience and
 /// a token this daemon cannot verify (another key, another algorithm, a production token) is
 /// refused as invalid, so neither is ever the target here; but the official emulator reads the
 /// claim without verifying and asserts it against the path's or the body's tenant before it looks
 /// a tenant up, so it still has to agree with them.
-fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(String, bool)> {
+fn id_token_tenant(
+    state: &AuthState,
+    routing: &RoutingIdToken,
+    project: &str,
+    body: &Value,
+) -> Option<(String, bool)> {
     let token = str_field(body, "idToken")?;
-    let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-    let Ok(decoded) = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) else {
+    let Some(decoded) = routing.decode(state, token) else {
         // Unverified: only the tenant claim, only for the agreement, never the target.
         return fireemu_core_auth::jwt::unverified_tenant_claim(token)
             .map(|tenant| (tenant, false));
@@ -3770,6 +3824,7 @@ fn admit_request(
 /// profile never creates one: production refuses.
 fn emulator_creates_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     request: &TenantCreation<'_>,
     body: &Value,
     resolution: routes::Resolution<'_>,
@@ -3802,7 +3857,7 @@ fn emulator_creates_named_tenant(
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
     // (a tenant not made yet) or lands in this project goes on.
-    if let Ok(store) = select_store(state, path, query, body, resolution) {
+    if let Ok(store) = select_store(state, routing, path, query, body, resolution) {
         if store
             .lock()
             .is_ok_and(|store| store.project_id() != project)
@@ -3816,7 +3871,7 @@ fn emulator_creates_named_tenant(
         None | Some(Value::Null | Value::String(_)) => None,
         _ => return Ok(None),
     };
-    let (token_tenant, token_of_project) = match id_token_tenant(state, &project, body) {
+    let (token_tenant, token_of_project) = match id_token_tenant(state, routing, &project, body) {
         Some((tenant, of_project)) => (Some(tenant), of_project),
         None => (None, true),
     };
@@ -3939,8 +3994,13 @@ fn official_reads_the_id_token(
 
 /// The tenant an ID token of `project` names (an empty claim names none), read as the official
 /// emulator reads it: the third source of an operation's target tenant.
-fn token_tenant_of_project(state: &AuthState, project: &str, body: &Value) -> Option<String> {
-    id_token_tenant(state, project, body)
+fn token_tenant_of_project(
+    state: &AuthState,
+    routing: &RoutingIdToken,
+    project: &str,
+    body: &Value,
+) -> Option<String> {
+    id_token_tenant(state, routing, project, body)
         .filter(|(_, of_project)| *of_project)
         .map(|(tenant, _)| tenant)
 }
@@ -3978,8 +4038,10 @@ fn official_admin_account_handler(handler: routes::Handler) -> bool {
 ///
 /// An empty body `tenantId` is already dropped (`emulator_tenant_id_reading`), as the emulator
 /// reads `""` as no tenant (a project user's token too).
+#[allow(clippy::too_many_arguments)]
 fn emulator_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     resolution: routes::Resolution<'_>,
     path: &str,
     query: Option<&str>,
@@ -4000,8 +4062,7 @@ fn emulator_named_tenant(
         return Ok(());
     }
     let Some((audience, token_tenant)) = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        let decoded = routing.decode(state, token)?;
         let audience = decoded
             .payload
             .get("aud")
@@ -4106,6 +4167,7 @@ const PROVIDER_COLLECTIONS: [&str; 3] = [
 /// `Ok(Some(body))` is the body the request continues with.
 fn strict_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     path: &str,
     query: Option<&str>,
     body: &Value,
@@ -4148,8 +4210,7 @@ fn strict_named_tenant(
         Some(_) => return Err(error(400, "INVALID_TENANT_ID")),
     }
     let token_tenant = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        let decoded = routing.decode(state, token)?;
         decoded
             .payload
             .get("firebase")
@@ -4280,8 +4341,9 @@ fn handle_with_policy_inner(
         return response;
     }
     // Production's reading of the tenant a request names (strict profile).
+    let routing = RoutingIdToken::default();
     let named_tenant_body;
-    let body = match strict_named_tenant(state, path, query, body) {
+    let body = match strict_named_tenant(state, &routing, path, query, body) {
         Ok(Some(rewritten)) => {
             named_tenant_body = rewritten;
             &named_tenant_body
@@ -4307,15 +4369,17 @@ fn handle_with_policy_inner(
         at,
         app_check_admitted: std::cell::RefCell::new(None),
     };
-    let made_on_the_way = match emulator_creates_named_tenant(state, &creation, body, resolution) {
-        Ok(made) => made,
-        Err(response) => return response,
-    };
+    let made_on_the_way =
+        match emulator_creates_named_tenant(state, &routing, &creation, body, resolution) {
+            Ok(made) => made,
+            Err(response) => return response,
+        };
     // A request the tenant admission let through was admitted by App Check there; it is observed once.
     let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
     if let Err(response) = emulator_named_tenant(
         state,
+        &routing,
         resolution,
         path,
         query,
@@ -4452,7 +4516,7 @@ fn handle_with_policy_inner(
         let body_tenant_store = str_field(body, "tenantId")
             .filter(|tenant| !tenant.is_empty())
             .map(str::to_owned)
-            .or_else(|| token_tenant_of_project(state, project, body))
+            .or_else(|| token_tenant_of_project(state, &routing, project, body))
             .filter(|_| {
                 // The emulator profile only (as the store selection's arm below is).
                 state.stateless_refresh_tokens
@@ -4467,7 +4531,7 @@ fn handle_with_policy_inner(
         }
         body_tenant_store.unwrap_or(store)
     } else {
-        match select_store(state, path, query, body, resolution) {
+        match select_store(state, &routing, path, query, body, resolution) {
             Ok(store) => store,
             // Production answers a client policy read of an unknown tenant with the v2 API's
             // INVALID_TENANT_ID (sandbox recording 2026-09-25).
@@ -9352,6 +9416,7 @@ fn request_may_create_end_user(
 #[allow(clippy::too_many_lines)]
 fn select_store(
     state: &AuthState,
+    routing: &RoutingIdToken,
     path: &str,
     query: Option<&str>,
     body: &Value,
@@ -9395,23 +9460,20 @@ fn select_store(
         }
     }
     let id_token_target = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
-            .ok()
-            .and_then(|d| {
-                let audience = d
-                    .payload
-                    .get("aud")
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned)?;
-                let tenant = d
-                    .payload
-                    .get("firebase")
-                    .and_then(|firebase| firebase.get("tenant"))
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned);
-                Some((audience, tenant))
-            })
+        routing.decode(state, token).and_then(|d| {
+            let audience = d
+                .payload
+                .get("aud")
+                .and_then(fireemu_core_types::json::JsonValue::as_str)
+                .map(str::to_owned)?;
+            let tenant = d
+                .payload
+                .get("firebase")
+                .and_then(|firebase| firebase.get("tenant"))
+                .and_then(fireemu_core_types::json::JsonValue::as_str)
+                .map(str::to_owned);
+            Some((audience, tenant))
+        })
     });
     let exchanges_custom_token = matches!(
         resolution,
@@ -9797,23 +9859,34 @@ fn query_selectors_reading(
     Ok((api_key, tenant))
 }
 
-fn custom_token_uid(body: &Value) -> Option<String> {
+/// The claims of a request's custom token as routing reads them, before sign-in validates it: a
+/// strict-JSON fake token, or an unsigned JWT for the custom-token audience. Anything else (a
+/// signed token included) is `None` and keeps the default routing.
+fn routing_custom_token_payload(body: &Value) -> Option<JsonValue> {
     let token = str_field(body, "token")?;
-    let payload = if token.trim_start().starts_with('{') {
-        fireemu_core_types::json::parse(token).ok()?
-    } else {
-        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
-        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
-            .then_some(decoded.payload)?
-    };
-    payload
-        .get("uid")
-        .or_else(|| payload.get("user_id"))
-        .and_then(|value| match value {
-            JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
-            JsonValue::Int(value) => Some(value.to_string()),
-            _ => None,
-        })
+    if token.trim_start().starts_with('{') {
+        return fireemu_core_types::json::parse(token).ok();
+    }
+    let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
+    (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
+        .then_some(decoded.payload)
+}
+
+/// A custom token's user: its `uid` claim, else its `user_id`, a string or an integer. Request
+/// routing and sign-in both read the user here, so they cannot disagree on it (ITKT-5).
+fn custom_token_payload_uid(payload: &JsonValue) -> Option<String> {
+    match payload.get("uid").or_else(|| payload.get("user_id"))? {
+        JsonValue::String(uid) => Some(uid.clone()),
+        JsonValue::Int(uid) => Some(uid.to_string()),
+        _ => None,
+    }
+}
+
+fn custom_token_uid(body: &Value) -> Option<String> {
+    routing_custom_token_payload(body)
+        .as_ref()
+        .and_then(custom_token_payload_uid)
+        .filter(|uid| !uid.is_empty())
 }
 
 /// Returns the tenant scope of a syntactically valid custom token. `None` means that the token is
@@ -9828,14 +9901,7 @@ enum CustomTokenTenant {
 }
 
 fn custom_token_tenant(body: &Value) -> Option<CustomTokenTenant> {
-    let token = str_field(body, "token")?;
-    let payload = if token.trim_start().starts_with('{') {
-        fireemu_core_types::json::parse(token).ok()?
-    } else {
-        let decoded = fireemu_core_auth::jwt::decode_unsigned(token).ok()?;
-        (decoded.payload.get("aud").and_then(JsonValue::as_str) == Some(CUSTOM_TOKEN_AUDIENCE))
-            .then_some(decoded.payload)?
-    };
+    let payload = routing_custom_token_payload(body)?;
     match payload.get("tenant_id") {
         None => Some(CustomTokenTenant::ProjectScoped),
         Some(JsonValue::String(tenant)) => Some(CustomTokenTenant::Tenant(tenant.clone())),
@@ -10071,12 +10137,7 @@ fn sign_in_with_custom_token(
             return error(400, "TENANT_ID_MISMATCH");
         }
     }
-    let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
-        Some(JsonValue::String(s)) => Some(s.clone()),
-        Some(JsonValue::Int(i)) => Some(i.to_string()),
-        _ => None,
-    };
-    let Some(uid) = uid else {
+    let Some(uid) = custom_token_payload_uid(&payload) else {
         return error(400, "MISSING_IDENTIFIER");
     };
     // Production bounds the uid to 1..=128 characters (sandbox recording 2026-09-24).

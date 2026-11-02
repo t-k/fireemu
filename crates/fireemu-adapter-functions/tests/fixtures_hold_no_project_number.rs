@@ -10,7 +10,8 @@
 //!   offset), and the varint has 12 or 13 digits, or 10 digits outside the seconds window of 2020 to 2036
 //!   (the real `sourceToken` holds a timestamp's seconds). 11 digit varints are not refused here: random bytes
 //!   that parse as a message produce them. A run that is a
-//!   subresource integrity digest (`sha512-...`) or a lower case identifier or path (`snake_case`, `kebab-case`, `dir/file`) is not decoded as a message:
+//!   subresource integrity digest (`sha512-...`), a Go module checksum (`h1:` and 43 characters, as in go.sum)
+//!   or a lower case identifier or path (`snake_case`, `kebab-case`, `dir/file`) is not decoded as a message:
 //!   random bytes parse as one now and then. No instant is exempt as a varint, so a token that holds an epoch
 //!   in milliseconds as a varint would be refused.
 //! - As ASCII decimal digits (a GCF v2 `sourceToken` carried the events project number this way): a whole run
@@ -151,6 +152,9 @@ fn is_project_number(number: u64) -> bool {
         || ((1_000_000_000..10_000_000_000).contains(&number) && !SECONDS_WINDOW.contains(&number))
 }
 
+/// The characters of a Go module checksum after its `h1:` prefix (go.sum): the unpadded base64 of a SHA-256.
+const GO_MODULE_CHECKSUM_LEN: usize = 43;
+
 /// The maximal runs of base64 or base64url characters in `text` that are at least `min_len` long.
 fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
     let mut runs = Vec::new();
@@ -165,7 +169,10 @@ fn base64_runs(text: &[u8], min_len: usize) -> Vec<&[u8]> {
             (true, None) => start = Some(index),
             (false, Some(from)) => {
                 start = None;
-                if index - from >= min_len {
+                // A Go module checksum is a digest, not a token (see `GO_MODULE_CHECKSUM_LEN`).
+                let go_checksum =
+                    index - from == GO_MODULE_CHECKSUM_LEN && text[..from].ends_with(b"h1:");
+                if index - from >= min_len && !go_checksum {
                     runs.push(&text[from..index]);
                 }
             }
@@ -1428,6 +1435,31 @@ fn the_listing_parser_drops_empty_names_sorts_and_removes_duplicates() {
 #[test]
 fn scanning_nothing_is_clean() {
     assert_eq!(scan(&[], MAX_FILE_BYTES), Corpus::default());
+}
+
+#[test]
+fn a_go_module_checksum_is_a_digest_but_the_same_run_elsewhere_is_a_token() {
+    // `h1:` followed by the 43 characters of an unpadded SHA-256 (go.sum, go.work.sum): random bytes
+    // that parse as a message now and then, like a `sha512-` digest.
+    let token = encode(&message_of(111_111_111_111, 23), false, false);
+    assert_eq!(token.len(), GO_MODULE_CHECKSUM_LEN, "{token}");
+    let line =
+        format!("example.com/mod v1.2.3 h1:{token}=\nexample.com/mod v1.2.3/go.mod h1:{token}=\n");
+    assert!(project_numbers_in(line.as_bytes()).is_empty());
+    assert!(ascii_numbers_in(line.as_bytes()).is_empty());
+    // Near misses: another prefix, no prefix, a longer run behind the prefix.
+    for text in [
+        format!("h2:{token}"),
+        format!("h1{token}"),
+        token.clone(),
+        format!("h1:{token}A"),
+    ] {
+        assert_eq!(
+            project_numbers_in(text.as_bytes()),
+            [111_111_111_111],
+            "{text}"
+        );
+    }
 }
 
 #[test]

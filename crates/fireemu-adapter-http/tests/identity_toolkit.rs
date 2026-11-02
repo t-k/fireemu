@@ -878,6 +878,93 @@ fn an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_
     assert!(store.user_by_email("intervening@example.com").is_some());
 }
 
+/// Updates the signing-in account and creates another one through the Admin API while the
+/// first `BeforeSignIn` runs, as another client of the same project may at any moment.
+struct InterveningAdminUpdateHook {
+    state: std::sync::OnceLock<std::sync::Weak<AuthState>>,
+    done: AtomicBool,
+}
+
+impl AuthBlockingHook for InterveningAdminUpdateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSignIn
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if !self.done.swap(true, Ordering::SeqCst) {
+            let state = self.state.get().and_then(std::sync::Weak::upgrade).unwrap();
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts:update"),
+                &json!({"localId": user.local_id.to_string(), "displayName": "Written meanwhile"}),
+            );
+            assert_eq!(status, 200, "{body}");
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts"),
+                &json!({"email": "racer@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        Ok(json!({}))
+    }
+}
+
+/// `BHCLONE-3`: a write that lands while `BeforeSignIn` runs is neither lost nor refused. The
+/// sign-in commits onto the store as it is after the write, not onto the copy the function saw:
+/// it answers with the name written meanwhile, keeps it and the account created meanwhile, and
+/// adds exactly one working refresh session.
+#[test]
+fn a_write_that_lands_while_before_sign_in_runs_is_kept_by_the_sign_in() {
+    let hook = Arc::new(InterveningAdminUpdateHook {
+        state: std::sync::OnceLock::new(),
+        done: AtomicBool::new(false),
+    });
+    let mut auth = state();
+    let (status, created) = post(
+        &auth,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "raced@example.com", "password": "hunter22", "displayName": "Before"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let uid = created["localId"].as_str().unwrap().to_owned();
+    let sessions_before = auth.store.lock().unwrap().refresh_session_count();
+    auth.blocking = Some(hook.clone());
+    let auth = Arc::new(auth);
+    hook.state.set(Arc::downgrade(&auth)).unwrap();
+
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "raced@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], uid.as_str());
+    assert_eq!(body["displayName"], "Written meanwhile");
+    {
+        let store = auth.store.lock().unwrap();
+        let user = store.user_by_email("raced@example.com").unwrap();
+        assert_eq!(user.display_name.as_deref(), Some("Written meanwhile"));
+        assert!(store.user_by_email("racer@example.com").is_some());
+        // The candidate's provisional session is not committed: one sign-in, one session.
+        assert_eq!(store.refresh_session_count(), sessions_before + 1);
+    }
+    let (status, refreshed) = post(
+        &auth,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(refreshed["user_id"], uid.as_str());
+}
+
 /// In the emulator profile a blocking configuration that keeps changing while an email link is
 /// sent and used refuses neither request, as the official Auth emulator does not (closure
 /// review M1, 2026-09-28).
@@ -3210,12 +3297,11 @@ fn delayed_blocking_auth_requests_do_not_exhaust_tokio_workers() {
         Arc::new(auth),
     ));
 
+    // The two held requests outlast every probe below, so a probe that hangs is reported by its
+    // own assertion rather than by a held request timing out first.
+    let held_timeout = Duration::from_secs(10);
     let first = std::thread::spawn(move || {
-        request(
-            addr,
-            &signup_request("first@example.test"),
-            Duration::from_secs(2),
-        )
+        request(addr, &signup_request("first@example.test"), held_timeout)
     });
     let entered_deadline = Instant::now() + Duration::from_secs(1);
     while hook.entered.load(Ordering::SeqCst) == 0 {
@@ -3226,38 +3312,44 @@ fn delayed_blocking_auth_requests_do_not_exhaust_tokio_workers() {
         std::thread::yield_now();
     }
 
-    let (written_tx, written_rx) = std::sync::mpsc::sync_channel(1);
     let second = std::thread::spawn(move || {
-        let request = signup_request("second@example.test");
-        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        written_tx.send(()).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map(|_| response)
+        request(addr, &signup_request("second@example.test"), held_timeout)
     });
-    written_rx.recv().unwrap();
-    std::thread::sleep(Duration::from_millis(25));
+    // Without a registry the hook runs outside the namespace gate, so the second request reaches
+    // it while the first is still inside. Entering the hook happens after admission, so once
+    // both have entered, both blocking slots are held and every probe below runs against a
+    // saturated bridge (no scheduling assumption).
+    let second_entered_deadline = Instant::now() + Duration::from_secs(1);
+    while hook.entered.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < second_entered_deadline,
+            "the second request did not enter the blocking hook"
+        );
+        std::thread::yield_now();
+    }
 
+    // The hooks are released only after these probes return, so a probe the server cannot answer
+    // while both hooks block (a starved worker, or a surplus request queued for a slot) never
+    // answers within any timeout: the timeout bounds how long the failure takes to report, not
+    // what is detected.
+    let probe_timeout = Duration::from_secs(2);
     let overloaded = request(
         addr,
         &signup_request("overloaded@example.test"),
-        Duration::from_millis(100),
+        probe_timeout,
     );
 
     let readiness = request(
         addr,
         "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        Duration::from_millis(100),
+        probe_timeout,
     );
     let lookup = request(
         addr,
         &format!(
             "POST {V1}/accounts:lookup HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
         ),
-        Duration::from_millis(100),
+        probe_timeout,
     );
 
     hook.release.store(true, Ordering::SeqCst);
@@ -9248,6 +9340,72 @@ fn custom_token(uid: &str, claims: &Value, exp: i64) -> String {
     }))
 }
 
+/// ITKT-5: a compatibility custom-token exchange is routed to the store holding the token's user
+/// and then signs in that user, and both read the uid alike: a string or an integer `uid`, in a
+/// strict-JSON fake token or an unsigned JWT. Were the routing reading to differ from the
+/// sign-in's (an integer it does not see), the default project would make a new account.
+#[test]
+fn a_routed_custom_token_signs_in_the_user_its_routing_found() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+
+    let mut s = state();
+    s.registry = Some(Arc::new(AuthRegistry::new("demo-app", s.store.clone())));
+    s.allow_routed_projects = true;
+    // The first Admin write installs the routed project, whose users the exchange may find.
+    for uid in ["12345", "routed-user"] {
+        let (status, made) = admin(
+            &s,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/projects/demo-routed/accounts",
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{made}");
+    }
+    let now = 1_788_004_860;
+    let jwt = |uid: Value| {
+        custom_token_from_payload(&json!({
+            "aud": CUSTOM_TOKEN_AUDIENCE,
+            "iss": "firebase-auth-emulator@example.com",
+            "sub": "firebase-auth-emulator@example.com",
+            "uid": uid,
+            "iat": now,
+            "exp": now + 3600,
+        }))
+    };
+    for (token, uid) in [
+        (r#"{"uid":12345}"#.to_owned(), "12345"),
+        (r#"{"user_id":"routed-user"}"#.to_owned(), "routed-user"),
+        (jwt(json!(12345)), "12345"),
+        (jwt(json!("routed-user")), "routed-user"),
+    ] {
+        // Keyless: an API key selects its own project before this routing applies.
+        let response = handle(
+            &s,
+            "POST",
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        let (status, body) = (response.status, response.body);
+        assert_eq!(status, 200, "{token}: {body}");
+        assert_eq!(body["isNewUser"], false, "{token}: {body}");
+        let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+            .unwrap()
+            .payload;
+        assert_eq!(
+            claims.get("user_id").and_then(|v| v.as_str()),
+            Some(uid),
+            "{token}"
+        );
+        assert_eq!(
+            claims.get("aud").and_then(|v| v.as_str()),
+            Some("demo-routed"),
+            "{token}"
+        );
+    }
+    assert!(s.store.lock().unwrap().user_by_id("12345").is_none());
+    assert!(s.store.lock().unwrap().user_by_id("routed-user").is_none());
+}
+
 fn custom_token_from_payload(payload: &Value) -> String {
     use fireemu_core_auth::jwt::base64url_encode;
     let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
@@ -10457,6 +10615,81 @@ fn form_encoded_token_refresh_is_accepted_by_the_server_layer() {
     assert!(body["id_token"].as_str().is_some());
 }
 
+/// ITKT-4: `accounts:update` refuses the fields this runtime does not model instead of dropping
+/// them, and refuses before it changes anything. `mfaInfo` counts as present unless it is null or
+/// an empty array, object or string; `deleteProvider: "emailLink"` is refused by name.
+#[test]
+fn account_updates_refuse_unmodelled_fields_without_changing_the_account() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "unmodelled@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let id_token = account["idToken"].as_str().unwrap().to_owned();
+    let uid = account["localId"].as_str().unwrap().to_owned();
+    let display_name = || {
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_id(&uid)
+            .unwrap()
+            .display_name
+            .clone()
+    };
+    let mfa_refusal = "UNSUPPORTED_FIELD : mfaInfo is not supported by this runtime";
+    for mfa_info in [
+        json!([{"phoneInfo": "+15555550100"}]),
+        json!({"phoneInfo": "+15555550100"}),
+        json!("x"),
+        json!(1),
+        json!(false),
+    ] {
+        let (status, refused) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, "displayName": "changed", "mfaInfo": mfa_info}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].clone()),
+            (400, json!(mfa_refusal)),
+            "mfaInfo {mfa_info}"
+        );
+        assert_eq!(display_name(), None, "mfaInfo {mfa_info}");
+    }
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "changed", "deleteProvider": ["emailLink"]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (
+            400,
+            json!("UNSUPPORTED_FIELD : deleteProvider \"emailLink\" is not supported")
+        )
+    );
+    assert_eq!(display_name(), None);
+    for (index, empty) in [json!(null), json!([]), json!({}), json!("")]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("accepted-{index}");
+        let (status, updated) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": id_token, "displayName": name, "mfaInfo": empty}),
+        );
+        assert_eq!(status, 200, "mfaInfo {empty}: {updated}");
+        assert_eq!(
+            display_name().as_deref(),
+            Some(name.as_str()),
+            "mfaInfo {empty}"
+        );
+    }
+}
+
 #[test]
 fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
     let s = state();
@@ -10504,11 +10737,12 @@ fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
     );
     let uid = looked["users"][0]["localId"].as_str().unwrap().to_owned();
     let token = custom_token(&uid, &json!({}), now_secs + 3600);
-    let (_, body) = post(
+    let (status, body) = post(
         &s,
         &format!("{V1}/accounts:signInWithCustomToken"),
         &json!({"token": token}),
     );
+    assert_eq!(status, 200, "{body}");
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -10519,7 +10753,12 @@ fn refreshed_tokens_keep_the_custom_token_provider_and_claims() {
             .and_then(|v| v.as_str()),
         Some("custom")
     );
-    assert!(looked["users"][0]["lastLoginAt"].is_string() || body["localId"] == uid);
+    // The session is the existing password user's, not a new account.
+    assert_eq!(body["isNewUser"], false, "{body}");
+    assert_eq!(
+        decoded.payload.get("user_id").and_then(|v| v.as_str()),
+        Some(uid.as_str())
+    );
 }
 
 /// Account records and sign-in bodies follow production's field omissions and additions

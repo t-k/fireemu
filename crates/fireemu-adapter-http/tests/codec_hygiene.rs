@@ -19,13 +19,10 @@ const OWNER: &str = "fireemu-core-types/src/codec.rs";
 
 /// Files that still hold a hand-rolled decoder, with the issue that removes each one.
 ///
-/// Temporary. Two other lanes are editing these files as this is written, so converting them
-/// here would collide; the entries come out with those lanes.
+/// Temporary. Another lane is editing this file as this is written, so converting it here
+/// would collide; the entry comes out with that lane.
 /// See `docs.local/issues/open/hand-rolled-percent-decoder-regression-in-adapters.md`.
-const ALLOWED: &[&str] = &[
-    "fireemu-adapter-http/src/storage.rs",
-    "fireemu-adapter-grpc/src/webchannel.rs",
-];
+const ALLOWED: &[&str] = &["fireemu-adapter-grpc/src/webchannel.rs"];
 
 /// The markers a hand-rolled percent decoder leaves behind. `to_digit(16)` is the same
 /// nibble parse spelled through `char`, which is how the App Check surface wrote it.

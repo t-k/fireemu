@@ -1239,3 +1239,88 @@ fn a_match_can_be_stopped_between_the_characters_of_the_name() {
     // An empty name has no character to stop at.
     assert_eq!(glob.matches_unless("", &|| true), Some(false));
 }
+
+/// The page `list_matching` answers, computed from the whole listing: each entry of the reference
+/// listing with whether it is a folded prefix.
+fn reference_page(
+    kept: &BTreeSet<String>,
+    prefix: &str,
+    delimiter: Option<&str>,
+    token: Option<&str>,
+    max: usize,
+) -> (Vec<String>, Vec<String>, Option<String>) {
+    let delimiter = delimiter.filter(|d| !d.is_empty());
+    let entries: Vec<(String, bool)> = reference_entries(kept, prefix, delimiter)
+        .into_iter()
+        .map(|entry| {
+            let folded = !kept.contains(&entry)
+                || delimiter.is_some_and(|d| entry[prefix.len()..].contains(d));
+            (entry, folded)
+        })
+        .collect();
+    let split = |page: &[(String, bool)]| {
+        let items = page.iter().filter(|e| !e.1).map(|e| e.0.clone()).collect();
+        let prefixes = page.iter().filter(|e| e.1).map(|e| e.0.clone()).collect();
+        (items, prefixes)
+    };
+    if max == 0 {
+        // The official emulator's empty page: every prefix, and the first object at or after a
+        // token that names an object (else the first object).
+        let item_start = token
+            .filter(|t| entries.iter().any(|e| !e.1 && e.0 == *t))
+            .unwrap_or(prefix);
+        let next = entries
+            .iter()
+            .find(|e| !e.1 && e.0.as_str() >= item_start)
+            .map(|e| e.0.clone());
+        let (_, prefixes) = split(&entries);
+        return (Vec::new(), prefixes, next);
+    }
+    let start = token
+        .and_then(|t| entries.iter().position(|e| e.0 == t))
+        .unwrap_or(0);
+    let end = (start + max).min(entries.len());
+    let (items, prefixes) = split(&entries[start..end]);
+    (items, prefixes, entries.get(end).map(|e| e.0.clone()))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4000))]
+    /// One page of a listing, for any token (an entry, a name inside a folded prefix, a prefix of
+    /// names, or nothing the bucket holds) and any `max` including zero, equals the page cut from
+    /// the reference listing of the names the filter accepts.
+    #[test]
+    fn one_listing_page_equals_the_page_of_the_reference_listing(
+        names in names(),
+        prefix in prefixes(),
+        delimiter in proptest::sample::select(&[None, Some(""), Some("/"), Some("a/"), Some("r"), Some("ir/")][..]),
+        token in proptest::option::of(proptest::sample::select(
+            &["", "a", "a/", "a/b", "a/b/", "dir", "dir/", "dir/a", "dir/a/", "dir/dir2/", "dir2", "x/b/", "Z/c", "zz"][..],
+        )),
+        pick in proptest::option::of((any::<bool>(), any::<proptest::sample::Index>(), any::<proptest::sample::Index>())),
+        max in 0usize..=5,
+        start in proptest::option::of(proptest::sample::select(&["", "a/", "b", "dir/b"][..])),
+    ) {
+        let store = store_with(&names);
+        let accepted = |name: &str| start.is_none_or(|s| name >= s);
+        let kept: BTreeSet<String> = names.iter().filter(|n| accepted(n)).cloned().collect();
+        let listed = reference_entries(&kept, prefix, delimiter.filter(|d| !d.is_empty()));
+        // A token drawn from the listing itself, so that valid tokens are common, or cut from a
+        // stored name after a slash, so that tokens that are a prefix of many names are common.
+        let token = match pick {
+            Some((true, index, _)) if !listed.is_empty() => Some(listed[index.index(listed.len())].clone()),
+            Some((false, index, cut)) if !names.is_empty() => {
+                let name = names.iter().nth(index.index(names.len())).unwrap();
+                let cuts: Vec<usize> = name.match_indices('/').map(|(i, _)| i + 1).collect();
+                Some(cuts.get(cut.index(cuts.len() + 1)).map_or(name.as_str(), |&i| &name[..i]).to_owned())
+            }
+            _ => token.map(str::to_owned),
+        };
+        let page = store.list_matching(&bucket(), prefix, delimiter, token.as_deref(), Some(max), &accepted);
+        let items: Vec<String> = page.items.iter().map(|m| m.name.as_str().to_owned()).collect();
+        prop_assert_eq!(
+            (items, page.prefixes, page.next_page_token),
+            reference_page(&kept, prefix, delimiter, token.as_deref(), max)
+        );
+    }
+}

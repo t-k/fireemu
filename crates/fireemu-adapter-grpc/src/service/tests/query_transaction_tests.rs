@@ -1095,12 +1095,19 @@ async fn run_query_with_work_between_pages(
 
 // Page three of a bare RunQuery reads the snapshot of page one: a commit that lands between the
 // pages (changing, deleting and adding documents) is not seen, and every page reports the
-// first page's read time.
+// first page's read time. The clock stands still from the first page on, so that commit is
+// stamped with the first page's read time itself: only the version tells the two apart.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bare_run_query_pages_keep_their_snapshot_across_commits_between_pages() {
     for field_order in [false, true] {
-        let backend = test_backend();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(test_gateway(), Arc::clone(&clock), 7));
         let request = seeded_query(&backend, 65, field_order);
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+            .unwrap();
         let parent = query_request().parent;
         let writer = backend.clone();
         let responses = run_query_with_work_between_pages(&backend, request, move || {

@@ -178,6 +178,12 @@ def violations(source, toolchain_channel: nil)
   # at eventarc_authentication without it), as ci.yml and release.yml install it.
   installed = nextest_runs.index { |run| run.include?("pnpm -C conformance install --frozen-lockfile") }
   errors << "nextest must install the conformance SDKs before the suite (pnpm -C conformance install --frozen-lockfile)" unless installed && suite && installed < suite
+  # The mutation baseline runs the same suites, so the shard job installs the SDKs before it mutates.
+  mutants_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }
+  installed_for_mutants = mutants_runs.index { |run| run.include?("pnpm -C conformance install --frozen-lockfile") }
+  mutating = mutants_runs.index { |run| run.include?("--shard ") }
+  errors << "mutants must install the conformance SDKs before the shards mutate (pnpm -C conformance install --frozen-lockfile)" unless installed_for_mutants && mutating && installed_for_mutants < mutating
+  errors << "mutants must keep ignored files in the copy under test (--gitignore=false) so the installed SDKs are there" unless mutants_runs.any? { |run| run.include?("--shard ") && run.include?("--gitignore=false") }
   # Inputs are validated where they enter, and everything downstream takes the validated outputs.
   plan = workflow.dig("jobs", "plan", "steps") || []
   validate = plan.find { |step| step["id"] == "validate" }

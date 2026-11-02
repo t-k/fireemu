@@ -168,12 +168,24 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub(/ *export LC_ALL=C\n/, ""), "pin the locale")
   end
 
+  # The text with the last occurrence of `old` (the nextest job's, which follows the mutants job's) replaced.
+  def sub_last(source, old, new)
+    index = source.rindex(old)
+    source[0...index] + new + source[(index + old.length)..]
+  end
+
   def test_a_nextest_job_without_the_locked_fetch_is_refused
-    assert_violation(REAL.sub("        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
+    assert_violation(sub_last(REAL, "        run: cargo fetch --locked\n", "        run: \"true\"\n"), "must fetch the locked graph")
   end
 
   def test_a_nextest_job_without_the_conformance_install_is_refused
-    assert_violation(REAL.sub("        run: pnpm -C conformance install --frozen-lockfile\n", "        run: \"true\"\n"), "must install the conformance SDKs before the suite")
+    assert_violation(sub_last(REAL, "        run: pnpm -C conformance install --frozen-lockfile\n", "        run: \"true\"\n"), "must install the conformance SDKs before the suite")
+  end
+
+  def test_a_mutants_job_without_the_conformance_install_or_the_ignored_files_is_refused
+    install = "      - name: the pinned real SDKs for the suites that run them\n        run: pnpm -C conformance install --frozen-lockfile\n"
+    assert_violation(REAL.sub(install, ""), "mutants must install the conformance SDKs")
+    assert_violation(REAL.gsub("--gitignore=false", "--gitignore=true"), "--gitignore=false")
   end
 
   def test_an_unpinned_pnpm_version_is_refused

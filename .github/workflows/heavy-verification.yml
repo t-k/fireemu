@@ -287,6 +287,19 @@ jobs:
         with:
           key: heavy-mutants
           save-if: "false"
+      # The unmutated baseline runs the whole suite of the mutated package, including the suites that run
+      # the real SDKs and the offline authority checks (run 41476822938 failed its baseline without them):
+      # the same preparation as the nextest job.
+      - name: fetch locked dependency graph for offline authority checks
+        run: cargo fetch --locked
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: the pinned real SDKs for the suites that run them
+        run: pnpm -C conformance install --frozen-lockfile
       # What is mutated: the Rust diff against the base (a dispatch, the nightly), or one package of the
       # rotation, whole or by file (the weekly). Counted first, so that a diff without a mutant (a test-only
       # change) ends here instead of leaving a run with no result for the summary to refuse.
@@ -331,7 +344,9 @@ jobs:
           set -euo pipefail
           mapfile -t args < "$RUNNER_TEMP/mutants.args"
           set +e
-          cargo mutants --test-tool nextest --cargo-arg=--locked "${args[@]}" \
+          # --gitignore=false: the copy of the tree under test must keep the ignored conformance/node_modules
+          # the SDK suites load (cargo-mutants leaves target/ and .git out of the copy either way).
+          cargo mutants --gitignore=false --test-tool nextest --cargo-arg=--locked "${args[@]}" \
             --shard "$SHARD/$TOTAL" --sharding slice --output "mutants-out-$SHARD"
           code=$?
           set -e

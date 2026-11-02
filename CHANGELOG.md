@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Realtime Database Rules compare snapshots, `auth` and `query` by identity, as the official emulator does: two snapshots are equal when they read the same version of the tree (`data` or `newData`) at the same location, and `query` equals itself. Such a comparison behind a ternary was a rule error that denied the request in both polarities.
+
 ### Changed
 
 - The daemon's virtual clock now follows real time from the daemon's start time by default. `clock:advance`, `clock:advanceTo` and `clock:set` add an offset on top. Realtime Database `ServerValue.TIMESTAMP`, Firestore and Storage times, token expiry, Rules `request.time` and schedules all read this clock, so they move as they do in production. A pinned `daemon.clockStart` still gives a clock that stands still until it is moved, so reproducible runs and `fireemu/testing` worlds are unchanged; `daemon.clock` (`"realtime"` or `"frozen"`) chooses either way explicitly.

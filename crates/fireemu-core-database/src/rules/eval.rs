@@ -113,6 +113,15 @@ pub struct Scope<'a> {
     pub wildcards: &'a BTreeMap<String, String>,
 }
 
+/// Which version of the tree a snapshot value reads: `root` and `data` read the tree before
+/// the write, `newData` the tree after it. The official emulator compares two snapshots by
+/// this version and their location (review r9 M25, option (a)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Version {
+    Data,
+    New,
+}
+
 #[derive(Debug, Clone)]
 enum Value<'a> {
     Null,
@@ -134,7 +143,9 @@ enum Value<'a> {
     /// An integer query bound: the official emulator holds it as a `Long`, which equals the
     /// number it stands for but is no number to `<`, `+`, `-` or a member.
     Long(i64),
-    Snapshot(Snapshot<'a>),
+    /// A snapshot, with the version of the tree it reads.
+    Snapshot(Snapshot<'a>, Version),
+    /// `query`, one object.
     Query,
     Regex(super::pattern::Pattern),
     Array(Vec<Value<'a>>),
@@ -263,7 +274,7 @@ fn eval_inner<'a>(
             };
             let object = eval(object, scope, observer)?;
             observer.member_name(callee.diagnostic, name);
-            let callable = matches!(object, Value::Snapshot(_) | Value::Str(_));
+            let callable = matches!(object, Value::Snapshot(..) | Value::Str(_));
             if callable {
                 let method = observer.opaque(None);
                 observer.record(callee.diagnostic, method);
@@ -309,9 +320,12 @@ fn variable<'a>(name: &str, scope: &Scope<'a>) -> Option<Value<'a>> {
         }),
         #[allow(clippy::cast_precision_loss)]
         "now" => Some(Value::Num(scope.now as f64)),
-        "root" => Some(Value::Snapshot(scope.root.clone())),
-        "data" => Some(Value::Snapshot(scope.data.clone())),
-        "newData" => scope.new_data.clone().map(Value::Snapshot),
+        "root" => Some(Value::Snapshot(scope.root.clone(), Version::Data)),
+        "data" => Some(Value::Snapshot(scope.data.clone(), Version::Data)),
+        "newData" => scope
+            .new_data
+            .clone()
+            .map(|snapshot| Value::Snapshot(snapshot, Version::New)),
         "query" => Some(Value::Query),
         _ => scope.wildcards.get(name).map(|key| Value::Str(key.clone())),
     }
@@ -500,7 +514,7 @@ fn string_argument(arguments: &[Value<'_>], i: usize) -> Option<String> {
 
 fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Value<'a>> {
     match object {
-        Value::Snapshot(snapshot) => snapshot_call(&snapshot, name, arguments),
+        Value::Snapshot(snapshot, version) => snapshot_call(&snapshot, version, name, arguments),
         Value::Str(s) => match name {
             "contains" => Some(Value::Bool(s.contains(&string_argument(arguments, 0)?))),
             "beginsWith" => Some(Value::Bool(s.starts_with(&string_argument(arguments, 0)?))),
@@ -525,6 +539,7 @@ fn call<'a>(object: Value<'a>, name: &str, arguments: &[Value<'a>]) -> Option<Va
 
 fn snapshot_call<'a>(
     snapshot: &Snapshot<'a>,
+    version: Version,
     name: &str,
     arguments: &[Value<'a>],
 ) -> Option<Value<'a>> {
@@ -541,12 +556,16 @@ fn snapshot_call<'a>(
         }),
         "child" => Some(Value::Snapshot(
             snapshot.child(&string_argument(arguments, 0)?),
+            version,
         )),
         "parent" => snapshot.path.parent().map(|path| {
-            Value::Snapshot(Snapshot {
-                root: snapshot.root,
-                path,
-            })
+            Value::Snapshot(
+                Snapshot {
+                    root: snapshot.root,
+                    path,
+                },
+                version,
+            )
         }),
         "exists" => Some(Value::Bool(!matches!(located, Located::Absent))),
         "hasChild" => Some(Value::Bool(!matches!(
@@ -676,8 +695,8 @@ fn chain<'a>(
 /// `l op r` for an operator that is not `&&` or `||`.
 fn combine<'a>(op: BinaryOp, l: &Value<'a>, r: &Value<'a>) -> Option<Value<'a>> {
     match op {
-        BinaryOp::Eq => equal(l, r).map(Value::Bool),
-        BinaryOp::Ne => equal(l, r).map(|equal| Value::Bool(!equal)),
+        BinaryOp::Eq => Some(Value::Bool(equal(l, r))),
+        BinaryOp::Ne => Some(Value::Bool(!equal(l, r))),
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
             let ordering = match (l, r) {
                 // Any comparison with NaN is false there.
@@ -732,13 +751,20 @@ fn text(value: &Value<'_>) -> Option<String> {
     }
 }
 
-/// Primitive values and orderings compare by value, and values of different types are unequal. New objects from `val()` or an `auth` member equal nothing. Root `auth` references from one scope compare equal. Snapshot and query identity comparisons remain rule errors, so the rule is false even when the comparison is negated (review r9 M25, option (b)).
+/// Primitive values and orderings compare by value, and values of different types are
+/// unequal. New objects from `val()` or an `auth` member equal nothing. Objects compare by
+/// identity, as the official emulator compares them (review r9 M25, option (a)): `auth` and
+/// `query` are one object each in a scope, and two snapshots are equal when they read the
+/// same version of the tree at the same location.
 #[allow(clippy::float_cmp)]
-fn equal(l: &Value<'_>, r: &Value<'_>) -> Option<bool> {
-    Some(match (l, r) {
-        (Value::Snapshot(_), Value::Snapshot(_)) | (Value::Query, Value::Query) => return None,
+fn equal(l: &Value<'_>, r: &Value<'_>) -> bool {
+    match (l, r) {
+        (Value::Snapshot(a, a_version), Value::Snapshot(b, b_version)) => {
+            a_version == b_version && a.path == b.path
+        }
         // Every root auth value in one evaluation comes from the same scope.
         (Value::Auth(_), Value::Auth(_))
+        | (Value::Query, Value::Query)
         | (Value::Null | Value::AuthEmpty, Value::Null | Value::AuthEmpty) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Num(a), Value::Num(b)) => a == b,
@@ -749,5 +775,5 @@ fn equal(l: &Value<'_>, r: &Value<'_>) -> Option<bool> {
         (Value::Str(a), Value::Str(b)) => a == b,
         (Value::Ordering(a), Value::Ordering(b)) => a == b,
         _ => false,
-    })
+    }
 }

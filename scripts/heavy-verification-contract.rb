@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # Contract of .github/workflows/heavy-verification.yml, which runs heavy verification on a public
-# repository: manual dispatch only, read-only token, no secrets, pinned actions (from a fixed table),
+# repository: started only by manual dispatch and by the two pinned schedules (the nightly and weekly
+# mutation runs, which fire on the default branch only), read-only token, no secrets, pinned actions (from a fixed table),
 # timeouts, no cache written, no run from the default branch, and no workflow input interpolated into
 # a script or any other field except where the plan job validates it.
 #
@@ -29,7 +30,19 @@ PINS = {
 # outputs, the matrix, a step's own output, and the runner's temp directory. The plan's own env may also
 # read the inputs, the default branch and the repository URL parts; no other job may read an input.
 STEP_EXPRESSION = /\A(fromJSON\(needs\.plan\.outputs\.[a-z_]+\)|needs\.plan\.outputs\.[a-z_]+|needs\.mutants\.result|matrix\.[a-z_]+|steps\.[a-z_]+\.outputs\.[a-z_]+|runner\.temp)\z/
-PLAN_EXPRESSION = /\A(inputs\.[a-z_]+|github\.event\.repository\.default_branch|github\.server_url|github\.repository)\z/
+PLAN_EXPRESSION = /\A(inputs\.[a-z_]+|github\.event\.repository\.default_branch|github\.server_url|github\.repository|github\.event_name|github\.event\.schedule)\z/
+# The two schedules: the nightly mutation run of the Rust diff and the weekly one of a crate.
+SCHEDULES = ["23 3 * * *", "41 4 * * 6"].freeze
+# What a job may test: the plan's validated outputs and the plan's result.
+JOB_IF_EXPRESSION = /\A(always\(\)|needs\.plan\.result\s*==\s*'success'|needs\.plan\.outputs\.(job|skip)\s*(==|!=)\s*'[a-z-]+'|needs\.mutants\.outputs\.count\s*!=\s*'0')\z/
+# What the run name and the concurrency group are made of: string literals, format(), the event name,
+# the schedule and the inputs that label a run, joined with && || == and parentheses.
+NAMING_TOKENS = /'[^']*'|format|github\.event_name|github\.event\.schedule|inputs\.(?:job|tag|ref)|&&|\|\||==|[(),\s]/
+
+# The expressions of `text` that use anything but NAMING_TOKENS.
+def unnamed_expressions(text)
+  text.scan(/\$\{\{(.*?)\}\}/m).flatten.reject { |expression| expression.gsub(NAMING_TOKENS, "").empty? }
+end
 FORBIDDEN_ENV = /\bACTIONS_(ALLOW_UNSECURE_COMMANDS|RUNNER_DEBUG|STEP_DEBUG)\b/
 
 # The expressions inside a text that do not match `allowed`.
@@ -52,9 +65,15 @@ def violations(source, toolchain_channel: nil)
   workflow = YAML.safe_load(source, aliases: true)
   code = source.lines.reject { |line| line.strip.start_with?("#") }.join
   trigger = workflow["on"] || workflow[true]
-  errors << "the only trigger must be workflow_dispatch" unless trigger.is_a?(Hash) && trigger.keys == ["workflow_dispatch"]
+  errors << "the only triggers must be schedule and workflow_dispatch" unless trigger.is_a?(Hash) && trigger.keys.sort == %w[schedule workflow_dispatch]
+  crons = trigger.is_a?(Hash) ? Array(trigger["schedule"]).map { |entry| entry.is_a?(Hash) ? entry["cron"] : nil } : []
+  errors << "the schedules must be exactly #{SCHEDULES.inspect}" unless crons == SCHEDULES
   errors << "top-level permissions must be exactly contents: read" unless workflow["permissions"] == { "contents" => "read" }
   errors << "a concurrency group per ref is required" unless workflow.dig("concurrency", "group").to_s.include?("inputs.ref")
+  errors << "the scheduled runs need one concurrency group of their own" unless workflow.dig("concurrency", "group").to_s.include?("'heavy-verification-scheduled'")
+  errors << "the concurrency group and the run name may only read the event name, the schedule and the inputs" unless
+    [workflow.dig("concurrency", "group"), workflow["run-name"]].all? { |text| unnamed_expressions(text.to_s).empty? }
+  errors << "a running scheduled mutation run must not be cancelled by another" if workflow.dig("concurrency", "cancel-in-progress") == true
   errors << "pull_request_target must never appear" if code.include?("pull_request_target")
   errors << "secrets must never be used" if code.match?(/\bsecrets\b/)
   errors << "no token other than the read-only default may be used" if code.match?(/\b(github\.token|GITHUB_TOKEN|GH_TOKEN)\b/)
@@ -70,7 +89,8 @@ def violations(source, toolchain_channel: nil)
   workflow.fetch("jobs").each do |name, job|
     errors << "#{name}: a timeout-minutes is required" unless job["timeout-minutes"].is_a?(Integer)
     errors << "#{name}: a job must not widen the permissions" if job.key?("permissions")
-    errors << "#{name}: an if condition may only test the job input" if job["if"] && job["if"].gsub(/inputs\.job\s*==\s*'[a-z-]+'/, "").match?(/inputs\.|github\.event/)
+    errors << "#{name}: an if condition may only test the plan's validated outputs" if job["if"] && job["if"].to_s.split("&&").map(&:strip).any? { |term| !term.match?(JOB_IF_EXPRESSION) }
+    errors << "#{name}: an if condition must not read an input or the event" if job["if"].to_s.match?(/inputs\.|github\./)
     # Job-level fields that take an expression (where the job runs, its container, its matrix): the same
     # allow-list as a step, so an input can never choose a runner or an image.
     %w[runs-on container services strategy environment name].each do |key|
@@ -141,6 +161,8 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary merge must pass the shard job's result (--mutants-result \"$MUTANTS_RESULT\")" unless merge && merge["run"].to_s.include?('--mutants-result "$MUTANTS_RESULT"') && merge.dig("env", "MUTANTS_RESULT").to_s.gsub(/\s+/, "") == "${{needs.mutants.result}}"
   errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
   mutate_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }.select { |run| run.include?("cargo mutants") }
+  # The selection step only lists the mutants (--list); the shard run is the one that mutates.
+  mutate_runs = mutate_runs.reject { |run| run.include?("--list") && !run.include?("--shard") }
   shardings = mutate_runs.flat_map { |run| run.scan(/--sharding[= ]\S*/) }
   errors << "the shards must say --sharding slice once on the command line (the summary checks that layout, whatever the ref's mutants.toml says)" unless mutate_runs.size == 1 && shardings == ["--sharding slice"]
   errors << "no --sharding value but slice may appear anywhere in the workflow" if code.scan(/--sharding[= ]\S*/).any? { |text| text != "--sharding slice" }
@@ -161,7 +183,7 @@ def violations(source, toolchain_channel: nil)
   validate = plan.find { |step| step["id"] == "validate" }
   errors << "a plan job must validate the inputs" unless validate
   if validate
-    %w[INPUT_REF INPUT_BASE INPUT_SHARDS INPUT_PACKAGE INPUT_SCRIPT INPUT_JOB DEFAULT_BRANCH REPO_URL].each do |variable|
+    %w[INPUT_REF INPUT_BASE INPUT_SHARDS INPUT_PACKAGE INPUT_SCRIPT INPUT_JOB DEFAULT_BRANCH REPO_URL EVENT_NAME EVENT_SCHEDULE REPOSITORY].each do |variable|
       errors << "plan must validate #{variable}" unless validate["run"].to_s.include?(variable) && validate.fetch("env", {}).key?(variable)
     end
     script = validate["run"].to_s
@@ -169,6 +191,8 @@ def violations(source, toolchain_channel: nil)
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
     errors << "plan must pin the locale (export LC_ALL=C) before it matches a pattern" unless script.include?("export LC_ALL=C")
     errors << "plan must refuse an unreadable default branch" unless script.include?('[[ -n $DEFAULT_BRANCH ]]')
+    errors << "plan must start a schedule only on the default branch" unless script.include?('[[ $GITHUB_REF == "refs/heads/$DEFAULT_BRANCH" ]]')
+    errors << "plan must refuse any event but schedule and workflow_dispatch" unless script.include?('[[ $EVENT_NAME == workflow_dispatch ]]')
     errors << "plan must refuse refs/, HEAD and FETCH_HEAD" unless script.include?("refs/*") && script.include?("FETCH_HEAD")
   end
   workflow.fetch("jobs").each do |name, job|

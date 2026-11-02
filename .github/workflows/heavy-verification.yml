@@ -1,27 +1,39 @@
 name: heavy-verification
 
-run-name: heavy-verification ${{ inputs.job }} ${{ inputs.tag }}
+run-name: ${{ github.event_name == 'schedule' && format('heavy-verification scheduled {0}', github.event.schedule == '23 3 * * *' && 'nightly' || 'weekly') || format('heavy-verification {0} {1}', inputs.job, inputs.tag) }}
 
 # Heavy verification (mutation testing, the whole nextest suite, Linux measurements) on GitHub's
 # standard runners instead of a developer machine. The repository is public, so they cost nothing.
 #
+# Two scheduled runs of the mutants job need no one to start them (owner decision 2209):
+# - nightly: the Rust diff of the default branch since the last successful scheduled nightly (or the
+#   last 24 hours). No Rust in the diff: nothing to do, the run passes. A missed mutant fails the run.
+# - weekly: one package of tools/ci/mutation-weekly.txt, chosen by the ISO week, mutated whole. It only
+#   reports: the survivors are in the step summary and the artifact, and the run does not fail on them.
+# Both can also be dispatched (job nightly or weekly) from a branch, to try them out.
+#
 # Security (public repository):
-# - Manual dispatch only. No pull_request_target, no other trigger.
+# - Triggers: the two schedules above and manual dispatch. No pull_request, no pull_request_target.
 # - `permissions: contents: read` and nothing else. No secrets are used anywhere, and no write token.
 # - No production credentials, and no network call to Google or Firebase: the suites run against the
 #   local emulators only, and the jobs fetch nothing but the repository, the pinned actions, the
-#   Rust toolchain and the crates the lockfile names.
+#   Rust toolchain and the crates the lockfile names. The plan job also reads the public list of this
+#   repository's workflow runs, unauthenticated, to find the last successful nightly.
 # - Inputs are never interpolated into a script. They reach `run:` only through `env:` and are
 #   validated there first (the `plan` job). A validated value is the only thing the other jobs use.
 # - Every action is pinned by its full commit SHA, and every job has a timeout.
-# - It refuses to run from the default branch or a tag: the Actions cache is scoped by the ref the
-#   run belongs to, and the code under test must never share a cache scope with ci.yml or
-#   release.yml. Dispatch it from the branch under test (or a dedicated branch); no job saves a
-#   cache either (`save-if: "false"`).
+# - A dispatch refuses to run from the default branch or a tag: the Actions cache is scoped by the ref
+#   the run belongs to, and the code under test must never share a cache scope with ci.yml or
+#   release.yml. A scheduled run belongs to the default branch and tests only its own head, which is
+#   safe because no job saves a cache (`save-if: "false"`).
 #
 # Use tools/ci/heavy-run.sh to dispatch it, wait, and download the artifacts.
 
 on:
+  schedule:
+    # Nightly, then weekly (Saturday). The plan job tells them apart by this text.
+    - cron: "23 3 * * *"
+    - cron: "41 4 * * 6"
   workflow_dispatch:
     inputs:
       job:
@@ -32,16 +44,18 @@ on:
           - mutants
           - nextest
           - linux-measure
+          - nightly
+          - weekly
       ref:
         description: branch name or full commit SHA to verify
         type: string
         required: true
       package:
-        description: "mutants: workspace package to mutate (empty for the whole diff)"
+        description: "mutants, nightly: workspace package to mutate (empty for the whole diff); weekly: the package whose line of tools/ci/mutation-weekly.txt to run (empty for this ISO week's)"
         type: string
         default: ""
       base:
-        description: "mutants: ref the diff is taken against (--in-diff)"
+        description: "mutants: ref the diff is taken against (--in-diff); nightly and weekly choose their own"
         type: string
         default: main
       shards:
@@ -61,7 +75,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: heavy-verification-${{ inputs.job }}-${{ inputs.ref }}
+  # One scheduled run at a time (a queued one waits); a dispatch is serialized per job and ref.
+  group: ${{ github.event_name == 'schedule' && 'heavy-verification-scheduled' || format('heavy-verification-{0}-{1}', inputs.job, inputs.ref) }}
   cancel-in-progress: false
 
 env:
@@ -72,6 +87,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      job: ${{ steps.validate.outputs.job }}
+      mode: ${{ steps.validate.outputs.mode }}
+      skip: ${{ steps.validate.outputs.skip }}
+      fail_on_missed: ${{ steps.validate.outputs.fail_on_missed }}
+      files: ${{ steps.validate.outputs.files }}
       ref: ${{ steps.validate.outputs.ref }}
       base: ${{ steps.validate.outputs.base }}
       package: ${{ steps.validate.outputs.package }}
@@ -84,6 +104,9 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
           INPUT_JOB: ${{ inputs.job }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_PACKAGE: ${{ inputs.package }}
@@ -97,14 +120,28 @@ jobs:
           # letter in en_US.UTF-8); every pattern below means ASCII only.
           export LC_ALL=C
           fail() { echo "::error::$1"; exit 1; }
-          # The cache is scoped by the ref this run belongs to. Never run from the default branch or a
-          # tag: code under test would share a cache scope with ci.yml and release.yml.
+          # The cache is scoped by the ref this run belongs to. A dispatch never runs from the default
+          # branch or a tag: code under test would share a cache scope with ci.yml and release.yml.
+          # A scheduled run is the default branch itself and tests only its own head.
           [[ -n $DEFAULT_BRANCH ]] || fail "cannot read the repository's default branch"
-          case "$GITHUB_REF" in
-            "refs/heads/$DEFAULT_BRANCH" | refs/tags/*) fail "dispatch from the branch under test or a dedicated branch, not $GITHUB_REF" ;;
-            refs/heads/*) ;;
-            *) fail "dispatch from a branch of this repository" ;;
-          esac
+          if [[ $EVENT_NAME == schedule ]]; then
+            [[ $GITHUB_REF == "refs/heads/$DEFAULT_BRANCH" ]] || fail "a scheduled run belongs to the default branch, not $GITHUB_REF"
+            [[ $GITHUB_SHA =~ ^[0-9a-f]{40}$ ]] || fail "a scheduled run needs the commit it runs on"
+            case "$EVENT_SCHEDULE" in
+              "23 3 * * *") INPUT_JOB=nightly INPUT_SHARDS=8 ;;
+              "41 4 * * 6") INPUT_JOB=weekly INPUT_SHARDS=16 ;;
+              *) fail "unknown schedule" ;;
+            esac
+            # A schedule has no inputs: it takes the head of the default branch.
+            INPUT_REF=$GITHUB_SHA INPUT_BASE=$DEFAULT_BRANCH INPUT_PACKAGE="" INPUT_SCRIPT="" INPUT_TAG=""
+          else
+            [[ $EVENT_NAME == workflow_dispatch ]] || fail "unexpected event $EVENT_NAME"
+            case "$GITHUB_REF" in
+              "refs/heads/$DEFAULT_BRANCH" | refs/tags/*) fail "dispatch from the branch under test or a dedicated branch, not $GITHUB_REF" ;;
+              refs/heads/*) ;;
+              *) fail "dispatch from a branch of this repository" ;;
+            esac
+          fi
           # A branch name or a full commit SHA: no leading dash, no "..", no "//", no trailing slash,
           # and nothing that names a ref outside refs/heads (refs/..., HEAD, FETCH_HEAD).
           ref_ok() {
@@ -115,8 +152,8 @@ jobs:
             [[ $value != refs/* && $value != HEAD && $value != FETCH_HEAD && $value != ORIG_HEAD ]]
           }
           case "$INPUT_JOB" in
-            mutants | nextest | linux-measure) ;;
-            *) fail "job must be mutants, nextest or linux-measure" ;;
+            mutants | nextest | linux-measure | nightly | weekly) ;;
+            *) fail "job must be mutants, nextest, linux-measure, nightly or weekly" ;;
           esac
           ref_ok "$INPUT_REF" || fail "ref must be a branch name or a full commit SHA"
           ref_ok "$INPUT_BASE" || fail "base must be a branch name or a full commit SHA"
@@ -149,11 +186,73 @@ jobs:
           }
           ref_sha=$(resolve "$INPUT_REF") || fail "ref is not a branch of this repository, nor a commit of one"
           base_sha=$(resolve "$INPUT_BASE") || fail "base is not a branch of this repository, nor a commit of one"
+          job=$INPUT_JOB mode=$INPUT_JOB package=$INPUT_PACKAGE files="" skip=false fail_on_missed=false
+          case "$INPUT_JOB" in
+            nightly)
+              # The Rust diff since the last successful scheduled nightly, or since 24 hours ago. A
+              # missed mutant fails the run, so that the owner is told.
+              job=mutants fail_on_missed=true
+              last=""
+              listing=$(curl --silent --show-error --fail --max-time 30 --header 'Accept: application/vnd.github+json' \
+                "https://api.github.com/repos/$REPOSITORY/actions/workflows/heavy-verification.yml/runs?event=schedule&status=success&branch=$DEFAULT_BRANCH&per_page=50") || listing=""
+              if [[ -n $listing ]]; then
+                last=$(python3 -c '
+          import json, re, sys
+          for run in json.load(sys.stdin).get("workflow_runs", []):
+              if run.get("display_title") == "heavy-verification scheduled nightly" and re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or ""):
+                  print(run["head_sha"])
+                  break
+          ' <<< "$listing") || last=""
+              fi
+              if [[ -n $last ]] && git -C "$RUNNER_TEMP/repo.git" cat-file -e "$last^{commit}" 2> /dev/null &&
+                git -C "$RUNNER_TEMP/repo.git" merge-base --is-ancestor "$last" "$ref_sha"; then
+                base_sha=$last
+              else
+                base_sha=$(git -C "$RUNNER_TEMP/repo.git" rev-list -n 1 --before="24 hours ago" "$ref_sha")
+                [[ -n $base_sha ]] || base_sha=$(git -C "$RUNNER_TEMP/repo.git" rev-list --max-parents=0 "$ref_sha" | tail -n 1)
+              fi
+              if [[ -z $(git -C "$RUNNER_TEMP/repo.git" diff --name-only "$base_sha" "$ref_sha" -- '*.rs') ]]; then
+                skip=true
+              fi
+              ;;
+            weekly)
+              # One package of the rotation, whole. The list is read from the commit under test.
+              job=mutants base_sha=""
+              week=$((10#$(date -u +%V)))
+              mapfile -t entries < <(git -C "$RUNNER_TEMP/repo.git" show "$ref_sha:tools/ci/mutation-weekly.txt" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')
+              (( ${#entries[@]} > 0 )) || fail "tools/ci/mutation-weekly.txt lists no package"
+              if [[ -n $INPUT_PACKAGE ]]; then
+                entry=""
+                for candidate in "${entries[@]}"; do
+                  if [[ ${candidate%% *} == "$INPUT_PACKAGE" ]]; then
+                    entry=$candidate
+                    break
+                  fi
+                done
+                [[ -n $entry ]] || fail "package $INPUT_PACKAGE is not in tools/ci/mutation-weekly.txt"
+              else
+                entry=${entries[$((week % ${#entries[@]}))]}
+              fi
+              read -r -a tokens <<< "$entry"
+              package=${tokens[0]}
+              [[ $package =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "the rotation names a bad package"
+              for token in "${tokens[@]:1}"; do
+                [[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the rotation names a bad file"
+                files="$files $token"
+              done
+              files=${files# }
+              ;;
+          esac
           matrix=$(seq 0 $((shards - 1)) | paste -sd, -)
           {
+            echo "job=$job"
+            echo "mode=$mode"
+            echo "skip=$skip"
+            echo "fail_on_missed=$fail_on_missed"
+            echo "files=$files"
             echo "ref=$ref_sha"
             echo "base=$base_sha"
-            echo "package=$INPUT_PACKAGE"
+            echo "package=$package"
             echo "script=$INPUT_SCRIPT"
             echo "total=$shards"
             echo "matrix=[$matrix]"
@@ -161,9 +260,11 @@ jobs:
 
   mutants:
     needs: plan
-    if: inputs.job == 'mutants'
+    if: needs.plan.outputs.job == 'mutants' && needs.plan.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    outputs:
+      count: ${{ steps.select.outputs.count }}
     strategy:
       fail-fast: false
       matrix:
@@ -186,23 +287,52 @@ jobs:
         with:
           key: heavy-mutants
           save-if: "false"
-      - name: mutate this shard of the diff
+      # What is mutated: the Rust diff against the base (a dispatch, the nightly), or one package of the
+      # rotation, whole or by file (the weekly). Counted first, so that a diff without a mutant (a test-only
+      # change) ends here instead of leaving a run with no result for the summary to refuse.
+      - name: select the mutants
+        id: select
         env:
+          MODE: ${{ needs.plan.outputs.mode }}
           BASE: ${{ needs.plan.outputs.base }}
           PACKAGE: ${{ needs.plan.outputs.package }}
+          FILES: ${{ needs.plan.outputs.files }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ $MODE == weekly ]]; then
+            args+=(-p "$PACKAGE")
+            for file in $FILES; do
+              if [[ $file == '!'* ]]; then
+                args+=(--exclude "${file#!}")
+              else
+                args+=(--file "$file")
+              fi
+            done
+          else
+            git fetch --no-tags origin "$BASE"
+            git diff -U0 FETCH_HEAD...HEAD > "$RUNNER_TEMP/changes.diff"
+            args+=(--in-diff "$RUNNER_TEMP/changes.diff")
+            if [[ -n $PACKAGE ]]; then
+              args+=(-p "$PACKAGE")
+            fi
+          fi
+          printf '%s\n' "${args[@]}" > "$RUNNER_TEMP/mutants.args"
+          listing=$(cargo mutants "${args[@]}" --list)
+          count=$(grep -c . <<< "$listing" || true)
+          echo "$count mutants selected"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+      - name: mutate this shard
+        if: steps.select.outputs.count != '0'
+        env:
           SHARD: ${{ matrix.shard }}
           TOTAL: ${{ needs.plan.outputs.shards }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "$BASE"
-          git diff -U0 FETCH_HEAD...HEAD > "$RUNNER_TEMP/changes.diff"
-          args=()
-          if [[ -n $PACKAGE ]]; then
-            args+=(-p "$PACKAGE")
-          fi
+          mapfile -t args < "$RUNNER_TEMP/mutants.args"
           set +e
-          cargo mutants --test-tool nextest --cargo-arg=--locked --in-diff "$RUNNER_TEMP/changes.diff" \
-            --shard "$SHARD/$TOTAL" --sharding slice --output "mutants-out-$SHARD" "${args[@]}"
+          cargo mutants --test-tool nextest --cargo-arg=--locked "${args[@]}" \
+            --shard "$SHARD/$TOTAL" --sharding slice --output "mutants-out-$SHARD"
           code=$?
           set -e
           # 0: every mutant caught. 2: some missed. 3: some timed out. The summary job reports
@@ -220,7 +350,7 @@ jobs:
 
   mutants-summary:
     needs: [plan, mutants]
-    if: always() && inputs.job == 'mutants' && needs.plan.result == 'success'
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.job == 'mutants' && needs.plan.outputs.skip != 'true' && needs.mutants.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -236,11 +366,17 @@ jobs:
         env:
           TOTAL: ${{ needs.plan.outputs.shards }}
           MUTANTS_RESULT: ${{ needs.mutants.result }}
+          FAIL_ON_MISSED: ${{ needs.plan.outputs.fail_on_missed }}
         run: |
           set -euo pipefail
           mkdir summary
           code=0
-          python3 tools/ci/mutants-summary.py --expected-shards "$TOTAL" --mutants-result "$MUTANTS_RESULT" shards summary || code=$?
+          # The nightly fails on a missed mutant; the weekly and a dispatch only report it.
+          extra=()
+          if [[ $FAIL_ON_MISSED == true ]]; then
+            extra+=(--fail-on-missed)
+          fi
+          python3 tools/ci/mutants-summary.py --expected-shards "$TOTAL" --mutants-result "$MUTANTS_RESULT" "${extra[@]}" shards summary || code=$?
           # The summary is shown and uploaded whether or not the run can be trusted; the step still fails with the script's status.
           if [[ -f summary/summary.md ]]; then
             cat summary/summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -258,7 +394,7 @@ jobs:
 
   nextest:
     needs: plan
-    if: inputs.job == 'nextest'
+    if: needs.plan.outputs.job == 'nextest'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
@@ -301,7 +437,7 @@ jobs:
 
   linux-measure:
     needs: plan
-    if: inputs.job == 'linux-measure'
+    if: needs.plan.outputs.job == 'linux-measure'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

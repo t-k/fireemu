@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Merges the outcomes of the shards of one cargo-mutants run into one summary.
 
-Usage: mutants-summary.py [--expected-shards N] <shards-dir> <out-dir>
+Usage: mutants-summary.py [--expected-shards N] [--mutants-result R] [--fail-on-missed] <shards-dir> <out-dir>
 
 <shards-dir> holds one directory per shard (`mutants-shard-K`, the downloaded artifact), each with
 the shard's `outcomes.json`. The summary counts the mutants by outcome (caught, missed, unviable,
@@ -298,6 +298,11 @@ def main(argv):
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--expected-shards", type=int, default=None)
     parser.add_argument(
+        "--fail-on-missed",
+        action="store_true",
+        help="exit 2 when the run can be trusted and a mutant was missed (a run that cannot be trusted exits 1)",
+    )
+    parser.add_argument(
         "--mutants-result",
         default=None,
         help="the result of the job that ran the shards (needs.mutants.result); anything but success is a problem",
@@ -314,7 +319,12 @@ def main(argv):
             f"mutants-summary: the run cannot be trusted ({len(summary['problems'])} problems)",
             file=sys.stderr,
         )
-    return 1 if summary["problems"] else 0
+    if summary["problems"]:
+        return 1
+    if args.fail_on_missed and summary["missed"]:
+        print(f"mutants-summary: {summary['missed']} mutants were missed", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

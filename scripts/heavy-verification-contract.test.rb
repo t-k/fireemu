@@ -23,8 +23,48 @@ class HeavyVerificationContractTest < Minitest::Test
   end
 
   def test_another_trigger_is_refused
-    assert_violation(REAL.sub("on:\n  workflow_dispatch:", "on:\n  pull_request:\n  workflow_dispatch:"), "only trigger")
+    assert_violation(REAL.sub("on:\n  schedule:", "on:\n  pull_request:\n  schedule:"), "only triggers")
+    assert_violation(REAL.sub("on:\n  schedule:", "on:\n  push:\n  schedule:"), "only triggers")
+    assert_violation(REAL.sub("on:\n  schedule:", "on:\n  workflow_run:\n  schedule:"), "only triggers")
     assert_violation(REAL.sub("workflow_dispatch:", "pull_request_target:"), "pull_request_target")
+    assert_violation(REAL.sub(/^  schedule:\n(?:    (?:#|- cron:).*\n)+/, ""), "only triggers")
+  end
+
+  def test_a_changed_or_extra_schedule_is_refused
+    assert_violation(REAL.sub('"23 3 * * *"', '"* * * * *"'), "schedules must be exactly")
+    assert_violation(REAL.sub('"41 4 * * 6"', "\"41 4 * * 6\"\n    - cron: \"0 * * * *\""), "schedules must be exactly")
+    assert_violation(REAL.sub(/^    - cron: "41 4 \* \* 6"\n/, ""), "schedules must be exactly")
+  end
+
+  def test_a_scheduled_run_with_a_wider_token_is_refused
+    assert_violation(REAL.sub("permissions:\n  contents: read", "permissions:\n  contents: read\n  actions: write"), "contents: read")
+    assert_violation(REAL.sub("permissions:\n  contents: read", "permissions:\n  contents: read\n  contents: write"), "write permission")
+  end
+
+  def test_a_scheduled_run_that_may_cancel_or_share_a_group_is_refused
+    assert_violation(REAL.sub("cancel-in-progress: false", "cancel-in-progress: true"), "must not be cancelled")
+    assert_violation(REAL.sub("github.event_name == 'schedule' && 'heavy-verification-scheduled' || ", ""), "concurrency group of their own")
+  end
+
+  def test_a_run_name_or_group_that_reads_more_than_the_event_is_refused
+    assert_violation(REAL.sub("run-name: ${{ github.event_name", "run-name: ${{ github.event.head_commit.message }}${{ github.event_name"), "may only read the event name")
+    assert_violation(REAL.sub("format('heavy-verification-{0}-{1}', inputs.job, inputs.ref)", "format('heavy-verification-{0}-{1}', inputs.job, inputs.base)"), "may only read the event name")
+  end
+
+  def test_a_plan_that_runs_a_schedule_outside_the_default_branch_is_refused
+    assert_violation(REAL.sub('[[ $GITHUB_REF == "refs/heads/$DEFAULT_BRANCH" ]]', "true"), "schedule only on the default branch")
+    assert_violation(REAL.sub("[[ $EVENT_NAME == workflow_dispatch ]]", "true"), "refuse any event")
+  end
+
+  def test_a_job_condition_that_reads_an_input_or_the_event_is_refused
+    assert_violation(REAL.sub("if: needs.plan.outputs.job == 'nextest'", "if: inputs.job == 'nextest'"), "validated outputs")
+    assert_violation(REAL.sub("if: needs.plan.outputs.job == 'nextest'", "if: needs.plan.outputs.job == 'nextest' && github.event_name == 'schedule'"), "validated outputs")
+    assert_violation(REAL.sub("if: needs.plan.outputs.job == 'nextest'", "if: needs.plan.outputs.job == 'nextest' || always()"), "validated outputs")
+  end
+
+  def test_a_second_mutation_run_is_refused
+    extra = "      - name: another\n        run: cargo mutants --shard 1/2 --sharding slice\n"
+    assert_violation(REAL.sub("      - name: select the mutants", extra + "      - name: select the mutants"), "--sharding slice once")
   end
 
   def test_a_wider_token_is_refused

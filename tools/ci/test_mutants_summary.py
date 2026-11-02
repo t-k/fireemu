@@ -81,6 +81,19 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(merged["problems"], [])
         self.assertEqual(merged["shards_found"], [0, 1])
 
+    def test_a_missed_mutant_fails_the_run_only_when_asked_to(self):
+        write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant"), mutant("a.rs:2: y", "MissedMutant")])
+        args = ["--expected-shards", "1", str(self.root), str(self.out)]
+        self.assertEqual(summary.main(args), 0)
+        self.assertEqual(summary.main(["--fail-on-missed"] + args), 2)
+        # A run that cannot be trusted stays 1, whatever it missed.
+        self.assertEqual(summary.main(["--fail-on-missed", "--expected-shards", "2", str(self.root), str(self.out)]), 1)
+        # Timed-out mutants alone do not fail it, and nothing missed passes.
+        other = Path(self.tmp.name) / "other"
+        other.mkdir()
+        write_shard(other, 0, [mutant("a.rs:1: x", "CaughtMutant"), mutant("a.rs:3: z", "Timeout")])
+        self.assertEqual(summary.main(["--fail-on-missed", "--expected-shards", "1", str(other), str(self.out)]), 0)
+
     def test_a_missing_shard_makes_the_run_untrustworthy(self):
         write_shard(self.root, 0, [mutant("a.rs:1: x", "CaughtMutant")])
         merged = summary.merge(self.root, 3)

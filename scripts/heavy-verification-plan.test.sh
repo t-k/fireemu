@@ -22,7 +22,18 @@ git init -q --bare "$work/origin.git"
 git init -q "$work/src"
 git_in "$work/src" checkout -q -b main
 git_in "$work/src" commit -q --allow-empty -m one
-git_in "$work/src" commit -q --allow-empty -m two
+one_sha=$(git_in "$work/src" rev-parse HEAD)
+# The second commit holds Rust (the nightly mutates a diff that has some) and the weekly rotation.
+mkdir -p "$work/src/crates/a/src" "$work/src/tools/ci"
+echo 'fn main() {}' > "$work/src/crates/a/src/lib.rs"
+cat > "$work/src/tools/ci/mutation-weekly.txt" << 'LIST'
+# a comment line
+fireemu-core-auth  # the whole package
+fireemu-adapter-http crates/fireemu-adapter-http/src/identity_toolkit.rs
+fireemu-adapter-http !crates/fireemu-adapter-http/src/identity_toolkit.rs !crates/x/*.rs
+LIST
+git_in "$work/src" add -A
+git_in "$work/src" commit -q -m two
 for branch in work/my-branch release/1.0 feature/a.b-c ci/heavy; do git_in "$work/src" branch "$branch"; done
 git_in "$work/src" checkout -q -b only-here
 git_in "$work/src" commit -q --allow-empty -m "only on a pull request head"
@@ -36,6 +47,23 @@ git init -q "$work/fork"
 git_in "$work/fork" commit -q --allow-empty -m "a commit of a fork"
 fork_sha=$(git_in "$work/fork" rev-parse HEAD)
 
+# A `curl` that answers the list of workflow runs the nightly asks GitHub for: the runs named by
+# CURL_RUNS (SHA, title) pairs, or a failure when CURL_FAILS is set.
+mkdir -p "$work/bin"
+cat > "$work/bin/curl" << 'CURL'
+#!/usr/bin/env bash
+[[ -z ${CURL_FAILS-} ]] || exit 22
+printf '{"workflow_runs": ['
+sep=""
+while read -r sha title; do
+  [[ -n $sha ]] || continue
+  printf '%s{"head_sha": "%s", "display_title": "%s"}' "$sep" "$sha" "$title"
+  sep=","
+done <<< "${CURL_RUNS-}"
+printf ']}'
+CURL
+chmod +x "$work/bin/curl"
+
 failures=0
 pass() { echo "ok   $1"; }
 flunk() {
@@ -46,7 +74,9 @@ flunk() {
 # validate JOB REF PACKAGE BASE SHARDS SCRIPT TAG
 validate() {
   : > "$work/output"
-  GITHUB_REF=${GITHUB_REF_UNDER_TEST-refs/heads/ci/heavy} DEFAULT_BRANCH=${DEFAULT_BRANCH_UNDER_TEST-main} REPO_URL="file://$work/origin.git" \
+  PATH="$work/bin:$PATH" EVENT_NAME=${EVENT_NAME_UNDER_TEST-workflow_dispatch} EVENT_SCHEDULE=${EVENT_SCHEDULE_UNDER_TEST-} GITHUB_SHA=${GITHUB_SHA_UNDER_TEST-$main_sha} \
+    REPOSITORY=t-k/fireemu \
+    GITHUB_REF=${GITHUB_REF_UNDER_TEST-refs/heads/ci/heavy} DEFAULT_BRANCH=${DEFAULT_BRANCH_UNDER_TEST-main} REPO_URL="file://$work/origin.git" \
     RUNNER_TEMP="$work/tmp" INPUT_JOB=$1 INPUT_REF=$2 INPUT_PACKAGE=$3 INPUT_BASE=$4 INPUT_SHARDS=$5 INPUT_SCRIPT=$6 \
     INPUT_TAG=${7-} GITHUB_OUTPUT="$work/output" bash "$work/validate.sh" > "$work/log" 2>&1
   local status=$?
@@ -153,5 +183,61 @@ for locale in C.UTF-8 en_US.UTF-8; do
   refuses linux-measure work/my-branch "" main 8 scripts/../x.sh ""
   refuses linux-measure work/my-branch "" main 8 other/x.sh ""
   refuses nextest work/my-branch "" main 8 "" 'a b'
+
+  # The scheduled runs: the head of the default branch, no inputs, and the schedule says which run.
+  # The nightly takes the diff since the last successful nightly; the weekly one package of the list.
+  scheduled() { # SCHEDULE
+    EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST=$1 GITHUB_REF_UNDER_TEST=refs/heads/main "${@:2}"
+  }
+  has() { grep -qx -- "$1" "$work/output"; }
+  nightly_title="heavy-verification scheduled nightly"
+  # Rust changed since the last nightly (the commit before the one that added it): mutate that diff.
+  CURL_RUNS="$one_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has job=mutants && has mode=nightly && has skip=false && has fail_on_missed=true && has "ref=$main_sha" && has "base=$one_sha" &&
+    has total=8 && has package= && has files=; then
+    pass "the nightly mutates the Rust diff since the last successful nightly and fails on a miss"
+  else
+    flunk "the nightly mutates the Rust diff since the last successful nightly ($(cat "$work/output"))"
+  fi
+  # No Rust since the last nightly: nothing to do.
+  CURL_RUNS="$main_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=true && has "base=$main_sha"; then pass "the nightly skips a diff without Rust"; else flunk "the nightly skips a diff without Rust ($(cat "$work/output"))"; fi
+  # Another workflow run, a run that is not a nightly and a commit this branch does not contain are not the base.
+  CURL_RUNS="$main_sha heavy-verification scheduled weekly" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=false && ! has "base=$main_sha"; then pass "a weekly run is not the last nightly"; else flunk "a weekly run is not the last nightly ($(cat "$work/output"))"; fi
+  CURL_RUNS="$fork_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=false && ! has "base=$fork_sha"; then pass "a nightly commit outside the history is not the base"; else flunk "a nightly commit outside the history is not the base ($(cat "$work/output"))"; fi
+  # No answer from GitHub: 24 hours back, which here reaches before the first commit.
+  CURL_FAILS=1 scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=false && has "ref=$main_sha" && ! has "base=$main_sha"; then pass "without an answer the nightly falls back to 24 hours"; else flunk "without an answer the nightly falls back to 24 hours ($(cat "$work/output"))"; fi
+  # The weekly: the line of the ISO week, whole, and only reporting.
+  week=$((10#$(date -u +%V)))
+  mapfile -t listed < <(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$work/src/tools/ci/mutation-weekly.txt")
+  read -r -a chosen <<< "${listed[$((week % ${#listed[@]}))]}"
+  scheduled "41 4 * * 6" validate "" "" "" "" "" "" ""
+  if has job=mutants && has mode=weekly && has skip=false && has fail_on_missed=false && has total=16 && has "package=${chosen[0]}" &&
+    has "files=${chosen[*]:1}" && has base=; then
+    pass "the weekly takes the line of the ISO week and only reports"
+  else
+    flunk "the weekly takes the line of the ISO week ($(cat "$work/output"))"
+  fi
+  # A dispatch of the weekly names the line by package, from a branch; the first line of a package wins.
+  validate weekly work/my-branch fireemu-adapter-http main 4 "" ""
+  if has "package=fireemu-adapter-http" && has "files=crates/fireemu-adapter-http/src/identity_toolkit.rs" && has total=4; then
+    pass "a dispatched weekly takes the named package's line"
+  else
+    flunk "a dispatched weekly takes the named package's line ($(cat "$work/output"))"
+  fi
+  EXPECT="is not in tools/ci/mutation-weekly.txt" refuses weekly work/my-branch no-such-package main 4 "" ""
+  # A dispatched nightly can be tried on a branch, and keeps the ban on the default branch.
+  accepts nightly work/my-branch "" main 4 "" ""
+  GITHUB_REF_UNDER_TEST=refs/heads/main refuses nightly work/my-branch "" main 4 "" ""
+  # A schedule only belongs to the default branch and to the two known crons; nothing else may start it.
+  EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST="23 3 * * *" GITHUB_REF_UNDER_TEST=refs/heads/work/my-branch EXPECT="belongs to the default branch" refuses "" "" "" "" "" "" ""
+  EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST="23 3 * * *" GITHUB_REF_UNDER_TEST=refs/tags/v1.0.0 EXPECT="belongs to the default branch" refuses "" "" "" "" "" "" ""
+  EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST="1 2 * * *" GITHUB_REF_UNDER_TEST=refs/heads/main EXPECT="unknown schedule" refuses "" "" "" "" "" "" ""
+  EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST="" GITHUB_REF_UNDER_TEST=refs/heads/main EXPECT="unknown schedule" refuses "" "" "" "" "" "" ""
+  EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST="23 3 * * *" GITHUB_REF_UNDER_TEST=refs/heads/main GITHUB_SHA_UNDER_TEST=nothex EXPECT="needs the commit" refuses "" "" "" "" "" "" ""
+  EVENT_NAME_UNDER_TEST=pull_request EXPECT="unexpected event" refuses mutants work/my-branch "" main 8 "" ""
 done
 exit "$failures"

@@ -1,0 +1,47 @@
+# The crates the weekly mutation run takes in turn, one line per run (see docs/mutation-testing.md).
+#
+# Line: `<package> [<file> ...] [!<file> ...]  # <mutant count when written>`. A file is a path from the
+# repository root (a cargo-mutants --file glob); `!<file>` excludes it (--exclude). A line with no file
+# mutates the whole package. The run of ISO week W takes line (W mod number of lines) of this file, so
+# the rotation is fixed by the file. The weekly run has 16 shards of at most 360 minutes: a package too
+# large for that is split here by file, and the last line of a split package excludes the files of
+# its other lines, so a new file of the package is still mutated by that last line.
+# Regenerate the counts with `cargo mutants --list -p <package> --file <glob>`.
+fireemu crates/fireemu/src/functions.rs crates/fireemu/src/import_export.rs crates/fireemu/src/session_rsa_cache.rs crates/fireemu/src/ui.rs  # 1600
+fireemu crates/fireemu/src/config.rs crates/fireemu/src/daemon.rs crates/fireemu/src/hub.rs crates/fireemu/src/main.rs crates/fireemu/src/readiness.rs  # 1586
+fireemu !crates/fireemu/src/config.rs !crates/fireemu/src/daemon.rs !crates/fireemu/src/functions.rs !crates/fireemu/src/hub.rs !crates/fireemu/src/import_export.rs !crates/fireemu/src/main.rs !crates/fireemu/src/readiness.rs !crates/fireemu/src/session_rsa_cache.rs !crates/fireemu/src/ui.rs  # 722
+fireemu-adapter-database  # 1570
+fireemu-adapter-functions crates/fireemu-adapter-functions/src/eventarc_strict.rs crates/fireemu-adapter-functions/src/http.rs crates/fireemu-adapter-functions/src/protocol.rs crates/fireemu-adapter-functions/src/runtime.rs crates/fireemu-adapter-functions/src/task_scheduler.rs  # 1599
+fireemu-adapter-functions !crates/fireemu-adapter-functions/src/eventarc_strict.rs !crates/fireemu-adapter-functions/src/http.rs !crates/fireemu-adapter-functions/src/protocol.rs !crates/fireemu-adapter-functions/src/runtime.rs !crates/fireemu-adapter-functions/src/task_scheduler.rs  # 944
+fireemu-adapter-grpc crates/fireemu-adapter-grpc/src/pipeline_shape.rs crates/fireemu-adapter-grpc/src/rest/coverage.rs crates/fireemu-adapter-grpc/src/rest/json.rs crates/fireemu-adapter-grpc/src/rest/json_syntax.rs crates/fireemu-adapter-grpc/src/rules.rs crates/fireemu-adapter-grpc/src/service.rs crates/fireemu-adapter-grpc/src/streams.rs  # 1598
+fireemu-adapter-grpc crates/fireemu-adapter-grpc/src/pipeline.rs crates/fireemu-adapter-grpc/src/rest/mod.rs crates/fireemu-adapter-grpc/src/text_search.rs  # 1597
+fireemu-adapter-grpc crates/fireemu-adapter-grpc/src/admin/catalog.rs crates/fireemu-adapter-grpc/src/admin/index_rest.rs crates/fireemu-adapter-grpc/src/admin/indexes.rs crates/fireemu-adapter-grpc/src/admin/managed.rs crates/fireemu-adapter-grpc/src/admin/operations.rs crates/fireemu-adapter-grpc/src/admin/rest.rs crates/fireemu-adapter-grpc/src/decode.rs crates/fireemu-adapter-grpc/src/encode.rs crates/fireemu-adapter-grpc/src/gateway.rs crates/fireemu-adapter-grpc/src/query_messages.rs crates/fireemu-adapter-grpc/src/rest/admin_fields.rs crates/fireemu-adapter-grpc/src/rest/pipeline_json.rs crates/fireemu-adapter-grpc/src/rest/transcode.rs crates/fireemu-adapter-grpc/src/serve.rs crates/fireemu-adapter-grpc/src/service/explain.rs  # 1594
+fireemu-adapter-grpc crates/fireemu-adapter-grpc/src/admin/grpc.rs crates/fireemu-adapter-grpc/src/local.rs crates/fireemu-adapter-grpc/src/webchannel.rs  # 1593
+fireemu-adapter-grpc !crates/fireemu-adapter-grpc/src/admin/catalog.rs !crates/fireemu-adapter-grpc/src/admin/grpc.rs !crates/fireemu-adapter-grpc/src/admin/index_rest.rs !crates/fireemu-adapter-grpc/src/admin/indexes.rs !crates/fireemu-adapter-grpc/src/admin/managed.rs !crates/fireemu-adapter-grpc/src/admin/operations.rs !crates/fireemu-adapter-grpc/src/admin/rest.rs !crates/fireemu-adapter-grpc/src/decode.rs !crates/fireemu-adapter-grpc/src/encode.rs !crates/fireemu-adapter-grpc/src/gateway.rs !crates/fireemu-adapter-grpc/src/local.rs !crates/fireemu-adapter-grpc/src/pipeline.rs !crates/fireemu-adapter-grpc/src/pipeline_shape.rs !crates/fireemu-adapter-grpc/src/query_messages.rs !crates/fireemu-adapter-grpc/src/rest/admin_fields.rs !crates/fireemu-adapter-grpc/src/rest/coverage.rs !crates/fireemu-adapter-grpc/src/rest/json.rs !crates/fireemu-adapter-grpc/src/rest/json_syntax.rs !crates/fireemu-adapter-grpc/src/rest/mod.rs !crates/fireemu-adapter-grpc/src/rest/pipeline_json.rs !crates/fireemu-adapter-grpc/src/rest/transcode.rs !crates/fireemu-adapter-grpc/src/rules.rs !crates/fireemu-adapter-grpc/src/serve.rs !crates/fireemu-adapter-grpc/src/service.rs !crates/fireemu-adapter-grpc/src/service/explain.rs !crates/fireemu-adapter-grpc/src/streams.rs !crates/fireemu-adapter-grpc/src/text_search.rs !crates/fireemu-adapter-grpc/src/webchannel.rs  # 205
+fireemu-adapter-http crates/fireemu-adapter-http/src/identity_toolkit.rs  # 2301
+fireemu-adapter-http crates/fireemu-adapter-http/src/control.rs crates/fireemu-adapter-http/src/identity_toolkit/project_config.rs crates/fireemu-adapter-http/src/identity_toolkit/provider_seeds.rs crates/fireemu-adapter-http/src/signing.rs crates/fireemu-adapter-http/src/storage.rs  # 1599
+fireemu-adapter-http !crates/fireemu-adapter-http/src/control.rs !crates/fireemu-adapter-http/src/identity_toolkit.rs !crates/fireemu-adapter-http/src/identity_toolkit/project_config.rs !crates/fireemu-adapter-http/src/identity_toolkit/provider_seeds.rs !crates/fireemu-adapter-http/src/signing.rs !crates/fireemu-adapter-http/src/storage.rs  # 1341
+fireemu-adapter-logging  # 132
+fireemu-adapter-pubsub  # 986
+fireemu-adapter-support  # 112
+fireemu-adapter-ui  # 350
+fireemu-core-app-check  # 374
+fireemu-core-auth crates/fireemu-core-auth/src/federation.rs crates/fireemu-core-auth/src/jwt.rs crates/fireemu-core-auth/src/mfa.rs crates/fireemu-core-auth/src/mfa_config.rs crates/fireemu-core-auth/src/store.rs  # 1599
+fireemu-core-auth !crates/fireemu-core-auth/src/federation.rs !crates/fireemu-core-auth/src/jwt.rs !crates/fireemu-core-auth/src/mfa.rs !crates/fireemu-core-auth/src/mfa_config.rs !crates/fireemu-core-auth/src/store.rs  # 295
+fireemu-core-database crates/fireemu-core-database/src/error.rs crates/fireemu-core-database/src/hash.rs crates/fireemu-core-database/src/limits.rs crates/fireemu-core-database/src/node.rs crates/fireemu-core-database/src/rules/check.rs crates/fireemu-core-database/src/rules/eval.rs crates/fireemu-core-database/src/rules/mod.rs crates/fireemu-core-database/src/rules/parse.rs crates/fireemu-core-database/src/rules/pattern.rs crates/fireemu-core-database/src/rules/regex_admission.rs crates/fireemu-core-database/src/rules/regex_admission/minimum.rs crates/fireemu-core-database/src/rules/regex_admission/persistent.rs crates/fireemu-core-database/src/rules/regex_admission/reader.rs crates/fireemu-core-database/src/rules/regex_admission/symbolic.rs  # 1600
+fireemu-core-database !crates/fireemu-core-database/src/error.rs !crates/fireemu-core-database/src/hash.rs !crates/fireemu-core-database/src/limits.rs !crates/fireemu-core-database/src/node.rs !crates/fireemu-core-database/src/rules/check.rs !crates/fireemu-core-database/src/rules/eval.rs !crates/fireemu-core-database/src/rules/mod.rs !crates/fireemu-core-database/src/rules/parse.rs !crates/fireemu-core-database/src/rules/pattern.rs !crates/fireemu-core-database/src/rules/regex_admission.rs !crates/fireemu-core-database/src/rules/regex_admission/minimum.rs !crates/fireemu-core-database/src/rules/regex_admission/persistent.rs !crates/fireemu-core-database/src/rules/regex_admission/reader.rs !crates/fireemu-core-database/src/rules/regex_admission/symbolic.rs  # 373
+fireemu-core-events  # 119
+fireemu-core-export  # 676
+fireemu-core-firestore crates/fireemu-core-firestore/src/pipeline_exec.rs crates/fireemu-core-firestore/src/pipeline_exec/logic.rs crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs crates/fireemu-core-firestore/src/text_index.rs crates/fireemu-core-firestore/src/text_search.rs crates/fireemu-core-firestore/src/value.rs  # 1599
+fireemu-core-firestore crates/fireemu-core-firestore/src/index.rs crates/fireemu-core-firestore/src/query.rs crates/fireemu-core-firestore/src/size.rs crates/fireemu-core-firestore/src/store.rs  # 1579
+fireemu-core-firestore !crates/fireemu-core-firestore/src/index.rs !crates/fireemu-core-firestore/src/pipeline_exec.rs !crates/fireemu-core-firestore/src/pipeline_exec/logic.rs !crates/fireemu-core-firestore/src/pipeline_exec/scalar.rs !crates/fireemu-core-firestore/src/query.rs !crates/fireemu-core-firestore/src/size.rs !crates/fireemu-core-firestore/src/store.rs !crates/fireemu-core-firestore/src/text_index.rs !crates/fireemu-core-firestore/src/text_search.rs !crates/fireemu-core-firestore/src/value.rs  # 372
+fireemu-core-functions  # 726
+fireemu-core-limits  # 52
+fireemu-core-pubsub  # 855
+fireemu-core-rules crates/fireemu-core-rules/src/civil.rs crates/fireemu-core-rules/src/coverage.rs crates/fireemu-core-rules/src/eval.rs crates/fireemu-core-rules/src/lint.rs crates/fireemu-core-rules/src/runtime.rs  # 1591
+fireemu-core-rules !crates/fireemu-core-rules/src/civil.rs !crates/fireemu-core-rules/src/coverage.rs !crates/fireemu-core-rules/src/eval.rs !crates/fireemu-core-rules/src/lint.rs !crates/fireemu-core-rules/src/runtime.rs  # 763
+fireemu-core-session  # 248
+fireemu-core-storage  # 631
+fireemu-core-types  # 958
+fireemu-export-publication  # 307
+fireemu-fd-acl  # 20

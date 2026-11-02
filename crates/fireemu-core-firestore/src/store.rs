@@ -1514,10 +1514,23 @@ pub(crate) fn document_path_retained_bytes(path: &DocumentPath) -> u64 {
 }
 
 fn value_retained_bytes(value: &Value) -> u64 {
+    value_retained_bytes_with(value, &mut retained_bytes_work_stack())
+}
+
+/// An empty work stack for [`value_retained_bytes_with`].
+fn retained_bytes_work_stack<'a>() -> Vec<&'a Value> {
+    #[cfg(test)]
+    RETAINED_BYTES_WORK_STACKS.with(|count| count.set(count.get().saturating_add(1)));
+    Vec::new()
+}
+
+/// [`value_retained_bytes`] on a caller's work stack, so sizing many values allocates the stack
+/// once rather than once per value. The stack is empty again on return.
+fn value_retained_bytes_with<'a>(value: &'a Value, pending: &mut Vec<&'a Value>) -> u64 {
     const BTREE_ENTRY_OVERHEAD: u64 = 128;
 
     let mut total = u64::try_from(core::mem::size_of::<Value>()).unwrap_or(u64::MAX);
-    let mut pending = vec![value];
+    pending.push(value);
     while let Some(value) = pending.pop() {
         match value {
             Value::String(text) | Value::Reference(text) => {
@@ -7146,10 +7159,11 @@ pub fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) 
 }
 
 pub(crate) fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
+    let mut pending = retained_bytes_work_stack();
     fields.iter().fold(0u64, |total, (key, value)| {
         total
             .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
-            .saturating_add(value_retained_bytes(value))
+            .saturating_add(value_retained_bytes_with(value, &mut pending))
     })
 }
 
@@ -8095,4 +8109,14 @@ mod ttl_expiry_selection_tests {
 #[cfg(test)]
 thread_local! {
     static TTL_INDEX_BUILD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static RETAINED_BYTES_WORK_STACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod query_counter_tests {
+    include!("../tests/support/query_counters.rs");
 }

@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "verify"
 harness = false
+
+[[bench]]
+name = "run_query_counters"
+harness = false

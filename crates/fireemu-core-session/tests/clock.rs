@@ -293,3 +293,109 @@ proptest::proptest! {
         }
     }
 }
+
+// A source the test moves by hand makes every case exact.
+
+fn manual_clock(start: LogicalInstant) -> (VirtualClock, Arc<Mutex<i128>>) {
+    let reading = Arc::new(Mutex::new(1_000_000_000_000_i128));
+    let source = reading.clone();
+    let clock = VirtualClock::following_with(
+        start,
+        Arc::new(move || *source.lock().unwrap()),
+        *reading.lock().unwrap(),
+    );
+    (clock, reading)
+}
+
+fn run_for(reading: &Arc<Mutex<i128>>, nanos: i128) {
+    *reading.lock().unwrap() += nanos;
+}
+
+#[test]
+fn a_source_that_steps_back_holds_the_clock_until_it_catches_up() {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let (mut clock, reading) = manual_clock(start);
+    run_for(&reading, 10_000_000_000);
+    assert_eq!(clock.now().as_nanos() - start.as_nanos(), 10_000_000_000);
+    run_for(&reading, -4_000_000_000);
+    assert_eq!(clock.now().as_nanos() - start.as_nanos(), 10_000_000_000);
+    assert_eq!(clock.snapshot().elapsed_nanos, 10_000_000_000);
+    run_for(&reading, 5_000_000_000);
+    assert_eq!(clock.now().as_nanos() - start.as_nanos(), 11_000_000_000);
+    // A move resets the hold along with everything else.
+    let moved = clock.advance(LogicalDuration::from_seconds(1)).unwrap();
+    assert_eq!(moved.as_nanos() - start.as_nanos(), 12_000_000_000);
+    assert_eq!(clock.snapshot().elapsed_nanos, 12_000_000_000);
+    run_for(&reading, -3_000_000_000);
+    assert_eq!(clock.now(), moved);
+}
+
+#[test]
+fn elapsed_time_counts_real_time_and_hand_moves_once_each() {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let (mut clock, reading) = manual_clock(start);
+    run_for(&reading, 2_000_000_000);
+    clock.advance(LogicalDuration::from_seconds(10)).unwrap();
+    run_for(&reading, 3_000_000_000);
+    let snapshot = clock.snapshot();
+    assert_eq!(
+        snapshot.instant.as_nanos() - start.as_nanos(),
+        15_000_000_000
+    );
+    assert_eq!(snapshot.elapsed_nanos, 15_000_000_000);
+    assert_eq!(snapshot.revision, 1);
+    assert!(clock.is_following());
+    assert!(!VirtualClock::new(start).is_following());
+    assert_eq!(clock.now_for_test(), snapshot.instant);
+    assert_eq!(VirtualClock::new(start).now_for_test(), start);
+}
+
+#[test]
+fn syncing_publishes_nothing_when_no_time_passed_or_the_range_forbids_it() {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let (mut clock, reading) = manual_clock(start);
+    assert!(!clock.sync(), "no time has passed");
+    assert_eq!(clock.snapshot().revision, 0);
+    let high = LogicalInstant::from_nanos(start.as_nanos() + 10_000_000_000);
+    clock.restrict_range(start, high).unwrap();
+    run_for(&reading, 20_000_000_000);
+    assert!(!clock.sync(), "the range does not reach the running time");
+    assert_eq!(clock.snapshot().revision, 0);
+    let (mut free, free_reading) = manual_clock(start);
+    run_for(&free_reading, 20_000_000_000);
+    assert!(free.sync());
+    assert_eq!(free.snapshot().revision, 1);
+}
+
+#[test]
+fn a_runtime_range_includes_its_ends_and_only_narrows() {
+    let at = |seconds: i64| LogicalInstant::from_unix_seconds(seconds);
+    let mut clock = VirtualClock::new(at(10));
+    assert_eq!(clock.restrict_range(at(10), at(20)), Ok(()));
+    assert_eq!(clock.restrict_range(at(0), at(10)), Ok(()));
+    let mut clock = VirtualClock::new(at(10));
+    assert_eq!(
+        clock.restrict_range(at(11), at(20)),
+        Err(ClockError::OutOfRange)
+    );
+    assert_eq!(
+        clock.restrict_range(at(0), at(9)),
+        Err(ClockError::OutOfRange)
+    );
+    assert_eq!(
+        clock.restrict_range(at(20), at(0)),
+        Err(ClockError::OutOfRange)
+    );
+    clock.restrict_range(at(0), at(100)).unwrap();
+    clock.restrict_range(at(5), at(200)).unwrap();
+    assert!(
+        clock.advance_to(at(101)).is_err(),
+        "100 is the upper end now"
+    );
+    assert!(clock.advance_to(at(100)).is_ok());
+    assert!(
+        clock.try_set_allow_backwards(at(4)).is_err(),
+        "5 is the lower end now"
+    );
+    assert!(clock.try_set_allow_backwards(at(5)).is_ok());
+}

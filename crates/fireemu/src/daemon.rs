@@ -1926,6 +1926,25 @@ fn wall_nanos_of(time: std::time::SystemTime) -> i128 {
         .unwrap_or(0)
 }
 
+/// The daemon's clock: it follows real time unless `daemon.clock` freezes it, and a ticker then
+/// tells its observers (schedules, waiting tasks) that time has passed. `reading` is the wall
+/// clock's reading at which an unpinned start was taken; a pinned start begins to run now.
+/// Must be called inside the runtime.
+fn make_clock(cfg: &RuntimeConfig, reading: Option<i128>) -> Arc<Mutex<VirtualClock>> {
+    if cfg.clock_frozen() {
+        return Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+    }
+    // Real time is the wall clock's, so a clock that has run for days still agrees with the
+    // callers' clocks.
+    let clock = Arc::new(Mutex::new(VirtualClock::following_with(
+        cfg.clock_start,
+        Arc::new(|| wall_nanos_of(std::time::SystemTime::now())),
+        reading.unwrap_or_else(|| wall_nanos_of(std::time::SystemTime::now())),
+    )));
+    tokio::spawn(clock_ticker(Arc::downgrade(&clock)));
+    clock
+}
+
 /// How often a clock that follows real time publishes its running time to its observers.
 const CLOCK_TICK: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -1983,22 +2002,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // can advertise readiness, and a SIGTERM that arrives before its handler exists
         // terminates the process without running a destructor.
         let signals = ShutdownSignals::install();
-        // The clock follows real time unless `daemon.clock` freezes it; a ticker tells its
-        // observers (schedules, waiting tasks) that time has passed.
-        let clock = Arc::new(Mutex::new(if cfg.clock_frozen() {
-            VirtualClock::new(cfg.clock_start)
-        } else {
-            // Real time is the wall clock's, so a clock that has run for days still agrees
-            // with the callers' clocks.
-            VirtualClock::following_with(
-                cfg.clock_start,
-                Arc::new(|| wall_nanos_of(std::time::SystemTime::now())),
-                clock_reading.unwrap_or_else(|| wall_nanos_of(std::time::SystemTime::now())),
-            )
-        }));
-        if !cfg.clock_frozen() {
-            tokio::spawn(clock_ticker(Arc::downgrade(&clock)));
-        }
+        let clock = make_clock(&cfg, clock_reading);
         let created_at = cfg.database_create_time.unwrap_or(cfg.clock_start);
         if created_at > cfg.clock_start {
             return Err(format!(
@@ -2507,6 +2511,101 @@ fn configured_pubsub_handle(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn the_clock_ticker_publishes_the_running_time_until_the_clock_is_gone() {
+        use fireemu_core_session::clock::{ClockObserver, VirtualClock};
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::{Arc, Mutex};
+        let reading = Arc::new(Mutex::new(0_i128));
+        let source = reading.clone();
+        let mut clock = VirtualClock::following_with(
+            LogicalInstant::from_unix_seconds(1_800_000_000),
+            Arc::new(move || *source.lock().unwrap()),
+            0,
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let observer: Arc<ClockObserver> =
+            Arc::new(move |snapshot| sink.lock().unwrap().push(snapshot));
+        clock.observe(&observer);
+        let clock = Arc::new(Mutex::new(clock));
+        let ticker = tokio::spawn(super::clock_ticker(Arc::downgrade(&clock)));
+        tokio::time::sleep(super::CLOCK_TICK * 3).await;
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "no time has passed: nothing to publish"
+        );
+        *reading.lock().unwrap() = 7_000_000_000;
+        tokio::time::sleep(super::CLOCK_TICK * 3).await;
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 2, "the running time is published once");
+            assert_eq!(seen[1].elapsed_nanos, 7_000_000_000);
+            assert_eq!(seen[1].revision, 1);
+        }
+        drop(clock);
+        tokio::time::timeout(super::CLOCK_TICK * 5, ticker)
+            .await
+            .expect("the ticker stops with its clock")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_daemon_clock_follows_the_wall_clock_unless_frozen() {
+        use fireemu_core_session::clock::ClockObserver;
+        use std::sync::{Arc, Mutex};
+        let config = |clock: &str| {
+            crate::config::RuntimeConfig::from_json(&serde_json::json!({
+                "schemaVersion": 1,
+                "daemon": {"clockStart": "2026-01-01T00:00:00Z", "clock": clock},
+            }))
+            .unwrap()
+        };
+        let start = config("realtime").clock_start;
+        let revisions = |clock: &Arc<Mutex<fireemu_core_session::clock::VirtualClock>>| {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let sink = seen.clone();
+            let observer: Arc<ClockObserver> =
+                Arc::new(move |snapshot| sink.lock().unwrap().push(snapshot.revision));
+            clock.lock().unwrap().observe(&observer);
+            (seen, observer)
+        };
+        // Following: a reading five seconds old puts the clock five seconds in, and the ticker
+        // publishes that to an observer.
+        let five_seconds_ago = super::wall_nanos_of(std::time::SystemTime::now()) - 5_000_000_000;
+        let running = super::make_clock(&config("realtime"), Some(five_seconds_ago));
+        let (seen, _observer) = revisions(&running);
+        let elapsed = running.lock().unwrap().now_for_test().as_nanos() - start.as_nanos();
+        assert!(
+            (5_000_000_000..6_000_000_000).contains(&elapsed),
+            "{elapsed}"
+        );
+        tokio::time::sleep(super::CLOCK_TICK * 3).await;
+        assert!(
+            seen.lock().unwrap().len() >= 2,
+            "the ticker publishes the running time"
+        );
+        // Frozen: it stands still and nothing ticks.
+        let frozen = super::make_clock(&config("frozen"), Some(five_seconds_ago));
+        let (seen, _observer) = revisions(&frozen);
+        tokio::time::sleep(super::CLOCK_TICK * 3).await;
+        assert_eq!(frozen.lock().unwrap().now_for_test(), start);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn wall_readings_count_nanoseconds_since_the_epoch() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        assert_eq!(super::wall_nanos_of(UNIX_EPOCH), 0);
+        assert_eq!(
+            super::wall_nanos_of(UNIX_EPOCH + Duration::new(1_800_000_000, 5)),
+            1_800_000_000_000_000_005
+        );
+        assert_eq!(super::wall_nanos_of(UNIX_EPOCH - Duration::from_secs(1)), 0);
+        assert!(super::wall_nanos_of(SystemTime::now()) > 1_700_000_000_000_000_000);
+    }
+
     /// The Admin SDK verifier is the callable boundary's verifier for the configured project, on
     /// the virtual clock, with the owner rulings applied in every profile: a future `iat`
     /// verifies (as in production) and an unknown or disabled app does not.

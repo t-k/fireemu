@@ -19,6 +19,9 @@ pub type TimeSource = Arc<dyn Fn() -> i128 + Send + Sync>;
 struct Follow {
     source: TimeSource,
     at: i128,
+    /// The most drift any read has reported since the last move, so that a source that steps
+    /// back holds the clock where it was instead of taking it back.
+    peak: std::cell::Cell<i128>,
 }
 
 /// One published clock state; elapsed time counts forward movement only.
@@ -161,6 +164,7 @@ impl VirtualClock {
         clock.follow = Some(Follow {
             source,
             at: reading,
+            peak: std::cell::Cell::new(0),
         });
         clock
     }
@@ -173,9 +177,11 @@ impl VirtualClock {
 
     /// Nanoseconds the clock has run since its last move (zero for a frozen clock).
     fn drift_nanos(&self) -> i128 {
-        self.follow
-            .as_ref()
-            .map_or(0, |follow| ((follow.source)() - follow.at).max(0))
+        self.follow.as_ref().map_or(0, |follow| {
+            let drift = ((follow.source)() - follow.at).max(follow.peak.get());
+            follow.peak.set(drift);
+            drift
+        })
     }
 
     /// The instant now: the last move plus the real time that has passed since.
@@ -330,6 +336,7 @@ impl VirtualClock {
         if let Some(follow) = &mut self.follow {
             // The drift just folded in is not counted again.
             follow.at += drift;
+            follow.peak.set(0);
         }
         self.revision = self.revision.saturating_add(1);
         let snapshot = self.snapshot();

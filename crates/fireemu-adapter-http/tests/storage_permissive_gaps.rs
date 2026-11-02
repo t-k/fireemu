@@ -1556,8 +1556,9 @@ fn a_google_client_library_read_without_credentials_is_admitted_and_a_plain_fetc
 async fn raw_get(addr: std::net::SocketAddr, path: &str, extra_headers: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let head =
-        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Connection: close\r\n\r\n");
+    let head = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Connection: close\r\n\r\n"
+    );
     stream.write_all(head.as_bytes()).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();

@@ -5,6 +5,8 @@
 //! official default 4400, and gives the daemon its own project so its locator file is its
 //! own.
 
+#[cfg(unix)]
+mod census;
 mod scratch;
 
 use scratch::Scratch;
@@ -604,6 +606,28 @@ fn a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator() {
         !path.exists(),
         "{} outlived the daemon that wrote it",
         path.display()
+    );
+}
+
+/// A daemon without an export to write stops within a fraction of a second of SIGTERM: the
+/// time went to a background key generation that the runtime waited for on its way out (a
+/// debug build measured 1.4 to 8.8 s). The bound is well above the measured 50 to 250 ms.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_stops_the_daemon_without_waiting_for_background_work() {
+    let mut daemon = Daemon::start("demo-hub-sigterm-latency", &[]);
+    let pid = i32::try_from(daemon.child.id()).expect("a pid");
+    let started = Instant::now();
+    let status = daemon.terminate_and_wait();
+    let took = started.elapsed();
+    assert_eq!(status.code(), Some(0), "{status:?}");
+    assert!(
+        took < Duration::from_secs(2),
+        "the daemon took {took:?} to stop after SIGTERM"
+    );
+    assert!(
+        census::wait_for_no_descendants(pid, Duration::from_secs(5)).is_empty(),
+        "the daemon left children behind"
     );
 }
 

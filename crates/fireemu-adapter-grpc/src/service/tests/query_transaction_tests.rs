@@ -146,7 +146,7 @@ async fn assert_multipage_cancellation_preserves_transaction_ownership(analyze: 
                     backend.latest_query_execution_stats().unwrap().1.page_count,
                     2
                 );
-                assert_eq!(transaction_stats(&backend).active, 1);
+                assert_eq!(transaction_stats(&backend).active, usize::from(!internal));
                 assert_eq!(selection_bytes(&backend) > 0, field_order);
                 drop(stream);
                 release_tx.send(()).unwrap();
@@ -578,7 +578,8 @@ async fn execute_pipeline_drop_before_first_delivery_releases_snapshot() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(transaction_stats_for(&backend, &request.parent).active, 1);
+    // The pipeline's input query has no consistency selector: it reads without a transaction.
+    assert_eq!(transaction_stats_for(&backend, &request.parent).active, 0);
     task.abort();
     release_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -666,7 +667,8 @@ async fn execute_pipeline_drop_during_continuation_releases_snapshot_and_stops_p
         backend.latest_query_execution_stats().unwrap().1.page_count,
         2
     );
-    assert_eq!(transaction_stats(&backend).active, 1);
+    // The pipeline's input query has no consistency selector: it reads without a transaction.
+    assert_eq!(transaction_stats(&backend).active, 0);
     task.abort();
     release_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -967,4 +969,376 @@ async fn execute_pipeline_preserves_canonical_context_on_continuation_error() {
     })
     .await
     .unwrap();
+}
+
+/// A hook that blocks its first caller until the returned sender releases it (or 10 s pass),
+/// after reporting on the returned receiver that it was entered.
+#[allow(clippy::type_complexity)]
+fn pause_first_call() -> (
+    Arc<dyn Fn() + Send + Sync>,
+    mpsc::Receiver<()>,
+    mpsc::Sender<()>,
+) {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let state = Mutex::new(Some((entered_tx, release_rx)));
+    let hook = Arc::new(move || {
+        let taken = state.lock().unwrap().take();
+        if let Some((entered, release)) = taken {
+            entered.send(()).unwrap();
+            let _ = release.recv_timeout(Duration::from_secs(10));
+        }
+    });
+    (hook, entered_rx, release_tx)
+}
+
+async fn wait_entered(entered: mpsc::Receiver<()>) {
+    tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(5)))
+        .await
+        .unwrap()
+        .expect("the paused operation was entered");
+}
+
+fn query_names(responses: &[pb::RunQueryResponse]) -> Vec<String> {
+    responses
+        .iter()
+        .filter_map(|response| response.document.as_ref().map(|d| d.name.clone()))
+        .collect()
+}
+
+// RQLOCK-1: while a bare RunQuery page is inside its read (held here in its read guard, under
+// the database lock), a second bare RunQuery and a GetDocument of the same database are served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_page_admits_concurrent_readers_of_the_same_database() {
+    for field_order in [false, true] {
+        let backend = test_backend();
+        let mut service = GatewayService::local(test_gateway(), backend.clone());
+        let request = seeded_query(&backend, 65, field_order);
+        let (hook, entered, release) = pause_first_call();
+        service.first_query_page_guard = Some(hook);
+        let service = Arc::new(service);
+        let first_service = Arc::clone(&service);
+        let first_request = request.clone();
+        let first = tokio::spawn(async move {
+            let stream = Firestore::run_query(&*first_service, Request::new(first_request))
+                .await
+                .unwrap()
+                .into_inner();
+            stream.map(Result::unwrap).collect::<Vec<_>>().await
+        });
+        wait_entered(entered).await;
+
+        let second_service = Arc::clone(&service);
+        let second_request = request.clone();
+        let second = tokio::time::timeout(Duration::from_secs(1), async move {
+            let stream = Firestore::run_query(&*second_service, Request::new(second_request))
+                .await
+                .unwrap()
+                .into_inner();
+            stream.map(Result::unwrap).collect::<Vec<_>>().await
+        })
+        .await;
+        let get_backend = backend.clone();
+        let get = tokio::time::timeout(
+            Duration::from_secs(1),
+            tokio::task::spawn_blocking(move || {
+                get_backend.get_document_snapshot(
+                    &pb::GetDocumentRequest {
+                        name: format!("{}/items/000", query_request().parent),
+                        ..Default::default()
+                    },
+                    &crate::rules::allow_all_reads,
+                )
+            }),
+        )
+        .await;
+        release.send(()).unwrap();
+        let first = first.await.unwrap();
+
+        let second = second.expect("a second bare RunQuery waited for the first one's page");
+        let get = get.expect("a GetDocument waited for a bare RunQuery page");
+        assert!(get.unwrap().unwrap().document.is_some());
+        assert_eq!(query_names(&first).len(), 65);
+        assert_eq!(query_names(&first), query_names(&second));
+        assert_eq!(transaction_stats(&backend).active, 0);
+    }
+}
+
+/// Runs `request` to the end while `between_pages` runs after its second page was read (and
+/// before that page is sent), then returns every response.
+async fn run_query_with_work_between_pages(
+    backend: &Arc<LocalBackend>,
+    request: pb::RunQueryRequest,
+    between_pages: impl FnOnce() + Send + 'static,
+) -> Vec<Result<pb::RunQueryResponse, Status>> {
+    let mut service = GatewayService::local(test_gateway(), backend.clone());
+    let (hook, entered, release) = pause_first_call();
+    service.continuation_query_page_ready = Some(hook);
+    let query = tokio::spawn(async move {
+        let stream = Firestore::run_query(&service, Request::new(request))
+            .await
+            .unwrap()
+            .into_inner();
+        stream.collect::<Vec<_>>().await
+    });
+    wait_entered(entered).await;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        tokio::task::spawn_blocking(between_pages),
+    )
+    .await
+    .expect("a write between pages of a bare RunQuery is not blocked")
+    .unwrap();
+    release.send(()).unwrap();
+    query.await.unwrap()
+}
+
+// Page three of a bare RunQuery reads the snapshot of page one: a commit that lands between the
+// pages (changing, deleting and adding documents) is not seen, and every page reports the
+// first page's read time. The clock stands still from the first page on, so that commit is
+// stamped with the first page's read time itself: only the version tells the two apart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_pages_keep_their_snapshot_across_commits_between_pages() {
+    for field_order in [false, true] {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let backend = Arc::new(LocalBackend::new(test_gateway(), Arc::clone(&clock), 7));
+        let request = seeded_query(&backend, 65, field_order);
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(1))
+            .unwrap();
+        let parent = query_request().parent;
+        let writer = backend.clone();
+        let responses = run_query_with_work_between_pages(&backend, request, move || {
+            let update = |name: String, rank: i64| pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name,
+                    fields: rank_field(rank),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            writer
+                .commit(&pb::CommitRequest {
+                    database: database_name_from_query_parent(&parent),
+                    writes: vec![
+                        update(format!("{parent}/items/000"), -1),
+                        update(format!("{parent}/items/064"), 1_000),
+                        update(format!("{parent}/items/999"), 0),
+                        pb::Write {
+                            operation: Some(pb::write::Operation::Delete(format!(
+                                "{parent}/items/050"
+                            ))),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                })
+                .unwrap();
+        })
+        .await;
+        let responses: Vec<_> = responses.into_iter().map(Result::unwrap).collect();
+        let mut expected: Vec<_> = (0..65)
+            .map(|index| format!("{}/items/{index:03}", query_request().parent))
+            .collect();
+        if field_order {
+            expected.reverse();
+        }
+        assert_eq!(query_names(&responses), expected);
+        let ranks: Vec<_> = responses
+            .iter()
+            .filter_map(|response| response.document.as_ref())
+            .map(|document| document.fields["rank"].value_type.clone())
+            .collect();
+        let mut want: Vec<_> = (0..65)
+            .map(|index| Some(pb::value::ValueType::IntegerValue(65 - index)))
+            .collect();
+        if field_order {
+            want.reverse();
+        }
+        assert_eq!(ranks, want);
+        let read_times: BTreeSet<_> = responses
+            .iter()
+            .map(|response| response.read_time.map(|t| (t.seconds, t.nanos)))
+            .collect();
+        assert_eq!(read_times.len(), 1, "every page reports one snapshot");
+        assert_eq!(transaction_stats(&backend).active, 0);
+        assert_eq!(selection_bytes(&backend), 0);
+    }
+}
+
+// Under retention pressure the history a bare RunQuery reads can be compacted between pages
+// (here the per-path version capacity, which no root can hold back): the next page answers
+// the transaction-expired ABORTED instead of rows from another snapshot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_page_after_its_snapshot_was_compacted_is_aborted() {
+    for field_order in [false, true] {
+        let backend = Arc::new(
+            LocalBackend::new(
+                test_gateway(),
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+                7,
+            )
+            .with_history_version_limit(2),
+        );
+        let request = seeded_query(&backend, 65, field_order);
+        let parent = query_request().parent;
+        let writer = backend.clone();
+        let responses = run_query_with_work_between_pages(&backend, request, move || {
+            // Page three holds items/064 (name order) or items/000 (rank order).
+            for name in ["000", "064"] {
+                for rank in 0..3 {
+                    writer
+                        .commit(&pb::CommitRequest {
+                            database: database_name_from_query_parent(&parent),
+                            writes: vec![pb::Write {
+                                operation: Some(pb::write::Operation::Update(pb::Document {
+                                    name: format!("{parent}/items/{name}"),
+                                    fields: rank_field(1_000 + rank),
+                                    ..Default::default()
+                                })),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }
+            }
+        })
+        .await;
+        let error = responses
+            .iter()
+            .find_map(|response| response.as_ref().err())
+            .expect("a page past the retained history fails");
+        assert_eq!(error.code(), tonic::Code::Aborted);
+        assert_eq!(
+            error.message(),
+            "The referenced transaction has expired or is no longer valid."
+        );
+        assert!(responses
+            .iter()
+            .filter_map(|response| response.as_ref().ok())
+            .filter_map(|response| response.document.as_ref())
+            .all(|document| document.fields["rank"].value_type
+                != Some(pb::value::ValueType::IntegerValue(1_000))));
+        assert_eq!(transaction_stats(&backend).active, 0);
+    }
+}
+
+// A bare RunQuery that finishes (drained, or ended early by its limit) or is cancelled
+// leaves no transaction, selection or backend reference behind, and the next write of the
+// database commits at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_finish_and_cancel_leave_nothing_behind() {
+    for field_order in [false, true] {
+        for ending in ["drain", "limit", "cancel"] {
+            let backend = test_backend();
+            let mut request = seeded_query(&backend, 65, field_order);
+            if ending == "limit" {
+                let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                    &mut request.query_type
+                else {
+                    unreachable!()
+                };
+                query.limit = Some(40);
+            }
+            let service = GatewayService::local(test_gateway(), backend.clone());
+            let mut stream = Firestore::run_query(&service, Request::new(request))
+                .await
+                .unwrap()
+                .into_inner();
+            let mut documents = 0;
+            while let Some(response) = stream.next().await {
+                let response = response.unwrap();
+                assert!(response.transaction.is_empty());
+                documents += usize::from(response.document.is_some());
+                if ending == "cancel" && documents == 40 {
+                    break;
+                }
+            }
+            drop(stream);
+            drop(service);
+            assert_eq!(documents, if ending == "drain" { 65 } else { 40 });
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while Arc::strong_count(&backend) != 1 || selection_bytes(&backend) != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("a finished or cancelled query releases what it held");
+            let stats = transaction_stats(&backend);
+            assert_eq!((stats.active, stats.finished), (0, 0));
+            let writer = backend.clone();
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::task::spawn_blocking(move || {
+                    writer.commit(&pb::CommitRequest {
+                        database: database_name_from_query_parent(&query_request().parent),
+                        writes: vec![pb::Write {
+                            operation: Some(pb::write::Operation::Delete(format!(
+                                "{}/items/000",
+                                query_request().parent
+                            ))),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                }),
+            )
+            .await
+            .expect("the database lock is free")
+            .unwrap()
+            .unwrap();
+        }
+    }
+}
+
+// A bare RunQuery whose consumer takes longer than a transaction's idle and total time between
+// two pages still delivers every page at its first page's snapshot: no transaction expires.
+// Past the one-hour read-time window, an unrelated commit compacts history up to that snapshot
+// (it becomes the compaction floor), which is still exact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_outlives_the_transaction_time_limits() {
+    for (seconds, unrelated_commit) in [(600, false), (7_200, true)] {
+        for field_order in [false, true] {
+            let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+            let backend = Arc::new(LocalBackend::new(test_gateway(), Arc::clone(&clock), 7));
+            let request = seeded_query(&backend, 65, field_order);
+            let writer = backend.clone();
+            let responses = run_query_with_work_between_pages(&backend, request, move || {
+                clock
+                    .lock()
+                    .unwrap()
+                    .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+                        seconds,
+                    ))
+                    .unwrap();
+                if unrelated_commit {
+                    let parent = query_request().parent;
+                    writer
+                        .commit(&pb::CommitRequest {
+                            database: database_name_from_query_parent(&parent),
+                            writes: vec![pb::Write {
+                                operation: Some(pb::write::Operation::Update(pb::Document {
+                                    name: format!("{parent}/other/doc"),
+                                    ..Default::default()
+                                })),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }
+            })
+            .await;
+            let responses: Vec<_> = responses.into_iter().map(Result::unwrap).collect();
+            assert_eq!(query_names(&responses).len(), 65);
+            let read_times: BTreeSet<_> = responses
+                .iter()
+                .map(|response| response.read_time.map(|t| (t.seconds, t.nanos)))
+                .collect();
+            assert_eq!(read_times.len(), 1, "every page reports one snapshot");
+        }
+    }
 }

@@ -87,7 +87,11 @@ fn holders(inodes: &[u64]) -> Vec<String> {
         return holders;
     };
     for entry in processes.flatten() {
-        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
             continue;
         };
         let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {

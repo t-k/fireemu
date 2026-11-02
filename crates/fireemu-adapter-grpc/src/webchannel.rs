@@ -2949,6 +2949,25 @@ mod tests {
         (session, receiver)
     }
 
+    /// The production limit leaves room for the SDK's write pipeline (10 pending batches of up to
+    /// 10 MiB parked behind one delayed request) and stays a bound, not a formality.
+    #[test]
+    fn the_production_limit_covers_the_sdk_write_pipeline_and_stays_bounded() {
+        const MIB: usize = 1024 * 1024;
+        assert!(MAX_BUFFERED_MAP_BYTES >= 10 * 10 * MIB);
+        assert!(MAX_BUFFERED_MAP_BYTES <= 256 * MIB);
+    }
+
+    /// `session_deliver` applies the production limit and reports that the stream took the maps.
+    #[test]
+    fn session_deliver_delivers_in_order_maps_under_the_production_limit() {
+        let (session, mut inbound_rx) = session_with_inbound("map-production-limit", 4);
+        assert!(session_deliver(&session, &map_form(0, &["1", "2"])).unwrap());
+        assert!(inbound_rx.try_recv().unwrap().is_ok());
+        assert!(inbound_rx.try_recv().unwrap().is_ok());
+        assert_eq!(session.maps.lock().unwrap().0, 2);
+    }
+
     /// WCMAP-2: whatever a client sends after a gap, the bytes one session buffers never exceed
     /// the limit; the request that would cross it is refused whole, before it stores anything.
     #[test]

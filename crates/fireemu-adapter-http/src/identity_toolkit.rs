@@ -2448,17 +2448,17 @@ impl Drop for GeneratedLocalIdReservation {
 /// has and `before` did not, with its address and the kind of mail. An unknown address that
 /// improved email privacy answers without a code sends nothing, and an email verification is
 /// not a mail Identity Platform runs `beforeSendEmail` for.
-fn mail_about_to_be_sent(before: &AuthStore, after: &AuthStore) -> Option<(String, &'static str)> {
+fn mail_about_to_be_sent(
+    issued_before: impl Fn(&str) -> bool,
+    after: &AuthStore,
+) -> Option<(String, &'static str)> {
     after.oob_codes().into_iter().find_map(|code| {
         let email_type = match code.request_type {
             OobRequestType::PasswordReset => "PASSWORD_RESET",
             OobRequestType::EmailSignIn => "EMAIL_SIGN_IN",
             OobRequestType::VerifyEmail | OobRequestType::VerifyAndChangeEmail => return None,
         };
-        before
-            .oob_code(&code.code)
-            .is_none()
-            .then(|| (code.email.clone(), email_type))
+        (!issued_before(&code.code)).then(|| (code.email.clone(), email_type))
     })
 }
 
@@ -2551,7 +2551,24 @@ fn dispatch_with_blocking_hook(
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
     }
     let mut candidate = store.clone();
-    let live_snapshot = store.clone();
+    // What the request needs to know about the store as it was before the speculative run: the
+    // candidate is private to this request, so these few facts stand in for a second copy.
+    let project = store.project_id().to_owned();
+    let tenant = store.tenant_id().map(str::to_owned);
+    let first_new_sequence = store.next_user_sequence();
+    let mail_request = matches!(
+        handler,
+        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
+    );
+    let codes_before: std::collections::BTreeSet<String> = if mail_request {
+        store
+            .oob_codes()
+            .into_iter()
+            .map(|code| code.code.clone())
+            .collect()
+    } else {
+        std::collections::BTreeSet::new()
+    };
     let reset_generation = store.reset_generation();
     let reserve_local_id = request_may_create_end_user(handler, &store, body, at)
         .then(|| candidate.reserve_next_generated_local_id_with_ticket());
@@ -2603,7 +2620,9 @@ fn dispatch_with_blocking_hook(
     let speculative_uid = uid.clone();
     let is_new = is_authentication
         && uid_text.as_deref().is_some_and(|uid| {
-            live_snapshot.user_by_id(uid).is_none() && candidate.user_by_id(uid).is_some()
+            candidate
+                .user_by_id(uid)
+                .is_some_and(|user| user.sequence >= first_new_sequence)
         });
     let signed_in = is_authentication
         && response.status == 200
@@ -2626,8 +2645,6 @@ fn dispatch_with_blocking_hook(
         .any()
         .then(|| inbound_credentials_from_request(body, retained_policy))
         .flatten();
-    let project = live_snapshot.project_id().to_owned();
-    let tenant = live_snapshot.tenant_id().map(str::to_owned);
     // Identity Platform runs no blocking function for an anonymous sign-up or a custom-token
     // sign-in (AUTH-TENANT-BLOCKING recording 2026-09-28, events#sign-up-anonymous and
     // custom-token#custom-*; the official Auth emulator runs none either).
@@ -2636,11 +2653,8 @@ fn dispatch_with_blocking_hook(
     // one (security review S1). A mail request reaches this path only where beforeSendEmail
     // runs (the strict profile, with a function for it: `handler_runs_blocking_auth`), and a
     // refused or failed request has created no code.
-    let speculative_mail = matches!(
-        handler,
-        routes::Handler::SendOobCode | routes::Handler::AdminSendOobCode
-    )
-    .then(|| mail_about_to_be_sent(&live_snapshot, &candidate));
+    let speculative_mail =
+        mail_request.then(|| mail_about_to_be_sent(|code| codes_before.contains(code), &candidate));
     if let Some(Some(mail)) = &speculative_mail {
         if let Err(refusal) = before_send_email(blocking, mail, &project) {
             return refusal;
@@ -2890,7 +2904,8 @@ fn dispatch_with_blocking_hook(
         // differently from the speculative copy (an address registered meanwhile, a setting
         // changed), and then the request is refused rather than sent unchecked.
         if let Some(expected) = &speculative_mail {
-            if mail_about_to_be_sent(&live, &committed) != *expected {
+            if mail_about_to_be_sent(|code| live.oob_code(code).is_some(), &committed) != *expected
+            {
                 return error(409, "AUTH_STATE_CHANGED");
             }
         }

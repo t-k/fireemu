@@ -878,6 +878,93 @@ fn an_account_created_while_before_create_runs_does_not_fail_an_email_link_sign_
     assert!(store.user_by_email("intervening@example.com").is_some());
 }
 
+/// Updates the signing-in account and creates another one through the Admin API while the
+/// first `BeforeSignIn` runs, as another client of the same project may at any moment.
+struct InterveningAdminUpdateHook {
+    state: std::sync::OnceLock<std::sync::Weak<AuthState>>,
+    done: AtomicBool,
+}
+
+impl AuthBlockingHook for InterveningAdminUpdateHook {
+    fn handles(&self, event: BlockingAuthEvent) -> bool {
+        event == BlockingAuthEvent::BeforeSignIn
+    }
+
+    fn invoke(
+        &self,
+        _event: BlockingAuthEvent,
+        user: &fireemu_core_auth::store::UserRecord,
+    ) -> Result<Value, BlockingFunctionFailure> {
+        if !self.done.swap(true, Ordering::SeqCst) {
+            let state = self.state.get().and_then(std::sync::Weak::upgrade).unwrap();
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts:update"),
+                &json!({"localId": user.local_id.to_string(), "displayName": "Written meanwhile"}),
+            );
+            assert_eq!(status, 200, "{body}");
+            let (status, body) = admin(
+                &state,
+                "POST",
+                &format!("{V1}/projects/demo-app/accounts"),
+                &json!({"email": "racer@example.com", "password": "hunter22"}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        Ok(json!({}))
+    }
+}
+
+/// `BHCLONE-3`: a write that lands while `BeforeSignIn` runs is neither lost nor refused. The
+/// sign-in commits onto the store as it is after the write, not onto the copy the function saw:
+/// it answers with the name written meanwhile, keeps it and the account created meanwhile, and
+/// adds exactly one working refresh session.
+#[test]
+fn a_write_that_lands_while_before_sign_in_runs_is_kept_by_the_sign_in() {
+    let hook = Arc::new(InterveningAdminUpdateHook {
+        state: std::sync::OnceLock::new(),
+        done: AtomicBool::new(false),
+    });
+    let mut auth = state();
+    let (status, created) = post(
+        &auth,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "raced@example.com", "password": "hunter22", "displayName": "Before"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let uid = created["localId"].as_str().unwrap().to_owned();
+    let sessions_before = auth.store.lock().unwrap().refresh_session_count();
+    auth.blocking = Some(hook.clone());
+    let auth = Arc::new(auth);
+    hook.state.set(Arc::downgrade(&auth)).unwrap();
+
+    let (status, body) = post(
+        &auth,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "raced@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], uid.as_str());
+    assert_eq!(body["displayName"], "Written meanwhile");
+    {
+        let store = auth.store.lock().unwrap();
+        let user = store.user_by_email("raced@example.com").unwrap();
+        assert_eq!(user.display_name.as_deref(), Some("Written meanwhile"));
+        assert!(store.user_by_email("racer@example.com").is_some());
+        // The candidate's provisional session is not committed: one sign-in, one session.
+        assert_eq!(store.refresh_session_count(), sessions_before + 1);
+    }
+    let (status, refreshed) = post(
+        &auth,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(refreshed["user_id"], uid.as_str());
+}
+
 /// In the emulator profile a blocking configuration that keeps changing while an email link is
 /// sent and used refuses neither request, as the official Auth emulator does not (closure
 /// review M1, 2026-09-28).

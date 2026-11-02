@@ -14213,3 +14213,107 @@ async fn a_transaction_still_expires_when_the_clock_passes_its_idle_limit() {
         }
     }
 }
+
+/// One step of a transaction's life in the lifetime property below.
+#[derive(Debug, Clone)]
+enum LifeStep {
+    /// The session clock is advanced by this many seconds.
+    Advance(i64),
+    /// The client reads in the transaction (activity).
+    Read,
+}
+
+fn life_step() -> impl proptest::strategy::Strategy<Value = LifeStep> {
+    use proptest::strategy::Strategy;
+    proptest::prop_oneof![
+        3 => (1i64..90).prop_map(LifeStep::Advance),
+        1 => proptest::strategy::Just(LifeStep::Read),
+    ]
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(40))]
+
+    /// Model of a read-write transaction's lifetime on an unpinned daemon, over random clock
+    /// advances before its begin and random advances and reads during its life: it dies once
+    /// the time since its last activity reaches the idle limit (strict 120 s, emulator 60 s) or
+    /// its age reaches the 270 s total lifetime, both counted from virtual advances made while
+    /// it lives; what was advanced before its begin never counts. Each read succeeds exactly
+    /// while it lives, and so does the final commit.
+    #[test]
+    fn transaction_lifetime_matches_the_clock_model(
+        strict in proptest::bool::ANY,
+        before in proptest::collection::vec(1i64..300, 0..4),
+        life in proptest::collection::vec(life_step(), 0..8),
+    ) {
+        const DATABASE: &str = "projects/demo-app/databases/(default)";
+        let idle_limit = if strict { 120 } else { 60 };
+        let tokio = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        tokio.block_on(async {
+            let (mut client, clock, backend, handle) = start_unpinned(strict).await;
+            for seconds in &before {
+                advance_session_clock(&clock, &backend, *seconds);
+            }
+            let transaction = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DATABASE.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            let (mut idle, mut age, mut alive) = (0i64, 0i64, true);
+            for step in &life {
+                match step {
+                    LifeStep::Advance(seconds) => {
+                        advance_session_clock(&clock, &backend, *seconds);
+                        idle += seconds;
+                        age += seconds;
+                        alive &= idle < idle_limit && age < 270;
+                    }
+                    LifeStep::Read => {
+                        let read = client
+                            .get_document(pb::GetDocumentRequest {
+                                name: format!("{DATABASE}/documents/items/a"),
+                                consistency_selector: Some(
+                                    pb::get_document_request::ConsistencySelector::Transaction(
+                                        transaction.clone(),
+                                    ),
+                                ),
+                                ..Default::default()
+                            })
+                            .await;
+                        // A missing document is NOT_FOUND inside a live transaction; an expired or
+                        // forgotten one is ABORTED / INVALID_ARGUMENT.
+                        let lived = !matches!(
+                            read.as_ref().map_err(tonic::Status::code),
+                            Err(tonic::Code::Aborted | tonic::Code::InvalidArgument)
+                        );
+                        proptest::prop_assert_eq!(lived, alive, "read after {:?}: {:?}", life, read);
+                        if alive {
+                            idle = 0;
+                        }
+                    }
+                }
+            }
+            let commit = client
+                .commit(pb::CommitRequest {
+                    transaction,
+                    ..history_budget_update("demo-app", "(default)", "a", 1)
+                })
+                .await;
+            handle.abort();
+            proptest::prop_assert_eq!(
+                commit.is_ok(),
+                alive,
+                "strict {}, before {:?}, life {:?}: {:?}",
+                strict,
+                before,
+                life,
+                commit
+            );
+            Ok(())
+        })?;
+    }
+}

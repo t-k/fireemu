@@ -3483,17 +3483,15 @@ impl LocalBackend {
                 *last = now;
                 advance
             };
-            if advance > 0 {
-                let advance = fireemu_core_types::time::LogicalDuration::from_nanos(advance);
-                let scope = fireemu_core_session::tenancy::Scope::AllExcept(
-                    std::collections::BTreeSet::new(),
-                );
-                for (_, handle) in self.handles_of(&scope) {
-                    let _ = handle.with(|state| {
-                        state.age_transactions(advance);
-                        Ok(())
-                    });
-                }
+            // A clock set backwards ages nothing: `age_transactions` ignores a non-positive age.
+            let advance = fireemu_core_types::time::LogicalDuration::from_nanos(advance);
+            let scope =
+                fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
+            for (_, handle) in self.handles_of(&scope) {
+                let _ = handle.with(|state| {
+                    state.age_transactions(advance);
+                    Ok(())
+                });
             }
         }
         self.compact_all(now);

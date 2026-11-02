@@ -1568,12 +1568,15 @@ fn phone_sign_in_uses_a_deterministic_code_from_the_inspection_route() {
     assert_eq!(entry["sessionInfo"], session);
     let code = entry["code"].as_str().unwrap().to_owned();
     assert_eq!(code.len(), 6);
+    // A code that cannot be the issued one, so the refusal is certain.
+    let wrong_code = if code == "000000" { "111111" } else { "000000" };
     let (status, wrong) = post(
         &s,
         &format!("{V1}/accounts:signInWithPhoneNumber"),
-        &json!({"sessionInfo": session, "code": "000000"}),
+        &json!({"sessionInfo": session, "code": wrong_code}),
     );
-    assert!(status == 400 || code == "000000", "{wrong}");
+    assert_eq!(status, 400, "{wrong}");
+    assert_eq!(wrong["error"]["message"], "INVALID_CODE", "{wrong}");
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPhoneNumber"),
@@ -2507,23 +2510,24 @@ fn phone_second_factor_enrollment_and_sign_in() {
         .as_str()
         .unwrap()
         .to_owned();
+    // A code that cannot be the issued one, so the refusal is certain.
+    let wrong_code = if code == "999999" { "000000" } else { "999999" };
     let (status, wrong) = post(
         &s,
         &format!("{V2}/accounts/mfaSignIn:finalize"),
-        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": "999999"}}),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": wrong_code}}),
     );
-    assert!(status == 400 || code == "999999", "{wrong}");
-    // Wrong code consumed nothing: the session is still there if the code differed.
-    if code != "999999" {
-        let (status, signed) = post(
-            &s,
-            &format!("{V2}/accounts/mfaSignIn:finalize"),
-            &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
-        );
-        assert_eq!(status, 200, "{signed}");
-        let c = claims(signed["idToken"].as_str().unwrap());
-        assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
-    }
+    assert_eq!(status, 400, "{wrong}");
+    assert_eq!(wrong["error"]["message"], "INVALID_CODE", "{wrong}");
+    // The wrong code consumed nothing: the session still finalizes with the issued code.
+    let (status, signed) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": credential, "phoneVerificationInfo": {"sessionInfo": session, "code": code}}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let c = claims(signed["idToken"].as_str().unwrap());
+    assert_eq!(c["firebase"]["sign_in_second_factor"], "phone");
     let recorded = contexts.lock().unwrap();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, BlockingAuthEvent::BeforeSignIn);

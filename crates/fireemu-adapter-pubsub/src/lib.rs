@@ -2561,6 +2561,233 @@ mod dispatch_tests {
             assert_eq!(received[0].message.message.data, b"available");
         }
     }
+
+    /// A push backoff ends at its resume instant: a publication at exactly that instant is
+    /// deliverable at once.
+    #[test]
+    fn a_push_backoff_no_longer_holds_at_its_resume_instant() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let mut dispatch = PushDispatchState::default();
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+
+        dispatch.enqueue(name.clone(), resume_at);
+        assert!(dispatch.deferred.is_empty());
+        assert_eq!(dispatch.claim().unwrap().subscription, name);
+    }
+
+    /// A retry deferral at exactly the backoff's resume instant does not withdraw a publication
+    /// queued during the attempt: the backoff is over.
+    #[test]
+    fn a_backoff_that_ends_at_the_deferral_instant_does_not_withdraw_queued_work() {
+        let topic = TopicName::new("demo-project", "backoff").unwrap();
+        let name = subscription(0, &topic);
+        let mut dispatch = PushDispatchState::default();
+        let resume_at = record_failure_for_current(&mut dispatch, &name, TEST_NOW);
+
+        dispatch.enqueue(name.clone(), resume_at);
+        let work = dispatch.claim().expect("the worker claims the work");
+        dispatch.enqueue(name.clone(), resume_at);
+        let retry_at = resume_at
+            .checked_add(LogicalDuration::from_seconds(30))
+            .unwrap();
+        dispatch.defer(work, retry_at, resume_at);
+
+        assert_eq!(dispatch.claim().unwrap().subscription, name);
+    }
+
+    /// A worker whose subscription was deleted under it defers nothing: the stale incarnation
+    /// leaves no deferred work behind.
+    #[test]
+    fn a_stale_worker_defers_nothing() {
+        let topic = TopicName::new("demo-project", "stale").unwrap();
+        let name = subscription(0, &topic);
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let work = dispatch.claim().unwrap();
+        dispatch.invalidate(&name.to_full());
+
+        let later = TEST_NOW
+            .checked_add(LogicalDuration::from_seconds(10))
+            .unwrap();
+        dispatch.defer(work, later, TEST_NOW);
+        assert!(dispatch.deferred.is_empty());
+    }
+
+    /// Promoting due work marks the subscription queued, so a publication that arrives next does
+    /// not queue the same subscription twice.
+    #[test]
+    fn promoted_work_is_queued_once_even_when_a_publication_follows() {
+        let topic = TopicName::new("demo-project", "promote").unwrap();
+        let name = subscription(0, &topic);
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(name.clone(), TEST_NOW);
+        let work = dispatch.claim().unwrap();
+        let due = TEST_NOW
+            .checked_add(LogicalDuration::from_seconds(10))
+            .unwrap();
+        dispatch.defer(work, due, TEST_NOW);
+
+        dispatch.promote_due(due);
+        dispatch.enqueue(name.clone(), due);
+        assert_eq!(dispatch.ready.len(), 1);
+    }
+
+    /// Invalidating one subscription leaves every other subscription's ready work in place.
+    #[test]
+    fn invalidating_a_subscription_keeps_other_ready_work() {
+        let topic = TopicName::new("demo-project", "ready").unwrap();
+        let gone = subscription(0, &topic);
+        let kept = subscription(1, &topic);
+        let mut dispatch = PushDispatchState::default();
+        dispatch.enqueue(gone.clone(), TEST_NOW);
+        dispatch.enqueue(kept.clone(), TEST_NOW);
+
+        dispatch.invalidate(&gone.to_full());
+        assert_eq!(dispatch.claim().unwrap().subscription, kept);
+        assert!(dispatch.claim().is_none());
+    }
+
+    struct NoRecoveryDelivery;
+
+    impl TopicDelivery for NoRecoveryDelivery {
+        fn reserve(
+            &self,
+            _topic: &str,
+            _messages: &[BridgeMessage],
+        ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+            Err(TopicDeliveryError::Capacity)
+        }
+    }
+
+    struct RecoveringDelivery(Arc<tokio::sync::Notify>);
+
+    impl TopicDelivery for RecoveringDelivery {
+        fn reserve(
+            &self,
+            _topic: &str,
+            _messages: &[BridgeMessage],
+        ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+            Err(TopicDeliveryError::Capacity)
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn handle_with_bridge(bridge: Arc<dyn TopicDelivery>) -> PubSubHandle {
+        PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(42))),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            Some(bridge),
+        )
+    }
+
+    fn dead_letter_dispatcher_running(handle: &PubSubHandle) -> bool {
+        handle.dead_letter_dispatcher.lock().unwrap().task.is_some()
+    }
+
+    /// A bridge without a recovery signal has nothing to wake a dead-letter retry driver, so
+    /// none is started.
+    #[tokio::test]
+    async fn a_bridge_without_a_recovery_signal_starts_no_dead_letter_dispatcher() {
+        let handle = handle_with_bridge(Arc::new(NoRecoveryDelivery));
+        handle.start_dead_letter_dispatcher();
+        assert!(!dead_letter_dispatcher_running(&handle));
+    }
+
+    /// Once the dispatchers are cancelled, starting the dead-letter dispatcher again does
+    /// nothing.
+    #[tokio::test]
+    async fn a_cancelled_dead_letter_dispatcher_is_not_restarted() {
+        let handle = handle_with_bridge(Arc::new(RecoveringDelivery(Arc::default())));
+        handle.start_dead_letter_dispatcher();
+        assert!(dead_letter_dispatcher_running(&handle));
+        handle.shutdown_push_dispatcher().await;
+        assert!(!dead_letter_dispatcher_running(&handle));
+
+        handle.start_dead_letter_dispatcher();
+        assert!(!dead_letter_dispatcher_running(&handle));
+    }
+
+    /// Aborting a running server (dropping its future) cancels the dispatchers it started.
+    #[tokio::test]
+    async fn aborting_the_server_cancels_its_dispatchers() {
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(42))),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            None,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = tokio::spawn(serve_pubsub(listener, handle.clone()));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while handle.push_dispatcher.lock().unwrap().task.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the server starts its push dispatcher");
+        server.abort();
+        let _ = server.await;
+
+        assert!(handle.push_dispatcher.lock().unwrap().stopped);
+        assert!(handle.push_dispatch.lock().unwrap().shutting_down);
+        assert!(handle.dead_letter_dispatcher.lock().unwrap().stopped);
+        handle.shutdown_push_dispatcher().await;
+    }
+
+    /// A Scheduler publication is stored under the message id the scheduler chose and reaches
+    /// the topic's subscriptions like any other publication.
+    #[test]
+    fn a_scheduler_publication_returns_the_stored_message_under_its_id() {
+        let topic = TopicName::new("demo-project", "scheduled").unwrap();
+        let name = SubscriptionName::new("demo-project", "scheduled-pull").unwrap();
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        {
+            let mut state = state.lock().unwrap();
+            state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    labels: BTreeMap::new(),
+                    expiration_policy: None,
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
+                    name: name.clone(),
+                    topic: topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: PushConfig::default(),
+                })
+                .unwrap();
+        }
+        let handle = PubSubHandle::new(
+            state,
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            None,
+        );
+        let stored = handle
+            .publish_scheduler_message(
+                &topic,
+                PubsubMessage {
+                    data: b"tick".to_vec(),
+                    attributes: BTreeMap::new(),
+                    ordering_key: String::new(),
+                },
+                "scheduler-message-1".to_owned(),
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].message_id, "scheduler-message-1");
+        assert_eq!(stored[0].message.data, b"tick");
+        let pulled = handle.pull(&name, 10).unwrap();
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message.message_id, "scheduler-message-1");
+    }
 }
 
 #[cfg(test)]

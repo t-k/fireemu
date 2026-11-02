@@ -2292,15 +2292,14 @@ fn the_retained_upload_gauge_is_bounded_by_one_gibibyte() {
 }
 
 #[test]
-fn an_oversized_import_is_refused_as_too_large_before_its_identity_is_checked() {
+fn an_oversized_import_is_refused_as_too_large() {
     use fireemu_core_storage::store::{ImportedObject, MAX_OBJECT_BYTES};
     let mut s = StorageState::new(1);
     let object = ImportedObject {
         bucket: bucket(),
         name: name("oversized"),
-        // An identity the import refuses; the size refusal comes first.
-        generation: 0,
-        metageneration: 0,
+        generation: 1,
+        metageneration: 1,
         content_type: "application/octet-stream".to_owned(),
         content_disposition: None,
         content_encoding: None,

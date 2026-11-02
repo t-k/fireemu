@@ -2,6 +2,7 @@
 //! contains neither self references nor request bindings. Public AST mutations that change item
 //! shape/offsets rebuild the plan; names, bodies and match captures are always read from the AST.
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -12,6 +13,19 @@ std::thread_local! { pub(crate) static PLAN_BUILDS: core::cell::Cell<usize> = co
 
 #[cfg(test)]
 std::thread_local! { pub(crate) static LEGACY_EVALUATION: core::cell::Cell<bool> = const { core::cell::Cell::new(false) }; }
+
+#[cfg(test)]
+std::thread_local! {
+    /// Counts `ServiceScopes::agrees` walks started by `FunctionScopes`.
+    pub(crate) static AGREEMENT_CHECKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Restores the pre-lazy per-request setup (agreement walk and capture tables for every
+    /// entered block) so differential tests can compare it with the lazy path.
+    pub(crate) static EAGER_SCOPE_SETUP: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Shape {
@@ -102,27 +116,46 @@ impl ServiceScopes {
 
 pub(crate) struct FunctionScopes<'a> {
     items: &'a [Item],
-    pub(crate) plan: Arc<ServiceScopes>,
+    compiled: &'a Arc<ServiceScopes>,
+    /// Resolved on the first declaration lookup, so a request that calls no function never
+    /// walks the service. `items` is borrowed for the whole evaluation, so a later check sees
+    /// the same AST shape as an eager one would have.
+    plan: OnceCell<Arc<ServiceScopes>>,
     #[cfg(test)]
     legacy: Option<BTreeMap<usize, Arc<crate::eval::LegacyFunctionEnvironment<'a>>>>,
 }
 
 impl<'a> FunctionScopes<'a> {
-    pub(crate) fn new(items: &'a [Item], compiled: &Arc<ServiceScopes>) -> Self {
-        Self {
+    pub(crate) fn new(items: &'a [Item], compiled: &'a Arc<ServiceScopes>) -> Self {
+        let scopes = Self {
             items,
+            compiled,
+            plan: OnceCell::new(),
             #[cfg(test)]
             legacy: LEGACY_EVALUATION.with(core::cell::Cell::get).then(|| {
                 let mut scopes = BTreeMap::new();
                 crate::eval::collect_function_scopes(items, None, &mut scopes);
                 scopes
             }),
-            plan: if compiled.agrees(items, 0) {
-                Arc::clone(compiled)
-            } else {
-                ServiceScopes::compile(items)
-            },
+        };
+        #[cfg(test)]
+        if EAGER_SCOPE_SETUP.with(core::cell::Cell::get) {
+            scopes.plan();
         }
+        scopes
+    }
+
+    /// The compiled plan when it still describes `items`; otherwise a plan rebuilt from them.
+    pub(crate) fn plan(&self) -> &Arc<ServiceScopes> {
+        self.plan.get_or_init(|| {
+            #[cfg(test)]
+            AGREEMENT_CHECKS.with(|checks| checks.set(checks.get() + 1));
+            if self.compiled.agrees(self.items, 0) {
+                Arc::clone(self.compiled)
+            } else {
+                ServiceScopes::compile(self.items)
+            }
+        })
     }
 
     pub(crate) fn get(&self, function: &FunctionDecl) -> Option<FunctionEnvironment<'a>> {
@@ -132,17 +165,18 @@ impl<'a> FunctionScopes<'a> {
                 .get(&(std::ptr::from_ref(function) as usize))
                 .map(|environment| FunctionEnvironment {
                     items: self.items,
-                    plan: Arc::clone(&self.plan),
+                    plan: Arc::clone(self.plan()),
                     scope: 0,
                     legacy: Some(Arc::clone(environment)),
                 });
         }
-        let &(scope, _) = self.plan.declarations.get(&function.span.offset)?.iter().find(|&&(scope, position)| {
-            matches!(&self.plan.items(self.items, scope)[position], Item::Function(found) if std::ptr::eq(found, function))
+        let plan = self.plan();
+        let &(scope, _) = plan.declarations.get(&function.span.offset)?.iter().find(|&&(scope, position)| {
+            matches!(&plan.items(self.items, scope)[position], Item::Function(found) if std::ptr::eq(found, function))
         })?;
         Some(FunctionEnvironment {
             items: self.items,
-            plan: Arc::clone(&self.plan),
+            plan: Arc::clone(plan),
             scope,
             #[cfg(test)]
             legacy: None,
@@ -208,7 +242,7 @@ mod scope_plan_tests {
             &ruleset.function_scopes[0],
         );
         assert!(std::sync::Arc::ptr_eq(
-            &scopes.plan,
+            scopes.plan(),
             &ruleset.function_scopes[0]
         ));
         let crate::ast::Item::Function(function) = &mut ruleset.services[0].items[0] else {
@@ -225,7 +259,7 @@ mod scope_plan_tests {
             &ruleset.function_scopes[0],
         );
         assert!(std::sync::Arc::ptr_eq(
-            &scopes.plan,
+            scopes.plan(),
             &ruleset.function_scopes[0]
         ));
         let crate::ast::Item::Function(function) = &ruleset.services[0].items[0] else {
@@ -243,7 +277,7 @@ mod scope_plan_tests {
             &ruleset.function_scopes[0],
         );
         assert!(!std::sync::Arc::ptr_eq(
-            &scopes.plan,
+            scopes.plan(),
             &ruleset.function_scopes[0]
         ));
         assert_eq!(original.services[0].items.len(), 2);

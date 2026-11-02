@@ -26,3 +26,7 @@ harness = false
 [[bench]]
 name = "coverage_merge"
 harness = false
+
+[[bench]]
+name = "function_scopes"
+harness = false

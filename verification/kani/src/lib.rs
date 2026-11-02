@@ -243,8 +243,12 @@ mod harnesses {
 
     /// The actual production composite predicate over bounded scalar identities and shapes.
     /// Normalization, real FieldPath equality, automatic indexes and merge selection are native-only.
+    /// Unwind 6 is the least bound that discharges every unwinding assertion: the longest loops
+    /// walk the five-slot field array once (5 iterations plus the exit test). Symbolic execution
+    /// unrolls every loop to the bound whatever the symbolic length, so a looser bound only adds
+    /// dead iterations (at 8 the contract's nested field-by-order scan dominated the run).
     #[kani::proof]
-    #[kani::unwind(8)]
+    #[kani::unwind(6)]
     fn production_index_never_false_accepts() {
         use super::composite_contract::{contract, mode, serve};
         use fireemu_core_firestore::index::IndexQueryScope;

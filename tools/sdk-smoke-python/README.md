@@ -12,9 +12,11 @@ with `uv pip compile requirements.in --python-version 3.12 --generate-hashes`).
   token from a password sign-in through the Identity Toolkit endpoint the emulator serves.
 - `test_storage.py`: `upload_from_string`, `download_as_bytes`, metadata, delete (GCS JSON API).
 
-The suite reads the emulator hosts from `FIRESTORE_EMULATOR_HOST`, `FIREBASE_AUTH_EMULATOR_HOST`
-and `FIREBASE_STORAGE_EMULATOR_HOST`, refuses to start without them or with a non-loopback host,
-and gives the Admin SDK an anonymous credential, so it never reaches Google. Run it under
+The suite reads the emulator endpoints the clients use, `FIRESTORE_EMULATOR_HOST`,
+`FIREBASE_AUTH_EMULATOR_HOST` and `STORAGE_EMULATOR_HOST` (the Storage client takes its endpoint
+from this one, with the `http://` scheme), refuses to start unless each is a loopback `host:port`
+without userinfo (`emulator_guard.py`, tested offline in `test_guard.py`), and gives the Admin SDK
+an anonymous credential, so it never reaches Google. Run it under
 `fireemu exec`, with the default profile and with `fireemu.strict.json`:
 
 ```sh

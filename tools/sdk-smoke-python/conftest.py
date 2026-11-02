@@ -1,8 +1,8 @@
 """Shared fixtures for the Python Admin SDK smoke suite.
 
-The suite runs under `fireemu exec`, which exports FIRESTORE_EMULATOR_HOST,
-FIREBASE_AUTH_EMULATOR_HOST and FIREBASE_STORAGE_EMULATOR_HOST to the command. It never
-contacts Google: every client is pointed at the emulator by those variables.
+The suite runs under `fireemu exec`, which exports the emulator hosts the clients read (see
+emulator_guard.py). It never contacts Google: every client is pointed at the emulator by those
+variables, and the guard refuses to start unless each one is a loopback address.
 """
 
 import os
@@ -13,24 +13,16 @@ import pytest
 from firebase_admin import credentials
 from google.auth.credentials import AnonymousCredentials
 
+from emulator_guard import emulator_endpoints
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "demo-app")
-REQUIRED_HOSTS = (
-    "FIRESTORE_EMULATOR_HOST",
-    "FIREBASE_AUTH_EMULATOR_HOST",
-    "FIREBASE_STORAGE_EMULATOR_HOST",
-)
 
 
 def pytest_configure(config):
-    missing = [name for name in REQUIRED_HOSTS if not os.environ.get(name)]
-    if missing:
-        raise pytest.UsageError(
-            "run this suite under `fireemu exec` (missing " + ", ".join(missing) + ")"
-        )
-    for name in REQUIRED_HOSTS:
-        host = os.environ[name].removeprefix("http://")
-        if not host.startswith(("127.0.0.1:", "localhost:", "[::1]:")):
-            raise pytest.UsageError(f"{name}={host} is not a loopback emulator")
+    try:
+        emulator_endpoints(os.environ)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from error
 
 
 class EmulatorCredential(credentials.Base):

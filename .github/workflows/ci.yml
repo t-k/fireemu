@@ -285,6 +285,8 @@ jobs:
   # command really receives. ubuntu-24.04's system python3 is 3.12, so no setup action is needed; the
   # requirements are hash-locked. The suite runs under the default profile and under strict.
   sdk-smoke-python:
+    # Bound cache tokens even when the Python SDK code under `fireemu exec` calls the cache API.
+    cache-mode: read
     name: Python Admin SDK smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -293,9 +295,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # Keep the action-level save guard too, as sdk-latest.yml does.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: sdk-smoke-python
+          save-if: "false"
       - name: build fireemu from this commit
         run: cargo build --locked -p fireemu
       - name: the pinned Python SDKs

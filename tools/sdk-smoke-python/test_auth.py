@@ -1,5 +1,6 @@
 """firebase_admin.auth against fireemu's Identity Toolkit REST surface."""
 
+import contextlib
 import json
 import os
 import urllib.request
@@ -7,19 +8,24 @@ import urllib.request
 from firebase_admin import auth
 
 
-def sign_in(email, password):
-    """Signs in through the Identity Toolkit endpoint the emulator serves, as a client SDK does."""
+def identity_toolkit(method, body):
+    """POSTs to an Identity Toolkit method the emulator serves, as a client SDK does."""
     host = os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
     request = urllib.request.Request(
-        f"http://{host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key",
-        data=json.dumps(
-            {"email": email, "password": password, "returnSecureToken": True}
-        ).encode(),
+        f"http://{host}/identitytoolkit.googleapis.com/v1/{method}?key=fake-api-key",
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
+
+
+def sign_in(email, password):
+    return identity_toolkit(
+        "accounts:signInWithPassword",
+        {"email": email, "password": password, "returnSecureToken": True},
+    )
 
 
 def test_user_lifecycle_and_custom_claims(app, unique):
@@ -57,10 +63,20 @@ def test_list_users(app, unique):
 
 
 def test_create_custom_token(app, unique):
-    token = auth.create_custom_token(f"py-custom-{unique}", {"role": "tester"}, app=app)
+    uid = f"py-custom-{unique}"
+    token = auth.create_custom_token(uid, {"role": "tester"}, app=app)
     assert isinstance(token, bytes)
-    header, payload, _ = token.split(b".")
-    assert header and payload
+    try:
+        exchanged = identity_toolkit(
+            "accounts:signInWithCustomToken",
+            {"token": token.decode(), "returnSecureToken": True},
+        )
+        decoded = auth.verify_id_token(exchanged["idToken"], app=app)
+        assert decoded["uid"] == uid
+        assert decoded["role"] == "tester"
+    finally:
+        with contextlib.suppress(auth.UserNotFoundError):
+            auth.delete_user(uid, app=app)
 
 
 def test_verify_id_token_from_an_emulator_sign_in(app, unique):

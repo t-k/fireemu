@@ -9857,3 +9857,33 @@ fn signed_xml_put_does_not_capture_unknown_api_routes() {
         );
     }
 }
+
+/// PCT-1 for Storage. A percent escape in a path segment is two ASCII hexadecimal digits
+/// and nothing else, as `fireemu_core_types::codec` defines it, so `%+f` is a malformed
+/// escape and the request is refused with 400 like `%zz` is. A hand-rolled decoder used
+/// `u8::from_str_radix`, which accepts a leading `+`, and read `%+f` as the byte 0x0F.
+#[test]
+fn a_storage_path_segment_takes_two_hexadecimal_digits_per_escape() {
+    let s = state(None);
+    let owner = [("authorization", "Bearer owner")];
+    let status = |path: String| handle(&s, req("GET", &path, &owner, b"")).status;
+    for malformed in ["a%+fb", "a%zzb", "a%2", "a%", "a%FFb"] {
+        for path in [
+            format!("/v0/b/{BUCKET}/o/{malformed}"),
+            format!("/storage/v1/b/{BUCKET}/o/{malformed}"),
+            format!("/{BUCKET}/{malformed}"),
+        ] {
+            assert_eq!(status(path.clone()), 400, "{path}");
+        }
+    }
+    // A well-formed escape and a literal plus still route; the object is simply missing.
+    for name in ["a%2Bb", "a+b", "a%0fb"] {
+        for path in [
+            format!("/v0/b/{BUCKET}/o/{name}"),
+            format!("/storage/v1/b/{BUCKET}/o/{name}"),
+            format!("/{BUCKET}/{name}"),
+        ] {
+            assert_eq!(status(path.clone()), 404, "{path}");
+        }
+    }
+}

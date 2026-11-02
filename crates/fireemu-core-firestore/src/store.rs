@@ -3032,12 +3032,22 @@ impl FirestoreState {
     /// Evicts the lowest finished tokens that production does not remember as expired until the lineage is back within its bound.
     fn evict_finished_transactions(&mut self) {
         while self.finished_transactions.len() > MAX_FINISHED_TRANSACTION_LINEAGE {
+            // Every token the selection looks at counts as a visit, so a selection that walks the lineage shows in the count.
+            let mut examined = 0_u64;
             let candidate = if self.limit_scope == LimitScope::Production {
-                self.evictable_finished_transactions.first()
+                self.evictable_finished_transactions
+                    .iter()
+                    .inspect(|_| examined += 1)
+                    .next()
             } else {
-                self.finished_transactions.first()
+                self.finished_transactions
+                    .iter()
+                    .inspect(|_| examined += 1)
+                    .next()
             }
             .cloned();
+            self.transaction_eviction_visits =
+                self.transaction_eviction_visits.saturating_add(examined);
             #[cfg(test)]
             assert_eq!(
                 candidate,
@@ -3050,7 +3060,6 @@ impl FirestoreState {
             let Some(id) = candidate else {
                 break;
             };
-            self.transaction_eviction_visits = self.transaction_eviction_visits.saturating_add(1);
             self.finished_transactions.remove(&id);
             self.evictable_finished_transactions.remove(&id);
             if let Some(transaction) = self.transactions.get(&id) {

@@ -1296,26 +1296,49 @@ async fn bare_run_query_finish_and_cancel_leave_nothing_behind() {
 
 // A bare RunQuery whose consumer takes longer than a transaction's idle and total time between
 // two pages still delivers every page at its first page's snapshot: no transaction expires.
+// Past the one-hour read-time window, an unrelated commit compacts history up to that snapshot
+// (it becomes the compaction floor), which is still exact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bare_run_query_outlives_the_transaction_time_limits() {
-    for field_order in [false, true] {
-        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
-        let backend = Arc::new(LocalBackend::new(test_gateway(), Arc::clone(&clock), 7));
-        let request = seeded_query(&backend, 65, field_order);
-        let responses = run_query_with_work_between_pages(&backend, request, move || {
-            clock
-                .lock()
-                .unwrap()
-                .advance(fireemu_core_types::time::LogicalDuration::from_seconds(600))
-                .unwrap();
-        })
-        .await;
-        let responses: Vec<_> = responses.into_iter().map(Result::unwrap).collect();
-        assert_eq!(query_names(&responses).len(), 65);
-        let read_times: BTreeSet<_> = responses
-            .iter()
-            .map(|response| response.read_time.map(|t| (t.seconds, t.nanos)))
-            .collect();
-        assert_eq!(read_times.len(), 1, "every page reports one snapshot");
+    for (seconds, unrelated_commit) in [(600, false), (7_200, true)] {
+        for field_order in [false, true] {
+            let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+            let backend = Arc::new(LocalBackend::new(test_gateway(), Arc::clone(&clock), 7));
+            let request = seeded_query(&backend, 65, field_order);
+            let writer = backend.clone();
+            let responses = run_query_with_work_between_pages(&backend, request, move || {
+                clock
+                    .lock()
+                    .unwrap()
+                    .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
+                        seconds,
+                    ))
+                    .unwrap();
+                if unrelated_commit {
+                    let parent = query_request().parent;
+                    writer
+                        .commit(&pb::CommitRequest {
+                            database: database_name_from_query_parent(&parent),
+                            writes: vec![pb::Write {
+                                operation: Some(pb::write::Operation::Update(pb::Document {
+                                    name: format!("{parent}/other/doc"),
+                                    ..Default::default()
+                                })),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }
+            })
+            .await;
+            let responses: Vec<_> = responses.into_iter().map(Result::unwrap).collect();
+            assert_eq!(query_names(&responses).len(), 65);
+            let read_times: BTreeSet<_> = responses
+                .iter()
+                .map(|response| response.read_time.map(|t| (t.seconds, t.nanos)))
+                .collect();
+            assert_eq!(read_times.len(), 1, "every page reports one snapshot");
+        }
     }
 }

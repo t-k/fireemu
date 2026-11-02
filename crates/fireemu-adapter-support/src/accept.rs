@@ -92,7 +92,7 @@ pub fn backoff(failures: u32) -> Duration {
 /// Whether the `failures`-th consecutive resource error is reported: only the first of a run, so
 /// a listener stuck out of descriptors does not flood stderr.
 #[must_use]
-pub fn reports(failures: u32) -> bool {
+fn reports(failures: u32) -> bool {
     failures == 1
 }
 

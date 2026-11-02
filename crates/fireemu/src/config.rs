@@ -8683,6 +8683,58 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        /// Every product section accepts any combination of the two deploy hooks, in the
+        /// object and the array form, and refuses the entry as soon as it carries a near-miss
+        /// spelling of one, naming that key.
+        #[test]
+        fn deploy_hook_keys_are_accepted_exactly_by_their_names(
+            section in 0usize..4,
+            array in proptest::bool::ANY,
+            predeploy in proptest::bool::ANY,
+            postdeploy in proptest::bool::ANY,
+            near_miss in proptest::option::of(proptest::sample::select(vec![
+                "preDeploy", "postDeploy", "pre_deploy", "predeploys", "deploy", "predeploy ", "Predeploy",
+            ])),
+        ) {
+            let (name, mut entry) = match section {
+                0 => ("firestore", json!({"rules": "firestore.rules"})),
+                1 => ("storage", json!({"rules": "storage.rules"})),
+                2 => ("database", json!({"rules": "database.rules.json"})),
+                _ => ("functions", json!({"source": "functions"})),
+            };
+            if array && section == 1 {
+                entry["target"] = json!("main");
+            }
+            if array && section == 2 {
+                entry["instance"] = json!("demo-default-rtdb");
+            }
+            if predeploy {
+                entry["predeploy"] = json!(["echo a"]);
+            }
+            if postdeploy {
+                entry["postdeploy"] = json!("echo b");
+            }
+            if let Some(key) = near_miss {
+                entry[key] = json!("echo c");
+            }
+            let value = if array { json!([entry]) } else { entry };
+            let result = RuntimeConfig::default().apply_firebase_json(
+                &json!({ name: value }),
+                std::path::Path::new("/proj"),
+                &Selection::default(),
+            );
+            match near_miss {
+                None => proptest::prop_assert!(result.is_ok(), "{name}: {result:?}"),
+                Some(key) => {
+                    let error = result.expect_err("a near-miss key is refused").0;
+                    proptest::prop_assert!(error.contains(&format!("unknown key {name}")), "{error}");
+                    proptest::prop_assert!(error.contains(key), "{error}");
+                }
+            }
+        }
+    }
+
     /// Accepting the deploy hooks does not weaken the allow-lists: any other key is refused.
     #[test]
     fn unknown_keys_beside_deploy_hooks_are_still_refused() {

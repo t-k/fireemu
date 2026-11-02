@@ -28,7 +28,7 @@ Fireemu validates the file at startup, including rules the schema cannot express
 | `scheduler` | Time zone, catch-up and overlap of scheduled functions | [Time and scheduled functions](../../guides/time/) |
 | `pubsub`, `eventarc` | Authentication and delivery settings | [Pub/Sub and Eventarc](../../products/pubsub-eventarc/) |
 | `appCheck` | Apps, debug tokens and enforcement | [App Check](../../products/app-check/) |
-| `daemon` | Ports, project, start time | [Time and scheduled functions](../../guides/time/) |
+| `daemon` | Ports, project, start time, how the clock moves (`clock`) | [Time and scheduled functions](../../guides/time/) |
 | `network` | Listening off loopback | [CI and containers](../../guides/ci-and-containers/) |
 | `bind` | Accepted, currently no effect: the daemon binds the loopback address, and `emulators.<name>.host` in `firebase.json` sets a host per service | [CI and containers](../../guides/ci-and-containers/) |
 | `projects` | Whether only `demo-` project IDs are accepted (`requireDemoPrefix`), and whether a request naming another project is served or refused (`unknownProjects`) | [Profiles and productionExact](../../guides/profiles/) |

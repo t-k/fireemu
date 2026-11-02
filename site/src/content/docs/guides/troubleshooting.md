@@ -29,7 +29,7 @@ npx fireemu doctor --connect http://127.0.0.1:<port>
 | Export fails because of permissions | Run `fireemu doctor --export-dir <dir>`. It inspects the complete existing ancestor chain without modifying it; a private child under a shared parent is insufficient. See [export destinations](../data/#where-to-export). |
 | Tests fail while copying an unrelated global repository | Functions worlds in v0.25.0/v0.26.0 snapshot inherited `NODE_PATH`. Use an empty path for local-only dependencies, or explicitly narrow required roots. See [dependency snapshots](../time/#dependency-snapshots-and-global-node_path). |
 | The UI does not open | `up` starts without the UI when port 4000 is busy. Use `--ui-port`. `exec` starts the UI only with `--ui`. |
-| A scheduled function never runs | Schedules follow the virtual clock, not real time. Move the clock or run the function from the UI. See [Time and scheduled functions](../time/). |
+| A scheduled function never runs | Schedules follow the virtual clock. With `daemon.clockStart` pinned (or `daemon.clock = "frozen"`) the clock stands still, so move it or run the function from the UI; without a pinned start it follows real time. See [Time and scheduled functions](../time/). |
 
 For more detail, start with `--log-verbosity debug`, which also prints the resolved configuration.
 

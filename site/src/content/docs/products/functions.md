@@ -104,7 +104,7 @@ For a codebase that exports `hello` (`onRequest`), `ping` (`onCall`) and `worker
 
 Starting with v0.27.0, publishing a message to a first-generation schedule's `firebase-schedule-<function>-<region>` topic under `strict` also invokes the handler, preserving the original Pub/Sub data, attributes, ordering key and message ID. Normal scheduled occurrences and manual runs still invoke it once.
 
-A schedule runs on Fireemu's virtual clock, not on real time. Set a start time with `daemon.clockStart` and move the clock to make occurrences due, or run a scheduled function immediately from the UI. See [Time and scheduled functions](../../guides/time/).
+A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `daemon.clockStart`, that clock follows real time, so occurrences come due as time passes; with a pinned start it stands still, and you move the clock to make occurrences due (or run a scheduled function immediately from the UI). See [Time and scheduled functions](../../guides/time/).
 
 ## App Check in callables
 

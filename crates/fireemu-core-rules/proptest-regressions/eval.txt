@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 059e6224413614868b12c20309f2bea2868a75ddea2552a40ef4f44662c6ea08 # shrinks to levels = [([(0, 0), (0, 0)], 0, 0)], recursive_tail = false, values = [false, false, false, false, false], depth = 0, write = false, query = false, mutation = 0
+cc 86d1098f63479192a03ac55f65a0f31d9837e37edaea9d57bfff2d2291d706dc # shrinks to levels = [([], 0, 0), ([(0, 0)], 0, 0), ([], 0, 0), ([], 2, 0)], recursive_tail = false, values = [false, false, false, false, false], depth = 4, write = false, query = false, mutation = 1

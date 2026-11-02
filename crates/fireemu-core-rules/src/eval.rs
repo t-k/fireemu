@@ -1058,6 +1058,12 @@ fn block_reachability(
     })
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Counts request-local function capture tables built while walking match blocks.
+    static CAPTURE_TABLES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
 #[allow(clippy::too_many_lines)]
 fn walk_match<'a>(
     block: &'a MatchBlock,
@@ -1108,26 +1114,36 @@ fn walk_match<'a>(
                 .into_iter()
                 .map(|(name, value)| Binding::value(name, value)),
         );
-        let captured_bindings: FunctionBindings = Arc::new(
-            ev.scope
-                .bindings
-                .iter()
-                .filter_map(|binding| match &binding.state {
-                    BindingState::Value(value)
-                    | BindingState::Resolved {
-                        result: Ok(value), ..
-                    } => Some((binding.name.clone(), value.clone())),
-                    BindingState::Lazy(_)
-                    | BindingState::Evaluating
-                    | BindingState::Resolved { .. } => None,
-                })
-                .collect(),
-        );
-        bind_function_captures(
-            &block.items,
-            &captured_bindings,
-            &mut ev.scope.function_bindings,
-        );
+        // Only this block's declarations read its capture table, so a block that declares no
+        // function has nothing to bind.
+        let declares_functions = ev.scope.functions.len() > functions_before;
+        #[cfg(test)]
+        let declares_functions =
+            declares_functions || crate::scope::EAGER_SCOPE_SETUP.with(core::cell::Cell::get);
+        if declares_functions {
+            #[cfg(test)]
+            CAPTURE_TABLES.with(|tables| tables.set(tables.get() + 1));
+            let captured_bindings: FunctionBindings = Arc::new(
+                ev.scope
+                    .bindings
+                    .iter()
+                    .filter_map(|binding| match &binding.state {
+                        BindingState::Value(value)
+                        | BindingState::Resolved {
+                            result: Ok(value), ..
+                        } => Some((binding.name.clone(), value.clone())),
+                        BindingState::Lazy(_)
+                        | BindingState::Evaluating
+                        | BindingState::Resolved { .. } => None,
+                    })
+                    .collect(),
+            );
+            bind_function_captures(
+                &block.items,
+                &captured_bindings,
+                &mut ev.scope.function_bindings,
+            );
+        }
         let mut result: Result<bool, EvalError> = Ok(false);
         if rest.is_empty() {
             *matched_any = true;
@@ -6762,6 +6778,175 @@ service cloud.firestore {
             crate::scope::LEGACY_EVALUATION.with(|enabled| enabled.set(false));
             let actual = super::evaluate_request_traced(&tree, &context, None);
             proptest::prop_assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        }
+    }
+
+    fn early_allow_rules(unrelated: usize, condition: &str) -> crate::ast::Ruleset {
+        let mut source = format!(
+            "rules_version = '2'; service cloud.firestore {{ function top() {{ return true; }} match /databases/{{db}}/documents/notes/{{id}} {{ allow get: if {condition}; }}"
+        );
+        for index in 0..unrelated {
+            let _ = write!(
+                source,
+                " function helper{index}() {{ return false; }} match /unrelated{index}/{{id}} {{ function inner{index}() {{ return id == 'x'; }} allow get: if inner{index}(); }}"
+            );
+        }
+        source.push_str(" }");
+        parse_ruleset(&source).unwrap()
+    }
+
+    fn note_request() -> RequestContext {
+        RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: "/databases/(default)/documents/notes/one".to_owned(),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 0,
+            abstract_path: false,
+            request_query: None,
+        }
+    }
+
+    /// Runs `requests` evaluations and returns (agreement walks, capture tables, plan builds).
+    fn scope_setup_work(ruleset: &crate::ast::Ruleset, requests: usize) -> (usize, usize, usize) {
+        crate::scope::AGREEMENT_CHECKS.with(|work| work.set(0));
+        super::CAPTURE_TABLES.with(|work| work.set(0));
+        crate::scope::PLAN_BUILDS.with(|work| work.set(0));
+        for _ in 0..requests {
+            assert!(matches!(
+                evaluate_request(ruleset, &note_request()).decision,
+                Decision::Allow
+            ));
+        }
+        (
+            crate::scope::AGREEMENT_CHECKS.with(core::cell::Cell::get),
+            super::CAPTURE_TABLES.with(core::cell::Cell::get),
+            crate::scope::PLAN_BUILDS.with(core::cell::Cell::get),
+        )
+    }
+
+    #[test]
+    fn unrelated_blocks_add_no_per_request_scope_setup_to_an_early_allow() {
+        for unrelated in [0, 100, 1_000] {
+            let literal = early_allow_rules(unrelated, "true");
+            assert_eq!(
+                scope_setup_work(&literal, 3),
+                (0, 0, 0),
+                "literal allow, {unrelated} unrelated blocks"
+            );
+            // A call checks the compiled plan against the AST once per request, never rebuilds
+            // it, and the allowing block declares nothing to capture.
+            let call = early_allow_rules(unrelated, "top()");
+            assert_eq!(
+                scope_setup_work(&call, 3),
+                (3, 0, 0),
+                "function allow, {unrelated} unrelated blocks"
+            );
+        }
+    }
+
+    /// One generated corpus entry: nested match levels, each declaring functions that capture
+    /// wildcards, shadow outer names, call each other or recurse past the depth limit.
+    /// (declared functions as (name, body kind), allow kind, unrelated sibling blocks).
+    type GeneratedLevel = (Vec<(u8, u8)>, u8, u8);
+
+    fn generated_rules(levels: &[GeneratedLevel], recursive_tail: bool) -> String {
+        let mut source = String::from("rules_version = '2'; service cloud.firestore { function f0() { return false; } match /databases/{db}/documents {");
+        for (level, (functions, allow, unrelated)) in levels.iter().enumerate() {
+            for index in 0..*unrelated {
+                let _ = write!(source, " match /other{level}x{index}/{{w{level}}} {{ function f0() {{ return true; }} allow read: if f0(); }}");
+            }
+            let _ = write!(source, " match /l{level}/{{w{level}}} {{");
+            let declared: BTreeMap<u8, u8> = functions
+                .iter()
+                .map(|(name, body)| (name % 3, *body))
+                .collect();
+            for (name, body) in declared {
+                let body = match body % 7 {
+                    0 => format!("return w{level} == 'a';"),
+                    1 => format!("return f{}();", (name + 1) % 3),
+                    2 => "return true;".to_owned(),
+                    3 => format!("return f{name}();"),
+                    4 => "return w0 == 'b';".to_owned(),
+                    5 => format!(
+                        "let v = w{level}; return v == 'b' && f{}();",
+                        (name + 2) % 3
+                    ),
+                    _ => "return false;".to_owned(),
+                };
+                let _ = write!(source, " function f{name}() {{ {body} }}");
+            }
+            let condition = match allow % 6 {
+                0 => "true".to_owned(),
+                1 => "false".to_owned(),
+                2 => "f0()".to_owned(),
+                3 => "f1() && f2()".to_owned(),
+                4 => format!("f2() || w{level} == 'b'"),
+                _ => "f1()".to_owned(),
+            };
+            let methods = if allow % 2 == 0 { "get" } else { "read, write" };
+            let _ = write!(source, " allow {methods}: if {condition};");
+        }
+        if recursive_tail {
+            source.push_str(" match /{rest=**} { allow get: if f1() || rest.size() > 3; }");
+        }
+        source.push_str(&"}".repeat(levels.len() + 2));
+        source
+    }
+
+    fn generated_level() -> impl proptest::strategy::Strategy<Value = GeneratedLevel> {
+        (
+            proptest::collection::vec((0u8..3, 0u8..7), 0..4),
+            0u8..6,
+            0u8..3,
+        )
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        #[test]
+        fn lazy_scope_setup_matches_eager_setup_on_generated_corpus(
+            levels in proptest::collection::vec(generated_level(), 1..5),
+            recursive_tail in proptest::bool::ANY,
+            values in proptest::collection::vec(proptest::bool::ANY, 5),
+            depth in 0usize..7,
+            write in proptest::bool::ANY,
+            query in proptest::bool::ANY,
+            mutation in 0u8..3,
+        ) {
+            let mut tree = parse_ruleset(&generated_rules(&levels, recursive_tail)).unwrap();
+            match mutation {
+                // Shape changes force the plan to be rebuilt from the live AST.
+                1 => { tree.services[0].items.remove(0); }
+                2 => {
+                    let crate::ast::Item::Function(function) = &mut tree.services[0].items[0] else { unreachable!() };
+                    function.name = "f1".into();
+                }
+                _ => {}
+            }
+            let mut path = String::from("/databases/(default)/documents");
+            for (level, value) in values.iter().enumerate().take(depth) {
+                let _ = write!(path, "/l{level}/{}", if *value { "a" } else { "b" });
+            }
+            let context = RequestContext { service: RulesService::Firestore, method: if write { Method::Create } else { Method::Get }, path, auth: None, resource: None, request_resource: None, time_unix_nanos: 0, abstract_path: query, request_query: None };
+            crate::scope::EAGER_SCOPE_SETUP.with(|eager| eager.set(true));
+            let expected = super::evaluate_request_traced(&tree, &context, None);
+            crate::scope::EAGER_SCOPE_SETUP.with(|eager| eager.set(false));
+            let actual = super::evaluate_request_traced(&tree, &context, None);
+            proptest::prop_assert_eq!(&actual.0.decision, &expected.0.decision);
+            proptest::prop_assert_eq!(actual.0.expressions_evaluated, expected.0.expressions_evaluated);
+            proptest::prop_assert_eq!(actual.0.max_call_depth, expected.0.max_call_depth);
+            proptest::prop_assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+            // Concurrent evaluations of one generation stay isolated from each other.
+            let concurrent: Vec<String> = std::thread::scope(|threads| {
+                let handles: Vec<_> = (0..2).map(|_| threads.spawn(|| format!("{:?}", super::evaluate_request_traced(&tree, &context, None)))).collect();
+                handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+            });
+            for report in concurrent {
+                proptest::prop_assert_eq!(&report, &format!("{expected:?}"));
+            }
         }
     }
 

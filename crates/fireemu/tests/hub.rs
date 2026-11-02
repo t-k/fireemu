@@ -123,6 +123,9 @@ fn json(port: u16, method: &str, path: &str) -> serde_json::Value {
     serde_json::from_str(&body).unwrap_or_else(|e| panic!("{method} {path}: {e}\n{body}"))
 }
 
+/// How long `Daemon::cleanup` waits for the daemon to exit on SIGTERM before it kills it.
+const SIGTERM_GRACE: Duration = Duration::from_secs(15);
+
 /// A daemon serving until it is stopped, with the Hub on `hub_port`.
 struct Daemon {
     child: Child,
@@ -364,7 +367,10 @@ impl Daemon {
             {
                 let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
             }
-            let deadline = Instant::now() + Duration::from_secs(5);
+            // Only an upper bound: the loop returns as soon as the daemon exits. An idle daemon
+            // has been measured taking up to 6.5 s to shut down, so a shorter grace would fall
+            // back to SIGKILL in ordinary runs and hide a daemon that ignores SIGTERM.
+            let deadline = Instant::now() + SIGTERM_GRACE;
             while Instant::now() < deadline {
                 if self.child.try_wait().is_ok_and(|status| status.is_some()) {
                     exited = true;
@@ -398,6 +404,27 @@ impl Daemon {
         status
     }
 
+    /// Fails when `cleanup` had to fall back to SIGKILL, that is when the daemon did not stop
+    /// on SIGTERM within `SIGTERM_GRACE`. Only that fallback sends SIGKILL.
+    fn assert_not_killed(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt as _;
+            let signal = self
+                .child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.signal());
+            assert_ne!(
+                signal,
+                Some(rustix::process::Signal::KILL.as_raw()),
+                "daemon {} did not exit on SIGTERM within {SIGTERM_GRACE:?} and was killed",
+                self.child.id()
+            );
+        }
+    }
+
     fn stop(mut self) {
         let graceful = self.cleanup();
         assert!(
@@ -405,6 +432,7 @@ impl Daemon {
             "daemon {} survived explicit cleanup",
             self.child.id()
         );
+        self.assert_not_killed();
         if graceful {
             assert!(
                 !self.locator().exists(),
@@ -418,6 +446,10 @@ impl Daemon {
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.cleanup();
+        // A second panic while unwinding would abort the whole test binary.
+        if !std::thread::panicking() {
+            self.assert_not_killed();
+        }
     }
 }
 

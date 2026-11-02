@@ -14,7 +14,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
-- `fireemu up` stops within a fraction of a second of SIGTERM or SIGINT. It used to wait, for up to several seconds in a debug build, for the App Check signing key that is generated in the background, which holds nothing that persists. The stages that wait on other tasks during shutdown (Functions, the Pub/Sub push dispatcher, the servers) now have bounds and say so on stderr when they reach one.
+- `fireemu up` stops within a fraction of a second of SIGTERM or SIGINT. It used to wait, for up to several seconds in a debug build, for the App Check signing key that is generated in the background; that key generation now runs on a thread of its own that the exit ends. Exports and snapshot copies in flight still finish. The stages that wait on other tasks during shutdown (Functions, the Pub/Sub push dispatcher, the servers) now have bounds and say so on stderr when they reach one.
 
 ## [0.41.0] - 2026-10-31
 

@@ -1218,6 +1218,11 @@ enum SnapshotSelector<'a> {
 pub(crate) struct QuerySnapshot {
     version: CommitVersion,
     read_time: fireemu_core_types::time::LogicalInstant,
+    /// The incarnation of the database entry the first page read, captured under its lock. A
+    /// database deleted and created again has an incarnation of its own and a version history
+    /// of its own, so a later page refuses to read it at this version (as the internal
+    /// transaction's token did).
+    incarnation: Option<u64>,
 }
 
 /// Snapshot chosen for one read operation. A non-empty report is the token for a transaction
@@ -1325,6 +1330,9 @@ enum SnapshotState<'a> {
 
 struct SnapshotAccess<'a> {
     state: SnapshotState<'a>,
+    /// The incarnation of the database entry a shared read runs against (none for an exclusive
+    /// one, whose snapshot is a transaction's).
+    incarnation: Option<u64>,
     selected: SelectedSnapshot,
     query_execution_id: Option<QueryExecutionId>,
     complete_query_execution: bool,
@@ -5604,9 +5612,19 @@ impl LocalBackend {
         parent: &Parent,
         f: impl FnOnce(&FirestoreState) -> Result<T, Status>,
     ) -> Result<T, Status> {
+        self.read_db_incarnation(parent, |db, _| f(db))
+    }
+
+    /// [`Self::read_db`], also handing `f` the incarnation of the entry whose state it reads.
+    fn read_db_incarnation<T>(
+        &self,
+        parent: &Parent,
+        f: impl FnOnce(&FirestoreState, u64) -> Result<T, Status>,
+    ) -> Result<T, Status> {
         let _admitted = self.barrier.admit();
         let handle = self.database_handle(parent)?;
-        handle.read_status(f)
+        let incarnation = handle.0.incarnation;
+        handle.read_status(|db| f(db, incarnation))
     }
 
     fn auto_id(&self) -> String {
@@ -5947,35 +5965,49 @@ impl LocalBackend {
             self.compact_all(now);
         }
         match selector {
-            SnapshotSelector::ReadTime(read_at) => self.read_db(parent, |db| {
-                run(&mut SnapshotAccess {
-                    state: SnapshotState::Shared(db),
-                    selected: SelectedSnapshot {
-                        transaction: None,
-                        report: Vec::new(),
-                        read_at: Some(read_at),
-                        pinned: None,
-                    },
-                    query_execution_id: None,
-                    complete_query_execution: false,
+            SnapshotSelector::ReadTime(read_at) => {
+                self.read_db_incarnation(parent, |db, incarnation| {
+                    run(&mut SnapshotAccess {
+                        state: SnapshotState::Shared(db),
+                        incarnation: Some(incarnation),
+                        selected: SelectedSnapshot {
+                            transaction: None,
+                            report: Vec::new(),
+                            read_at: Some(read_at),
+                            pinned: None,
+                        },
+                        query_execution_id: None,
+                        complete_query_execution: false,
+                    })
                 })
-            }),
-            SnapshotSelector::Pinned(snapshot) => self.read_db(parent, |db| {
-                run(&mut SnapshotAccess {
-                    state: SnapshotState::Shared(db),
-                    selected: SelectedSnapshot {
-                        transaction: None,
-                        report: Vec::new(),
-                        read_at: Some(snapshot.read_time),
-                        pinned: Some(snapshot.version),
-                    },
-                    query_execution_id: None,
-                    complete_query_execution: false,
+            }
+            SnapshotSelector::Pinned(snapshot) => {
+                self.read_db_incarnation(parent, |db, incarnation| {
+                    // The database was deleted and created again since the first page: this one is
+                    // not the database the snapshot was taken in.
+                    if snapshot.incarnation != Some(incarnation) {
+                        return Err(Status::aborted(
+                            "The referenced transaction has expired or is no longer valid.",
+                        ));
+                    }
+                    run(&mut SnapshotAccess {
+                        state: SnapshotState::Shared(db),
+                        incarnation: Some(incarnation),
+                        selected: SelectedSnapshot {
+                            transaction: None,
+                            report: Vec::new(),
+                            read_at: Some(snapshot.read_time),
+                            pinned: Some(snapshot.version),
+                        },
+                        query_execution_id: None,
+                        complete_query_execution: false,
+                    })
                 })
-            }),
-            SnapshotSelector::Latest => self.read_db(parent, |db| {
+            }
+            SnapshotSelector::Latest => self.read_db_incarnation(parent, |db, incarnation| {
                 run(&mut SnapshotAccess {
                     state: SnapshotState::Shared(db),
+                    incarnation: Some(incarnation),
                     selected: SelectedSnapshot {
                         transaction: None,
                         report: Vec::new(),
@@ -5991,6 +6023,7 @@ impl LocalBackend {
                     let selected = self.select_snapshot(parent, db, selector, now)?;
                     let mut access = SnapshotAccess {
                         state: SnapshotState::Exclusive(db),
+                        incarnation: None,
                         selected,
                         query_execution_id: None,
                         complete_query_execution: false,
@@ -7290,6 +7323,7 @@ impl LocalBackend {
             let snapshot = QuerySnapshot {
                 version: version.unwrap_or_else(|| access.db().current_version()),
                 read_time: access.read_time(now)?,
+                incarnation: access.incarnation,
             };
             // Authorized from the query constraints before any data is touched.
             guard(

@@ -1226,6 +1226,61 @@ async fn bare_run_query_page_after_its_snapshot_was_compacted_is_aborted() {
     }
 }
 
+// A bare RunQuery is bound to the incarnation of the database its first page read: when the
+// database is deleted and created again between the pages, the next page answers the same
+// transaction-expired ABORTED the internal transaction's token gave (the replacement database
+// is at a version of its own, so reading it at the old one would return its documents at the
+// first page's read time, or too few of them).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bare_run_query_page_after_its_database_was_recreated_is_aborted() {
+    for field_order in [false, true] {
+        let backend = test_backend();
+        let request = seeded_query(&backend, 65, field_order);
+        let parent = query_request().parent;
+        let writer = backend.clone();
+        let responses = run_query_with_work_between_pages(&backend, request, move || {
+            let target = crate::query_messages::parse_query_parent(&parent).unwrap();
+            writer.delete_database(target.project.as_str(), target.database.as_str());
+            writer
+                .commit(&pb::CommitRequest {
+                    database: database_name_from_query_parent(&parent),
+                    writes: (0..65)
+                        .map(|index| pb::Write {
+                            operation: Some(pb::write::Operation::Update(pb::Document {
+                                name: format!("{parent}/items/{index:03}"),
+                                fields: rank_field(2_000 + index),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+                .unwrap();
+        })
+        .await;
+        let error = responses
+            .iter()
+            .find_map(|response| response.as_ref().err())
+            .expect("a page read after the database was recreated fails");
+        assert_eq!(error.code(), tonic::Code::Aborted);
+        assert_eq!(
+            error.message(),
+            "The referenced transaction has expired or is no longer valid."
+        );
+        // No row of the replacement database is ever sent.
+        assert!(responses
+            .iter()
+            .filter_map(|response| response.as_ref().ok())
+            .filter_map(|response| response.document.as_ref())
+            .all(|document| !matches!(
+                document.fields["rank"].value_type,
+                Some(pb::value::ValueType::IntegerValue(rank)) if rank >= 2_000
+            )));
+        assert_eq!(transaction_stats(&backend).active, 0);
+    }
+}
+
 // A bare RunQuery that finishes (drained, or ended early by its limit) or is cancelled
 // leaves no transaction, selection or backend reference behind, and the next write of the
 // database commits at once.

@@ -25,12 +25,16 @@ EXPECTED_HARNESSES = tuple("harnesses::" + name for name in (
     "boundary_reject_precedes_warning",
     "totp_window_boundary",
     "production_index_never_false_accepts",
+    "rules_numeric_equality_key_matches_equality",
+    "rules_float_equality_key_matches_equality",
 ))
 
 EXPECTED_COVERS = {
     "harnesses::limit_boundary_classification": 1,
     "harnesses::totp_window_boundary": 3,
     "harnesses::production_index_never_false_accepts": 12,
+    "harnesses::rules_numeric_equality_key_matches_equality": 2,
+    "harnesses::rules_float_equality_key_matches_equality": 1,
 }
 
 def discover_harnesses():

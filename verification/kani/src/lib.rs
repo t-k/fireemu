@@ -351,6 +351,59 @@ mod harnesses {
         );
         kani::cover!(actual && contains.is_some(), "contains slot accepted");
     }
+
+    /// INV-RULES-SET-001: the equality key that indexes Rules set operations is exactly as fine
+    /// as Rules numeric equality for every `int` / `float` pair: the two have equal keys exactly
+    /// when they compare equal (`1 == 1.0`, `-2^63 == i64::MIN`, `2^63 != i64::MAX`,
+    /// `2^53 + 1 != 2^53`), and a NaN, which equals nothing, has no key. A coarser key would
+    /// only cost index work, but a finer one would let `toSet` keep two equal members and
+    /// `hasAny` miss one. Equality is symmetric, so the `float` / `int` order is the same proof.
+    #[kani::proof]
+    #[kani::unwind(3)]
+    #[kani::solver(kissat)]
+    fn rules_numeric_equality_key_matches_equality() {
+        use fireemu_core_rules::eval::{equality_key, try_compare};
+        use fireemu_core_rules::value::RulesValue;
+        let integer: i64 = kani::any();
+        let float: f64 = kani::any();
+        let (a, b) = (RulesValue::Int(integer), RulesValue::Float(float));
+        let equal = try_compare(&a, &b) == Some(core::cmp::Ordering::Equal);
+        assert!(equality_key(&a).is_some());
+        match equality_key(&b) {
+            Some(key) => assert_eq!(equality_key(&a) == Some(key), equal),
+            None => {
+                assert!(float.is_nan());
+                assert!(!equal);
+            }
+        }
+        kani::cover!(equal, "an integer equals a float");
+        kani::cover!(
+            !equal && float.trunc() == float,
+            "an integral float differs"
+        );
+    }
+
+    /// INV-RULES-SET-001: between two `float` values the equality key is exactly Rules
+    /// equality (`-0.0 == 0.0`, infinities equal themselves), and NaN has no key.
+    #[kani::proof]
+    #[kani::unwind(3)]
+    #[kani::solver(kissat)]
+    fn rules_float_equality_key_matches_equality() {
+        use fireemu_core_rules::eval::{equality_key, try_compare};
+        use fireemu_core_rules::value::RulesValue;
+        let (x, y): (f64, f64) = (kani::any(), kani::any());
+        let (a, b) = (RulesValue::Float(x), RulesValue::Float(y));
+        let equal = try_compare(&a, &b) == Some(core::cmp::Ordering::Equal);
+        assert_eq!(equality_key(&a).is_none(), x.is_nan());
+        match (equality_key(&a), equality_key(&b)) {
+            (Some(left), Some(right)) => assert_eq!(left == right, equal),
+            _ => assert!(!equal),
+        }
+        kani::cover!(
+            equal && x.to_bits() != y.to_bits(),
+            "equal floats with different bits"
+        );
+    }
 }
 
 #[cfg(any(kani, test))]

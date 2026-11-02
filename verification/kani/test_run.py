@@ -21,6 +21,8 @@ COVER_COUNTS = {
     "harnesses::limit_boundary_classification": 1,
     "harnesses::totp_window_boundary": 3,
     "harnesses::production_index_never_false_accepts": 12,
+    "harnesses::rules_numeric_equality_key_matches_equality": 2,
+    "harnesses::rules_float_equality_key_matches_equality": 1,
 }
 
 
@@ -129,7 +131,7 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                 os.kill(child, signal.SIGKILL)
 
     def test_inventory_requires_every_declared_proof(self):
-        self.assertEqual(len(self.runner.discover_harnesses()), 9)
+        self.assertEqual(len(self.runner.discover_harnesses()), 11)
         self.assertEqual(set(self.runner.discover_harnesses()), set(self.runner.EXPECTED_HARNESSES))
 
     def test_actual_proof_success_publishes_runner_provenance(self):
@@ -150,8 +152,8 @@ sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
                    good.replace(self.runner.EXPECTED_HARNESSES[-1], self.runner.EXPECTED_HARNESSES[0]),
                    good.replace("Complete -", "Incomplete -"),
                    good.replace("0 of 174 failed", "1 of 174 failed", 1),
-                   good.replace("9 successfully", "8 successfully"),
-                   good.replace("9 total", "8 total"),
+                   good.replace("11 successfully", "10 successfully"),
+                   good.replace("11 total", "10 total"),
                    good.replace("0 failures", "1 failures"),
                    good.replace("VERIFICATION:- SUCCESSFUL", "", 1)]
         for output in changed:

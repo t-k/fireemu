@@ -1207,6 +1207,17 @@ enum SnapshotSelector<'a> {
     NewTransaction(&'a pb::TransactionOptions),
     ReadTime(fireemu_core_types::time::LogicalInstant),
     Latest,
+    /// The snapshot an earlier page of the same query execution read at.
+    Pinned(QuerySnapshot),
+}
+
+/// The snapshot the first page of a query without a consistency selector read: its later
+/// pages read the same version under the shared database lock. The version is held by the
+/// store's `read_time` retention window; a page that finds it compacted away is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct QuerySnapshot {
+    version: CommitVersion,
+    read_time: fireemu_core_types::time::LogicalInstant,
 }
 
 /// Snapshot chosen for one read operation. A non-empty report is the token for a transaction
@@ -1215,6 +1226,8 @@ struct SelectedSnapshot {
     transaction: Option<TransactionId>,
     report: Vec<u8>,
     read_at: Option<fireemu_core_types::time::LogicalInstant>,
+    /// The version of a [`SnapshotSelector::Pinned`] read (whose time is `read_at`).
+    pinned: Option<CommitVersion>,
 }
 
 #[derive(Clone, Copy)]
@@ -1257,6 +1270,7 @@ type AuthorizedQueryPage = (
     Vec<pb::RunQueryResponse>,
     Vec<String>,
     Option<Arc<QuerySelection>>,
+    QuerySnapshot,
 );
 
 #[derive(Debug)]
@@ -1507,6 +1521,18 @@ impl SelectedSnapshot {
                 .transaction_read_version(transaction)
                 .map(Some)
                 .map_err(|error| status_from_error(&error)),
+            // Answered as a read of a transaction whose snapshot was compacted away, which is
+            // what these pages answered while they read through an internal transaction.
+            (None, _)
+                if self
+                    .pinned
+                    .is_some_and(|version| version < db.compaction_floor()) =>
+            {
+                Err(Status::aborted(
+                    "The referenced transaction has expired or is no longer valid.",
+                ))
+            }
+            (None, _) if self.pinned.is_some() => Ok(self.pinned),
             (None, Some(read_at)) => LocalBackend::retained_read_version(db, read_at).map(Some),
             (None, None) => Ok(None),
         }
@@ -5862,6 +5888,7 @@ impl LocalBackend {
                     transaction: Some(transaction),
                     report: Vec::new(),
                     read_at: None,
+                    pinned: None,
                 })
             }
             SnapshotSelector::NewTransaction(options) => {
@@ -5873,17 +5900,26 @@ impl LocalBackend {
                     transaction: Some(transaction),
                     report,
                     read_at: None,
+                    pinned: None,
                 })
             }
             SnapshotSelector::ReadTime(read_at) => Ok(SelectedSnapshot {
                 transaction: None,
                 report: Vec::new(),
                 read_at: Some(read_at),
+                pinned: None,
             }),
             SnapshotSelector::Latest => Ok(SelectedSnapshot {
                 transaction: None,
                 report: Vec::new(),
                 read_at: None,
+                pinned: None,
+            }),
+            SnapshotSelector::Pinned(snapshot) => Ok(SelectedSnapshot {
+                transaction: None,
+                report: Vec::new(),
+                read_at: Some(snapshot.read_time),
+                pinned: Some(snapshot.version),
             }),
         }
     }
@@ -5918,6 +5954,20 @@ impl LocalBackend {
                         transaction: None,
                         report: Vec::new(),
                         read_at: Some(read_at),
+                        pinned: None,
+                    },
+                    query_execution_id: None,
+                    complete_query_execution: false,
+                })
+            }),
+            SnapshotSelector::Pinned(snapshot) => self.read_db(parent, |db| {
+                run(&mut SnapshotAccess {
+                    state: SnapshotState::Shared(db),
+                    selected: SelectedSnapshot {
+                        transaction: None,
+                        report: Vec::new(),
+                        read_at: Some(snapshot.read_time),
+                        pinned: Some(snapshot.version),
                     },
                     query_execution_id: None,
                     complete_query_execution: false,
@@ -5930,6 +5980,7 @@ impl LocalBackend {
                         transaction: None,
                         report: Vec::new(),
                         read_at: None,
+                        pinned: None,
                     },
                     query_execution_id: None,
                     complete_query_execution: false,
@@ -7082,12 +7133,13 @@ impl LocalBackend {
         authorization_req: &pb::RunQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
             None,
             false,
+            None,
             None,
             None,
         )?;
@@ -7113,6 +7165,7 @@ impl LocalBackend {
                 complete: false,
             }),
             None,
+            None,
         )
     }
 
@@ -7128,7 +7181,7 @@ impl LocalBackend {
         guard: ReadGuard<'_>,
         after_document: Option<&DocumentPath>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
@@ -7136,11 +7189,14 @@ impl LocalBackend {
             true,
             None,
             None,
+            None,
         )?;
         Ok((responses, warnings))
     }
 
-    /// Executes a continuation page of one streamed query execution.
+    /// Executes a continuation page of one streamed query execution, at `pinned` (the snapshot
+    /// its first page read) when the request has no consistency selector.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_query_authorized_as_after_for_execution(
         &self,
         req: &pb::RunQueryRequest,
@@ -7149,8 +7205,9 @@ impl LocalBackend {
         after_document: Option<&DocumentPath>,
         execution_id: QueryExecutionId,
         selection: Option<Arc<QuerySelection>>,
+        pinned: Option<QuerySnapshot>,
     ) -> Result<(Vec<pb::RunQueryResponse>, Vec<String>), Status> {
-        let (responses, warnings, _) = self.run_query_authorized_as_after_internal(
+        let (responses, warnings, _, _) = self.run_query_authorized_as_after_internal(
             req,
             authorization_req,
             guard,
@@ -7161,6 +7218,7 @@ impl LocalBackend {
                 complete: false,
             }),
             selection,
+            pinned,
         )?;
         Ok((responses, warnings))
     }
@@ -7175,6 +7233,7 @@ impl LocalBackend {
         continuation: bool,
         execution: Option<QueryExecutionContext>,
         selection: Option<Arc<QuerySelection>>,
+        pinned: Option<QuerySnapshot>,
     ) -> Result<AuthorizedQueryPage, Status> {
         let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -7220,7 +7279,7 @@ impl LocalBackend {
                     self.read_time_horizon(&parent, now),
                 )?)
             }
-            None => SnapshotSelector::Latest,
+            None => pinned.map_or(SnapshotSelector::Latest, SnapshotSelector::Pinned),
         };
         self.with_selected_snapshot(&parent, selector, now, |access| {
             let execution_present = execution.is_some();
@@ -7228,6 +7287,10 @@ impl LocalBackend {
                 access.set_query_execution(execution.id, execution.complete);
             }
             let version = access.version()?;
+            let snapshot = QuerySnapshot {
+                version: version.unwrap_or_else(|| access.db().current_version()),
+                read_time: access.read_time(now)?,
+            };
             // Authorized from the query constraints before any data is touched.
             guard(
                 access.db(),
@@ -7252,7 +7315,12 @@ impl LocalBackend {
                         None,
                     ));
                 }
-                return Ok((responses, authorization.warnings.clone(), selection));
+                return Ok((
+                    responses,
+                    authorization.warnings.clone(),
+                    selection,
+                    snapshot,
+                ));
             }
             let mut selection_stage = None;
             let mut selection_matched = None;
@@ -7368,7 +7436,12 @@ impl LocalBackend {
                     response.explain_metrics = Some(metrics);
                 }
             }
-            Ok((responses, authorization.warnings.clone(), selection))
+            Ok((
+                responses,
+                authorization.warnings.clone(),
+                selection,
+                snapshot,
+            ))
         })
     }
 

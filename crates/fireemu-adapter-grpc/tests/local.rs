@@ -4211,11 +4211,10 @@ async fn large_read_only_query_pages_preserve_snapshot_completion_and_cleanup() 
                 fireemu_core_firestore::store::FirestoreState::transaction_bookkeeping_stats,
             )
             .unwrap();
-        assert_eq!(bookkeeping.active, 1);
-        assert!(
-            bookkeeping.conflict_ledger_bytes < 4096,
-            "only the bounded query descriptor is retained"
-        );
+        // A query without a consistency selector reads its pages at one snapshot without a
+        // transaction.
+        assert_eq!(bookkeeping.active, 0);
+        assert_eq!(bookkeeping.conflict_ledger_bytes, 0);
         // Write while the stream still owns its snapshot; later responses must retain it.
         client
             .commit(pb::CommitRequest {

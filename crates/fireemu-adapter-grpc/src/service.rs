@@ -67,6 +67,9 @@ pub struct GatewayService {
     app_check: Option<Arc<ServiceAdmission>>,
     #[cfg(test)]
     first_query_page_ready: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Runs inside the first `RunQuery` page's read guard, while the database lock is held.
+    #[cfg(test)]
+    first_query_page_guard: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     continuation_query_page_ready: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -84,6 +87,8 @@ impl GatewayService {
             #[cfg(test)]
             first_query_page_ready: None,
             #[cfg(test)]
+            first_query_page_guard: None,
+            #[cfg(test)]
             continuation_query_page_ready: None,
         }
     }
@@ -98,6 +103,8 @@ impl GatewayService {
             app_check: None,
             #[cfg(test)]
             first_query_page_ready: None,
+            #[cfg(test)]
+            first_query_page_guard: None,
             #[cfg(test)]
             continuation_query_page_ready: None,
         }
@@ -1945,7 +1952,9 @@ impl GatewayService {
             let original_offset = req.query_type.as_ref().map_or(0, |query| match query {
                 pb::run_query_request::QueryType::StructuredQuery(query) => query.offset,
             });
-            let internal_transaction = req.consistency_selector.is_none() && !plan_only;
+            // A query without a consistency selector reads its first page at the latest
+            // snapshot under the shared database lock, and every later page at that snapshot.
+            let pins_snapshot = req.consistency_selector.is_none() && !plan_only;
             let mut first_request = req.clone();
             set_run_query_page(
                 &mut first_request,
@@ -1958,16 +1967,6 @@ impl GatewayService {
             );
             if plan_only {
                 set_run_query_page(&mut first_request, 0, Some(0));
-            }
-            if internal_transaction {
-                first_request.consistency_selector =
-                    Some(pb::run_query_request::ConsistencySelector::NewTransaction(
-                        pb::TransactionOptions {
-                            mode: Some(pb::transaction_options::Mode::ReadOnly(
-                                pb::transaction_options::ReadOnly::default(),
-                            )),
-                        },
-                    ));
             }
             let first_authorization = req.clone();
             let query_execution_id = local.next_query_execution_id();
@@ -1983,12 +1982,26 @@ impl GatewayService {
             let guard_local = Arc::clone(&local);
             #[cfg(test)]
             let first_query_page_ready = self.first_query_page_ready.clone();
-            let (mut first, warnings, selection, mut rollback) = blocking_read(
+            #[cfg(test)]
+            let first_query_page_guard = self.first_query_page_guard.clone();
+            let (first, warnings, selection, snapshot, rollback) = blocking_read(
                 local.clone(),
                 self.rules.clone(),
                 caller.clone(),
                 move |local, guard| {
-                    let (first, warnings, selection) = local
+                    #[cfg(test)]
+                    let hooked =
+                        |db: &fireemu_core_firestore::store::FirestoreState,
+                         version,
+                         check: crate::rules::ReadCheck<'_>| {
+                            if let Some(hook) = &first_query_page_guard {
+                                hook();
+                            }
+                            guard(db, version, check)
+                        };
+                    #[cfg(test)]
+                    let guard: crate::rules::ReadGuard<'_> = &hooked;
+                    let (first, warnings, selection, snapshot) = local
                         .run_query_authorized_as_for_execution(
                             &first_request,
                             &first_authorization,
@@ -2004,7 +2017,7 @@ impl GatewayService {
                     if let Some(ready) = first_query_page_ready {
                         ready();
                     }
-                    Ok((first, warnings, selection, rollback))
+                    Ok((first, warnings, selection, snapshot, rollback))
                 },
             )
             .await?;
@@ -2015,10 +2028,6 @@ impl GatewayService {
                     }
                     _ => None,
                 });
-            if internal_transaction {
-                // Hide only the dedicated transaction announcement, preserving offset metadata.
-                first.retain(|response| response.transaction.is_empty());
-            }
             let skipped_entries: u64 = first
                 .iter()
                 .map(|row| u64::try_from(row.skipped_results).unwrap_or(0))
@@ -2035,15 +2044,10 @@ impl GatewayService {
             };
             let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
             let rules = self.rules.clone();
-            let announcement_guard = if internal_transaction {
-                None
-            } else {
-                rollback.take()
-            };
+            let pinned = pins_snapshot.then_some(snapshot);
             #[cfg(test)]
             let continuation_query_page_ready = self.continuation_query_page_ready.clone();
             tokio::spawn(async move {
-                let rollback = rollback;
                 // Keep one response until exhaustion and execution finalization are known.
                 // Page-local completion must never terminate the public query stream.
                 let mut pending = None;
@@ -2070,10 +2074,12 @@ impl GatewayService {
                         page.consistency_selector = Some(
                             pb::run_query_request::ConsistencySelector::Transaction(transaction),
                         );
-                    } else if !matches!(
-                        page.consistency_selector,
-                        Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
-                    ) {
+                    } else if pinned.is_none()
+                        && !matches!(
+                            page.consistency_selector,
+                            Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
+                        )
+                    {
                         let _ = sender
                             .send(Err(Status::internal(
                                 "RunQuery snapshot transaction was not returned",
@@ -2116,6 +2122,7 @@ impl GatewayService {
                                 continuation.as_ref(),
                                 query_execution_id,
                                 selection,
+                                pinned,
                             );
                             #[cfg(test)]
                             if let Some(ready) = continuation_query_page_ready {
@@ -2243,7 +2250,6 @@ impl GatewayService {
                             });
                     }
                 }
-                drop(rollback);
                 // Production marks no response `done`; the stream's end completes it.
                 if let Some(response) = pending {
                     let _ = sender.send(Ok(response)).await;
@@ -2251,7 +2257,7 @@ impl GatewayService {
             });
             let boxed: BoxStream<pb::RunQueryResponse> = Box::pin(QueryResponseStream {
                 receiver,
-                announcement_guard,
+                announcement_guard: rollback,
             });
             return Ok(with_warnings(Response::new(boxed), &warnings));
         }
@@ -3300,6 +3306,8 @@ mod tests {
             let mut request = query_request();
             request.parent = "projects/documents-demo/databases/(default)/documents".to_owned();
             let parent = request.parent.clone();
+            // A query without a consistency selector reads without a transaction.
+            let minted = usize::from(selector.is_some());
             request.consistency_selector = selector;
             let query = tokio::spawn(async move {
                 Firestore::run_query(&service, Request::new(request))
@@ -3310,12 +3318,14 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!(transaction_stats_for(&backend, &parent).active, 1);
+            assert_eq!(transaction_stats_for(&backend, &parent).active, minted);
             query.abort();
             assert!(query.await.unwrap_err().is_cancelled());
             release_tx.send(()).unwrap();
             tokio::time::timeout(Duration::from_secs(5), async {
-                while transaction_stats_for(&backend, &parent).finished != 1 {
+                while transaction_stats_for(&backend, &parent).finished != minted
+                    || Arc::strong_count(&backend) != 1
+                {
                     tokio::task::yield_now().await;
                 }
             })

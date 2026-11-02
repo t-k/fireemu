@@ -10,6 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- A Firestore `RunQuery` without a consistency selector (the SDKs' `getDocs` / `get()`) no longer opens an internal read-only transaction that took the database's exclusive lock for every page. Its pages now read under the shared lock, so other reads of the same database run alongside a long query, and every page still reads the first page's snapshot. The responses are unchanged. Such a stream no longer fails midway when it outlives a transaction's idle or total time; a page whose snapshot was compacted away under history pressure is still answered `ABORTED`, as before.
 - Realtime Database Rules compare snapshots, `auth` and `query` by identity, as the official emulator does: two snapshots are equal when they read the same version of the tree (`data` or `newData`) at the same location, and `query` equals itself. Such a comparison behind a ternary was a rule error that denied the request in both polarities.
   The production Realtime Database checked on 2026-10-31 load-rejects (400) a direct comparison of snapshots or queries, as fireemu does, and evaluates `auth == auth` as true, matching the official emulator, so the runtime results of comparisons hidden behind a ternary are taken as production's.
 

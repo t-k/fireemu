@@ -12,6 +12,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - The daemon's virtual clock now follows real time from the daemon's start time by default. `clock:advance`, `clock:advanceTo` and `clock:set` add an offset on top. Realtime Database `ServerValue.TIMESTAMP`, Firestore and Storage times, token expiry, Rules `request.time` and schedules all read this clock, so they move as they do in production. A pinned `daemon.clockStart` still gives a clock that stands still until it is moved, so reproducible runs and `fireemu/testing` worlds are unchanged; `daemon.clock` (`"realtime"` or `"frozen"`) chooses either way explicitly.
 
+### Fixed
+
+- `fireemu up` stops within a fraction of a second of SIGTERM or SIGINT. It used to wait, for up to several seconds in a debug build, for the App Check signing key that is generated in the background, which holds nothing that persists. The stages that wait on other tasks during shutdown (Functions, the Pub/Sub push dispatcher, the servers) now have bounds and say so on stderr when they reach one.
+
 ## [0.41.0] - 2026-10-31
 
 ### Added

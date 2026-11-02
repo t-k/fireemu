@@ -280,6 +280,53 @@ jobs:
       - name: database smoke tests
         run: npm test --prefix tools/sdk-smoke-database
 
+  # tools/sdk-smoke-go: the Go Admin SDK (firebase.google.com/go/v4 with cloud.google.com/go/firestore
+  # and cloud.google.com/go/storage, versions locked in go.mod/go.sum) against a fireemu built from this
+  # commit, under `fireemu exec` with the defaults and with the strict exact configuration. The smoke's
+  # guard refuses to start unless every emulator host variable those SDKs read names a loopback host,
+  # and its offline tests run first. No credential is used: the SDKs run in their emulator modes.
+  sdk-smoke-go:
+    name: Go Admin SDK smoke
+    # The job runs third-party SDK code: bound its cache tokens to reads.
+    cache-mode: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # setup-go reads the exact `toolchain` line of go.mod and exports GOTOOLCHAIN=local.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/sdk-smoke-go/go.mod
+          cache: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: sdk-smoke-go
+          save-if: "false"
+      - name: build fireemu from this commit
+        run: cargo build --locked -p fireemu
+      - name: Go smoke format, vet and offline guard tests
+        run: |
+          set -eu
+          cd tools/sdk-smoke-go
+          go mod verify
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go build -o "$RUNNER_TEMP/sdk-smoke-go" .
+      - name: Go Admin SDK smoke under fireemu exec
+        run: |
+          set -eu
+          bin="$PWD/target/debug/fireemu"
+          echo "::group::default configuration"
+          "$bin" exec --project demo-app --hub-port 0 -- "$RUNNER_TEMP/sdk-smoke-go"
+          echo "::endgroup::"
+          echo "::group::strict exact configuration"
+          "$bin" exec --config tools/sdk-smoke-go/fireemu.strict.json --project demo-app --hub-port 0 -- "$RUNNER_TEMP/sdk-smoke-go"
+          echo "::endgroup::"
+
   # The packages a release would publish, built from this commit and installed the way a user
   # installs them: offline, from the packed tarballs, under a path with a space and non-ASCII
   # characters, through a symlink and from a read-only directory. `pack-local.mjs` is what a

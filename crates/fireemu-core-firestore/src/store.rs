@@ -33,8 +33,8 @@ use crate::query::{
     UnaryOp,
 };
 #[cfg(test)]
-use crate::size::document_size_bytes;
-use crate::size::{document_size, field_value_size};
+use crate::size::document_size;
+use crate::size::{document_size_bytes, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -1478,7 +1478,7 @@ fn observed_document_bytes(path: &DocumentPath, document: Option<&Document>) -> 
                 .unwrap_or(u64::MAX)
                 .saturating_add(32)
         },
-        |document| document_size(path, &document.fields).map_or(u64::MAX, |size| size.total),
+        |document| document_size_bytes(path, &document.fields).unwrap_or(u64::MAX),
     )
 }
 
@@ -1585,10 +1585,23 @@ pub(crate) fn document_path_retained_bytes(path: &DocumentPath) -> u64 {
 }
 
 fn value_retained_bytes(value: &Value) -> u64 {
+    value_retained_bytes_with(value, &mut retained_bytes_work_stack())
+}
+
+/// An empty work stack for [`value_retained_bytes_with`].
+fn retained_bytes_work_stack<'a>() -> Vec<&'a Value> {
+    #[cfg(test)]
+    RETAINED_BYTES_WORK_STACKS.with(|count| count.set(count.get().saturating_add(1)));
+    Vec::new()
+}
+
+/// [`value_retained_bytes`] on a caller's work stack, so sizing many values allocates the stack
+/// once rather than once per value. The stack is empty again on return.
+fn value_retained_bytes_with<'a>(value: &'a Value, pending: &mut Vec<&'a Value>) -> u64 {
     const BTREE_ENTRY_OVERHEAD: u64 = 128;
 
     let mut total = u64::try_from(core::mem::size_of::<Value>()).unwrap_or(u64::MAX);
-    let mut pending = vec![value];
+    pending.push(value);
     while let Some(value) = pending.pop() {
         match value {
             Value::String(text) | Value::Reference(text) => {
@@ -2462,7 +2475,7 @@ impl FirestoreState {
     #[must_use]
     pub fn visible_bytes(&self) -> u64 {
         self.live_documents(None)
-            .map(|d| document_size(&d.path, &d.fields).map_or(0, |b| b.total))
+            .map(|d| document_size_bytes(&d.path, &d.fields).unwrap_or(0))
             .fold(0u64, u64::saturating_add)
     }
 
@@ -6258,9 +6271,9 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<u64, Firestore
         let property_path = PropertyPath::root(name);
         validate_value(value, false, &property_path, scope)?;
     }
-    let size = document_size(&doc.path, &doc.fields)
+    let size = document_size_bytes(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-    check_limit(limits::DOCUMENT_BYTES, size.total)?;
+    check_limit(limits::DOCUMENT_BYTES, size)?;
     // After the document charge, so that an oversized document still reports its size the
     // way it did before this check existed and the way production was observed reporting it.
     if scope == LimitScope::Production {
@@ -6268,7 +6281,7 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<u64, Firestore
             check_stored_field_paths(value, &PropertyPath::root(name))?;
         }
     }
-    Ok(size.total)
+    Ok(size)
 }
 
 #[derive(Debug, Clone)]
@@ -7234,10 +7247,11 @@ pub fn vector_distance(vector: &[f64], query: &[f64], measure: DistanceMeasure) 
 }
 
 pub(crate) fn fields_retained_bytes(fields: &BTreeMap<String, Value>) -> u64 {
+    let mut pending = retained_bytes_work_stack();
     fields.iter().fold(0u64, |total, (key, value)| {
         total
             .saturating_add(u64::try_from(key.len()).unwrap_or(u64::MAX))
-            .saturating_add(value_retained_bytes(value))
+            .saturating_add(value_retained_bytes_with(value, &mut pending))
     })
 }
 
@@ -8184,4 +8198,19 @@ mod ttl_expiry_selection_tests {
 #[cfg(test)]
 thread_local! {
     static TTL_INDEX_BUILD_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static RETAINED_BYTES_WORK_STACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod query_counter_tests {
+    include!("../tests/support/query_counters.rs");
+}
+
+#[cfg(test)]
+mod size_charge_tests {
+    include!("../tests/support/size_charges.rs");
 }

@@ -147,8 +147,7 @@ fn stored_bytes(
     document: &DocumentPath,
     fields: &BTreeMap<String, Value>,
 ) -> Result<u64, FirestoreError> {
-    crate::size::document_size(document, fields)
-        .map(|size| size.total)
+    crate::size::document_size_bytes(document, fields)
         .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))
 }
 

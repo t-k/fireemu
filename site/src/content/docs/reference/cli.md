@@ -14,6 +14,8 @@ This reference lists common fireemu commands and options. Run `npx fireemu --hel
 | [`doctor`](#doctor) | Check the installation: binary, UI, Functions runner, Node.js |
 | [`capabilities`](#capabilities) | Print the capability manifest of the resolved profile as JSON |
 | [`config show`](#config-show) | Print every configuration key with its effective value and source |
+| `--version` (also `-V`, `version`) | Print the version and exit |
+| `help [command]` (also `--help`, `-h`) | Print the command list, or the help of one command |
 
 ## init
 
@@ -275,7 +277,7 @@ options:
 
 ## config show
 
-`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`. Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description.
+`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`, but without the command-line overrides of `up` (`--project`, `--only` and the port flags) and without starting the emulators. Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description.
 
 - Sources distinguish explicit values, defaults, `productionExact`, derived values, and unset keys.
 - When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).

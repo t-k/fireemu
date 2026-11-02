@@ -249,7 +249,7 @@ The local `fireemu-lexical-v1` engine uses deterministic Unicode normalization a
 
 ## Query limits
 
-Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, stay production's. Under the `emulator` profile, `true` also asks for those production limits.
+Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. Under `strict` the key switches only these query limits (at most 30 disjunctions, 10 `not-in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, stay production's. Under the `emulator` profile, `true` also asks for those production limits.
 
 ## Listen streams
 

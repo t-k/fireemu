@@ -1918,6 +1918,14 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
         .map_err(|e| format!("cannot start runtime: {e}"))
 }
 
+/// A wall-clock reading in nanoseconds since the Unix epoch.
+fn wall_nanos_of(time: std::time::SystemTime) -> i128 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i128::try_from(elapsed.as_nanos()).ok())
+        .unwrap_or(0)
+}
+
 /// How often a clock that follows real time publishes its running time to its observers.
 const CLOCK_TICK: std::time::Duration = std::time::Duration::from_millis(100);
 
@@ -1946,6 +1954,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         config_origin,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
+    // The wall-clock reading an unpinned clock start was taken at, so that a clock that follows
+    // real time does not lag by the time the daemon takes to build its runtime. A pinned start
+    // begins to run when the clock is made.
+    let mut clock_reading = None;
     let auth_wall_clock = if cfg.clock_start_pinned {
         None
     } else {
@@ -1954,7 +1966,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // Token claims are still serialized at second precision; daemon.clockStart pins the
         // logical clock for reproducible runs.
         let monotonic_start = std::time::Instant::now();
-        cfg.clock_start = logical_system_time(std::time::SystemTime::now());
+        let wall_start = std::time::SystemTime::now();
+        cfg.clock_start = logical_system_time(wall_start);
+        clock_reading = Some(wall_nanos_of(wall_start));
         Some(AuthWallClock::from_anchor(cfg.clock_start, monotonic_start))
     };
     let runtime = match build_runtime() {
@@ -1974,7 +1988,13 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let clock = Arc::new(Mutex::new(if cfg.clock_frozen() {
             VirtualClock::new(cfg.clock_start)
         } else {
-            VirtualClock::following(cfg.clock_start)
+            // Real time is the wall clock's, so a clock that has run for days still agrees
+            // with the callers' clocks.
+            VirtualClock::following_with(
+                cfg.clock_start,
+                Arc::new(|| wall_nanos_of(std::time::SystemTime::now())),
+                clock_reading.unwrap_or_else(|| wall_nanos_of(std::time::SystemTime::now())),
+            )
         }));
         if !cfg.clock_frozen() {
             tokio::spawn(clock_ticker(Arc::downgrade(&clock)));

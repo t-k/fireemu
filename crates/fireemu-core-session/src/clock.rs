@@ -2,13 +2,24 @@
 //!
 //! The runtime never calls `SystemTime::now()`. Every session owns a `VirtualClock`; wall-clock
 //! adapters for the `compat` profile live outside the core. A clock made with
-//! [`VirtualClock::following`] counts the monotonic time that passes since its last move, so it
-//! runs at the pace of real time without the core ever reading the wall clock.
+//! [`VirtualClock::following_with`] counts the time a source reports since its last move, so it
+//! runs at the pace of real time without the core ever reading the wall clock: the daemon passes
+//! a wall-clock source, and [`VirtualClock::following`] a monotonic one.
 
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
+
+/// A reading of real time in nanoseconds, from any origin. Only differences are used.
+pub type TimeSource = Arc<dyn Fn() -> i128 + Send + Sync>;
+
+/// What a clock that follows real time counts: a source and its reading at the last move.
+#[derive(Clone)]
+struct Follow {
+    source: TimeSource,
+    at: i128,
+}
 
 /// One published clock state; elapsed time counts forward movement only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,8 +78,9 @@ impl std::error::Error for ClockError {}
 /// the pace of real time ([`VirtualClock::following`]).
 pub struct VirtualClock {
     now: LogicalInstant,
-    /// The monotonic instant `now` was published at, for a clock that follows real time.
-    anchor: Option<Instant>,
+    /// The real-time source and its reading when `now` was published, for a clock that follows
+    /// real time.
+    follow: Option<Follow>,
     backwards_sets: u32,
     elapsed_nanos: u128,
     revision: u64,
@@ -80,7 +92,7 @@ impl Clone for VirtualClock {
     fn clone(&self) -> Self {
         Self {
             now: self.now,
-            anchor: self.anchor,
+            follow: self.follow.clone(),
             backwards_sets: self.backwards_sets,
             elapsed_nanos: self.elapsed_nanos,
             revision: self.revision,
@@ -115,7 +127,7 @@ impl VirtualClock {
     pub const fn new(start: LogicalInstant) -> Self {
         Self {
             now: start,
-            anchor: None,
+            follow: None,
             backwards_sets: 0,
             elapsed_nanos: 0,
             revision: 0,
@@ -124,9 +136,9 @@ impl VirtualClock {
         }
     }
 
-    /// Creates a clock at `start` that keeps running at the pace of real time. A move by hand
-    /// (`advance`, `advance_to`, a set) is an offset on top: the clock runs on from where it
-    /// lands.
+    /// Creates a clock at `start` that keeps running at the pace of real time, measured by the
+    /// monotonic clock. A move by hand (`advance`, `advance_to`, a set) is an offset on top:
+    /// the clock runs on from where it lands.
     #[must_use]
     pub fn following(start: LogicalInstant) -> Self {
         Self::following_since(start, Instant::now())
@@ -135,28 +147,44 @@ impl VirtualClock {
     /// [`Self::following`] for a clock that was at `start` when the monotonic clock read
     /// `since` (a clock that has already run for a while).
     #[must_use]
-    pub const fn following_since(start: LogicalInstant, since: Instant) -> Self {
+    pub fn following_since(start: LogicalInstant, since: Instant) -> Self {
+        let source: TimeSource =
+            Arc::new(move || i128::try_from(since.elapsed().as_nanos()).unwrap_or(i128::MAX));
+        Self::following_with(start, source, 0)
+    }
+
+    /// A clock at `start` that runs with `source`, which read `reading` when the clock was at
+    /// `start`. A source that steps back holds the clock until it catches up.
+    #[must_use]
+    pub fn following_with(start: LogicalInstant, source: TimeSource, reading: i128) -> Self {
         let mut clock = Self::new(start);
-        clock.anchor = Some(since);
+        clock.follow = Some(Follow {
+            source,
+            at: reading,
+        });
         clock
     }
 
     /// Whether the clock runs with real time.
     #[must_use]
     pub const fn is_following(&self) -> bool {
-        self.anchor.is_some()
+        self.follow.is_some()
     }
 
     /// Nanoseconds the clock has run since its last move (zero for a frozen clock).
     fn drift_nanos(&self) -> i128 {
-        self.anchor.map_or(0, |anchor| {
-            i128::try_from(anchor.elapsed().as_nanos()).unwrap_or(i128::MAX)
-        })
+        self.follow
+            .as_ref()
+            .map_or(0, |follow| ((follow.source)() - follow.at).max(0))
     }
 
     /// The instant now: the last move plus the real time that has passed since.
     fn live(&self) -> LogicalInstant {
-        let drift = self.drift_nanos();
+        self.instant_after(self.drift_nanos())
+    }
+
+    /// The last move plus `drift` nanoseconds.
+    fn instant_after(&self, drift: i128) -> LogicalInstant {
         if drift == 0 {
             return self.now;
         }
@@ -169,7 +197,7 @@ impl VirtualClock {
     /// last publication, so a schedule or a waiting task notices that time has passed.
     /// Returns whether anything was published; a frozen clock has nothing to publish.
     pub fn sync(&mut self) -> bool {
-        if self.anchor.is_none() {
+        if self.follow.is_none() {
             return false;
         }
         let live = self.live();
@@ -250,12 +278,13 @@ impl VirtualClock {
 
     /// Validate without changing the wall, elapsed, revision or observer state.
     pub fn validate_target(&self, instant: LogicalInstant) -> Result<(), ClockError> {
-        let now = self.live();
+        let drift = self.drift_nanos();
+        let now = self.instant_after(drift);
         if self.revision == u64::MAX
             || (instant > now
                 && self
                     .elapsed_nanos
-                    .saturating_add(self.drift_elapsed())
+                    .saturating_add(drift.unsigned_abs())
                     .checked_add(instant.as_nanos().abs_diff(now.as_nanos()))
                     .is_none())
         {
@@ -279,30 +308,28 @@ impl VirtualClock {
     /// Current instant and monotonic timer/revision axes.
     #[must_use]
     pub fn snapshot(&self) -> ClockSnapshot {
+        let drift = self.drift_nanos();
         ClockSnapshot {
-            instant: self.live(),
-            elapsed_nanos: self.elapsed_nanos.saturating_add(self.drift_elapsed()),
+            instant: self.instant_after(drift),
+            elapsed_nanos: self.elapsed_nanos.saturating_add(drift.unsigned_abs()),
             revision: self.revision,
         }
     }
 
-    /// The real time a following clock has run since its last move, as elapsed time.
-    fn drift_elapsed(&self) -> u128 {
-        u128::try_from(self.drift_nanos()).unwrap_or(0)
-    }
-
     fn publish(&mut self, instant: LogicalInstant) {
         // Fold in the time that has passed since the last move, then the move itself.
-        let live = self.live();
-        self.elapsed_nanos = self.elapsed_nanos.saturating_add(self.drift_elapsed());
+        let drift = self.drift_nanos();
+        let live = self.instant_after(drift);
+        self.elapsed_nanos = self.elapsed_nanos.saturating_add(drift.unsigned_abs());
         if instant > live {
             self.elapsed_nanos = self
                 .elapsed_nanos
                 .saturating_add(instant.as_nanos().abs_diff(live.as_nanos()));
         }
         self.now = instant;
-        if self.anchor.is_some() {
-            self.anchor = Some(Instant::now());
+        if let Some(follow) = &mut self.follow {
+            // The drift just folded in is not counted again.
+            follow.at += drift;
         }
         self.revision = self.revision.saturating_add(1);
         let snapshot = self.snapshot();

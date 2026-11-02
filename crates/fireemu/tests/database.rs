@@ -1327,7 +1327,7 @@ fn a_pinned_start_runs_on_from_its_instant_and_frozen_stands_still() {
         if let Some(clock) = clock {
             daemon_section["clock"] = serde_json::json!(clock);
         }
-        let config = dir.join(&format!("fireemu-{}.json", clock.unwrap_or("default")));
+        let config = dir.join(format!("fireemu-{}.json", clock.unwrap_or("default")));
         std::fs::write(
             &config,
             serde_json::json!({"schemaVersion": 1, "daemon": daemon_section}).to_string(),
@@ -1349,7 +1349,7 @@ fn a_pinned_start_runs_on_from_its_instant_and_frozen_stands_still() {
             assert_eq!((first, second), (START_MILLIS, START_MILLIS), "{clock:?}");
         } else {
             assert!(
-                first >= START_MILLIS && first < START_MILLIS + 60_000,
+                (START_MILLIS..START_MILLIS + 60_000).contains(&first),
                 "{clock:?} {first}"
             );
             assert!(second - first >= 100, "{clock:?} {first} {second}");

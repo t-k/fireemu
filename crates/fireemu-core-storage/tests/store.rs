@@ -1898,3 +1898,460 @@ fn a_copy_shares_the_source_blob_and_reuses_its_digests() {
     let dst = s.get(&bucket(), &name("dst.bin")).unwrap().clone();
     assert_eq!(s.bytes(&dst), bytes.as_slice());
 }
+
+#[test]
+fn a_prepared_object_reports_its_length_and_digests_and_debug_omits_the_bytes() {
+    use fireemu_core_storage::store::PreparedObject;
+    let empty = PreparedObject::new(Vec::new());
+    assert_eq!(empty.len(), 0);
+    assert!(empty.is_empty());
+    let prepared = PreparedObject::new(b"secret-bytes".to_vec());
+    assert_eq!(prepared.len(), 12);
+    assert!(!prepared.is_empty());
+    let digests = prepared.digests();
+    assert_eq!(digests.md5(), md5(b"secret-bytes"));
+    assert_eq!(digests.crc32c(), crc32c(b"secret-bytes"));
+    assert_eq!(
+        digests.values(),
+        (md5(b"secret-bytes"), crc32c(b"secret-bytes"))
+    );
+    let debug = format!("{prepared:?}");
+    assert!(debug.starts_with("PreparedObject"), "{debug}");
+    assert!(debug.contains("len: 12"), "{debug}");
+    assert!(!debug.contains("secret"), "{debug}");
+}
+
+#[test]
+fn an_upload_admission_exposes_its_app_and_redacts_its_binding() {
+    use fireemu_core_storage::store::{UploadAdmission, UploadOptions};
+    let admission = UploadAdmission::new("1:123:web:demo", "binding-credential");
+    assert_eq!(admission.app_id(), "1:123:web:demo");
+    let debug = format!("{admission:?}");
+    assert!(debug.contains("1:123:web:demo"), "{debug}");
+    assert!(debug.contains("[redacted]"), "{debug}");
+    assert!(!debug.contains("binding-credential"), "{debug}");
+
+    let mut s = StorageState::new(1);
+    let id = s
+        .begin_upload_with(
+            &bucket(),
+            &name("admitted"),
+            NewMetadata::default(),
+            Precondition::default(),
+            UploadOptions {
+                admission: Some(admission.clone()),
+                ..UploadOptions::default()
+            },
+            t(0),
+        )
+        .unwrap();
+    s.upload_chunk(&id, 0, b"x", true, t(0)).unwrap();
+    // A committed session still answers which app it was admitted for.
+    assert_eq!(s.upload_admission(&id, t(0)).unwrap(), Some(&admission));
+}
+
+#[test]
+fn custom_metadata_and_download_tokens_share_the_budget_byte_for_byte() {
+    use fireemu_core_storage::store::MAX_CUSTOM_METADATA_BYTES;
+    // Three ten-byte tokens charge the key (29 bytes), their 30 bytes and two commas.
+    let tokens = "aaaaaaaaaa,bbbbbbbbbb,cccccccccc";
+    let charged_by_tokens = "firebaseStorageDownloadTokens".len() + 30 + 2;
+    let metadata = |value_len: usize| NewMetadata {
+        custom: Some(BTreeMap::from([
+            ("k".to_owned(), "v".repeat(value_len)),
+            (
+                "firebaseStorageDownloadTokens".to_owned(),
+                tokens.to_owned(),
+            ),
+        ])),
+        ..NewMetadata::default()
+    };
+    let exact = MAX_CUSTOM_METADATA_BYTES - charged_by_tokens - 1;
+    let mut s = StorageState::new(1);
+    let stored = s
+        .put(
+            &bucket(),
+            &name("exact"),
+            b"x".to_vec(),
+            metadata(exact),
+            Precondition::default(),
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(stored.download_tokens.len(), 3);
+    assert_eq!(
+        s.put(
+            &bucket(),
+            &name("over"),
+            b"x".to_vec(),
+            metadata(exact + 1),
+            Precondition::default(),
+            t(0),
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+}
+
+#[test]
+fn a_patch_may_fill_the_metadata_budget_exactly() {
+    use fireemu_core_storage::store::{CustomMetadataPatch, MAX_CUSTOM_METADATA_BYTES};
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    s.put(
+        &b,
+        &name("o"),
+        b"x".to_vec(),
+        NewMetadata::default(),
+        Precondition::default(),
+        t(0),
+    )
+    .unwrap();
+    let patch = |len: usize| MetadataPatch {
+        custom: Some(CustomMetadataPatch::Merge(BTreeMap::from([(
+            "k".to_owned(),
+            Some("v".repeat(len)),
+        )]))),
+        ..MetadataPatch::default()
+    };
+    assert_eq!(
+        s.update_metadata(
+            &b,
+            &name("o"),
+            &patch(MAX_CUSTOM_METADATA_BYTES),
+            Precondition::default(),
+            t(1)
+        ),
+        Err(StorageError::MetadataTooLarge)
+    );
+    let patched = s
+        .update_metadata(
+            &b,
+            &name("o"),
+            &patch(MAX_CUSTOM_METADATA_BYTES - 1),
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert_eq!(patched.metageneration, 2);
+}
+
+#[test]
+fn a_merge_that_leaves_keys_defines_the_custom_map() {
+    use fireemu_core_storage::store::CustomMetadataPatch;
+    let mut s = StorageState::new(1);
+    let b = bucket();
+    let stored = s
+        .put(
+            &b,
+            &name("o"),
+            b"x".to_vec(),
+            NewMetadata::default(),
+            Precondition::default(),
+            t(0),
+        )
+        .unwrap();
+    assert!(!stored.custom_defined);
+    let patched = s
+        .update_metadata(
+            &b,
+            &name("o"),
+            &MetadataPatch {
+                custom: Some(CustomMetadataPatch::Merge(BTreeMap::from([(
+                    "k".to_owned(),
+                    Some("v".to_owned()),
+                )]))),
+                ..MetadataPatch::default()
+            },
+            Precondition::default(),
+            t(1),
+        )
+        .unwrap();
+    assert!(patched.custom_defined);
+    assert_eq!(patched.custom.get("k").map(String::as_str), Some("v"));
+}
+
+#[test]
+fn a_download_token_of_the_maximum_length_is_kept_and_a_longer_one_dropped() {
+    use fireemu_core_storage::store::MAX_DOWNLOAD_TOKEN_LEN;
+    let longest = "t".repeat(MAX_DOWNLOAD_TOKEN_LEN);
+    let too_long = "u".repeat(MAX_DOWNLOAD_TOKEN_LEN + 1);
+    let mut s = StorageState::new(1);
+    let stored = s
+        .put(
+            &bucket(),
+            &name("o"),
+            b"x".to_vec(),
+            NewMetadata {
+                custom: Some(BTreeMap::from([(
+                    "firebaseStorageDownloadTokens".to_owned(),
+                    format!("{longest},{too_long}"),
+                )])),
+                ..NewMetadata::default()
+            },
+            Precondition::default(),
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(stored.download_tokens, vec![longest]);
+}
+
+#[test]
+fn minted_download_tokens_are_uuid_v4_shaped() {
+    let mut s = StorageState::new(7);
+    for _ in 0..256 {
+        let token = s.mint_download_token();
+        let groups: Vec<&str> = token.split('-').collect();
+        assert_eq!(
+            groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12],
+            "{token}"
+        );
+        assert!(
+            token
+                .chars()
+                .all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{token}"
+        );
+        // RFC 9562: version 4 in the third group, variant 10xx in the fourth.
+        assert!(groups[2].starts_with('4'), "{token}");
+        assert!(
+            matches!(groups[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'),
+            "{token}"
+        );
+    }
+}
+
+#[test]
+fn restoring_a_download_token_checkpoint_replays_the_same_token() {
+    let mut s = StorageState::new(7);
+    let checkpoint = s.download_token_checkpoint();
+    let first = s.mint_download_token();
+    s.restore_download_token_checkpoint(checkpoint);
+    assert_eq!(s.mint_download_token(), first);
+    assert_ne!(s.mint_download_token(), first);
+}
+
+#[test]
+fn removing_a_bucket_drops_its_uploads_and_keeps_other_buckets_uploads() {
+    let mut s = StorageState::new(1);
+    let gone = BucketName::try_new("demo-gone").unwrap();
+    let kept = BucketName::try_new("demo-kept").unwrap();
+    let start = |s: &mut StorageState, b: &BucketName, bytes: &[u8]| {
+        let id = s
+            .begin_upload(
+                b,
+                &name("u"),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                t(0),
+            )
+            .unwrap();
+        s.append_upload(&id, 0, bytes, t(0)).unwrap();
+        id
+    };
+    let gone_id = start(&mut s, &gone, b"abc");
+    let kept_id = start(&mut s, &kept, b"de");
+    assert_eq!(s.retained_upload_bytes(), 5);
+    s.remove_bucket(&gone);
+    assert_eq!(
+        s.upload_status(&gone_id, t(0)),
+        Err(StorageError::UploadNotFound)
+    );
+    assert_eq!(s.upload_status(&kept_id, t(0)).unwrap().0, 2);
+    assert_eq!(s.retained_upload_bytes(), 2);
+}
+
+#[test]
+fn a_bucket_is_not_known_because_a_later_bucket_holds_versions() {
+    let mut s = StorageState::new(1);
+    let versioned = BucketName::try_new("demo-zzz").unwrap();
+    s.set_versioning(&versioned, true);
+    for n in 0..2 {
+        s.put(
+            &versioned,
+            &name("o"),
+            vec![n],
+            NewMetadata::default(),
+            Precondition::default(),
+            t(i64::from(n)),
+        )
+        .unwrap();
+    }
+    assert!(s.bucket_known(&versioned));
+    assert!(!s.bucket_known(&BucketName::try_new("demo-aaa").unwrap()));
+}
+
+#[test]
+fn a_declared_md5_alone_refuses_mismatching_bytes() {
+    let mut s = StorageState::new(1);
+    let id = s
+        .begin_upload(
+            &bucket(),
+            &name("c"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.set_upload_hashes(&id, Some(md5(b"other")), None, t(0))
+        .unwrap();
+    s.append_upload(&id, 0, b"abc", t(0)).unwrap();
+    assert!(matches!(
+        s.finalize_upload(&id, t(0)),
+        Err(StorageError::ChecksumMismatch(_))
+    ));
+    assert!(s.get(&bucket(), &name("c")).is_none());
+}
+
+#[test]
+fn an_upload_total_of_exactly_the_object_limit_is_accepted() {
+    use fireemu_core_storage::store::MAX_OBJECT_BYTES;
+    let mut s = StorageState::new(1);
+    let id = s
+        .begin_upload(
+            &bucket(),
+            &name("x"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    assert_eq!(s.set_upload_total(&id, MAX_OBJECT_BYTES, t(0)), Ok(()));
+}
+
+/// Starts and finishes `count` upload sessions, oldest first.
+fn finished_uploads(s: &mut StorageState, count: usize) -> Vec<UploadId> {
+    (0..count)
+        .map(|i| {
+            let id = s
+                .begin_upload(
+                    &bucket(),
+                    &name(&format!("f{i}")),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    None,
+                    t(0),
+                )
+                .unwrap();
+            s.upload_chunk(&id, 0, b"x", true, t(0)).unwrap();
+            id
+        })
+        .collect()
+}
+
+#[test]
+fn eviction_over_the_finished_cap_drops_only_the_oldest_finished_sessions() {
+    use fireemu_core_storage::store::MAX_FINISHED_UPLOAD_SESSIONS;
+    let mut s = StorageState::new(1);
+    // An older session that is still receiving is never a tombstone.
+    let receiving = s
+        .begin_upload(
+            &bucket(),
+            &name("receiving"),
+            NewMetadata::default(),
+            Precondition::default(),
+            None,
+            t(0),
+        )
+        .unwrap();
+    s.append_upload(&receiving, 0, b"ab", t(0)).unwrap();
+    let finished = finished_uploads(&mut s, MAX_FINISHED_UPLOAD_SESSIONS + 1);
+    s.begin_upload(
+        &bucket(),
+        &name("next"),
+        NewMetadata::default(),
+        Precondition::default(),
+        None,
+        t(0),
+    )
+    .unwrap();
+    assert_eq!(s.upload_status(&receiving, t(0)).unwrap().0, 2);
+    assert_eq!(
+        s.upload_status(&finished[0], t(0)),
+        Err(StorageError::UploadNotFound)
+    );
+    for id in &finished[1..] {
+        assert!(s.upload_status(id, t(0)).is_ok(), "{}", id.as_str());
+    }
+}
+
+#[test]
+fn the_retained_upload_gauge_is_bounded_by_one_gibibyte() {
+    use fireemu_core_types::resources::RootBudget;
+    let s = StorageState::new(1);
+    let resources = s.resources(|_| true, RootBudget::DEFAULT);
+    let gauge = resources
+        .gauges
+        .iter()
+        .find(|g| g.id == "uploads.bytes")
+        .unwrap();
+    assert_eq!(gauge.limit, Some(1_073_741_824));
+}
+
+#[test]
+fn an_oversized_import_is_refused_as_too_large() {
+    use fireemu_core_storage::store::{ImportedObject, MAX_OBJECT_BYTES};
+    let mut s = StorageState::new(1);
+    let object = ImportedObject {
+        bucket: bucket(),
+        name: name("oversized"),
+        generation: 1,
+        metageneration: 1,
+        content_type: "application/octet-stream".to_owned(),
+        content_disposition: None,
+        content_encoding: None,
+        content_language: None,
+        cache_control: None,
+        custom: BTreeMap::new(),
+        custom_defined: false,
+        time_created: t(0),
+        updated: t(0),
+        download_tokens: Vec::new(),
+        md5: None,
+        crc32c: None,
+        size: None,
+    };
+    let bytes = vec![0; usize::try_from(MAX_OBJECT_BYTES).unwrap() + 1];
+    assert_eq!(
+        s.insert_imported(object, bytes),
+        Err(StorageError::TooLarge)
+    );
+}
+
+#[test]
+fn an_import_may_fill_the_custom_metadata_budget_exactly() {
+    use fireemu_core_storage::store::{ImportedObject, MAX_CUSTOM_METADATA_BYTES};
+    let imported = |object: &str, value_len: usize| ImportedObject {
+        bucket: bucket(),
+        name: name(object),
+        generation: 1_788_105_513_194,
+        metageneration: 1,
+        content_type: "text/plain".to_owned(),
+        content_disposition: None,
+        content_encoding: None,
+        content_language: None,
+        cache_control: None,
+        custom: BTreeMap::from([("k".to_owned(), "v".repeat(value_len))]),
+        custom_defined: true,
+        time_created: t(0),
+        updated: t(0),
+        download_tokens: Vec::new(),
+        md5: None,
+        crc32c: None,
+        size: None,
+    };
+    let mut s = StorageState::new(1);
+    assert!(s
+        .insert_imported(
+            imported("exact", MAX_CUSTOM_METADATA_BYTES - 1),
+            b"x".to_vec()
+        )
+        .is_ok());
+    assert_eq!(
+        s.insert_imported(imported("over", MAX_CUSTOM_METADATA_BYTES), b"x".to_vec()),
+        Err(StorageError::MetadataTooLarge)
+    );
+}

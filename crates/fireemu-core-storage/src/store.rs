@@ -3964,4 +3964,64 @@ mod tests {
             "another session's bucket is not reported"
         );
     }
+
+    #[test]
+    fn a_prepared_write_accepts_exactly_the_object_limit_and_refuses_one_byte_more() {
+        // Stand-in digests: the size bound is checked before the digests are used, and hashing
+        // 256 MiB in an unoptimized test build would take minutes.
+        let prepared = |len: u64| PreparedObject {
+            bytes: vec![0; usize::try_from(len).unwrap()],
+            digests: ObjectDigests::from_parts([0; 16], 0),
+        };
+        let bucket = BucketName::try_new("demo-limit").unwrap();
+        let mut state = StorageState::new(1);
+        let write = |state: &mut StorageState, name: &str, object: PreparedObject| {
+            state
+                .put_prepared_with_admission(
+                    &bucket,
+                    &ObjectName::try_new(name).unwrap(),
+                    object,
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    LogicalInstant::UNIX_EPOCH,
+                    |_| Ok(()),
+                )
+                .map(|(metadata, ())| metadata.size)
+        };
+        assert_eq!(
+            write(&mut state, "over", prepared(MAX_OBJECT_BYTES + 1)),
+            Err(StorageError::TooLarge)
+        );
+        assert_eq!(
+            write(&mut state, "exact", prepared(MAX_OBJECT_BYTES)),
+            Ok(MAX_OBJECT_BYTES)
+        );
+    }
+
+    #[test]
+    fn the_upload_accounting_probes_count_every_recomputation_and_lookup() {
+        // The tests above assert these probes stay at zero; that only means something if the
+        // probes move when the counted work does happen.
+        let now = LogicalInstant::UNIX_EPOCH;
+        let bucket = BucketName::try_new("demo-probe").unwrap();
+        let mut state = StorageState::new(1);
+        let id = state
+            .begin_upload(
+                &bucket,
+                &ObjectName::try_new("object").unwrap(),
+                NewMetadata::default(),
+                Precondition::default(),
+                None,
+                now,
+            )
+            .unwrap();
+        let checkpoint = state.upload_checkpoint(&id).unwrap();
+        state.rollback_upload(&id, checkpoint.clone());
+        state.rollback_upload(&id, checkpoint);
+        assert_eq!(state.upload_accounting_lookups, 4);
+        let captured = state.capture_buckets(|_| true);
+        state.restore_buckets(|_| true, &captured);
+        state.restore_buckets(|_| true, &captured);
+        assert_eq!(state.upload_recomputations, 2);
+    }
 }

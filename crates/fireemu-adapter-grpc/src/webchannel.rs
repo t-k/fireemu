@@ -1372,26 +1372,12 @@ fn decimal_digits(value: usize) -> usize {
 }
 
 /// Percent-decodes a form value (`+` is a space).
+///
+/// Lenient, through the shared codec: a malformed escape such as `%zz` or `%+f` stays
+/// literal and a sequence that is not UTF-8 is replaced.
 #[must_use]
 pub fn form_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Some(b) = s
-                .get(i + 1..i + 3)
-                .and_then(|h| u8::from_str_radix(h, 16).ok())
-            {
-                out.push(b);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
+    fireemu_core_types::codec::percent_decode(s, fireemu_core_types::codec::PlusMode::Space)
 }
 
 /// Parses `k=v&k=v` (query string or form body).

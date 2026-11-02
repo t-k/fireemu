@@ -146,7 +146,6 @@ fn fields_size(entries: &BTreeMap<String, Value>) -> Result<u64, SizeError> {
 }
 
 /// Exact document charge without constructing diagnostic contributors.
-#[cfg(test)]
 pub(crate) fn document_size_bytes(
     path: &DocumentPath,
     fields: &BTreeMap<String, Value>,

@@ -33,8 +33,8 @@ use crate::query::{
     UnaryOp,
 };
 #[cfg(test)]
-use crate::size::document_size_bytes;
-use crate::size::{document_size, field_value_size};
+use crate::size::document_size;
+use crate::size::{document_size_bytes, field_value_size};
 use crate::value::{normalize_fields_for_storage, stored_fields_eq, Timestamp, Value, ValueKind};
 
 /// How far back a snapshot selector may reach: the documented Firestore `read_time` window
@@ -1407,7 +1407,7 @@ fn observed_document_bytes(path: &DocumentPath, document: Option<&Document>) -> 
                 .unwrap_or(u64::MAX)
                 .saturating_add(32)
         },
-        |document| document_size(path, &document.fields).map_or(u64::MAX, |size| size.total),
+        |document| document_size_bytes(path, &document.fields).unwrap_or(u64::MAX),
     )
 }
 
@@ -2404,7 +2404,7 @@ impl FirestoreState {
     #[must_use]
     pub fn visible_bytes(&self) -> u64 {
         self.live_documents(None)
-            .map(|d| document_size(&d.path, &d.fields).map_or(0, |b| b.total))
+            .map(|d| document_size_bytes(&d.path, &d.fields).unwrap_or(0))
             .fold(0u64, u64::saturating_add)
     }
 
@@ -6183,9 +6183,9 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<u64, Firestore
         let property_path = PropertyPath::root(name);
         validate_value(value, false, &property_path, scope)?;
     }
-    let size = document_size(&doc.path, &doc.fields)
+    let size = document_size_bytes(&doc.path, &doc.fields)
         .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
-    check_limit(limits::DOCUMENT_BYTES, size.total)?;
+    check_limit(limits::DOCUMENT_BYTES, size)?;
     // After the document charge, so that an oversized document still reports its size the
     // way it did before this check existed and the way production was observed reporting it.
     if scope == LimitScope::Production {
@@ -6193,7 +6193,7 @@ fn validate_document(doc: &Document, scope: LimitScope) -> Result<u64, Firestore
             check_stored_field_paths(value, &PropertyPath::root(name))?;
         }
     }
-    Ok(size.total)
+    Ok(size)
 }
 
 #[derive(Debug, Clone)]
@@ -8119,4 +8119,9 @@ thread_local! {
 #[cfg(test)]
 mod query_counter_tests {
     include!("../tests/support/query_counters.rs");
+}
+
+#[cfg(test)]
+mod size_charge_tests {
+    include!("../tests/support/size_charges.rs");
 }

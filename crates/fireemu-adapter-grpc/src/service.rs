@@ -1952,9 +1952,6 @@ impl GatewayService {
             let original_offset = req.query_type.as_ref().map_or(0, |query| match query {
                 pb::run_query_request::QueryType::StructuredQuery(query) => query.offset,
             });
-            // A query without a consistency selector reads its first page at the latest
-            // snapshot under the shared database lock, and every later page at that snapshot.
-            let pins_snapshot = req.consistency_selector.is_none() && !plan_only;
             let mut first_request = req.clone();
             set_run_query_page(
                 &mut first_request,
@@ -2044,7 +2041,9 @@ impl GatewayService {
             };
             let (sender, receiver) = tokio::sync::mpsc::channel(RUN_QUERY_CHANNEL_CAPACITY);
             let rules = self.rules.clone();
-            let pinned = pins_snapshot.then_some(snapshot);
+            // A query without a consistency selector reads its first page at the latest
+            // snapshot under the shared database lock, and every later page at that snapshot.
+            let pinned = Some(snapshot);
             #[cfg(test)]
             let continuation_query_page_ready = self.continuation_query_page_ready.clone();
             tokio::spawn(async move {
@@ -2074,12 +2073,10 @@ impl GatewayService {
                         page.consistency_selector = Some(
                             pb::run_query_request::ConsistencySelector::Transaction(transaction),
                         );
-                    } else if pinned.is_none()
-                        && !matches!(
-                            page.consistency_selector,
-                            Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
-                        )
-                    {
+                    } else if !matches!(
+                        page.consistency_selector,
+                        None | Some(pb::run_query_request::ConsistencySelector::ReadTime(_))
+                    ) {
                         let _ = sender
                             .send(Err(Status::internal(
                                 "RunQuery snapshot transaction was not returned",

@@ -9887,3 +9887,57 @@ fn a_storage_path_segment_takes_two_hexadecimal_digits_per_escape() {
         }
     }
 }
+
+/// PCT-1 for Storage, by content: distinct objects whose names differ only in how a plus, a space
+/// and an escape are spelled come back by the right path. `%2B` is a plus, a literal `+` stays a
+/// plus (it is not a space, as in a query string), and an escape is decoded exactly once.
+#[test]
+fn a_storage_path_segment_decodes_to_the_object_it_names() {
+    let s = state(None);
+    let bucket = BucketName::try_new(BUCKET).unwrap();
+    // `a%2Bb` is the literal name of the third object: its path spelling `a%252Bb` decodes once.
+    let objects = [
+        ("a+b", "plus"),
+        ("a b", "space"),
+        ("a%2Bb", "escape-left-alone"),
+    ];
+    {
+        let mut store = s.store.lock().unwrap();
+        for (name, content) in objects {
+            store
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(name).unwrap(),
+                    content.as_bytes().to_vec(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    START,
+                )
+                .unwrap();
+        }
+    }
+    let owner = [("authorization", "Bearer owner")];
+    let read = |path: String| {
+        let response = handle(&s, req("GET", &path, &owner, b""));
+        assert_eq!(response.status, 200, "{path}");
+        String::from_utf8(response.body.to_vec()).unwrap()
+    };
+    for (spelling, expected) in [
+        ("a%2Bb", "plus"),
+        ("a%2bb", "plus"),
+        ("a+b", "plus"),
+        ("a%20b", "space"),
+        ("a%252Bb", "escape-left-alone"),
+    ] {
+        assert_eq!(
+            read(format!("/storage/v1/b/{BUCKET}/o/{spelling}?alt=media")),
+            expected,
+            "JSON API {spelling}"
+        );
+        assert_eq!(
+            read(format!("/{BUCKET}/{spelling}")),
+            expected,
+            "XML {spelling}"
+        );
+    }
+}

@@ -23,6 +23,20 @@ use std::fmt::Write as _;
 #[cfg(test)]
 std::thread_local! {
     pub(crate) static FIRESTORE_DOCUMENT_ENCODINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Called where a source event's payload is encoded, so a test can observe which locks
+    /// are held at that point.
+    pub(crate) static PAYLOAD_ENCODING_PROBE: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs the test's [`PAYLOAD_ENCODING_PROBE`], if one is set on this thread.
+#[cfg(test)]
+pub(crate) fn probe_payload_encoding() {
+    PAYLOAD_ENCODING_PROBE.with_borrow(|probe| {
+        if let Some(probe) = probe {
+            probe();
+        }
+    });
 }
 
 fn rfc3339(t: LogicalInstant) -> String {
@@ -300,7 +314,31 @@ pub fn firestore_event(
     if let Some((auth_type, auth_id)) = auth {
         with_auth_context(&mut attrs, auth_type, auth_id);
     }
+    let mut event = json!({
+        "specversion": "1.0",
+        "id": event_id_uuid(id),
+        "source": attrs.source,
+        "subject": attrs.subject,
+        "type": attrs.event_type,
+        "time": firestore_time(time),
+        "datacontenttype": "application/json",
+        "data": firestore_event_data(before, after),
+    });
+    for (k, v) in attrs.extensions {
+        event[k] = Value::String(v);
+    }
+    event
+}
+
+/// The `data` member of a Firestore document event: `value`, `oldValue` and `updateMask`.
+/// It depends only on the two document snapshots, never on the event's kind or id.
+#[must_use]
+pub fn firestore_event_data(before: Option<&Document>, after: Option<&Document>) -> Value {
     let mut data = Map::new();
+    #[cfg(test)]
+    if before.is_some() || after.is_some() {
+        probe_payload_encoding();
+    }
     #[cfg(test)]
     FIRESTORE_DOCUMENT_ENCODINGS.with(|count| {
         count.set(count.get() + usize::from(before.is_some()) + usize::from(after.is_some()));
@@ -317,20 +355,7 @@ pub fn firestore_event(
             json!({"fieldPaths": update_mask(b, a)}),
         );
     }
-    let mut event = json!({
-        "specversion": "1.0",
-        "id": event_id_uuid(id),
-        "source": attrs.source,
-        "subject": attrs.subject,
-        "type": attrs.event_type,
-        "time": firestore_time(time),
-        "datacontenttype": "application/json",
-        "data": Value::Object(data),
-    });
-    for (k, v) in attrs.extensions {
-        event[k] = Value::String(v);
-    }
-    event
+    Value::Object(data)
 }
 
 /// Object resource JSON (`StorageObjectData`), as the JSON API reports it.

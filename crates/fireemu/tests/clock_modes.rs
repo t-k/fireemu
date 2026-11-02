@@ -209,7 +209,24 @@ fn a_frozen_unpinned_clock_stands_still_and_a_rewind_sticks_through_requests() {
 #[test]
 fn a_following_clock_runs_on_from_a_rewind_and_requests_do_not_pull_it_back() {
     let daemon = Daemon::start("following", &json!({}));
+    // From its first reading the clock agrees with the wall clock, however long start-up took.
+    let wall = || {
+        i128::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        )
+        .unwrap()
+    };
+    let before = wall();
     let first = daemon.clock();
+    let after = wall();
+    assert!(
+        (before..=after).contains(&first.as_nanos()),
+        "{before} <= {} <= {after}",
+        first.as_nanos()
+    );
     std::thread::sleep(Duration::from_millis(300));
     daemon.sign_up();
     assert!(daemon.clock().as_nanos() - first.as_nanos() >= 300_000_000);

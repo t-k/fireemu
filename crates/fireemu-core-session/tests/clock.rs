@@ -455,3 +455,16 @@ fn reads_stop_at_the_runtime_range_like_writes() {
     run_for(&reading, 30_000_000_000);
     assert_eq!(clock.now(), high);
 }
+
+#[test]
+fn validating_a_target_judges_it_without_moving_anything() {
+    let at = |seconds: i64| LogicalInstant::from_unix_seconds(seconds);
+    let mut clock = VirtualClock::new(at(10));
+    clock.restrict_range(at(0), at(100)).unwrap();
+    let before = clock.snapshot();
+    assert_eq!(clock.validate_target(at(100)), Ok(()));
+    assert_eq!(clock.validate_target(at(0)), Ok(()));
+    assert_eq!(clock.validate_target(at(101)), Err(ClockError::OutOfRange));
+    assert_eq!(clock.validate_target(at(-1)), Err(ClockError::OutOfRange));
+    assert_eq!(clock.snapshot(), before, "nothing was published");
+}

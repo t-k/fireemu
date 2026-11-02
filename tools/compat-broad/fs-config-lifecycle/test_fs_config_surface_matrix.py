@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from pathlib import Path
 
 from fs_config_lifecycle.surface_matrix import (
     CLASSES,
@@ -14,6 +13,7 @@ from fs_config_lifecycle.surface_matrix import (
     class_counts,
     discovery_methods,
     repo_root,
+    citation_resolves,
     validate_matrix,
 )
 
@@ -68,8 +68,7 @@ def test_managed_infrastructure_rows_never_claim_a_local_obligation_to_serve() -
             assert row["local"]["status"] != "implemented"
 
 
-def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() -> None:
-    root = repo_root()
+def test_every_local_citation_names_an_existing_symbol_in_this_checkout() -> None:
     matrix = build_matrix()
     rows = matrix["methods"] + matrix["localSurfaces"] + matrix["databaseFields"]
     seen = 0
@@ -81,53 +80,43 @@ def test_every_local_citation_resolves_to_an_existing_line_in_this_checkout() ->
             continue
         assert citations
         for citation in citations:
-            path_text, _, line_text = citation.rpartition(":")
-            path = root / path_text
-            assert path.is_file(), citation
-            line = int(line_text)
-            assert 1 <= line <= len(path.read_text(encoding="utf-8").splitlines()), (
-                citation
-            )
+            assert citation_resolves(citation), citation
             seen += 1
     assert seen >= 20
 
 
-def test_every_citation_points_at_code_and_not_at_whitespace() -> None:
-    """A citation that drifted onto a blank line or a closing brace proves nothing.
+def test_every_citation_names_a_declared_symbol_and_not_a_line() -> None:
+    """A citation survives unrelated edits only if it names the item, not its line.
 
-    Every citation names the place a claim is implemented, so the line it resolves to must
-    carry code. It must also sit inside a named symbol: a Rust citation has a declaration
-    (`fn`, `struct`, `enum`, `impl`, `const`, `type`) at or above it in the same file, so a
-    reader following the citation lands somewhere they can name.
+    Each citation is `path.rs::symbol`, where the symbol is the enclosing named item
+    (fn, impl, struct, enum, mod, ...) of the cited place. A repeated name in the same file
+    carries a `#N` suffix from its second occurrence on. The symbol must still be declared in
+    that file, so a rename or removal fails here instead of leaving a stale reference.
     """
-    declaration = re.compile(
-        r"^\s*(pub(\([^)]*\))?\s+)?"
-        r"(async\s+|const\s+|unsafe\s+|extern\s+\S+\s+)*"
-        r"(fn|struct|enum|impl|trait|type|const|static|mod)\b"
-    )
     matrix = build_matrix()
     rows = matrix["methods"] + matrix["localSurfaces"] + matrix["databaseFields"]
+    rows = rows + matrix["repairTickets"]
     checked = 0
-    for row in rows + matrix["repairTickets"]:
+    for row in rows:
         citations = row["local"]["citations"] if "local" in row else row["citations"]
         for citation in citations:
-            path_text, _, line_text = citation.rpartition(":")
-            lines = (repo_root() / path_text).read_text(encoding="utf-8").splitlines()
-            index = int(line_text) - 1
-            line = lines[index]
-            assert line.strip(), f"{citation} is a blank line"
-            if not path_text.endswith(".rs"):
-                checked += 1
-                continue
-            assert line.strip() not in {"{", "}", "};", ")", ");"}, (
-                f"{citation} is a bare delimiter"
-            )
-            enclosing = [
-                above for above in lines[: index + 1] if declaration.match(above)
-            ]
-            assert enclosing, f"{citation} sits inside no named symbol"
+            if "::" not in citation:
+                assert citation.endswith(".json"), citation
+            else:
+                assert re.fullmatch(
+                    r"[\w/.-]+\.(rs|py)::[A-Za-z_]\w*(#[2-9][0-9]*)?", citation
+                ), citation
+            assert citation_resolves(citation), f"{citation} names no declaration"
             checked += 1
     assert checked >= 40
+
+
+def test_a_citation_to_a_missing_or_absent_occurrence_is_rejected() -> None:
+    assert not citation_resolves(
+        "crates/fireemu-core-types/src/ids.rs::NoSuchSymbolInThisFile"
+    )
+    assert not citation_resolves("crates/fireemu-core-types/src/ids.rs::DatabaseId#2")
+    assert not citation_resolves("crates/fireemu-core-types/src/absent.rs::DatabaseId")
 
 
 def test_the_checked_in_specification_equals_the_compiled_matrix() -> None:
@@ -217,9 +206,7 @@ def test_repair_tickets_are_reproducible_and_a_fixed_one_cites_its_commit() -> N
                 ["git", "-C", str(repo_root()), "cat-file", "-e", ticket["fixedAt"]]
             )
         for citation in ticket["citations"]:
-            path_text, _, line_text = citation.rpartition(":")
-            assert (repo_root() / Path(path_text)).is_file(), citation
-            assert int(line_text) >= 1
+            assert citation_resolves(citation), citation
 
 
 def test_database_fields_cover_the_pinned_schema() -> None:

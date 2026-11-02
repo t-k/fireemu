@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -102,22 +103,128 @@ _FIELD_REGISTRY = "crates/fireemu-adapter-grpc/src/admin/fields.rs"
 COMMIT_RUNTIME_FIELD_PATCH = "5b1aa63dea75eb1178fd657c3013380ad1038495"
 
 
-def _at(path: str, anchor: str) -> str:
-    """`file:line` of the one line of `path` containing `anchor`.
+_DECLARATION = re.compile(
+    r"^\s*(pub(\([^)]*\))?\s+)?"
+    r"(async\s+|const\s+|unsafe\s+|extern\s+\S+\s+)*"
+    r"(fn|struct|enum|impl|trait|type|const|static|mod)\b"
+)
+# Zero-width lookahead so that `const fn name` yields `name` after the `fn` keyword too.
+_ITEM_NAME = re.compile(
+    r"(?=\b(fn|struct|enum|trait|type|const|static|mod)\s+([A-Za-z_]\w*))"
+)
+_IMPL_NAME = re.compile(
+    r"\bimpl\b\s*(<[^>]*>)?\s*(?:[^{]*?\bfor\s+)?([A-Za-z_]\w*)"
+)
+_IMPL_START = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?(unsafe\s+)?impl\b")
+_KEYWORDS = frozenset({"fn", "struct", "enum", "trait", "type", "const", "static", "mod"})
 
-    Citations are resolved from the source at build time rather than written as literal line
-    numbers, which drift silently every time an unrelated edit moves a function. An anchor
-    that no longer appears, or that appears more than once, fails the build instead of
-    producing a citation that points at a blank line.
+
+_PY_DEFINITION = re.compile(r"^\s*(async\s+def|def|class)\s+([A-Za-z_]\w*)")
+
+
+def _declared_name(line: str, path: str = "") -> str | None:
+    """The item name a declaration line introduces, or None for a non-declaration."""
+    if path.endswith(".py"):
+        match = _PY_DEFINITION.match(line)
+        return match.group(2) if match else None
+    if not _DECLARATION.match(line):
+        return None
+    if _IMPL_START.match(line):
+        match = _IMPL_NAME.search(line)
+        return match.group(2) if match else None
+    for match in _ITEM_NAME.finditer(line):
+        if match.group(2) not in _KEYWORDS:
+            return match.group(2)
+    return None
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _enclosing_declaration(lines: list[str], index: int, path: str) -> int | None:
+    """Index of the innermost named item containing `lines[index]`.
+
+    The anchor itself when it is a declaration, otherwise the nearest declaration above it
+    that is less indented: in rustfmt-formatted Rust that is the enclosing fn, impl, struct,
+    enum or mod.
+    """
+    if _declared_name(lines[index], path) is not None:
+        return index
+    depth = _indent(lines[index])
+    for above in range(index - 1, -1, -1):
+        line = lines[above]
+        if line.strip() and _indent(line) < depth and _declared_name(line, path):
+            return above
+    # A doc comment or attribute documents the item below it, so it resolves forward.
+    for below in range(index + 1, len(lines)):
+        line = lines[below]
+        if line.strip() and _indent(line) == depth and _declared_name(line, path):
+            return below
+    return None
+
+
+def _occurrences(lines: list[str], name: str, path: str) -> list[int]:
+    return [
+        number
+        for number, line in enumerate(lines)
+        if _declared_name(line, path) == name
+    ]
+
+
+def symbol_citation(path: str, lines: list[str], index: int) -> str:
+    """`path::symbol` for the place at `lines[index]`; `#N` marks the N-th repeat of a name.
+
+    The first declaration of a name in a file is cited bare, and the second and later ones
+    get `#2`, `#3`, ... in declaration order, so `path::name#2` is unambiguous.
+    """
+    declaration = _enclosing_declaration(lines, index, path)
+    if declaration is None:
+        raise ValueError(f"{path}:{index + 1} sits inside no named item")
+    name = _declared_name(lines[declaration], path)
+    assert name is not None
+    occurrence = _occurrences(lines, name, path).index(declaration) + 1
+    suffix = "" if occurrence == 1 else f"#{occurrence}"
+    return f"{path}::{name}{suffix}"
+
+
+def citation_resolves(citation: str) -> bool:
+    """Whether a citation still points at something in this checkout.
+
+    `path::symbol` must name a declaration of that file today, with `#N` selecting the N-th
+    occurrence. A bare path cites a whole file, which only data without items (a JSON
+    fixture) may do.
+    """
+    path_text, separator, symbol = citation.partition("::")
+    path = repo_root() / path_text
+    if not path.is_file():
+        return False
+    if not separator:
+        return path_text.endswith(".json")
+    name, _, suffix = symbol.partition("#")
+    occurrence = int(suffix) if suffix else 1
+    if not name or occurrence < 1:
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return len(_occurrences(lines, name, path_text)) >= occurrence
+
+
+def _at(path: str, anchor: str) -> str:
+    """`path::symbol` of the one line of `path` containing `anchor`.
+
+    The citation names the enclosing item, not the line: an unrelated edit that moves code
+    does not make it drift, while a rename or removal of the item fails the symbol test. An
+    anchor that no longer appears, or that appears more than once, fails the build instead of
+    producing a citation for the wrong place.
     """
     root = Path(__file__).resolve().parents[3]
     lines = (root / path).read_text(encoding="utf-8").splitlines()
-    hits = [index for index, line in enumerate(lines, start=1) if anchor in line]
+    hits = [index for index, line in enumerate(lines) if anchor in line]
     if len(hits) != 1:
         raise ValueError(
             f"{path}: anchor {anchor!r} matches {len(hits)} lines, expected exactly one"
         )
-    return f"{path}:{hits[0]}"
+    return symbol_citation(path, lines, hits[0])
 
 
 _NOT_SERVED = "not-implemented"
@@ -234,7 +341,7 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         (
             _at(_IMPORT_EXPORT, "pub fn export("),
             _at(_EXPORT_FS, "pub fn write_managed_entity("),
-            f"{_METADATA}:142",
+            _at(_METADATA, "pub struct ExportMetadata {"),
         ),
     ),
     _row(
@@ -619,7 +726,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         (
             _at(_IMPORT_EXPORT, "pub fn export("),
             _at(_IMPORT_EXPORT, "/// A section of a product `--only` did not select"),
-            f"{_METADATA}:142",
+            _at(_METADATA, "pub struct ExportMetadata {"),
         ),
     ),
     _row(
@@ -631,7 +738,11 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "Cross-database reference values must survive a round trip and a malformed "
         "database identity must be refused before any document is published.",
         _IMPLEMENTED,
-        (f"{_METADATA}:133", f"{_METADATA}:195", _at(_IMPORT_EXPORT, "fn collect_document(")),
+        (
+            _at(_METADATA, "pub struct Extension {"),
+            _at(_METADATA, "pub fn named_databases(&self)"),
+            _at(_IMPORT_EXPORT, "fn collect_document("),
+        ),
     ),
     _row(
         "runtime.lazyDatabaseCreation",
@@ -642,7 +753,7 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "A request against an uncreated named database succeeds locally and fails in "
         "production, which is recorded as an open repair ticket rather than a fix here.",
         _IMPLEMENTED,
-        (_at(_LOCAL, "fn with_implicit_database_creation("), f"{_IDS}:183"),
+        (_at(_LOCAL, "fn with_implicit_database_creation("), _at(_IDS, "impl DatabaseId {")),
     ),
     _row(
         "control.textIndexLifecycle",
@@ -689,7 +800,7 @@ _DATABASE_FIELDS: tuple[tuple[str, str, str, str, str, tuple[str, ...], bool], .
         (
             _at(_REST, '"databaseEdition": edition.as_config_str()'),
             _at(_REST, "database inventory is supported only for Standard Native"),
-            "crates/fireemu-core-types/src/edition.rs:12",
+            _at("crates/fireemu-core-types/src/edition.rs", "pub enum FirestoreEdition {"),
         ),
         True,
     ),
@@ -933,7 +1044,7 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
                 _LOCAL,
                 "fn a_database_nothing_created_is_refused_and_is_not_materialized",
             ),
-            f"{_IDS}:183",
+            _at(_IDS, "impl DatabaseId {"),
         ),
         LOCAL_SAFETY,
         status=TICKET_FIXED,
@@ -981,8 +1092,8 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "strict subset and would fail the identity check the batch contract applies.",
         (
             _at(_REST, "fn admin_database_json("),
-            "tools/compat-broad/batch_contract.py:230",
-            "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1",
+            _at("tools/compat-broad/batch_contract.py", "self.token, self.expiry, self.failed = None, 0, True"),
+            "tools/compat-broad/fixtures/database-settings-7be6cf08.json",
         ),
         DATA_PLANE,
         status=TICKET_FIXED,
@@ -1034,7 +1145,7 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
                 "crates/fireemu-adapter-grpc/src/decode.rs",
                 "DecodeError::UnknownDatabase {",
             ),
-            f"{_IDS}:183",
+            _at(_IDS, "impl DatabaseId {"),
         ),
         DATA_PLANE,
     ),

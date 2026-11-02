@@ -112,7 +112,9 @@ async fn respond(
 /// Serves the UI on `listener` until the task is aborted.
 pub async fn serve_ui(listener: TcpListener, state: Arc<UiState>) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) =
+            fireemu_adapter_support::accept::accept_with_backoff("ui", || listener.accept())
+                .await?;
         let state = state.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(GracefulClose::new(

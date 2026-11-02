@@ -946,7 +946,9 @@ fn channel_kind(path: &str) -> Option<StreamKind> {
 struct RemotePeer;
 
 async fn accept_connection(listener: &TcpListener) -> std::io::Result<(TcpStream, bool)> {
-    let (stream, peer) = listener.accept().await?;
+    let (stream, peer) =
+        fireemu_adapter_support::accept::accept_with_backoff("firestore", || listener.accept())
+            .await?;
     // Streaming gRPC frames must not wait for a delayed ACK before flushing.
     stream.set_nodelay(true)?;
     Ok((stream, !peer.ip().to_canonical().is_loopback()))

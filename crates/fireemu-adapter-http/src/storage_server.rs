@@ -612,7 +612,9 @@ pub async fn serve_storage_with_budget(
     budget: &'static BodyBudget,
 ) -> std::io::Result<()> {
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (stream, peer) =
+            fireemu_adapter_support::accept::accept_with_backoff("storage", || listener.accept())
+                .await?;
         let remote_peer = !peer.ip().to_canonical().is_loopback();
         let state = state.clone();
         tokio::spawn(async move {

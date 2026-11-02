@@ -1027,6 +1027,8 @@ pub struct TransactionBookkeepingStats {
     pub finished_deadlines: usize,
     /// Deadline index entries examined while pruning expired transactions.
     pub pruned_deadlines: u64,
+    /// Finished-lineage tokens examined while choosing which one to evict from the bounded lineage.
+    pub eviction_visits: u64,
     /// Estimated bytes retained by all active transaction conflict ledgers.
     pub conflict_ledger_bytes: u64,
     /// Transactions examined as possible lock holders by the commit contention check.
@@ -1280,10 +1282,15 @@ pub struct FirestoreState {
     active_read_write_transactions: BTreeSet<TransactionId>,
     active_transaction_conflict_ledger_bytes: u64,
     finished_transactions: BTreeSet<TransactionId>,
+    /// Production profile only: the finished tokens eviction may take, those not remembered as expired
+    /// (`remembered_as_expired`), so an eviction never walks past the protected ones. Empty in the other profiles,
+    /// where every finished token may be evicted.
+    evictable_finished_transactions: BTreeSet<TransactionId>,
     finished_transaction_deadlines: BTreeSet<(LogicalInstant, TransactionId)>,
     transaction_prune_visits: u64,
     /// Transactions examined as possible lock holders by `check_contention`.
     contention_visits: u64,
+    transaction_eviction_visits: u64,
     /// Last published commit time; commit times are strictly monotonic per database.
     last_commit_time: Option<LogicalInstant>,
     /// Commit time of every retained version (`read_time` snapshots).
@@ -1337,9 +1344,11 @@ impl Default for FirestoreState {
             active_read_write_transactions: BTreeSet::new(),
             active_transaction_conflict_ledger_bytes: 0,
             finished_transactions: BTreeSet::new(),
+            evictable_finished_transactions: BTreeSet::new(),
             finished_transaction_deadlines: BTreeSet::new(),
             transaction_prune_visits: 0,
             contention_visits: 0,
+            transaction_eviction_visits: 0,
             last_commit_time: None,
             commit_times: VecDeque::new(),
             compaction_floor: CommitVersion::default(),
@@ -2541,9 +2550,11 @@ impl FirestoreState {
             active_read_write_transactions: BTreeSet::new(),
             active_transaction_conflict_ledger_bytes: 0,
             finished_transactions: BTreeSet::new(),
+            evictable_finished_transactions: BTreeSet::new(),
             finished_transaction_deadlines: BTreeSet::new(),
             transaction_prune_visits: 0,
             contention_visits: 0,
+            transaction_eviction_visits: 0,
             last_commit_time: self.last_commit_time,
             commit_times: self.commit_times.back().copied().into_iter().collect(),
             compaction_floor: self.version,
@@ -2899,6 +2910,7 @@ impl FirestoreState {
             self.finished_transaction_deadlines
                 .remove(&(deadline, id.clone()));
             self.finished_transactions.remove(&id);
+            self.evictable_finished_transactions.remove(&id);
             changed = true;
             if self
                 .transactions
@@ -2960,6 +2972,7 @@ impl FirestoreState {
             if let Some(transaction) = self.transactions.get_mut(id) {
                 transaction.state = state;
             }
+            self.sync_evictable_finished_transaction(id);
             return;
         };
         self.active_transaction_deadlines
@@ -2987,13 +3000,14 @@ impl FirestoreState {
                 .insert((transaction_lineage_deadline(transaction), id.clone()));
         }
         self.finished_transactions.insert(id.clone());
+        self.sync_evictable_finished_transaction(id);
         self.evict_finished_transactions();
     }
 
     /// Whether production still remembers this transaction as one that a timeout finished (its total lifetime, or an idle expiry: P13a recorded
     /// both remembered until about 300 s). Eviction never takes such a token before its memory ends. The tokens held this way are the ones that
     /// timed out within the last 300 s, at most those that were active together (4 096) per 120 s of idle limit, about 10 000 in the worst case. While
-    /// the lineage is full, each eviction scans past them, so a finish costs up to that many steps; the bound is deliberate and nothing else grows.
+    /// the lineage is full, eviction takes the first token of `evictable_finished_transactions` instead of scanning past them.
     fn remembered_as_expired(&self, id: &TransactionId) -> bool {
         self.limit_scope == LimitScope::Production
             && self
@@ -3002,17 +3016,43 @@ impl FirestoreState {
                 .is_some_and(|transaction| transaction.state == TransactionState::Finished)
     }
 
+    /// Keeps `evictable_finished_transactions` in step with `id` after it joined the finished lineage or its state changed
+    /// (production profile only; the other profiles take the first finished token).
+    fn sync_evictable_finished_transaction(&mut self, id: &TransactionId) {
+        if self.limit_scope != LimitScope::Production {
+            return;
+        }
+        if self.finished_transactions.contains(id) && !self.remembered_as_expired(id) {
+            self.evictable_finished_transactions.insert(id.clone());
+        } else {
+            self.evictable_finished_transactions.remove(id);
+        }
+    }
+
+    /// Evicts the lowest finished tokens that production does not remember as expired until the lineage is back within its bound.
     fn evict_finished_transactions(&mut self) {
         while self.finished_transactions.len() > MAX_FINISHED_TRANSACTION_LINEAGE {
-            let Some(id) = self
-                .finished_transactions
-                .iter()
-                .find(|id| !self.remembered_as_expired(id))
-                .cloned()
-            else {
+            let candidate = if self.limit_scope == LimitScope::Production {
+                self.evictable_finished_transactions.first()
+            } else {
+                self.finished_transactions.first()
+            }
+            .cloned();
+            #[cfg(test)]
+            assert_eq!(
+                candidate,
+                self.finished_transactions
+                    .iter()
+                    .find(|id| !self.remembered_as_expired(id))
+                    .cloned(),
+                "the eviction index chose a different token than a scan of the lineage"
+            );
+            let Some(id) = candidate else {
                 break;
             };
+            self.transaction_eviction_visits = self.transaction_eviction_visits.saturating_add(1);
             self.finished_transactions.remove(&id);
+            self.evictable_finished_transactions.remove(&id);
             if let Some(transaction) = self.transactions.get(&id) {
                 self.finished_transaction_deadlines.remove(&(
                     finished_lineage_deadline(transaction, self.limit_scope),
@@ -3038,6 +3078,7 @@ impl FirestoreState {
             deadlines: self.active_transaction_deadlines.len(),
             finished_deadlines: self.finished_transaction_deadlines.len(),
             pruned_deadlines: self.transaction_prune_visits,
+            eviction_visits: self.transaction_eviction_visits,
             conflict_ledger_bytes: self.active_transaction_conflict_ledger_bytes,
             contention_visits: self.contention_visits,
         }
@@ -3062,6 +3103,7 @@ impl FirestoreState {
                     .saturating_sub(transaction.conflict_ledger_bytes);
             } else {
                 self.finished_transactions.remove(id);
+                self.evictable_finished_transactions.remove(id);
                 self.finished_transaction_deadlines.remove(&(
                     finished_lineage_deadline(&transaction, self.limit_scope),
                     id.clone(),
@@ -8402,6 +8444,150 @@ mod contention_index_tests {
                     &state.active_read_write_transactions,
                     &reference_active_read_write(&state)
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eviction_index_tests {
+    //! The production eviction index against the scan it replaced: under any sequence of transaction requests the index holds
+    //! exactly the finished tokens that are not remembered as expired, so its first token is the one the scan of the lineage took.
+    //! In this crate's unit tests `evict_finished_transactions` also asserts, at every eviction, that it picks the token the scan picks.
+
+    use super::*;
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        /// Begin this many transactions and leave them active (they expire unless touched).
+        Batch(usize),
+        /// Begin and roll back transactions until the lineage is at its bound, then this many more (each one an eviction).
+        Flood(usize),
+        /// Begin and commit (no writes) this many transactions.
+        CommitFlood(usize),
+        Advance(i64),
+        Touch(proptest::sample::Index),
+        Rollback(proptest::sample::Index),
+        Commit(proptest::sample::Index),
+        Retry(proptest::sample::Index),
+        Abandon(proptest::sample::Index),
+    }
+
+    fn op() -> impl proptest::strategy::Strategy<Value = Op> {
+        use proptest::prelude::*;
+        prop_oneof![
+            3 => (0usize..=4_096).prop_map(Op::Batch),
+            3 => (0usize..=300).prop_map(Op::Flood),
+            1 => (0usize..=300).prop_map(Op::CommitFlood),
+            3 => (0i64..=200).prop_map(Op::Advance),
+            2 => any::<proptest::sample::Index>().prop_map(Op::Touch),
+            2 => any::<proptest::sample::Index>().prop_map(Op::Rollback),
+            1 => any::<proptest::sample::Index>().prop_map(Op::Commit),
+            2 => any::<proptest::sample::Index>().prop_map(Op::Retry),
+            1 => any::<proptest::sample::Index>().prop_map(Op::Abandon),
+        ]
+    }
+
+    fn at(seconds: i64) -> LogicalInstant {
+        LogicalInstant::from_unix_seconds(1_788_000_000 + seconds)
+    }
+
+    fn pick(issued: &[TransactionId], index: proptest::sample::Index) -> Option<TransactionId> {
+        (!issued.is_empty()).then(|| issued[index.index(issued.len())].clone())
+    }
+
+    fn scanned_evictable(state: &FirestoreState) -> BTreeSet<TransactionId> {
+        state
+            .finished_transactions
+            .iter()
+            .filter(|id| !state.remembered_as_expired(id))
+            .cloned()
+            .collect()
+    }
+
+    fn apply(state: &mut FirestoreState, issued: &mut Vec<TransactionId>, now: &mut i64, op: &Op) {
+        match op {
+            Op::Batch(n) => {
+                for _ in 0..*n {
+                    if let Ok(id) = state.begin_transaction(false, at(*now)) {
+                        issued.push(id);
+                    }
+                }
+            }
+            Op::Flood(extra) => {
+                // A begin may first finish expired transactions, so the fill is measured as it goes.
+                let mut evictions = *extra;
+                loop {
+                    if state.finished_transactions.len() >= MAX_FINISHED_TRANSACTION_LINEAGE {
+                        if evictions == 0 {
+                            break;
+                        }
+                        evictions -= 1;
+                    }
+                    let Ok(id) = state.begin_transaction(false, at(*now)) else {
+                        break;
+                    };
+                    let _ = state.rollback_at(&id, at(*now));
+                }
+            }
+            Op::CommitFlood(n) => {
+                for _ in 0..*n {
+                    if let Ok(id) = state.begin_transaction(false, at(*now)) {
+                        let _ = state.commit(&[], Some(&id), at(*now));
+                    }
+                }
+            }
+            Op::Advance(seconds) => *now += seconds,
+            Op::Touch(index) => {
+                if let Some(id) = pick(issued, *index) {
+                    let _ = state.touch_transaction(&id, at(*now));
+                }
+            }
+            Op::Rollback(index) => {
+                if let Some(id) = pick(issued, *index) {
+                    let _ = state.rollback_at(&id, at(*now));
+                }
+            }
+            Op::Commit(index) => {
+                if let Some(id) = pick(issued, *index) {
+                    let _ = state.commit(&[], Some(&id), at(*now));
+                }
+            }
+            Op::Retry(index) => {
+                if let Some(id) = pick(issued, *index) {
+                    if let Ok(retry) = state.retry_transaction(&id, at(*now)) {
+                        issued.push(retry);
+                    }
+                }
+            }
+            Op::Abandon(index) => {
+                if let Some(id) = pick(issued, *index) {
+                    state.abandon_transaction(&id);
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(12))]
+
+        #[test]
+        fn the_eviction_index_holds_exactly_the_tokens_the_scan_may_evict(
+            strict in proptest::bool::ANY,
+            expired_batches in 0usize..=2,
+            ops in proptest::collection::vec(op(), 1..10),
+        ) {
+            let scope = if strict { LimitScope::Production } else { LimitScope::OfficialEmulator };
+            let mut state = FirestoreState::with_limit_scope(scope);
+            let mut issued = Vec::new();
+            let mut now = 0;
+            // Up to two full batches left to expire, so the lineage holds up to 8 192 tokens production remembers as expired.
+            let prefix = (0..expired_batches).flat_map(|_| [Op::Batch(4_096), Op::Advance(121)]);
+            for op in prefix.chain(ops.iter().cloned()) {
+                apply(&mut state, &mut issued, &mut now, &op);
+                let expected = if strict { scanned_evictable(&state) } else { BTreeSet::new() };
+                proptest::prop_assert_eq!(&state.evictable_finished_transactions, &expected, "after {:?}", op);
+                proptest::prop_assert!(state.finished_transactions.len() <= MAX_FINISHED_TRANSACTION_LINEAGE);
             }
         }
     }

@@ -367,3 +367,41 @@ fn the_edges_of_the_recorded_table_hold() {
         assert_eq!(answer, expected, "read at {age} s");
     }
 }
+
+/// Finishing a transaction while the finished lineage is saturated with tokens production still remembers as expired does not walk past
+/// those tokens: the eviction visits a constant number of lineage tokens per finish, however many are protected.
+#[test]
+fn strict_a_finish_at_a_saturated_lineage_does_not_scan_the_remembered_tokens() {
+    const ACTIVE_LIMIT: usize = 4_096;
+    const FINISHES: u64 = 200;
+    // Visits allowed for each finish: the token it evicts, plus slack for an index that drops one stale entry.
+    const VISITS_PER_FINISH: u64 = 2;
+    let mut state = FirestoreState::with_limit_scope(LimitScope::Production);
+    // Two full batches of idle transactions; each expires 120 s after its begin and is remembered until 300 s of token age,
+    // so at 242 s all 8 192 tokens are protected and fill the bounded lineage.
+    for begin in [0, 121] {
+        for _ in 0..ACTIVE_LIMIT {
+            state.begin_transaction(false, t(begin)).unwrap();
+        }
+    }
+    let probe = state.begin_transaction(false, t(242)).unwrap();
+    state.rollback_at(&probe, t(242)).unwrap();
+    let before = state.transaction_bookkeeping_stats();
+    assert_eq!(before.active, 0);
+    assert_eq!(before.finished, 2 * ACTIVE_LIMIT);
+    for _ in 0..FINISHES {
+        let other = state.begin_transaction(false, t(242)).unwrap();
+        state.rollback_at(&other, t(242)).unwrap();
+    }
+    let after = state.transaction_bookkeeping_stats();
+    assert_eq!(
+        after.finished,
+        2 * ACTIVE_LIMIT,
+        "the lineage stays saturated"
+    );
+    let visits = after.eviction_visits - before.eviction_visits;
+    assert!(
+        visits <= FINISHES * VISITS_PER_FINISH,
+        "{FINISHES} finishes visited {visits} lineage tokens"
+    );
+}

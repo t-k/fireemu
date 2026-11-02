@@ -1029,6 +1029,8 @@ pub struct TransactionBookkeepingStats {
     pub pruned_deadlines: u64,
     /// Estimated bytes retained by all active transaction conflict ledgers.
     pub conflict_ledger_bytes: u64,
+    /// Transactions examined as possible lock holders by the commit contention check.
+    pub contention_visits: u64,
 }
 
 /// Which catalog limits a database refuses.
@@ -1273,10 +1275,15 @@ pub struct FirestoreState {
     transaction_releases: u64,
     active_transaction_deadlines: BTreeSet<(LogicalInstant, TransactionId)>,
     active_transaction_versions: BTreeMap<CommitVersion, usize>,
+    /// The active read-write transactions, the only ones whose reads lock documents: the
+    /// contention check of a commit looks at these and not at the finished lineage.
+    active_read_write_transactions: BTreeSet<TransactionId>,
     active_transaction_conflict_ledger_bytes: u64,
     finished_transactions: BTreeSet<TransactionId>,
     finished_transaction_deadlines: BTreeSet<(LogicalInstant, TransactionId)>,
     transaction_prune_visits: u64,
+    /// Transactions examined as possible lock holders by `check_contention`.
+    contention_visits: u64,
     /// Last published commit time; commit times are strictly monotonic per database.
     last_commit_time: Option<LogicalInstant>,
     /// Commit time of every retained version (`read_time` snapshots).
@@ -1327,10 +1334,12 @@ impl Default for FirestoreState {
             transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
+            active_read_write_transactions: BTreeSet::new(),
             active_transaction_conflict_ledger_bytes: 0,
             finished_transactions: BTreeSet::new(),
             finished_transaction_deadlines: BTreeSet::new(),
             transaction_prune_visits: 0,
+            contention_visits: 0,
             last_commit_time: None,
             commit_times: VecDeque::new(),
             compaction_floor: CommitVersion::default(),
@@ -2529,10 +2538,12 @@ impl FirestoreState {
             transaction_releases: 0,
             active_transaction_deadlines: BTreeSet::new(),
             active_transaction_versions: BTreeMap::new(),
+            active_read_write_transactions: BTreeSet::new(),
             active_transaction_conflict_ledger_bytes: 0,
             finished_transactions: BTreeSet::new(),
             finished_transaction_deadlines: BTreeSet::new(),
             transaction_prune_visits: 0,
+            contention_visits: 0,
             last_commit_time: self.last_commit_time,
             commit_times: self.commit_times.back().copied().into_iter().collect(),
             compaction_floor: self.version,
@@ -2827,6 +2838,9 @@ impl FirestoreState {
             .entry(read_version)
             .or_default() += 1;
         self.active_transaction_count += 1;
+        if !read_only {
+            self.active_read_write_transactions.insert(id.clone());
+        }
         self.transactions.insert(id.clone(), transaction);
         Ok(id)
     }
@@ -2851,6 +2865,7 @@ impl FirestoreState {
                 continue;
             }
             transaction.state = TransactionState::Finished;
+            self.active_read_write_transactions.remove(&id);
             transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
@@ -2949,6 +2964,7 @@ impl FirestoreState {
         };
         self.active_transaction_deadlines
             .remove(&(deadline, id.clone()));
+        self.active_read_write_transactions.remove(id);
         self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
         self.transaction_releases = self.transaction_releases.wrapping_add(1);
         if let Some(transaction) = self.transactions.get(id) {
@@ -3023,6 +3039,7 @@ impl FirestoreState {
             finished_deadlines: self.finished_transaction_deadlines.len(),
             pruned_deadlines: self.transaction_prune_visits,
             conflict_ledger_bytes: self.active_transaction_conflict_ledger_bytes,
+            contention_visits: self.contention_visits,
         }
     }
 
@@ -3034,6 +3051,7 @@ impl FirestoreState {
                     transaction_deadline(&transaction, self.limit_scope),
                     id.clone(),
                 ));
+                self.active_read_write_transactions.remove(id);
                 self.active_transaction_count = self.active_transaction_count.saturating_sub(1);
                 decrement_version_count(
                     &mut self.active_transaction_versions,
@@ -4693,41 +4711,9 @@ impl FirestoreState {
             return Ok(());
         }
         self.prune_transactions(now);
-        let grouped = std::cell::OnceCell::new();
-        let floor = self.compaction_floor;
-        let holders: Vec<(TransactionId, LogicalInstant, bool)> = self
-            .transactions
-            .iter()
-            .filter(|(id, holder)| {
-                holder.state == TransactionState::Active
-                    && !holder.read_only
-                    && holder.read_version >= floor
-                    && own != Some(*id)
-                    && self
-                        .holder_locks_writes(holder, grouped.get_or_init(|| group_writes(writes)))
-            })
-            .map(|(id, holder)| {
-                let cycle = own
-                    .and_then(|id| self.transactions.get(id))
-                    .is_some_and(|requester| {
-                        holder
-                            .waiting_to_commit
-                            .iter()
-                            .chain(
-                                holder
-                                    .owned_commit_waits
-                                    .0
-                                    .iter()
-                                    .filter(|(owner, _)| owner.is_active())
-                                    .map(|(_, pending)| pending),
-                            )
-                            .any(|pending| {
-                                self.holder_locks_writes(requester, &group_writes(pending))
-                            })
-                    });
-                (id.clone(), holder.started_at, cycle)
-            })
-            .collect();
+        let (holders, visits) =
+            self.contention_holders(self.active_read_write_transactions.iter(), writes, own);
+        self.contention_visits = self.contention_visits.saturating_add(visits);
         if holders.is_empty() {
             return Ok(());
         }
@@ -4766,6 +4752,55 @@ impl FirestoreState {
             }
         }
         Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// The lock holders `writes` collide with among `candidates`, other than `own`, each with
+    /// its age and whether it waits on `own`'s locks (a deadlock), and how many candidates were
+    /// examined. `candidates` is the active read-write index; any superset in id order (such as
+    /// every retained transaction) gives the same holders.
+    fn contention_holders<'a>(
+        &'a self,
+        candidates: impl Iterator<Item = &'a TransactionId>,
+        writes: &[Write],
+        own: Option<&TransactionId>,
+    ) -> (Vec<(TransactionId, LogicalInstant, bool)>, u64) {
+        let grouped = std::cell::OnceCell::new();
+        let floor = self.compaction_floor;
+        let mut visits = 0_u64;
+        let holders = candidates
+            .filter_map(|id| self.transactions.get_key_value(id))
+            .filter(|(id, holder)| {
+                visits += 1;
+                holder.state == TransactionState::Active
+                    && !holder.read_only
+                    && holder.read_version >= floor
+                    && own != Some(*id)
+                    && self
+                        .holder_locks_writes(holder, grouped.get_or_init(|| group_writes(writes)))
+            })
+            .map(|(id, holder)| {
+                let cycle = own
+                    .and_then(|id| self.transactions.get(id))
+                    .is_some_and(|requester| {
+                        holder
+                            .waiting_to_commit
+                            .iter()
+                            .chain(
+                                holder
+                                    .owned_commit_waits
+                                    .0
+                                    .iter()
+                                    .filter(|(owner, _)| owner.is_active())
+                                    .map(|(_, pending)| pending),
+                            )
+                            .any(|pending| {
+                                self.holder_locks_writes(requester, &group_writes(pending))
+                            })
+                    });
+                (id.clone(), holder.started_at, cycle)
+            })
+            .collect();
+        (holders, visits)
     }
 
     /// Clears the legacy unowned Commit wait; request-owned waits remain independent.
@@ -8213,4 +8248,161 @@ mod query_counter_tests {
 #[cfg(test)]
 mod size_charge_tests {
     include!("../tests/support/size_charges.rs");
+}
+
+#[cfg(test)]
+mod contention_index_tests {
+    use super::*;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use proptest::prelude::*;
+
+    const DOCUMENTS: [&str; 2] = ["c/a", "c/b"];
+
+    fn path(value: &str) -> DocumentPath {
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").expect("valid project"),
+            &DatabaseId::default_database(),
+            value,
+        )
+        .expect("valid document path")
+    }
+
+    fn set(value: &str) -> Write {
+        Write {
+            op: WriteOp::Set {
+                path: path(value),
+                fields: BTreeMap::new(),
+                update_mask: None,
+            },
+            precondition: None,
+            transforms: Vec::new(),
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum Op {
+        Begin { read_only: bool },
+        BeginReadWrite,
+        Retry(usize),
+        Read(usize, usize),
+        Commit(Option<usize>, Vec<usize>),
+        Rollback(usize),
+        Abandon(usize),
+        Advance(i64),
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        // Reads and transactional commits dominate so that holders, refused commits that wait,
+        // and deadlock cycles between waiting holders are common.
+        prop_oneof![
+            3 => any::<bool>().prop_map(|read_only| Op::Begin { read_only }),
+            1 => Just(Op::BeginReadWrite),
+            1 => any::<usize>().prop_map(Op::Retry),
+            6 => (any::<usize>(), 0..DOCUMENTS.len()).prop_map(|(t, d)| Op::Read(t, d)),
+            6 => (
+                proptest::option::weighted(0.8, any::<usize>()),
+                proptest::collection::vec(0..DOCUMENTS.len(), 0..3)
+            )
+                .prop_map(|(t, d)| Op::Commit(t, d)),
+            1 => any::<usize>().prop_map(Op::Rollback),
+            1 => any::<usize>().prop_map(Op::Abandon),
+            2 => prop_oneof![4 => 0_i64..20, 1 => 100_i64..200].prop_map(Op::Advance),
+        ]
+    }
+
+    /// The candidates the contention check examined before the index: every retained transaction.
+    fn reference_active_read_write(state: &FirestoreState) -> BTreeSet<TransactionId> {
+        state
+            .transactions
+            .iter()
+            .filter(|(_, t)| t.state == TransactionState::Active && !t.read_only)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// After every begin, read, commit, rollback, abandon, retry and expiry, the index holds
+        /// exactly the active read-write transactions, and a commit finds the same lock holders
+        /// (with the same ages and deadlock flags, in the same order) through the index as through
+        /// a scan of every retained transaction.
+        #[test]
+        fn index_gives_the_same_contention_holders_as_a_full_scan(
+            production in any::<bool>(),
+            ops in proptest::collection::vec(op(), 1..60),
+        ) {
+            let scope = if production { LimitScope::Production } else { LimitScope::OfficialEmulator };
+            let mut state = FirestoreState::with_limit_scope(scope);
+            let mut issued: Vec<TransactionId> = Vec::new();
+            let mut seconds = 0_i64;
+            let pick = |issued: &[TransactionId], i: usize| {
+                (!issued.is_empty()).then(|| issued[i % issued.len()].clone())
+            };
+            for op in ops {
+                let now = LogicalInstant::from_unix_seconds(1_788_000_000 + seconds);
+                match op {
+                    Op::Begin { read_only } => {
+                        if let Ok(id) = state.begin_transaction(read_only, now) {
+                            issued.push(id);
+                        }
+                    }
+                    Op::BeginReadWrite => {
+                        if let Ok(id) = state.begin_read_write_transaction(now) {
+                            issued.push(id);
+                        }
+                    }
+                    Op::Retry(i) => {
+                        if let Some(previous) = pick(&issued, i) {
+                            if let Ok(id) = state.retry_transaction(&previous, now) {
+                                issued.push(id);
+                            }
+                        }
+                    }
+                    Op::Read(i, d) => {
+                        if let Some(id) = pick(&issued, i) {
+                            if state.touch_transaction(&id, now).is_ok() {
+                                let _ = state.get_in_transaction(&id, &path(DOCUMENTS[d]));
+                            }
+                        }
+                    }
+                    Op::Commit(i, documents) => {
+                        let own = i.and_then(|i| pick(&issued, i));
+                        let writes: Vec<Write> =
+                            documents.iter().map(|d| set(DOCUMENTS[*d])).collect();
+                        state.prune_transactions(now);
+                        let (indexed, _) = state.contention_holders(
+                            state.active_read_write_transactions.iter(),
+                            &writes,
+                            own.as_ref(),
+                        );
+                        let (scanned, _) =
+                            state.contention_holders(state.transactions.keys(), &writes, own.as_ref());
+                        prop_assert_eq!(indexed, scanned);
+                        let _ = state.commit(&writes, own.as_ref(), now);
+                    }
+                    Op::Rollback(i) => {
+                        if let Some(id) = pick(&issued, i) {
+                            let _ = state.rollback_at(&id, now);
+                        }
+                    }
+                    Op::Abandon(i) => {
+                        if let Some(id) = pick(&issued, i) {
+                            state.abandon_transaction(&id);
+                        }
+                    }
+                    Op::Advance(by) => {
+                        seconds += by;
+                        state.prune_transactions(
+                            LogicalInstant::from_unix_seconds(1_788_000_000 + seconds),
+                        );
+                    }
+                }
+                prop_assert_eq!(
+                    &state.active_read_write_transactions,
+                    &reference_active_read_write(&state)
+                );
+            }
+        }
+    }
 }

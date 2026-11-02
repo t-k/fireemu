@@ -4996,3 +4996,34 @@ fn stored_reference_requires_document_below_documents_root() {
         Some(&Value::Reference(document))
     );
 }
+
+/// The contention check of a commit examines the active read-write transactions only: the
+/// finished attempts retained as retry lineage (up to 8,192) and active read-only
+/// transactions hold no locks, so a commit must not pay for them.
+#[test]
+fn contention_check_visits_only_active_read_write_transactions() {
+    let mut state = FirestoreState::new();
+    for _ in 0..8_192 {
+        let finished = state.begin_read_write_transaction(t(0)).unwrap();
+        state.rollback(&finished).unwrap();
+    }
+    let _reader = state.begin_transaction(true, t(0)).unwrap();
+    let holder = state.begin_transaction(false, t(0)).unwrap();
+    state
+        .get_in_transaction(&holder, &path("locked/doc"))
+        .unwrap();
+    let before = state.transaction_bookkeeping_stats();
+    assert_eq!(before.finished, 8_192);
+    assert_eq!(before.active, 2);
+
+    state
+        .commit(
+            &[set("unrelated/doc", &[("value", Value::Integer(1))])],
+            None,
+            t(1),
+        )
+        .unwrap();
+
+    let visits = state.transaction_bookkeeping_stats().contention_visits - before.contention_visits;
+    assert_eq!(visits, 1);
+}

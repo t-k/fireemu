@@ -2458,6 +2458,13 @@ impl StorageState {
                     })
             });
             let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
+            // Without a delimiter there are no prefixes to collect, so the answer is the first
+            // accepted name at or after `item_start` and the walk starts and ends there.
+            let lower = if delimiter.is_none() {
+                (bucket.clone(), ObjectName::range_start(item_start))
+            } else {
+                lower
+            };
             let mut prefixes = Vec::new();
             let mut next_page_token = None;
             for ((candidate_bucket, name), _) in self.objects.range(lower..) {
@@ -2473,6 +2480,9 @@ impl StorageState {
                     }
                 } else if name.as_str() >= item_start && next_page_token.is_none() {
                     next_page_token = Some(name.as_str().to_owned());
+                    if delimiter.is_none() {
+                        break;
+                    }
                 }
             }
             return ListPage {
@@ -2495,14 +2505,17 @@ impl StorageState {
             {
                 return true;
             }
+            // Every name that starts with a token folding to itself folds to that token, and no
+            // name folds to any other token, so only such a token needs the names under it.
+            if fold(token).as_deref() != Some(token) {
+                return false;
+            }
             self.objects
                 .range((bucket.clone(), ObjectName::range_start(token))..)
                 .take_while(|((candidate_bucket, name), _)| {
                     candidate_bucket == bucket && name.as_str().starts_with(token)
                 })
-                .any(|((_, name), _)| {
-                    fold(name.as_str()).as_deref() == Some(token) && matches(name.as_str())
-                })
+                .any(|((_, name), _)| matches(name.as_str()))
         });
         let start = page_token.filter(|_| token_is_entry).unwrap_or(prefix);
         let lower = (bucket.clone(), ObjectName::range_start(start));
@@ -3552,6 +3565,34 @@ mod tests {
         assert_eq!(page.items[0].name.as_str(), "object-1000");
         assert_eq!(page.next_page_token.as_deref(), Some("object-1010"));
         assert!(visits.get() <= 12, "visited {} names", visits.get());
+    }
+
+    #[test]
+    fn empty_page_without_a_delimiter_visits_only_the_next_object() {
+        use std::cell::Cell;
+        let bucket = BucketName::try_new("bucket-one").unwrap();
+        let mut state = StorageState::new(1);
+        for i in 0..1024 {
+            state
+                .put(
+                    &bucket,
+                    &ObjectName::try_new(format!("object-{i:04}")).unwrap(),
+                    Vec::new(),
+                    NewMetadata::default(),
+                    Precondition::default(),
+                    LogicalInstant::UNIX_EPOCH,
+                )
+                .unwrap();
+        }
+        for (token, next) in [(None, "object-0000"), (Some("object-1000"), "object-1000")] {
+            let visits = Cell::new(0);
+            let page = state.list_matching(&bucket, "", None, token, Some(0), &|_| {
+                visits.set(visits.get() + 1);
+                true
+            });
+            assert_eq!(page.next_page_token.as_deref(), Some(next));
+            assert!(visits.get() <= 2, "visited {} names", visits.get());
+        }
     }
 
     #[test]

@@ -6,8 +6,8 @@ run-name: ${{ github.event_name == 'schedule' && format('heavy-verification sche
 # standard runners instead of a developer machine. The repository is public, so they cost nothing.
 #
 # Two scheduled runs of the mutants job need no one to start them (owner decision 2209):
-# - nightly: the Rust diff of the default branch since the last successful scheduled nightly (or the
-#   last 24 hours). No Rust in the diff: nothing to do, the run passes. A missed mutant fails the run.
+# - nightly: the Rust diff of the default branch since the last scheduled nightly that completed, with
+#   success or failure (or the last 24 hours). No Rust in the diff: nothing to do, the run passes. A missed mutant fails the run.
 # - weekly: one package of tools/ci/mutation-weekly.txt, chosen by the ISO week, mutated whole. It only
 #   reports: the survivors are in the step summary and the artifact, and the run does not fail on them.
 # Both can also be dispatched (job nightly or weekly) from a branch, to try them out.
@@ -18,7 +18,7 @@ run-name: ${{ github.event_name == 'schedule' && format('heavy-verification sche
 # - No production credentials, and no network call to Google or Firebase: the suites run against the
 #   local emulators only, and the jobs fetch nothing but the repository, the pinned actions, the
 #   Rust toolchain and the crates the lockfile names. The plan job also reads the public list of this
-#   repository's workflow runs, unauthenticated, to find the last successful nightly.
+#   repository's workflow runs, unauthenticated, to find the last nightly that completed.
 # - Inputs are never interpolated into a script. They reach `run:` only through `env:` and are
 #   validated there first (the `plan` job). A validated value is the only thing the other jobs use.
 # - Every action is pinned by its full commit SHA, and every job has a timeout.
@@ -162,7 +162,7 @@ jobs:
           (( shards >= 1 && shards <= 16 )) || fail "shards must be from 1 to 16"
           [[ $INPUT_TAG =~ ^[A-Za-z0-9._-]{0,64}$ ]] || fail "tag must be letters, digits, dot, dash and underscore"
           if [[ -n $INPUT_PACKAGE ]]; then
-            [[ $INPUT_PACKAGE =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "package must be a workspace package name"
+            [[ $INPUT_PACKAGE =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail "package must be a workspace package name"
           fi
           if [[ $INPUT_JOB == linux-measure ]]; then
             [[ $INPUT_SCRIPT =~ ^(scripts|tools)/[A-Za-z0-9._/-]{1,200}$ ]] || fail "script must be a path below scripts/ or tools/"
@@ -189,17 +189,19 @@ jobs:
           job=$INPUT_JOB mode=$INPUT_JOB package=$INPUT_PACKAGE files="" skip=false fail_on_missed=false
           case "$INPUT_JOB" in
             nightly)
-              # The Rust diff since the last successful scheduled nightly, or since 24 hours ago. A
-              # missed mutant fails the run, so that the owner is told.
+              # The Rust diff since the last scheduled nightly that completed (success or failure; a
+              # cancelled or skipped one does not move the base), or since 24 hours ago. A failed nightly
+              # still moves the base: otherwise the diff would only grow until it times out. A missed
+              # mutant fails the run, so that the owner is told.
               job=mutants fail_on_missed=true
               last=""
               listing=$(curl --silent --show-error --fail --max-time 30 --header 'Accept: application/vnd.github+json' \
-                "https://api.github.com/repos/$REPOSITORY/actions/workflows/heavy-verification.yml/runs?event=schedule&status=success&branch=$DEFAULT_BRANCH&per_page=50") || listing=""
+                "https://api.github.com/repos/$REPOSITORY/actions/workflows/heavy-verification.yml/runs?event=schedule&status=completed&branch=$DEFAULT_BRANCH&per_page=50") || listing=""
               if [[ -n $listing ]]; then
                 last=$(python3 -c '
           import json, re, sys
           for run in json.load(sys.stdin).get("workflow_runs", []):
-              if run.get("display_title") == "heavy-verification scheduled nightly" and re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or ""):
+              if run.get("display_title") == "heavy-verification scheduled nightly" and run.get("conclusion") in ("success", "failure") and re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or ""):
                   print(run["head_sha"])
                   break
           ' <<< "$listing") || last=""
@@ -235,7 +237,7 @@ jobs:
               fi
               read -r -a tokens <<< "$entry"
               package=${tokens[0]}
-              [[ $package =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "the rotation names a bad package"
+              [[ $package =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail "the rotation names a bad package"
               for token in "${tokens[@]:1}"; do
                 [[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the rotation names a bad file"
                 files="$files $token"

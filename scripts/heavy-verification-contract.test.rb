@@ -62,6 +62,27 @@ class HeavyVerificationContractTest < Minitest::Test
     assert_violation(REAL.sub("if: needs.plan.outputs.job == 'nextest'", "if: needs.plan.outputs.job == 'nextest' || always()"), "validated outputs")
   end
 
+  def test_a_schedule_that_takes_its_ref_from_anywhere_but_the_commit_is_refused
+    assert_violation(REAL.sub("INPUT_REF=$GITHUB_SHA INPUT_BASE", "INPUT_REF=work/untrusted INPUT_BASE"), "must test the commit it runs on")
+    assert_violation(REAL.sub('INPUT_PACKAGE="" INPUT_SCRIPT="" INPUT_TAG=""', 'INPUT_TAG=""'), "must test the commit it runs on")
+  end
+
+  def test_a_weekly_rotation_without_its_checks_is_refused
+    assert_violation(REAL.sub(/ *\[\[ \$token =~ [^\n]*\n/, ""), "file tokens must be validated")
+    assert_violation(REAL.sub("&& $token != *..* ", ""), "file tokens must be validated")
+    assert_violation(REAL.sub("&& $token != *//* ", ""), "file tokens must be validated")
+    assert_violation(REAL.sub(/ *\[\[ \$package =~ [^\n]*\n/, ""), "package name must be validated")
+    assert_violation(REAL.sub("[[ $package =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]", "[[ $package =~ ^[A-Za-z0-9_-]{1,64}$ ]]"), "package name must be validated")
+    assert_violation(REAL.sub("[[ $INPUT_PACKAGE =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]]", "[[ $INPUT_PACKAGE =~ ^[A-Za-z0-9_-]{1,64}$ ]]"), "dispatched package name")
+  end
+
+  def test_a_summary_merge_that_never_fails_on_a_miss_is_refused
+    assert_violation(REAL.sub("extra+=(--fail-on-missed)", "extra+=()"), "--fail-on-missed")
+    assert_violation(REAL.sub("if [[ $FAIL_ON_MISSED == true ]]; then", "if [[ $FAIL_ON_MISSED == never ]]; then"), "--fail-on-missed")
+    assert_violation(REAL.sub('"${extra[@]}" shards summary', "shards summary"), "--fail-on-missed")
+    assert_violation(REAL.sub("FAIL_ON_MISSED: ${{ needs.plan.outputs.fail_on_missed }}", "FAIL_ON_MISSED: \"false\""), "--fail-on-missed")
+  end
+
   def test_a_second_mutation_run_is_refused
     extra = "      - name: another\n        run: cargo mutants --shard 1/2 --sharding slice\n"
     assert_violation(REAL.sub("      - name: select the mutants", extra + "      - name: select the mutants"), "--sharding slice once")

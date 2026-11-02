@@ -159,6 +159,10 @@ def violations(source, toolchain_channel: nil)
   errors << "the summary upload must run even when the merge failed (if: always())" unless upload && upload["if"].to_s.strip == "always()"
   merge = summary.find { |step| step["name"] == "merge the shards" }
   errors << "the summary merge must pass the shard job's result (--mutants-result \"$MUTANTS_RESULT\")" unless merge && merge["run"].to_s.include?('--mutants-result "$MUTANTS_RESULT"') && merge.dig("env", "MUTANTS_RESULT").to_s.gsub(/\s+/, "") == "${{needs.mutants.result}}"
+  errors << "the summary merge must pass --fail-on-missed when the plan says so (FAIL_ON_MISSED == true, from needs.plan.outputs.fail_on_missed)" unless merge &&
+    merge.dig("env", "FAIL_ON_MISSED").to_s.gsub(/\s+/, "") == "${{needs.plan.outputs.fail_on_missed}}" &&
+    merge["run"].to_s.include?('if [[ $FAIL_ON_MISSED == true ]]; then') && merge["run"].to_s.include?("extra+=(--fail-on-missed)") &&
+    merge["run"].to_s.include?('"${extra[@]}"')
   errors << "the summary upload must fail when there is no summary (if-no-files-found: error)" unless upload && upload.dig("with", "if-no-files-found") == "error"
   mutate_runs = (workflow.dig("jobs", "mutants", "steps") || []).map { |step| step["run"].to_s }.select { |run| run.include?("cargo mutants") }
   # The selection step only lists the mutants (--list); the shard run is the one that mutates.
@@ -197,6 +201,10 @@ def violations(source, toolchain_channel: nil)
     errors << "plan must resolve the ref and the base inside this repository" unless script.include?("for-each-ref --contains") && script.include?("refs/heads/$value")
     errors << "plan must pin the locale (export LC_ALL=C) before it matches a pattern" unless script.include?("export LC_ALL=C")
     errors << "plan must refuse an unreadable default branch" unless script.include?('[[ -n $DEFAULT_BRANCH ]]')
+    errors << "a scheduled run must test the commit it runs on and nothing an input names (INPUT_REF=$GITHUB_SHA, no package, script or tag)" unless script.include?('INPUT_REF=$GITHUB_SHA INPUT_BASE=$DEFAULT_BRANCH INPUT_PACKAGE="" INPUT_SCRIPT="" INPUT_TAG=""')
+    errors << "the weekly rotation's package name must be validated before it is used" unless script.include?('[[ $package =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail "the rotation names a bad package"')
+    errors << "the weekly rotation's file tokens must be validated before they are used (no .., no //)" unless script.include?('[[ $token =~ ^!?[A-Za-z0-9_./*-]{1,200}$ && $token != *..* && $token != *//* ]] || fail "the rotation names a bad file"')
+    errors << "the dispatched package name must be validated" unless script.include?('[[ $INPUT_PACKAGE =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || fail')
     errors << "plan must start a schedule only on the default branch" unless script.include?('[[ $GITHUB_REF == "refs/heads/$DEFAULT_BRANCH" ]]')
     errors << "plan must refuse any event but schedule and workflow_dispatch" unless script.include?('[[ $EVENT_NAME == workflow_dispatch ]]')
     errors << "plan must refuse refs/, HEAD and FETCH_HEAD" unless script.include?("refs/*") && script.include?("FETCH_HEAD")

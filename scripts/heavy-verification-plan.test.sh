@@ -39,7 +39,28 @@ git_in "$work/src" checkout -q -b only-here
 git_in "$work/src" commit -q --allow-empty -m "only on a pull request head"
 pr_sha=$(git_in "$work/src" rev-parse HEAD)
 git_in "$work/src" checkout -q main
-git_in "$work/src" push -q "$work/origin.git" main work/my-branch release/1.0 feature/a.b-c ci/heavy
+# Branches whose rotation file holds one hostile line (the weekly takes the file from the commit under test).
+hostile() { # BRANCH LINE
+  git_in "$work/src" checkout -q -b "$1" main
+  printf '%s\n' "$2" > "$work/src/tools/ci/mutation-weekly.txt"
+  git_in "$work/src" commit -q -am "hostile rotation"
+  git_in "$work/src" checkout -q main
+}
+hostile hostile-dotdot 'fireemu-core-auth crates/../secrets.rs'
+hostile hostile-slashes 'fireemu-core-auth crates//x.rs'
+hostile hostile-semicolon 'fireemu-core-auth crates/x.rs;id'
+# shellcheck disable=SC2016
+hostile hostile-subshell 'fireemu-core-auth $(id)'
+# shellcheck disable=SC2016
+hostile hostile-backtick 'fireemu-core-auth `id`'
+hostile hostile-exclude-dotdot 'fireemu-core-auth !../x.rs'
+hostile hostile-package-semicolon 'fireemu-core-auth;id crates/x.rs'
+# shellcheck disable=SC2016
+hostile hostile-package-subshell '$(id)'
+hostile hostile-package-flag '--help'
+hostile hostile-empty '# only a comment'
+hostile hostile-clean 'fireemu-core-auth crates/fireemu-core-auth/src/*.rs !crates/fireemu-core-auth/src/lib.rs'
+git_in "$work/src" push -q "$work/origin.git" main work/my-branch release/1.0 feature/a.b-c ci/heavy hostile-dotdot hostile-slashes hostile-semicolon hostile-subshell hostile-backtick hostile-exclude-dotdot hostile-package-semicolon hostile-package-subshell hostile-package-flag hostile-empty hostile-clean
 git_in "$work/src" push -q "$work/origin.git" "$pr_sha:refs/pull/1/head"
 main_sha=$(git_in "$work/src" rev-parse main)
 mine_sha=$(git_in "$work/src" rev-parse work/my-branch)
@@ -48,16 +69,16 @@ git_in "$work/fork" commit -q --allow-empty -m "a commit of a fork"
 fork_sha=$(git_in "$work/fork" rev-parse HEAD)
 
 # A `curl` that answers the list of workflow runs the nightly asks GitHub for: the runs named by
-# CURL_RUNS (SHA, title) pairs, or a failure when CURL_FAILS is set.
+# CURL_RUNS (SHA, conclusion, title) lines, or a failure when CURL_FAILS is set.
 mkdir -p "$work/bin"
 cat > "$work/bin/curl" << 'CURL'
 #!/usr/bin/env bash
 [[ -z ${CURL_FAILS-} ]] || exit 22
 printf '{"workflow_runs": ['
 sep=""
-while read -r sha title; do
+while read -r sha conclusion title; do
   [[ -n $sha ]] || continue
-  printf '%s{"head_sha": "%s", "display_title": "%s"}' "$sep" "$sha" "$title"
+  printf '%s{"head_sha": "%s", "conclusion": "%s", "display_title": "%s"}' "$sep" "$sha" "$conclusion" "$title"
   sep=","
 done <<< "${CURL_RUNS-}"
 printf ']}'
@@ -183,29 +204,42 @@ for locale in C.UTF-8 en_US.UTF-8; do
   refuses linux-measure work/my-branch "" main 8 scripts/../x.sh ""
   refuses linux-measure work/my-branch "" main 8 other/x.sh ""
   refuses nextest work/my-branch "" main 8 "" 'a b'
+  EXPECT="package must be a workspace package name" refuses mutants work/my-branch --help main 8 "" ""
+  EXPECT="package must be a workspace package name" refuses mutants work/my-branch -p main 8 "" ""
+  EXPECT="package must be a workspace package name" refuses mutants work/my-branch 'a;b' main 8 "" ""
 
   # The scheduled runs: the head of the default branch, no inputs, and the schedule says which run.
-  # The nightly takes the diff since the last successful nightly; the weekly one package of the list.
+  # The nightly takes the diff since the last completed nightly; the weekly one package of the list.
   scheduled() { # SCHEDULE
     EVENT_NAME_UNDER_TEST=schedule EVENT_SCHEDULE_UNDER_TEST=$1 GITHUB_REF_UNDER_TEST=refs/heads/main "${@:2}"
   }
-  has() { grep -qx -- "$1" "$work/output"; }
+  has() { grep -qxF -- "$1" "$work/output"; }
   nightly_title="heavy-verification scheduled nightly"
   # Rust changed since the last nightly (the commit before the one that added it): mutate that diff.
-  CURL_RUNS="$one_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  CURL_RUNS="$one_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has job=mutants && has mode=nightly && has skip=false && has fail_on_missed=true && has "ref=$main_sha" && has "base=$one_sha" &&
     has total=8 && has package= && has files=; then
-    pass "the nightly mutates the Rust diff since the last successful nightly and fails on a miss"
+    pass "the nightly mutates the Rust diff since the last completed nightly and fails on a miss"
   else
-    flunk "the nightly mutates the Rust diff since the last successful nightly ($(cat "$work/output"))"
+    flunk "the nightly mutates the Rust diff since the last completed nightly ($(cat "$work/output"))"
   fi
   # No Rust since the last nightly: nothing to do.
-  CURL_RUNS="$main_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  CURL_RUNS="$main_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=true && has "base=$main_sha"; then pass "the nightly skips a diff without Rust"; else flunk "the nightly skips a diff without Rust ($(cat "$work/output"))"; fi
+  # A nightly that failed moves the base as well (the diff must not grow until it times out); one that was
+  # cancelled, skipped or is not finished does not, and the newest completed one wins.
+  CURL_RUNS="$main_sha failure $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=true && has "base=$main_sha"; then pass "a failed nightly moves the base"; else flunk "a failed nightly moves the base ($(cat "$work/output"))"; fi
+  for conclusion in cancelled skipped timed_out null ""; do
+    CURL_RUNS="$main_sha ${conclusion:-null} $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+    if has skip=false && ! has "base=$main_sha"; then pass "a nightly that ended ${conclusion:-null} does not move the base"; else flunk "a nightly that ended ${conclusion:-null} does not move the base ($(cat "$work/output"))"; fi
+  done
+  CURL_RUNS="$(printf '%s cancelled %s\n%s failure %s\n%s success %s' "$main_sha" "$nightly_title" "$one_sha" "$nightly_title" "$main_sha" "$nightly_title")" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  if has skip=false && has "base=$one_sha"; then pass "the newest nightly that completed is the base, skipping a cancelled one"; else flunk "the newest nightly that completed is the base ($(cat "$work/output"))"; fi
   # Another workflow run, a run that is not a nightly and a commit this branch does not contain are not the base.
-  CURL_RUNS="$main_sha heavy-verification scheduled weekly" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  CURL_RUNS="$main_sha success heavy-verification scheduled weekly" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=false && ! has "base=$main_sha"; then pass "a weekly run is not the last nightly"; else flunk "a weekly run is not the last nightly ($(cat "$work/output"))"; fi
-  CURL_RUNS="$fork_sha $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
+  CURL_RUNS="$fork_sha success $nightly_title" scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
   if has skip=false && ! has "base=$fork_sha"; then pass "a nightly commit outside the history is not the base"; else flunk "a nightly commit outside the history is not the base ($(cat "$work/output"))"; fi
   # No answer from GitHub: 24 hours back, which here reaches before the first commit.
   CURL_FAILS=1 scheduled "23 3 * * *" validate "" "" "" "" "" "" ""
@@ -229,6 +263,20 @@ for locale in C.UTF-8 en_US.UTF-8; do
     flunk "a dispatched weekly takes the named package's line ($(cat "$work/output"))"
   fi
   EXPECT="is not in tools/ci/mutation-weekly.txt" refuses weekly work/my-branch no-such-package main 4 "" ""
+  # A hostile rotation line (the file comes from the commit under test) is refused before anything uses it.
+  for branch in hostile-dotdot hostile-slashes hostile-semicolon hostile-subshell hostile-backtick hostile-exclude-dotdot; do
+    EXPECT="the rotation names a bad file" refuses weekly "$branch" "" main 4 "" ""
+  done
+  for branch in hostile-package-semicolon hostile-package-subshell hostile-package-flag; do
+    EXPECT="the rotation names a bad package" refuses weekly "$branch" "" main 4 "" ""
+  done
+  EXPECT="lists no package" refuses weekly hostile-empty "" main 4 "" ""
+  validate weekly hostile-clean "" main 4 "" ""
+  if has "package=fireemu-core-auth" && has "files=crates/fireemu-core-auth/src/*.rs !crates/fireemu-core-auth/src/lib.rs"; then
+    pass "a clean rotation line with a glob and an exclusion is accepted"
+  else
+    flunk "a clean rotation line with a glob and an exclusion is accepted ($(cat "$work/output"))"
+  fi
   # A dispatched nightly can be tried on a branch, and keeps the ban on the default branch.
   accepts nightly work/my-branch "" main 4 "" ""
   GITHUB_REF_UNDER_TEST=refs/heads/main refuses nightly work/my-branch "" main 4 "" ""

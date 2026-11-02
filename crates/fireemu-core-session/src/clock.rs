@@ -11,6 +11,17 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
+/// One reading of a following clock: the instant now, the drift it stands for and the forward
+/// movement it counts.
+#[derive(Clone, Copy)]
+struct Sample {
+    instant: LogicalInstant,
+    /// Nanoseconds the source ran since the last move.
+    drift: i128,
+    /// Nanoseconds counted as elapsed: the drift, cut at the runtime range.
+    counted: i128,
+}
+
 /// A reading of real time in nanoseconds, from any origin. Only differences are used.
 pub type TimeSource = Arc<dyn Fn() -> i128 + Send + Sync>;
 
@@ -184,19 +195,34 @@ impl VirtualClock {
         })
     }
 
-    /// The instant now: the last move plus the real time that has passed since.
-    fn live(&self) -> LogicalInstant {
-        self.instant_after(self.drift_nanos())
+    /// One reading of the running time, taken once per operation so that what an operation
+    /// checks, counts and publishes all come from the same sample of the source.
+    fn sample(&self) -> Sample {
+        let drift = self.drift_nanos();
+        let mut instant = if drift == 0 {
+            self.now
+        } else {
+            self.now
+                .checked_add(LogicalDuration::from_nanos(drift))
+                .unwrap_or(self.now)
+        };
+        // Reads stay inside the runtime range that writers are held to.
+        if let Some((_, maximum)) = self.range {
+            instant = instant.min(maximum);
+        }
+        Sample {
+            instant,
+            drift,
+            counted: instant
+                .as_nanos()
+                .saturating_sub(self.now.as_nanos())
+                .max(0),
+        }
     }
 
-    /// The last move plus `drift` nanoseconds.
-    fn instant_after(&self, drift: i128) -> LogicalInstant {
-        if drift == 0 {
-            return self.now;
-        }
-        self.now
-            .checked_add(LogicalDuration::from_nanos(drift))
-            .unwrap_or(self.now)
+    /// The instant now: the last move plus the real time that has passed since.
+    fn live(&self) -> LogicalInstant {
+        self.sample().instant
     }
 
     /// Publishes the running time to the observers when a following clock has moved since its
@@ -206,11 +232,11 @@ impl VirtualClock {
         if self.follow.is_none() {
             return false;
         }
-        let live = self.live();
-        if live <= self.now || self.validate_target(live).is_err() {
+        let sample = self.sample();
+        if sample.instant <= self.now || self.check(sample.instant, &sample).is_err() {
             return false;
         }
-        self.publish(live);
+        self.publish(sample.instant, &sample);
         true
     }
 
@@ -219,26 +245,27 @@ impl VirtualClock {
         if duration.as_nanos() < 0 {
             return Err(ClockError::NegativeDuration);
         }
-        let next = self
-            .live()
+        let sample = self.sample();
+        let next = sample
+            .instant
             .checked_add(duration)
             .ok_or(ClockError::Overflow)?;
-        self.validate_target(next)?;
-        self.publish(next);
+        self.check(next, &sample)?;
+        self.publish(next, &sample);
         Ok(next)
     }
 
     /// Advances to `instant`; rejects going backwards.
     pub fn advance_to(&mut self, instant: LogicalInstant) -> Result<LogicalInstant, ClockError> {
-        let current = self.live();
-        if instant < current {
+        let sample = self.sample();
+        if instant < sample.instant {
             return Err(ClockError::WouldMoveBackwards {
-                current,
+                current: sample.instant,
                 requested: instant,
             });
         }
-        self.validate_target(instant)?;
-        self.publish(instant);
+        self.check(instant, &sample)?;
+        self.publish(instant, &sample);
         Ok(instant)
     }
 
@@ -257,11 +284,12 @@ impl VirtualClock {
 
     /// Checked rewind for clocks with configured runtime representation bounds.
     pub fn try_set_allow_backwards(&mut self, instant: LogicalInstant) -> Result<(), ClockError> {
-        self.validate_target(instant)?;
-        if instant < self.live() {
+        let sample = self.sample();
+        self.check(instant, &sample)?;
+        if instant < sample.instant {
             self.backwards_sets = self.backwards_sets.saturating_add(1);
         }
-        self.publish(instant);
+        self.publish(instant, &sample);
         Ok(())
     }
 
@@ -284,14 +312,17 @@ impl VirtualClock {
 
     /// Validate without changing the wall, elapsed, revision or observer state.
     pub fn validate_target(&self, instant: LogicalInstant) -> Result<(), ClockError> {
-        let drift = self.drift_nanos();
-        let now = self.instant_after(drift);
+        self.check(instant, &self.sample())
+    }
+
+    /// [`Self::validate_target`] against one sample of the running time.
+    fn check(&self, instant: LogicalInstant, sample: &Sample) -> Result<(), ClockError> {
         if self.revision == u64::MAX
-            || (instant > now
+            || (instant > sample.instant
                 && self
                     .elapsed_nanos
-                    .saturating_add(drift.unsigned_abs())
-                    .checked_add(instant.as_nanos().abs_diff(now.as_nanos()))
+                    .saturating_add(sample.counted.unsigned_abs())
+                    .checked_add(instant.as_nanos().abs_diff(sample.instant.as_nanos()))
                     .is_none())
         {
             return Err(ClockError::Overflow);
@@ -314,28 +345,31 @@ impl VirtualClock {
     /// Current instant and monotonic timer/revision axes.
     #[must_use]
     pub fn snapshot(&self) -> ClockSnapshot {
-        let drift = self.drift_nanos();
+        let sample = self.sample();
         ClockSnapshot {
-            instant: self.instant_after(drift),
-            elapsed_nanos: self.elapsed_nanos.saturating_add(drift.unsigned_abs()),
+            instant: sample.instant,
+            elapsed_nanos: self
+                .elapsed_nanos
+                .saturating_add(sample.counted.unsigned_abs()),
             revision: self.revision,
         }
     }
 
-    fn publish(&mut self, instant: LogicalInstant) {
-        // Fold in the time that has passed since the last move, then the move itself.
-        let drift = self.drift_nanos();
-        let live = self.instant_after(drift);
-        self.elapsed_nanos = self.elapsed_nanos.saturating_add(drift.unsigned_abs());
-        if instant > live {
+    /// Moves the clock to `instant`, folding in the time `sample` found passed since the last
+    /// move.
+    fn publish(&mut self, instant: LogicalInstant, sample: &Sample) {
+        self.elapsed_nanos = self
+            .elapsed_nanos
+            .saturating_add(sample.counted.unsigned_abs());
+        if instant > sample.instant {
             self.elapsed_nanos = self
                 .elapsed_nanos
-                .saturating_add(instant.as_nanos().abs_diff(live.as_nanos()));
+                .saturating_add(instant.as_nanos().abs_diff(sample.instant.as_nanos()));
         }
         self.now = instant;
         if let Some(follow) = &mut self.follow {
             // The drift just folded in is not counted again.
-            follow.at += drift;
+            follow.at += sample.drift;
             follow.peak.set(0);
         }
         self.revision = self.revision.saturating_add(1);

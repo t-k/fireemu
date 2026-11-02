@@ -1563,12 +1563,25 @@ impl FunctionsRuntime {
                     // A rewind can turn the last runnable task into future-only work.
                     runtime.idle.notify_waiters();
                     runtime.wake.notify_one();
+                    // A clock that follows real time moves with nobody to say so: sweep the
+                    // schedules and release the due retries as time passes (outside the clock
+                    // lock, which this observer task does not hold).
+                    if runtime.clock_follows_real_time() {
+                        runtime.on_clock_changed();
+                    }
                     if let Err(error) = runtime.sync_clock().await {
                         eprintln!("[functions] {error}");
                     }
                 }
             });
         }
+    }
+
+    fn clock_follows_real_time(&self) -> bool {
+        self.clock
+            .lock()
+            .map(|clock| clock.is_following())
+            .unwrap_or(false)
     }
 
     fn task_now(&self) -> crate::task_scheduler::TaskTime {

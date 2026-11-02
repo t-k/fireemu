@@ -2802,11 +2802,19 @@ impl LocalBackend {
         self
     }
 
-    /// Uses host wall time for Firestore commit timestamps. This is selected only when the
-    /// daemon clock was not explicitly pinned.
+    /// Uses host wall time for Firestore commit timestamps, and keeps every version. The
+    /// daemon does not use it: its clock follows real time itself, so writes read the one
+    /// clock and honour its offsets and a frozen clock.
     #[must_use]
     pub const fn with_wall_clock_write_time(mut self) -> Self {
         self.wall_clock_write_time = true;
+        self.with_unlimited_history()
+    }
+
+    /// Keeps every version of a document, as an unpinned daemon does: its history is not
+    /// bounded by the per-path capacity that keeps a pinned test world small.
+    #[must_use]
+    pub const fn with_unlimited_history(mut self) -> Self {
         self.history_version_limit = usize::MAX;
         self
     }

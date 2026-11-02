@@ -12,7 +12,7 @@ use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::rules::{NoticeEvent, NoticeLimit, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
-use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
+use fireemu_adapter_http::identity_toolkit::AuthState;
 use fireemu_core_auth::jwt::IdTokenSigner;
 use fireemu_core_auth::jwt::RulesTokenPolicy;
 use fireemu_core_auth::signup_quota::{
@@ -45,7 +45,6 @@ struct BoundStartup {
     import: Option<PathBuf>,
     export_on_exit: Option<PathBuf>,
     quiet: bool,
-    auth_wall_clock: Option<AuthWallClock>,
     clock: Arc<Mutex<VirtualClock>>,
     gateway: Gateway,
     backend: Arc<LocalBackend>,
@@ -530,7 +529,6 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         import,
         export_on_exit,
         quiet,
-        auth_wall_clock,
         clock,
         gateway,
         backend,
@@ -756,7 +754,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
-        wall_clock: auth_wall_clock,
+        wall_clock: None,
         totp_extension_enabled: cfg.auth_totp.is_some(),
         barrier: Some(barrier.clone()),
         events: functions_runtime.as_ref().map(functions::auth_sink),
@@ -968,21 +966,6 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         pubsub: pubsub_handle,
         realtime_database,
     })
-}
-
-/// The wall time Firestore follows: the strict profile's unpinned daemon judges token expiry
-/// and `request.time` at the time of each request, as production does (FS-RULES token-expiry,
-/// AUTH-FS-CROSS stage 2). A pinned clock keeps moving only when told to (ADR-004), and the
-/// emulator profile keeps its clock as it was, adding no refusal the official emulator lacks.
-fn firestore_wall_source(
-    profile: crate::config::CompatibilityProfile,
-    wall_clock: Option<AuthWallClock>,
-) -> Option<fireemu_adapter_grpc::rules::WallSource> {
-    if profile != crate::config::CompatibilityProfile::Strict {
-        return None;
-    }
-    let wall_clock = wall_clock?;
-    Some(Arc::new(move || wall_clock.now()))
 }
 
 /// The enforcer that verifies a callable Function's ID token. It keeps the full ID token
@@ -1352,13 +1335,8 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         }
     }
 
-    let wall_source = firestore_wall_source(cfg.profile, auth.wall_clock.clone());
     let enforcer = cfg.rules_enforced.then(|| {
         let enforcer = RulesEnforcer::new(rules.clone(), auth_store.clone(), clock.clone());
-        let enforcer = match wall_source {
-            Some(source) => enforcer.with_wall_clock(source),
-            None => enforcer,
-        };
         let enforcer = firestore_profile_settings(enforcer, &cfg)
             .with_listen_expiry(listen_expiry)
             // The UI's Rules page lists the decided requests: with the UI on, keep them from the
@@ -1977,19 +1955,15 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     // real time does not lag by the time the daemon takes to build its runtime. A pinned start
     // begins to run when the clock is made.
     let mut clock_reading = None;
-    let auth_wall_clock = if cfg.clock_start_pinned {
-        None
-    } else {
+    if !cfg.clock_start_pinned {
         // Unpinned: start at the precise wall-clock instant so a credential mutation around
         // a second boundary cannot lag the caller by the subsecond part discarded at startup.
         // Token claims are still serialized at second precision; daemon.clockStart pins the
         // logical clock for reproducible runs.
-        let monotonic_start = std::time::Instant::now();
         let wall_start = std::time::SystemTime::now();
         cfg.clock_start = logical_system_time(wall_start);
         clock_reading = Some(wall_nanos_of(wall_start));
-        Some(AuthWallClock::from_anchor(cfg.clock_start, monotonic_start))
-    };
+    }
     let runtime = match build_runtime() {
         Ok(r) => r,
         Err(e) => {
@@ -2045,7 +2019,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(contention_wait)
-                .with_wall_clock_write_time()
+                .with_unlimited_history()
         };
         let backend = if virtual_contention {
             backend.with_virtual_contention_wait()
@@ -2415,7 +2389,6 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 import,
                 export_on_exit,
                 quiet,
-                auth_wall_clock,
                 clock,
                 gateway,
                 backend,
@@ -3012,21 +2985,6 @@ mod tests {
         ));
     }
 
-    /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
-    /// and the emulator profile get no wall source.
-    #[test]
-    fn firestore_follows_the_wall_only_in_an_unpinned_strict_daemon() {
-        use crate::config::CompatibilityProfile;
-        use fireemu_adapter_http::identity_toolkit::AuthWallClock;
-
-        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
-        let wall = AuthWallClock::from_anchor(start, std::time::Instant::now());
-        let source = super::firestore_wall_source(CompatibilityProfile::Strict, Some(wall.clone()))
-            .expect("strict and unpinned follow the wall");
-        assert!(source() >= start);
-        assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
-        assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
-    }
     #[test]
     fn only_dropped_denial_lines_are_reported() {
         assert_eq!(super::dropped_denials_note(0), None);

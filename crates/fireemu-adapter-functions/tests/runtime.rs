@@ -4669,6 +4669,50 @@ async fn scheduled_runs_obey_delivery_faults_and_delays_keep_their_outcome() {
     );
 }
 
+/// A clock that follows real time, as the daemon's does by default, ticked the way the daemon
+/// ticks it: nothing moves it by hand and nothing calls `on_clock_changed`.
+#[tokio::test]
+async fn a_schedule_fires_as_real_time_passes_without_any_hand_move() {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
+    let spec = SpawnSpec {
+        command: vec!["python3".to_owned(), script.to_owned()],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Runner::spawn_spec(&spec).await.unwrap();
+    let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    // `tick` runs every five minutes, on the marks: the next one is a second away.
+    let almost = LogicalInstant::from_unix_seconds(1_788_004_860 + 3 * 60 + 59);
+    let clock = Arc::new(Mutex::new(VirtualClock::following(almost)));
+    let runtime = FunctionsRuntime::new(
+        manifest,
+        FunctionsConfig::for_tests(100, "s".into()),
+        clock.clone(),
+        Arc::new(runner),
+        None,
+    );
+    tokio::spawn(runtime.clone().dispatch_loop());
+    let ticking = clock.clone();
+    let ticker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            ticking.lock().unwrap().sync();
+        }
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while count_function(&runtime, "tick") == 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    ticker.abort();
+    assert_eq!(
+        count_function(&runtime, "tick"),
+        1,
+        "{:?}",
+        runtime.history()
+    );
+}
+
 fn advance(clock: &Mutex<VirtualClock>, seconds: i64) {
     clock
         .lock()

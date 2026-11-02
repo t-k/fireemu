@@ -20,6 +20,10 @@ use trusted_temp::TrustedTempDir;
 const PROJECT: &str = "demo-clock-modes";
 
 fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
+    http_as(port, method, path, "", body)
+}
+
+fn http_as(port: u16, method: &str, path: &str, headers: &str, body: &Value) -> (u16, Value) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("the daemon accepts");
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
@@ -27,7 +31,7 @@ fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
     let body = body.to_string();
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
@@ -68,14 +72,7 @@ impl Daemon {
                 "--project",
                 PROJECT,
             ])
-            .args([
-                "--only",
-                "auth",
-                "--firestore-port",
-                "0",
-                "--http-port",
-                "0",
-            ])
+            .args(["--firestore-port", "0", "--http-port", "0"])
             .args([
                 "--storage-port",
                 "0",
@@ -152,6 +149,19 @@ impl Daemon {
         assert_eq!(status, 200, "{body}");
     }
 
+    /// The update time of a document written now: Firestore stamps writes with the clock.
+    fn write_time(&self) -> LogicalInstant {
+        let (status, body) = http_as(
+            self.banner_port("firestore (gRPC + REST):"),
+            "PATCH",
+            &format!("/v1/projects/{PROJECT}/databases/(default)/documents/clock/doc"),
+            "Authorization: Bearer owner\r\n",
+            &json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        LogicalInstant::parse_rfc3339(body["updateTime"].as_str().expect("an update time")).unwrap()
+    }
+
     /// An Auth request, which reads the clock to stamp what it issues.
     fn sign_up(&self) {
         let (status, body) = http(
@@ -189,6 +199,11 @@ fn a_frozen_unpinned_clock_stands_still_and_a_rewind_sticks_through_requests() {
     std::thread::sleep(Duration::from_millis(300));
     daemon.sign_up();
     assert_eq!(nanos_since_rewind(daemon.clock()), 0, "the rewind sticks");
+    assert_eq!(
+        nanos_since_rewind(daemon.write_time()),
+        0,
+        "a write is stamped with the frozen clock, not the wall"
+    );
 }
 
 #[test]
@@ -206,5 +221,10 @@ fn a_following_clock_runs_on_from_a_rewind_and_requests_do_not_pull_it_back() {
     assert!(
         (300_000_000..30_000_000_000).contains(&after),
         "it runs on from the rewind, not from the wall: {after}"
+    );
+    let written = nanos_since_rewind(daemon.write_time());
+    assert!(
+        (after..30_000_000_000).contains(&written),
+        "a write is stamped with the clock's offset time: {written}"
     );
 }

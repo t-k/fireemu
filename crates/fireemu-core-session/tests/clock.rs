@@ -351,7 +351,7 @@ fn elapsed_time_counts_real_time_and_hand_moves_once_each() {
 }
 
 #[test]
-fn syncing_publishes_nothing_when_no_time_passed_or_the_range_forbids_it() {
+fn syncing_publishes_nothing_when_no_time_passed_or_the_range_is_spent() {
     let start = LogicalInstant::from_unix_seconds(1_800_000_000);
     let (mut clock, reading) = manual_clock(start);
     assert!(!clock.sync(), "no time has passed");
@@ -359,8 +359,12 @@ fn syncing_publishes_nothing_when_no_time_passed_or_the_range_forbids_it() {
     let high = LogicalInstant::from_nanos(start.as_nanos() + 10_000_000_000);
     clock.restrict_range(start, high).unwrap();
     run_for(&reading, 20_000_000_000);
-    assert!(!clock.sync(), "the range does not reach the running time");
-    assert_eq!(clock.snapshot().revision, 0);
+    assert!(clock.sync(), "the clock reaches the end of its range once");
+    assert_eq!(clock.snapshot().instant, high);
+    assert_eq!(clock.snapshot().revision, 1);
+    run_for(&reading, 1_000_000_000);
+    assert!(!clock.sync(), "and has nothing past it to publish");
+    assert_eq!(clock.snapshot().revision, 1);
     let (mut free, free_reading) = manual_clock(start);
     run_for(&free_reading, 20_000_000_000);
     assert!(free.sync());
@@ -398,4 +402,56 @@ fn a_runtime_range_includes_its_ends_and_only_narrows() {
         "5 is the lower end now"
     );
     assert!(clock.try_set_allow_backwards(at(5)).is_ok());
+}
+
+#[test]
+fn one_operation_reads_the_source_once_so_no_running_time_is_lost() {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let calls = Arc::new(Mutex::new(0_i128));
+    let counted = calls.clone();
+    // Every read of the source finds it ten nanoseconds further on.
+    let mut clock = VirtualClock::following_with(
+        start,
+        Arc::new(move || {
+            let mut calls = counted.lock().unwrap();
+            *calls += 1;
+            *calls * 10
+        }),
+        0,
+    );
+    assert!(clock.sync());
+    let after_sync = clock.snapshot();
+    let reading = *calls.lock().unwrap() * 10;
+    assert_eq!(
+        after_sync.instant.as_nanos() - start.as_nanos(),
+        reading,
+        "the clock reads what the source read, with nothing dropped on the way"
+    );
+    assert_eq!(after_sync.elapsed_nanos, u128::try_from(reading).unwrap());
+    let moved = clock.advance(LogicalDuration::from_nanos(1_000)).unwrap();
+    let reading = *calls.lock().unwrap() * 10;
+    assert_eq!(moved.as_nanos() - start.as_nanos(), reading + 1_000 - 10);
+}
+
+#[test]
+fn reads_stop_at_the_runtime_range_like_writes() {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let (mut clock, reading) = manual_clock(start);
+    let high = LogicalInstant::from_nanos(start.as_nanos() + 10_000_000_000);
+    clock.restrict_range(start, high).unwrap();
+    run_for(&reading, 20_000_000_000);
+    assert_eq!(clock.now(), high);
+    assert_eq!(clock.now_for_test(), high);
+    let snapshot = clock.snapshot();
+    assert_eq!(snapshot.instant, high);
+    assert_eq!(snapshot.elapsed_nanos, 10_000_000_000);
+    assert!(clock.sync(), "the end of the range is published once");
+    assert!(!clock.sync(), "there is nothing past the range to publish");
+    // A rewind inside the range runs on again, and stops at the range again.
+    let middle = LogicalInstant::from_nanos(start.as_nanos() + 5_000_000_000);
+    clock.try_set_allow_backwards(middle).unwrap();
+    run_for(&reading, 3_000_000_000);
+    assert_eq!(clock.now().as_nanos() - middle.as_nanos(), 3_000_000_000);
+    run_for(&reading, 30_000_000_000);
+    assert_eq!(clock.now(), high);
 }

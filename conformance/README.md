@@ -200,7 +200,9 @@ ORACLE.md DEBT.md                  generated
 
 ## Not in this slice
 
-Browser / WebChannel, Android, Apple, Unity, Java, Python and Go SDKs; import and export;
+Browser / WebChannel, Android, Apple, Unity, Java, Python and Go SDKs (the Python Admin SDK's
+Firestore, Auth and Storage calls are smoke-tested against fireemu by `tools/sdk-smoke-python`
+instead); import and export;
 Realtime Database (compared with the official emulator by `tools/sdk-smoke-database` instead), Hosting, App Hosting, Extensions and Data Connect; Windows and Linux
 matrix rows; and any production oracle. `DEBT.md` and the two issues under
 `docs.local/issues/open/` track the rest.

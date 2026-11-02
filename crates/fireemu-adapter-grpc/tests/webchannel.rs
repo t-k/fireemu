@@ -373,8 +373,8 @@ fn forward_maps(hub: &Hub, sid: &str, rid: &str, offset: u64, data: &str) -> (u1
 async fn out_of_order_forward_maps_are_bounded_per_session() {
     let hub = hub(None);
     let sid = open_listen_session(&hub, &listen_target(2, "open"));
-    // Each map is just over 1 MiB, so fifteen fit in the 16 MiB budget and the sixteenth does not.
-    let map = json!("x".repeat(1024 * 1024 + 1)).to_string();
+    // Each map is just over 8 MiB, so fifteen fit in the 128 MiB limit and the sixteenth does not.
+    let map = json!("x".repeat(8 * 1024 * 1024 + 1)).to_string();
     let fit = MAX_BUFFERED_MAP_BYTES / map.len();
     assert_eq!(fit, 15);
     for offset in 2..2 + fit as u64 {

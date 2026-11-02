@@ -95,16 +95,21 @@ pub const MAX_PROCESS_UNACKNOWLEDGED_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_PROCESS_REPLAY_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum maps per forward request and maximum gap of buffered map ids.
 const MAX_MAPS_PER_REQUEST: u64 = 1000;
-/// Maximum UTF-8 bytes of out-of-order forward-channel maps one session buffers while it waits
-/// for an earlier map id. A local memory-safety bound, not a production protocol limit: it equals
-/// the largest form body ([`max_form_bytes`]), so one request of any accepted size can still be
-/// buffered whole, while a client that opens a gap can no longer park one form-sized body per
-/// map id (up to `MAX_MAPS_PER_REQUEST` of them) for the life of the session.
-pub const MAX_BUFFERED_MAP_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum out-of-order map bytes buffered by one Hub across every session, mirroring
-/// [`MAX_PROCESS_UNACKNOWLEDGED_BYTES`] on the outbound side, so `MAX_SESSIONS` sessions cannot
-/// multiply the per-session bound.
-pub const MAX_PROCESS_BUFFERED_MAP_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum UTF-8 bytes of forward-channel maps one session retains while it waits for an earlier
+/// map id (or while the stream is not accepting them). A local memory-safety bound for buggy
+/// clients and runaway tests, not a production protocol limit: what production does when a
+/// session buffers too much is unrecorded (the 2026-09-27 recording only shows the 16 MiB form
+/// refusal, an HTML 400 followed by session loss), so the refusal reuses the existing
+/// `INVALID_ARGUMENT` shape of "map id too far ahead".
+///
+/// Sized so that legitimate SDK traffic cannot reach it. The Firestore SDK keeps up to
+/// `MAX_PENDING_WRITES` = 10 write batches in flight (read from the pinned `@firebase/firestore`
+/// bundle), the backend refuses a commit above 10 MiB, and the largest form body is 16 MiB
+/// ([`max_form_bytes`]); every map of those in-flight batches can be parked behind one delayed
+/// request, i.e. about 10 x 10 MiB. 128 MiB covers that with margin and still keeps a client that
+/// opens a gap and keeps sending (up to `MAX_MAPS_PER_REQUEST` ids ahead, 16 MiB per request)
+/// from growing a session without bound.
+pub const MAX_BUFFERED_MAP_BYTES: usize = 128 * 1024 * 1024;
 /// Maximum completed target lifetimes retained solely for diagnostics.
 const MAX_TRACE_COMPLETED_TARGETS: usize = 256;
 /// Maximum diagnostic events emitted by one admitted channel session.
@@ -697,7 +702,7 @@ struct Session {
     notify: Notify,
     last_seen: Mutex<Instant>,
     /// Forward-channel maps: next expected id and out-of-order buffer.
-    maps: Mutex<(u64, BTreeMap<u64, BufferedMap>)>,
+    maps: Mutex<(u64, BTreeMap<u64, String>)>,
     /// Target project named by the opening request, for classifying a replacement token.
     project: String,
     /// The app this channel was admitted for (specification section 13.1). `None` when
@@ -708,15 +713,6 @@ struct Session {
     registry: std::sync::Weak<SessionRegistry>,
     /// The transport is no longer available for any request.
     terminated: AtomicBool,
-}
-
-/// One forward-channel map waiting in the out-of-order buffer. A map that stays buffered past
-/// the request that delivered it holds its bytes of the Hub-wide budget until it is drained or
-/// the buffer is cleared.
-#[derive(Debug)]
-struct BufferedMap {
-    raw: String,
-    _process_permit: Option<OwnedSemaphorePermit>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -739,8 +735,6 @@ struct DeliveryState {
     replay_copy_budget: Arc<Semaphore>,
     process_retained_budget: Arc<Semaphore>,
     process_replay_budget: Arc<Semaphore>,
-    /// The Hub-wide budget for out-of-order forward-channel map bytes.
-    process_map_budget: Arc<Semaphore>,
 }
 
 impl Default for DeliveryState {
@@ -764,7 +758,6 @@ impl DeliveryState {
             replay_copy_budget: Arc::new(Semaphore::new(MAX_CONCURRENT_REPLAY_BYTES)),
             process_retained_budget: budgets.retained.clone(),
             process_replay_budget: budgets.replay.clone(),
-            process_map_budget: budgets.maps.clone(),
         }
     }
 }
@@ -773,7 +766,6 @@ impl DeliveryState {
 struct WebChannelBudgets {
     retained: Arc<Semaphore>,
     replay: Arc<Semaphore>,
-    maps: Arc<Semaphore>,
 }
 
 impl Default for WebChannelBudgets {
@@ -781,7 +773,6 @@ impl Default for WebChannelBudgets {
         Self {
             retained: Arc::new(Semaphore::new(MAX_PROCESS_UNACKNOWLEDGED_BYTES)),
             replay: Arc::new(Semaphore::new(MAX_PROCESS_REPLAY_BYTES)),
-            maps: Arc::new(Semaphore::new(MAX_PROCESS_BUFFERED_MAP_BYTES)),
         }
     }
 }
@@ -2145,15 +2136,14 @@ async fn backchannel_loop(
     }
 }
 
-/// Checks the maps a forward request would leave buffered (those at or after the first gap the
-/// drain cannot pass) against [`MAX_BUFFERED_MAP_BYTES`], and reserves the newly buffered ones'
-/// bytes from the Hub-wide `budget`. Returns the permit of each newly buffered map; nothing is
-/// stored or reserved when either budget refuses.
+/// Checks the bytes a forward request would leave buffered if its contiguous prefix drains (the
+/// maps at or after the first gap) against `limit`. Maps the request releases are not counted, so
+/// a request that fills a gap and drains is never refused for bytes it is about to free.
 fn admit_buffered_maps(
-    maps: &(u64, BTreeMap<u64, BufferedMap>),
+    maps: &(u64, BTreeMap<u64, String>),
     incoming: &BTreeMap<u64, &String>,
-    budget: &Arc<Semaphore>,
-) -> Result<BTreeMap<u64, OwnedSemaphorePermit>, Status> {
+    limit: usize,
+) -> Result<(), Status> {
     let mut gap = maps.0;
     while maps.1.contains_key(&gap) || incoming.contains_key(&gap) {
         gap += 1;
@@ -2161,47 +2151,44 @@ fn admit_buffered_maps(
     let buffered_bytes: usize = maps
         .1
         .range(gap..)
-        .map(|(_, map)| map.raw.len())
+        .map(|(_, raw)| raw.len())
         .chain(incoming.range(gap..).map(|(_, raw)| raw.len()))
         .sum();
-    if buffered_bytes > MAX_BUFFERED_MAP_BYTES {
-        return Err(Status::invalid_argument(
-            "forward channel buffers too many out-of-order map bytes",
-        ));
+    if buffered_bytes > limit {
+        return Err(map_bytes_exceeded());
     }
-    let mut reserved = BTreeMap::new();
-    for (map_id, raw) in incoming.range(gap..) {
-        let permit = u32::try_from(raw.len())
-            .ok()
-            .and_then(|units| budget.clone().try_acquire_many_owned(units).ok())
-            .ok_or_else(|| Status::invalid_argument("forward channel map buffers are exhausted"))?;
-        reserved.insert(*map_id, permit);
-    }
-    Ok(reserved)
+    Ok(())
+}
+
+fn map_bytes_exceeded() -> Status {
+    Status::invalid_argument("forward channel buffers too many out-of-order map bytes")
 }
 
 /// Delivers the `reqN___data__` maps of a form body to the session's stream in map-id
 /// order: retries are ignored, out-of-order maps are buffered, and the cursor advances only
 /// after a map was parsed and enqueued.
 ///
-/// The maps a request would leave buffered (those after a gap) are checked against
-/// [`MAX_BUFFERED_MAP_BYTES`] for the session and reserved from the Hub-wide
-/// [`MAX_PROCESS_BUFFERED_MAP_BYTES`] before anything is stored: a request over either budget is
-/// refused with `INVALID_ARGUMENT` and changes nothing. Maps that the request makes contiguous
-/// are drained at once and never count, so in-order traffic is unaffected.
+/// The bytes the session retains after the request never exceed [`MAX_BUFFERED_MAP_BYTES`]. A
+/// request is refused with `INVALID_ARGUMENT` when the maps it would leave buffered (those after
+/// a gap) exceed it, before anything is stored. The drain can also stop early (a malformed map
+/// at the expected id, a full inbound queue), leaving maps retained that the first check assumed
+/// would drain; then the retained bytes are counted again and, if they exceed the bound, this
+/// request's maps are removed again and it is refused the same way. Maps the request makes
+/// contiguous and delivers never count, so in-order traffic is unaffected.
 fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result<bool, Status> {
+    session_deliver_with_limit(session, form, MAX_BUFFERED_MAP_BYTES)
+}
+
+fn session_deliver_with_limit(
+    session: &Session,
+    form: &BTreeMap<String, String>,
+    limit: usize,
+) -> Result<bool, Status> {
     let count: u64 = form.get("count").and_then(|c| c.parse().ok()).unwrap_or(0);
     let ofs: u64 = form.get("ofs").and_then(|c| c.parse().ok()).unwrap_or(0);
     if count > MAX_MAPS_PER_REQUEST {
         return Err(Status::invalid_argument("too many maps in one request"));
     }
-    // Taken before the maps lock: no path holds the maps lock while waiting for `delivery`.
-    let process_map_budget = session
-        .delivery
-        .lock()
-        .map_err(|_| Status::internal("session lock poisoned"))?
-        .process_map_budget
-        .clone();
     let mut maps = session
         .maps
         .lock()
@@ -2226,18 +2213,47 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         incoming.insert(map_id, raw);
         accepted += 1;
     }
-    let mut reserved = admit_buffered_maps(&maps, &incoming, &process_map_budget)?;
+    admit_buffered_maps(&maps, &incoming, limit)?;
+    let incoming_ids: Vec<u64> = incoming.keys().copied().collect();
     for (map_id, raw) in incoming {
-        maps.1.insert(
-            map_id,
-            BufferedMap {
-                raw: raw.clone(),
-                _process_permit: reserved.remove(&map_id),
-            },
-        );
+        maps.1.insert(map_id, raw.clone());
     }
-    // Drain the contiguous prefix.
-    while let Some(raw) = maps.1.get(&maps.0).map(|map| map.raw.clone()) {
+    let drained = drain_contiguous_maps(session, &mut maps);
+    match drained {
+        Ok(true) => {}
+        Ok(false) => return Ok(false),
+        Err(status) => {
+            let retained: usize = maps.1.values().map(String::len).sum();
+            if retained > limit {
+                for id in incoming_ids {
+                    maps.1.remove(&id);
+                }
+                return Err(map_bytes_exceeded());
+            }
+            return Err(status);
+        }
+    }
+    let event = TraceEvent::ForwardMaps {
+        session: session.trace_id,
+        offset: ofs,
+        declared: count,
+        accepted,
+        duplicates,
+        buffered: maps.1.len(),
+        next_expected: maps.0,
+    };
+    drop(maps);
+    session.trace_event(&event);
+    Ok(true)
+}
+
+/// Delivers the contiguous prefix of the buffer to the stream. `Ok(false)` means the stream is
+/// gone and the buffer was cleared; an error leaves the maps from the failing one on retained.
+fn drain_contiguous_maps(
+    session: &Session,
+    maps: &mut (u64, BTreeMap<u64, String>),
+) -> Result<bool, Status> {
+    while let Some(raw) = maps.1.get(&maps.0).cloned() {
         let value: Value = serde_json::from_str(&raw)
             .map_err(|e| Status::invalid_argument(format!("invalid message JSON: {e}")))?;
         let inbound = session
@@ -2264,17 +2280,6 @@ fn session_deliver(session: &Session, form: &BTreeMap<String, String>) -> Result
         maps.1.remove(&done);
         maps.0 = done + 1;
     }
-    let event = TraceEvent::ForwardMaps {
-        session: session.trace_id,
-        offset: ofs,
-        declared: count,
-        accepted,
-        duplicates,
-        buffered: maps.1.len(),
-        next_expected: maps.0,
-    };
-    drop(maps);
-    session.trace_event(&event);
     Ok(true)
 }
 
@@ -2880,7 +2885,6 @@ mod tests {
         let budgets = WebChannelBudgets {
             retained: Arc::new(Semaphore::new(one_array_bytes)),
             replay: Arc::new(Semaphore::new(MAX_PROCESS_REPLAY_BYTES)),
-            maps: Arc::new(Semaphore::new(MAX_PROCESS_BUFFERED_MAP_BYTES)),
         };
         let first = test_session("global-first", DeliveryState::with_budgets(&budgets));
         let second = test_session("global-second", DeliveryState::with_budgets(&budgets));
@@ -2915,25 +2919,50 @@ mod tests {
             .unwrap()
             .1
             .values()
-            .map(|map| map.raw.len())
+            .map(String::len)
             .sum()
     }
 
+    /// The limit the focused tests below run with, small enough to cross in a few requests.
+    const TEST_LIMIT: usize = 64 * 1024;
+
+    fn deliver(session: &Session, ofs: u64, maps: &[&str]) -> Result<bool, Status> {
+        session_deliver_with_limit(session, &map_form(ofs, maps), TEST_LIMIT)
+    }
+
+    fn assert_map_bytes_refusal(status: &Status) {
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            status.message().contains("out-of-order map bytes"),
+            "{status:?}"
+        );
+    }
+
+    /// A session whose stream accepts `capacity` maps before it is full; keep the receiver.
+    fn session_with_inbound(
+        sid: &str,
+        capacity: usize,
+    ) -> (Session, mpsc::Receiver<Result<Value, Status>>) {
+        let (inbound, receiver) = mpsc::channel(capacity);
+        let session = test_session(sid, DeliveryState::default());
+        *session.inbound.lock().unwrap() = Some(inbound);
+        (session, receiver)
+    }
+
     /// WCMAP-2: whatever a client sends after a gap, the bytes one session buffers never exceed
-    /// `MAX_BUFFERED_MAP_BYTES`; the request that would cross it is refused whole, before it
-    /// stores anything.
+    /// the limit; the request that would cross it is refused whole, before it stores anything.
     #[test]
-    fn out_of_order_map_bytes_never_exceed_the_session_budget() {
+    fn out_of_order_map_bytes_never_exceed_the_session_limit() {
         let session = test_session("map-budget", DeliveryState::default());
-        let chunk = "x".repeat(MAX_BUFFERED_MAP_BYTES / 8 + 1);
+        let chunk = "x".repeat(TEST_LIMIT / 8 + 1);
         let mut refused = 0;
         // Map 0 never arrives, so every map from id 1 on stays buffered.
         for ofs in 1..=12 {
             let before = buffered_map_bytes(&session);
-            match session_deliver(&session, &map_form(ofs, &[&chunk])) {
+            match deliver(&session, ofs, &[&chunk]) {
                 Ok(_) => assert_eq!(buffered_map_bytes(&session), before + chunk.len()),
                 Err(status) => {
-                    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+                    assert_map_bytes_refusal(&status);
                     assert_eq!(
                         buffered_map_bytes(&session),
                         before,
@@ -2942,29 +2971,27 @@ mod tests {
                     refused += 1;
                 }
             }
-            assert!(buffered_map_bytes(&session) <= MAX_BUFFERED_MAP_BYTES);
+            assert!(buffered_map_bytes(&session) <= TEST_LIMIT);
         }
-        // Seven chunks fit (7/8 of the budget plus 7 bytes); every later one is refused.
+        // Seven chunks fit (7/8 of the limit plus 7 bytes); every later one is refused.
         assert_eq!(refused, 5);
-        // A multi-map request that would cross the budget stores none of its maps.
+        // A multi-map request that would cross the limit stores none of its maps.
         let session = test_session("map-budget-batch", DeliveryState::default());
-        let half = "y".repeat(MAX_BUFFERED_MAP_BYTES / 2);
-        assert!(session_deliver(&session, &map_form(1, &[&half, &half, "z"])).is_err());
+        let half = "y".repeat(TEST_LIMIT / 2);
+        assert_map_bytes_refusal(&deliver(&session, 1, &[&half, &half, "z"]).unwrap_err());
         assert_eq!(buffered_map_bytes(&session), 0);
-        assert!(session_deliver(&session, &map_form(1, &[&half, &half])).is_ok());
-        assert_eq!(buffered_map_bytes(&session), MAX_BUFFERED_MAP_BYTES);
+        assert!(deliver(&session, 1, &[&half, &half]).is_ok());
+        assert_eq!(buffered_map_bytes(&session), TEST_LIMIT);
     }
 
-    /// Maps a request makes contiguous are drained at once and never count against the budget,
+    /// Maps a request makes contiguous are drained at once and never count against the limit,
     /// so a large in-order request is delivered as before.
     #[test]
-    fn contiguous_maps_are_not_charged_to_the_buffer_budget() {
-        let (inbound, mut inbound_rx) = mpsc::channel(8);
-        let session = test_session("map-budget-in-order", DeliveryState::default());
-        *session.inbound.lock().unwrap() = Some(inbound);
-        let large = json!("v".repeat(MAX_BUFFERED_MAP_BYTES - 16)).to_string();
+    fn contiguous_maps_are_not_charged_to_the_buffer_limit() {
+        let (session, mut inbound_rx) = session_with_inbound("map-budget-in-order", 8);
+        let large = json!("v".repeat(TEST_LIMIT - 16)).to_string();
         let small = json!({"n": 1}).to_string();
-        assert!(session_deliver(&session, &map_form(0, &[&large, &small, &large])).unwrap());
+        assert!(deliver(&session, 0, &[&large, &small, &large]).unwrap());
         assert_eq!(buffered_map_bytes(&session), 0);
         for _ in 0..3 {
             assert!(inbound_rx.try_recv().unwrap().is_ok());
@@ -2972,61 +2999,145 @@ mod tests {
         assert_eq!(session.maps.lock().unwrap().0, 3);
     }
 
-    /// The Hub-wide budget is shared across sessions and refunded when a buffer is released.
+    /// Net accounting: a request that fills the gap releases the bytes buffered behind it, so it
+    /// is not refused for them even when the buffer is exactly full, and only what it leaves
+    /// buffered afterwards is counted.
     #[test]
-    fn process_map_budget_is_shared_and_refunded() {
-        let map = "m".repeat(1024);
-        let budgets = WebChannelBudgets {
-            maps: Arc::new(Semaphore::new(map.len())),
-            ..WebChannelBudgets::default()
-        };
-        let first = test_session("maps-first", DeliveryState::with_budgets(&budgets));
-        let second = test_session("maps-second", DeliveryState::with_budgets(&budgets));
+    fn a_request_that_fills_the_gap_is_not_refused_for_the_bytes_it_releases() {
+        let (session, mut inbound_rx) = session_with_inbound("map-budget-net", 8);
+        let half = json!("h".repeat(TEST_LIMIT / 2 - 2)).to_string();
+        assert_eq!(half.len(), TEST_LIMIT / 2);
+        assert!(deliver(&session, 1, &[&half, &half]).is_ok());
+        assert_eq!(buffered_map_bytes(&session), TEST_LIMIT);
 
-        assert!(session_deliver(&first, &map_form(1, &[&map])).is_ok());
-        let refused = session_deliver(&second, &map_form(1, &[&map])).unwrap_err();
-        assert_eq!(refused.code(), tonic::Code::InvalidArgument);
-        assert_eq!(buffered_map_bytes(&second), 0);
-
-        first.terminate();
-        assert!(session_deliver(&second, &map_form(1, &[&map])).is_ok());
-        assert_eq!(buffered_map_bytes(&second), map.len());
+        // Map 0 releases maps 1 and 2, although the buffer is exactly full.
+        assert!(deliver(&session, 0, &["0"]).is_ok());
+        assert_eq!(buffered_map_bytes(&session), 0);
+        for _ in 0..3 {
+            assert!(inbound_rx.try_recv().unwrap().is_ok());
+        }
+        assert!(deliver(&session, 4, &[&half]).is_ok());
+        assert_eq!(buffered_map_bytes(&session), half.len());
+        // Fill: buffered 4, send 3 and 5: drains 3, 4, 5 and leaves nothing.
+        assert!(deliver(&session, 3, &["3", &half, &half]).is_ok());
+        assert_eq!(buffered_map_bytes(&session), 0);
+        assert_eq!(session.maps.lock().unwrap().0, 6);
+        // A near miss: the same fill that leaves more than the limit buffered is still refused.
+        let session = test_session("map-budget-net-near-miss", DeliveryState::default());
+        assert!(deliver(&session, 2, &[&half, &half]).is_ok());
+        assert_map_bytes_refusal(&deliver(&session, 5, &["\"z\""]).unwrap_err());
     }
 
-    /// One forward request of the model-based property below: `maps` sizes in quarters of a
-    /// budget unit, delivered at `ofs` on session `session`.
+    /// A malformed map at the expected id stops the drain, so the sequential maps behind it are
+    /// retained although they are contiguous. Their bytes must be counted: a client that keeps
+    /// sending them cannot grow the session past the limit.
+    #[test]
+    fn maps_retained_behind_a_malformed_map_count_against_the_limit() {
+        let (session, mut inbound_rx) = session_with_inbound("map-budget-malformed", 8);
+        let chunk = json!("c".repeat(TEST_LIMIT / 8)).to_string();
+        let status = deliver(&session, 0, &["{not json"]).unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(!status.message().contains("out-of-order map bytes"));
+        let mut refused = 0;
+        for ofs in 1..=20 {
+            let before = buffered_map_bytes(&session);
+            let status = deliver(&session, ofs, &[&chunk]).unwrap_err();
+            if status.message().contains("out-of-order map bytes") {
+                assert_map_bytes_refusal(&status);
+                assert_eq!(
+                    buffered_map_bytes(&session),
+                    before,
+                    "refused request undone"
+                );
+                refused += 1;
+            } else {
+                assert!(
+                    status.message().contains("invalid message JSON"),
+                    "{status:?}"
+                );
+            }
+            assert!(buffered_map_bytes(&session) <= TEST_LIMIT, "ofs {ofs}");
+        }
+        assert!(refused > 0, "the retained maps must hit the limit");
+        assert!(inbound_rx.try_recv().is_err(), "nothing was delivered");
+    }
+
+    /// A full inbound queue stops the drain the same way: the maps it could not deliver stay
+    /// retained and count, a refused request is undone, and once the stream drains again the
+    /// retry of the refused map is accepted.
+    #[test]
+    fn maps_retained_behind_a_full_inbound_queue_count_against_the_limit() {
+        let (session, mut inbound_rx) = session_with_inbound("map-budget-full", 1);
+        let chunk = json!("c".repeat(TEST_LIMIT / 8)).to_string();
+        // Map 0 fills the queue; map 1 finds it full and stays retained.
+        let status = deliver(&session, 0, &["0", "1"]).unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        let mut refused_at = None;
+        for ofs in 2..=20 {
+            let before = buffered_map_bytes(&session);
+            let status = deliver(&session, ofs, &[&chunk]).unwrap_err();
+            if status.code() == tonic::Code::InvalidArgument {
+                assert_map_bytes_refusal(&status);
+                assert_eq!(
+                    buffered_map_bytes(&session),
+                    before,
+                    "refused request undone"
+                );
+                refused_at.get_or_insert(ofs);
+            } else {
+                assert_eq!(status.code(), tonic::Code::Unavailable);
+            }
+            assert!(buffered_map_bytes(&session) <= TEST_LIMIT, "ofs {ofs}");
+        }
+        let refused_at = refused_at.expect("the retained maps must hit the limit");
+        // The consumer catches up: the refused map goes through on retry and everything drains.
+        for _ in 0..=refused_at {
+            if inbound_rx.try_recv().is_err() {
+                break;
+            }
+            let _ = deliver(&session, refused_at, &[&chunk]);
+        }
+        assert!(buffered_map_bytes(&session) <= TEST_LIMIT);
+    }
+
+    /// One forward request of the model-based property below: `maps` are `(quarters, bad)`
+    /// pairs (size in quarter units, whether the JSON is malformed), delivered at `ofs`, after
+    /// the consumer drained the stream when `consume` is set.
     #[derive(Debug, Clone)]
     struct ForwardStep {
-        session: usize,
+        consume: bool,
         ofs: u64,
-        maps: Vec<usize>,
+        maps: Vec<(usize, bool)>,
     }
 
-    /// The reference model of one session's forward channel: next expected id, the buffered
-    /// maps' sizes, and the ids delivered so far.
+    /// The reference model of one session's forward channel: next expected id, the retained maps
+    /// `(size, bad)`, the ids delivered so far and how many sit unconsumed in the stream queue.
     #[derive(Default)]
     struct ModelSession {
         next: u64,
-        buffered: BTreeMap<u64, usize>,
+        buffered: BTreeMap<u64, (usize, bool)>,
         delivered: Vec<u64>,
+        queued: usize,
     }
 
-    /// Applies `step` to the model the way the budget contract says: a request is refused whole
-    /// when the bytes it would leave buffered exceed the session budget, or its newly buffered
-    /// bytes do not fit the Hub budget; otherwise its maps are stored and the contiguous prefix
-    /// is delivered in id order. Returns whether it was accepted.
+    const MODEL_QUEUE: usize = 3;
+    const MODEL_LIMIT: usize = 4096;
+
+    /// Applies `step` to the model the way the contract says: a request is refused whole when
+    /// the bytes it would leave buffered if everything drained exceed the limit; otherwise its
+    /// maps are stored and the drain delivers the contiguous prefix until a malformed map or a
+    /// full queue stops it; a stopped drain that leaves more than the limit retained undoes this
+    /// request's maps and refuses it. Returns whether it was accepted.
     fn model_apply(
-        sessions: &mut [ModelSession],
-        process_free: &mut usize,
+        session: &mut ModelSession,
         step: &ForwardStep,
-        sizes: &[usize],
+        sizes: &[(usize, bool)],
     ) -> bool {
-        let session = &mut sessions[step.session];
         let mut incoming = BTreeMap::new();
-        for (n, size) in sizes.iter().enumerate() {
+        for (n, entry) in sizes.iter().enumerate() {
             let id = step.ofs + n as u64;
             if id >= session.next && !session.buffered.contains_key(&id) {
-                incoming.entry(id).or_insert(*size);
+                incoming.entry(id).or_insert(*entry);
             }
         }
         let mut gap = session.next;
@@ -3037,109 +3148,107 @@ mod tests {
             .buffered
             .range(gap..)
             .chain(incoming.range(gap..))
-            .map(|(_, size)| size)
+            .map(|(_, (size, _))| size)
             .sum();
-        let reserved: usize = incoming.range(gap..).map(|(_, size)| size).sum();
-        if remaining > MAX_BUFFERED_MAP_BYTES || reserved > *process_free {
+        if remaining > MODEL_LIMIT {
             return false;
         }
-        *process_free -= reserved;
-        for id in session.next..gap {
-            let size = session
-                .buffered
-                .remove(&id)
-                .or_else(|| incoming.get(&id).copied())
-                .expect("contiguous");
-            if !incoming.contains_key(&id) {
-                // A map buffered by an earlier request releases its reservation when drained.
-                *process_free += size;
+        let incoming_ids: Vec<u64> = incoming.keys().copied().collect();
+        session.buffered.extend(incoming);
+        while let Some(&(_, bad)) = session.buffered.get(&session.next) {
+            if bad || session.queued == MODEL_QUEUE {
+                let retained: usize = session.buffered.values().map(|(size, _)| size).sum();
+                if retained > MODEL_LIMIT {
+                    for id in incoming_ids {
+                        session.buffered.remove(&id);
+                    }
+                }
+                return false;
             }
-            session.delivered.push(id);
+            session.buffered.remove(&session.next);
+            session.delivered.push(session.next);
+            session.queued += 1;
+            session.next += 1;
         }
-        for (id, size) in incoming.range(gap..) {
-            session.buffered.insert(*id, *size);
-        }
-        session.next = gap;
         true
     }
 
     fn forward_step() -> impl proptest::strategy::Strategy<Value = ForwardStep> {
         use proptest::strategy::Strategy;
         (
-            0usize..2,
+            proptest::bool::weighted(0.25),
             0u64..10,
-            proptest::collection::vec(0usize..=4, 1..4),
+            proptest::collection::vec((0usize..=8, proptest::bool::weighted(0.12)), 1..4),
         )
-            .prop_map(|(session, ofs, maps)| ForwardStep { session, ofs, maps })
+            .prop_map(|(consume, ofs, maps)| ForwardStep { consume, ofs, maps })
     }
 
     proptest::proptest! {
-        #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+        #![proptest_config(proptest::test_runner::Config::with_cases(96))]
 
-        /// Model-based check of the out-of-order map budgets over random request sequences on
-        /// two sessions sharing one Hub budget (smaller than two session budgets): every
-        /// accept/refuse decision, every session's buffered bytes, the Hub budget's use and the
-        /// delivered order match the reference model, and buffered bytes never exceed either
-        /// bound.
+        /// Model-based check of the retained-map limit over random request sequences, including
+        /// malformed maps and a stream that fills up and is consumed again: every accept/refuse
+        /// decision, the retained maps, the cursor and the delivered order match the reference
+        /// model, and the retained bytes never exceed the limit.
         #[test]
-        fn forward_map_budgets_match_the_reference_model(
-            steps in proptest::collection::vec(forward_step(), 1..24),
+        fn forward_map_limit_matches_the_reference_model(
+            steps in proptest::collection::vec(forward_step(), 1..32),
         ) {
-            // A quarter unit is 1/32 of the session budget, so a few requests cross it.
-            let quarter = MAX_BUFFERED_MAP_BYTES / 32;
-            let process_budget = MAX_BUFFERED_MAP_BYTES * 3 / 2;
-            let budgets = WebChannelBudgets {
-                maps: Arc::new(Semaphore::new(process_budget)),
-                ..WebChannelBudgets::default()
-            };
-            let mut receivers = Vec::new();
-            let sessions: Vec<Session> = (0..2)
-                .map(|n| {
-                    let (inbound, receiver) = mpsc::channel(4096);
-                    receivers.push(receiver);
-                    let session = test_session(&format!("model-{n}"), DeliveryState::with_budgets(&budgets));
-                    *session.inbound.lock().unwrap() = Some(inbound);
-                    session
-                })
-                .collect();
-            let mut model: Vec<ModelSession> = (0..2).map(|_| ModelSession::default()).collect();
-            let mut process_free = process_budget;
+            // A unit is 1/32 of the limit, so a few requests cross it.
+            let unit = MODEL_LIMIT / 32;
+            let (session, mut receiver) = session_with_inbound("model", MODEL_QUEUE);
+            let mut model = ModelSession::default();
+            let mut consumed = Vec::new();
             for step in &steps {
-                // Each map is a JSON string naming its id, padded to its size.
+                if step.consume {
+                    while let Ok(Ok(value)) = receiver.try_recv() {
+                        consumed.push(value);
+                    }
+                    model.queued = 0;
+                }
+                // Each map is a JSON string naming its id, padded to its size, or malformed.
                 let raws: Vec<String> = step
                     .maps
                     .iter()
                     .enumerate()
-                    .map(|(n, quarters)| {
+                    .map(|(n, (units, bad))| {
                         let id = step.ofs + n as u64;
-                        let head = format!("\"{id}:");
-                        let size = (quarters * quarter).max(head.len() + 1);
-                        format!("{head}{}\"", "p".repeat(size - head.len() - 1))
+                        if *bad {
+                            let size = (units * unit).max(2);
+                            format!("{{{}", "b".repeat(size - 1))
+                        } else {
+                            let head = format!("\"{id}:");
+                            let size = (units * unit).max(head.len() + 1);
+                            format!("{head}{}\"", "p".repeat(size - head.len() - 1))
+                        }
                     })
                     .collect();
-                let sizes: Vec<usize> = raws.iter().map(String::len).collect();
+                let sizes: Vec<(usize, bool)> = raws
+                    .iter()
+                    .zip(&step.maps)
+                    .map(|(raw, (_, bad))| (raw.len(), *bad))
+                    .collect();
                 let refs: Vec<&str> = raws.iter().map(String::as_str).collect();
-                let actual = session_deliver(&sessions[step.session], &map_form(step.ofs, &refs));
-                let expected = model_apply(&mut model, &mut process_free, step, &sizes);
+                let actual = session_deliver_with_limit(&session, &map_form(step.ofs, &refs), MODEL_LIMIT);
+                let expected = model_apply(&mut model, step, &sizes);
                 proptest::prop_assert_eq!(actual.is_ok(), expected, "{:?}: {:?}", step, actual);
-                for (n, session) in sessions.iter().enumerate() {
-                    let maps = session.maps.lock().unwrap();
-                    let bytes: usize = maps.1.values().map(|map| map.raw.len()).sum();
-                    let expected_bytes: usize = model[n].buffered.values().sum();
-                    proptest::prop_assert_eq!(bytes, expected_bytes);
-                    proptest::prop_assert!(bytes <= MAX_BUFFERED_MAP_BYTES);
-                    proptest::prop_assert_eq!(maps.0, model[n].next);
-                }
-                proptest::prop_assert_eq!(budgets.maps.available_permits(), process_free);
+                let maps = session.maps.lock().unwrap();
+                let actual_buffered: BTreeMap<u64, usize> =
+                    maps.1.iter().map(|(id, raw)| (*id, raw.len())).collect();
+                let expected_buffered: BTreeMap<u64, usize> =
+                    model.buffered.iter().map(|(id, (size, _))| (*id, *size)).collect();
+                proptest::prop_assert_eq!(actual_buffered, expected_buffered);
+                proptest::prop_assert!(maps.1.values().map(String::len).sum::<usize>() <= MODEL_LIMIT);
+                proptest::prop_assert_eq!(maps.0, model.next);
             }
-            for (n, receiver) in receivers.iter_mut().enumerate() {
-                let mut delivered = Vec::new();
-                while let Ok(Ok(value)) = receiver.try_recv() {
-                    let text = value.as_str().unwrap().to_owned();
-                    delivered.push(text.split(':').next().unwrap().parse::<u64>().unwrap());
-                }
-                proptest::prop_assert_eq!(&delivered, &model[n].delivered);
+            while let Ok(Ok(value)) = receiver.try_recv() {
+                consumed.push(value);
             }
+            let delivered: Vec<u64> = consumed
+                .iter()
+                .map(|value| value.as_str().unwrap().split(':').next().unwrap().parse().unwrap())
+                .collect();
+            proptest::prop_assert_eq!(&delivered, &model.delivered);
         }
     }
 
@@ -3164,7 +3273,6 @@ mod tests {
         let budgets = WebChannelBudgets {
             retained: Arc::new(Semaphore::new(MAX_PROCESS_UNACKNOWLEDGED_BYTES)),
             replay: Arc::new(Semaphore::new(framed_bytes)),
-            maps: Arc::new(Semaphore::new(MAX_PROCESS_BUFFERED_MAP_BYTES)),
         };
         let build = |sid: &str| {
             test_session(

@@ -10,6 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- Firestore WebChannel form values decode `%` followed by a non-hex character (such as `%+f`) literally again, through the shared percent codec, instead of turning it into a control character.
 - A Firestore `RunQuery` without a consistency selector (the SDKs' `getDocs` / `get()`) no longer opens an internal read-only transaction that took the database's exclusive lock for every page. Its pages now read under the shared lock, so other reads of the same database run alongside a long query, and every page still reads the first page's snapshot. The responses are unchanged. Such a stream no longer fails midway when it outlives a transaction's idle or total time; a page whose snapshot was compacted away under history pressure is still answered `ABORTED`, as before.
 
 ## [0.42.0] - 2026-11-02

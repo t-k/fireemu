@@ -181,3 +181,112 @@ fn configured_clock_range_rejects_every_writer_without_publishing_partial_state(
         .advance(LogicalDuration::from_nanos(1))
         .is_err());
 }
+
+// ---- A clock that follows real time ----------------------------------------------------------
+
+use std::time::{Duration, Instant};
+
+fn five_seconds_in() -> (VirtualClock, LogicalInstant) {
+    let start = LogicalInstant::from_unix_seconds(1_800_000_000);
+    let anchor = Instant::now()
+        .checked_sub(Duration::from_secs(5))
+        .expect("the monotonic clock has run for five seconds");
+    (VirtualClock::following_since(start, anchor), start)
+}
+
+#[test]
+fn a_following_clock_runs_from_its_start_and_a_frozen_one_does_not() {
+    let (clock, start) = five_seconds_in();
+    let now = clock.now().as_nanos() - start.as_nanos();
+    assert!((5_000_000_000..6_000_000_000).contains(&now), "{now}");
+    let snapshot = clock.snapshot();
+    assert!(snapshot.instant >= clock.now() || snapshot.instant.as_nanos() >= start.as_nanos() + 5_000_000_000);
+    assert!(snapshot.elapsed_nanos >= 5_000_000_000);
+    assert_eq!(snapshot.revision, 0, "reading publishes nothing");
+    let frozen = VirtualClock::new(start);
+    std::thread::sleep(Duration::from_millis(5));
+    assert_eq!(frozen.now(), start);
+    assert_eq!(frozen.snapshot().elapsed_nanos, 0);
+}
+
+#[test]
+fn a_following_clock_keeps_moving_between_reads() {
+    let mut clock = VirtualClock::following(LogicalInstant::from_unix_seconds(1_800_000_000));
+    let first = clock.now();
+    std::thread::sleep(Duration::from_millis(20));
+    let second = clock.now();
+    assert!(second.as_nanos() - first.as_nanos() >= 20_000_000);
+    // Moving it by hand is an offset on top: it keeps running from the new instant.
+    let moved = clock.advance(LogicalDuration::from_seconds(60)).unwrap();
+    assert!(moved.as_nanos() - second.as_nanos() >= 60_000_000_000);
+    std::thread::sleep(Duration::from_millis(10));
+    assert!(clock.now().as_nanos() - moved.as_nanos() >= 10_000_000);
+}
+
+#[test]
+fn a_following_clock_refuses_to_go_back_to_a_time_it_has_passed() {
+    let (mut clock, start) = five_seconds_in();
+    assert!(matches!(
+        clock.advance_to(start),
+        Err(ClockError::WouldMoveBackwards { .. })
+    ));
+    let ahead = LogicalInstant::from_nanos(start.as_nanos() + 3_600_000_000_000);
+    assert_eq!(clock.advance_to(ahead), Ok(ahead));
+    assert!(clock.now() >= ahead);
+    // A rewind is explicit and keeps counting from where it lands.
+    clock.set_allow_backwards(start);
+    assert_eq!(clock.backwards_sets(), 1);
+    let after = clock.now().as_nanos() - start.as_nanos();
+    assert!((0..1_000_000_000).contains(&after), "{after}");
+}
+
+#[test]
+fn syncing_publishes_the_running_time_to_observers_once_it_has_moved() {
+    let samples = Arc::new(Mutex::new(Vec::new()));
+    let sink = samples.clone();
+    let observer: Arc<fireemu_core_session::clock::ClockObserver> =
+        Arc::new(move |sample| sink.lock().unwrap().push(sample));
+    let (mut clock, start) = five_seconds_in();
+    clock.observe(&observer);
+    assert_eq!(samples.lock().unwrap().len(), 1);
+    assert!(clock.sync());
+    {
+        let seen = samples.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].instant.as_nanos() >= start.as_nanos() + 5_000_000_000);
+        assert_eq!(seen[1].revision, seen[0].revision + 1);
+    }
+    let mut frozen = VirtualClock::new(start);
+    frozen.observe(&observer);
+    let before = samples.lock().unwrap().len();
+    assert!(!frozen.sync(), "a frozen clock has nothing to publish");
+    assert_eq!(samples.lock().unwrap().len(), before);
+}
+
+proptest::proptest! {
+    #[test]
+    fn a_following_clock_never_goes_back_and_hand_moves_add_at_least_their_size(
+        moves in proptest::collection::vec((0u8..3, 0i64..10_000_000_000), 0..32),
+    ) {
+        let mut clock = VirtualClock::following(LogicalInstant::from_unix_seconds(1_800_000_000));
+        let mut last = clock.now();
+        for (kind, nanos) in moves {
+            match kind {
+                0 => {
+                    let before = clock.now();
+                    let after = clock.advance(LogicalDuration::from_nanos(i128::from(nanos))).unwrap();
+                    proptest::prop_assert!(after.as_nanos() - before.as_nanos() >= i128::from(nanos));
+                }
+                1 => {
+                    let target = LogicalInstant::from_nanos(clock.now().as_nanos() + i128::from(nanos));
+                    proptest::prop_assert_eq!(clock.advance_to(target), Ok(target));
+                }
+                _ => { clock.sync(); }
+            }
+            let now = clock.now();
+            proptest::prop_assert!(now >= last);
+            proptest::prop_assert!(clock.snapshot().instant >= now || clock.snapshot().instant.as_nanos() >= last.as_nanos());
+            last = now;
+        }
+    }
+}

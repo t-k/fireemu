@@ -3210,12 +3210,11 @@ fn delayed_blocking_auth_requests_do_not_exhaust_tokio_workers() {
         Arc::new(auth),
     ));
 
+    // The two held requests outlast every probe below, so a probe that hangs is reported by its
+    // own assertion rather than by a held request timing out first.
+    let held_timeout = Duration::from_secs(10);
     let first = std::thread::spawn(move || {
-        request(
-            addr,
-            &signup_request("first@example.test"),
-            Duration::from_secs(2),
-        )
+        request(addr, &signup_request("first@example.test"), held_timeout)
     });
     let entered_deadline = Instant::now() + Duration::from_secs(1);
     while hook.entered.load(Ordering::SeqCst) == 0 {
@@ -3226,38 +3225,44 @@ fn delayed_blocking_auth_requests_do_not_exhaust_tokio_workers() {
         std::thread::yield_now();
     }
 
-    let (written_tx, written_rx) = std::sync::mpsc::sync_channel(1);
     let second = std::thread::spawn(move || {
-        let request = signup_request("second@example.test");
-        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        stream.write_all(request.as_bytes()).unwrap();
-        written_tx.send(()).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).map(|_| response)
+        request(addr, &signup_request("second@example.test"), held_timeout)
     });
-    written_rx.recv().unwrap();
-    std::thread::sleep(Duration::from_millis(25));
+    // Without a registry the hook runs outside the namespace gate, so the second request reaches
+    // it while the first is still inside. Entering the hook happens after admission, so once
+    // both have entered, both blocking slots are held and every probe below runs against a
+    // saturated bridge (no scheduling assumption).
+    let second_entered_deadline = Instant::now() + Duration::from_secs(1);
+    while hook.entered.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < second_entered_deadline,
+            "the second request did not enter the blocking hook"
+        );
+        std::thread::yield_now();
+    }
 
+    // The hooks are released only after these probes return, so a probe the server cannot answer
+    // while both hooks block (a starved worker, or a surplus request queued for a slot) never
+    // answers within any timeout: the timeout bounds how long the failure takes to report, not
+    // what is detected.
+    let probe_timeout = Duration::from_secs(2);
     let overloaded = request(
         addr,
         &signup_request("overloaded@example.test"),
-        Duration::from_millis(100),
+        probe_timeout,
     );
 
     let readiness = request(
         addr,
         "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        Duration::from_millis(100),
+        probe_timeout,
     );
     let lookup = request(
         addr,
         &format!(
             "POST {V1}/accounts:lookup HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
         ),
-        Duration::from_millis(100),
+        probe_timeout,
     );
 
     hook.release.store(true, Ordering::SeqCst);

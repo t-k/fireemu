@@ -8112,3 +8112,101 @@ fn a_lowercase_operator_name_is_served_by_strict_and_refused_in_fireemus_words_b
     );
     assert!(body[0]["error"].get("details").is_none(), "{body}");
 }
+
+/// `RunQueryRequest.request_options` (field 11 of the pinned `firestore.proto`) is accepted,
+/// decoded against `RequestOptions` and otherwise ignored. The strict transcoder lists it;
+/// the emulator profile, which has no transcoder, decodes it in the handler.
+#[test]
+fn strict_run_query_accepts_request_options() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/tagged/a"),
+            json!({"fields": {"n": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        let query = json!({"from": [{"collectionId": "tagged"}]});
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "requestOptions": {"requestTags": ["t"]}}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        assert_eq!(body[0]["document"]["fields"]["n"]["integerValue"], "1");
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query, "requestOptions": {"requestTags": [1]}}),
+        );
+        assert_eq!(status, 400, "strict={strict}: {body}");
+    }
+}
+
+/// `RunAggregationQueryRequest.request_options` (field 9) is accepted, decoded against
+/// `RequestOptions` and otherwise ignored, on both profiles.
+#[test]
+fn strict_run_aggregation_query_accepts_request_options() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, body) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/tagged/a"),
+            json!({"fields": {"n": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        let aggregation = json!({
+            "structuredQuery": {"from": [{"collectionId": "tagged"}]},
+            "aggregations": [{"alias": "c", "count": {}}],
+        });
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runAggregationQuery"),
+            json!({"structuredAggregationQuery": aggregation, "requestOptions": {"requestTags": ["t"]}}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        assert_eq!(
+            body[0]["result"]["aggregateFields"]["c"]["integerValue"],
+            "1"
+        );
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runAggregationQuery"),
+            json!({"structuredAggregationQuery": aggregation, "requestOptions": {"requestTags": [1]}}),
+        );
+        assert_eq!(status, 400, "strict={strict}: {body}");
+    }
+}
+
+/// `PartitionQueryRequest.request_options` (field 7) is accepted, decoded against
+/// `RequestOptions` and otherwise ignored, on both profiles.
+#[test]
+fn strict_partition_query_accepts_request_options() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let query = json!({
+            "from": [{"collectionId": "tagged", "allDescendants": true}],
+            "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}],
+        });
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:partitionQuery"),
+            json!({"structuredQuery": query, "partitionCount": "2", "requestOptions": {"requestTags": ["t"]}}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:partitionQuery"),
+            json!({"structuredQuery": query, "partitionCount": "2", "requestOptions": {"requestTags": [1]}}),
+        );
+        assert_eq!(status, 400, "strict={strict}: {body}");
+    }
+}

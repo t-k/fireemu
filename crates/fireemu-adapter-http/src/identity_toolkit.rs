@@ -3495,16 +3495,48 @@ enum RefreshTokenTenant {
     Tenant(String),
 }
 
+/// The request's ID token as the routing helpers read it: decoded once per request with the
+/// default store's signer (ITKT-8), instead of once per helper, each taking the default store's
+/// lock. Routing only; the handler still verifies the token against the selected store.
+#[derive(Default)]
+struct RoutingIdToken {
+    decoded: std::cell::OnceCell<(String, Option<fireemu_core_auth::jwt::DecodedToken>)>,
+}
+
+impl RoutingIdToken {
+    /// `decode_token(token, default signer)`, memoized for the first token asked about.
+    fn decode(
+        &self,
+        state: &AuthState,
+        token: &str,
+    ) -> Option<fireemu_core_auth::jwt::DecodedToken> {
+        let decode = || {
+            let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
+            fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()
+        };
+        let (cached, decoded) = self.decoded.get_or_init(|| (token.to_owned(), decode()));
+        if cached == token {
+            decoded.clone()
+        } else {
+            decode()
+        }
+    }
+}
+
 /// The tenant an ID token names in its `firebase.tenant` claim, and whether the token is one of
 /// `project` that this daemon can verify. Another project's token is refused by its audience and
 /// a token this daemon cannot verify (another key, another algorithm, a production token) is
 /// refused as invalid, so neither is ever the target here; but the official emulator reads the
 /// claim without verifying and asserts it against the path's or the body's tenant before it looks
 /// a tenant up, so it still has to agree with them.
-fn id_token_tenant(state: &AuthState, project: &str, body: &Value) -> Option<(String, bool)> {
+fn id_token_tenant(
+    state: &AuthState,
+    routing: &RoutingIdToken,
+    project: &str,
+    body: &Value,
+) -> Option<(String, bool)> {
     let token = str_field(body, "idToken")?;
-    let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-    let Ok(decoded) = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()) else {
+    let Some(decoded) = routing.decode(state, token) else {
         // Unverified: only the tenant claim, only for the agreement, never the target.
         return fireemu_core_auth::jwt::unverified_tenant_claim(token)
             .map(|tenant| (tenant, false));
@@ -3792,6 +3824,7 @@ fn admit_request(
 /// profile never creates one: production refuses.
 fn emulator_creates_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     request: &TenantCreation<'_>,
     body: &Value,
     resolution: routes::Resolution<'_>,
@@ -3824,7 +3857,7 @@ fn emulator_creates_named_tenant(
     // the store selection itself, not by a copy of its rules) makes nothing here and is admitted
     // by App Check for the project it is served from, by the pipeline. A selection that fails
     // (a tenant not made yet) or lands in this project goes on.
-    if let Ok(store) = select_store(state, path, query, body, resolution) {
+    if let Ok(store) = select_store(state, routing, path, query, body, resolution) {
         if store
             .lock()
             .is_ok_and(|store| store.project_id() != project)
@@ -3838,7 +3871,7 @@ fn emulator_creates_named_tenant(
         None | Some(Value::Null | Value::String(_)) => None,
         _ => return Ok(None),
     };
-    let (token_tenant, token_of_project) = match id_token_tenant(state, &project, body) {
+    let (token_tenant, token_of_project) = match id_token_tenant(state, routing, &project, body) {
         Some((tenant, of_project)) => (Some(tenant), of_project),
         None => (None, true),
     };
@@ -3961,8 +3994,13 @@ fn official_reads_the_id_token(
 
 /// The tenant an ID token of `project` names (an empty claim names none), read as the official
 /// emulator reads it: the third source of an operation's target tenant.
-fn token_tenant_of_project(state: &AuthState, project: &str, body: &Value) -> Option<String> {
-    id_token_tenant(state, project, body)
+fn token_tenant_of_project(
+    state: &AuthState,
+    routing: &RoutingIdToken,
+    project: &str,
+    body: &Value,
+) -> Option<String> {
+    id_token_tenant(state, routing, project, body)
         .filter(|(_, of_project)| *of_project)
         .map(|(tenant, _)| tenant)
 }
@@ -4002,6 +4040,7 @@ fn official_admin_account_handler(handler: routes::Handler) -> bool {
 /// reads `""` as no tenant (a project user's token too).
 fn emulator_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     resolution: routes::Resolution<'_>,
     path: &str,
     query: Option<&str>,
@@ -4022,8 +4061,7 @@ fn emulator_named_tenant(
         return Ok(());
     }
     let Some((audience, token_tenant)) = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        let decoded = routing.decode(state, token)?;
         let audience = decoded
             .payload
             .get("aud")
@@ -4128,6 +4166,7 @@ const PROVIDER_COLLECTIONS: [&str; 3] = [
 /// `Ok(Some(body))` is the body the request continues with.
 fn strict_named_tenant(
     state: &AuthState,
+    routing: &RoutingIdToken,
     path: &str,
     query: Option<&str>,
     body: &Value,
@@ -4170,8 +4209,7 @@ fn strict_named_tenant(
         Some(_) => return Err(error(400, "INVALID_TENANT_ID")),
     }
     let token_tenant = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        let decoded = fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok()?;
+        let decoded = routing.decode(state, token)?;
         decoded
             .payload
             .get("firebase")
@@ -4302,8 +4340,9 @@ fn handle_with_policy_inner(
         return response;
     }
     // Production's reading of the tenant a request names (strict profile).
+    let routing = RoutingIdToken::default();
     let named_tenant_body;
-    let body = match strict_named_tenant(state, path, query, body) {
+    let body = match strict_named_tenant(state, &routing, path, query, body) {
         Ok(Some(rewritten)) => {
             named_tenant_body = rewritten;
             &named_tenant_body
@@ -4329,15 +4368,17 @@ fn handle_with_policy_inner(
         at,
         app_check_admitted: std::cell::RefCell::new(None),
     };
-    let made_on_the_way = match emulator_creates_named_tenant(state, &creation, body, resolution) {
-        Ok(made) => made,
-        Err(response) => return response,
-    };
+    let made_on_the_way =
+        match emulator_creates_named_tenant(state, &routing, &creation, body, resolution) {
+            Ok(made) => made,
+            Err(response) => return response,
+        };
     // A request the tenant admission let through was admitted by App Check there; it is observed once.
     let app_check_admitted = creation.app_check_admitted.take();
     // The official emulator's reading of an ID token's tenant (emulator profile).
     if let Err(response) = emulator_named_tenant(
         state,
+        &routing,
         resolution,
         path,
         query,
@@ -4474,7 +4515,7 @@ fn handle_with_policy_inner(
         let body_tenant_store = str_field(body, "tenantId")
             .filter(|tenant| !tenant.is_empty())
             .map(str::to_owned)
-            .or_else(|| token_tenant_of_project(state, project, body))
+            .or_else(|| token_tenant_of_project(state, &routing, project, body))
             .filter(|_| {
                 // The emulator profile only (as the store selection's arm below is).
                 state.stateless_refresh_tokens
@@ -4489,7 +4530,7 @@ fn handle_with_policy_inner(
         }
         body_tenant_store.unwrap_or(store)
     } else {
-        match select_store(state, path, query, body, resolution) {
+        match select_store(state, &routing, path, query, body, resolution) {
             Ok(store) => store,
             // Production answers a client policy read of an unknown tenant with the v2 API's
             // INVALID_TENANT_ID (sandbox recording 2026-09-25).
@@ -9374,6 +9415,7 @@ fn request_may_create_end_user(
 #[allow(clippy::too_many_lines)]
 fn select_store(
     state: &AuthState,
+    routing: &RoutingIdToken,
     path: &str,
     query: Option<&str>,
     body: &Value,
@@ -9417,23 +9459,20 @@ fn select_store(
         }
     }
     let id_token_target = str_field(body, "idToken").and_then(|token| {
-        let signer = state.store.lock().ok().and_then(|s| s.signer_arc());
-        fireemu_core_auth::jwt::decode_token(token, signer.as_deref())
-            .ok()
-            .and_then(|d| {
-                let audience = d
-                    .payload
-                    .get("aud")
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned)?;
-                let tenant = d
-                    .payload
-                    .get("firebase")
-                    .and_then(|firebase| firebase.get("tenant"))
-                    .and_then(fireemu_core_types::json::JsonValue::as_str)
-                    .map(str::to_owned);
-                Some((audience, tenant))
-            })
+        routing.decode(state, token).and_then(|d| {
+            let audience = d
+                .payload
+                .get("aud")
+                .and_then(fireemu_core_types::json::JsonValue::as_str)
+                .map(str::to_owned)?;
+            let tenant = d
+                .payload
+                .get("firebase")
+                .and_then(|firebase| firebase.get("tenant"))
+                .and_then(fireemu_core_types::json::JsonValue::as_str)
+                .map(str::to_owned);
+            Some((audience, tenant))
+        })
     });
     let exchanges_custom_token = matches!(
         resolution,

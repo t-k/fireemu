@@ -238,6 +238,7 @@ fn auth_response_tokens_are_signed_after_releasing_the_store_mutex() {
 struct CountingSigner {
     inner: Arc<RsaSigner>,
     signs: AtomicUsize,
+    verifies: AtomicUsize,
 }
 
 impl IdTokenSigner for CountingSigner {
@@ -255,6 +256,7 @@ impl IdTokenSigner for CountingSigner {
     }
 
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        self.verifies.fetch_add(1, Ordering::SeqCst);
         self.inner.verify(signing_input, signature)
     }
 
@@ -275,6 +277,7 @@ fn a_refresh_signs_its_id_token_once() {
     let signer = Arc::new(CountingSigner {
         inner: fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX),
         signs: AtomicUsize::new(0),
+        verifies: AtomicUsize::new(0),
     });
     store.lock().unwrap().set_signer(signer.clone());
     let state = auth_state(store);
@@ -759,4 +762,64 @@ fn a_lazy_app_check_signer_generates_its_key_on_first_use_and_matches_the_eager_
     assert!(format!("{lazy:?}").contains(&kid));
     assert!(!format!("{lazy:?}").contains("not generated yet"));
     assert!(!format!("{lazy:?}").contains("seed"));
+}
+
+/// ITKT-8: an account request's ID token is checked twice, whatever the profile and whether a
+/// registry routes it: once to route the request (decoded with the default store's signer) and
+/// once by the handler against the selected store. Each routing helper used to decode it again.
+#[test]
+fn an_id_token_is_decoded_once_for_routing_and_verified_once_by_the_handler() {
+    for (registry, emulator_profile) in [(false, true), (true, true), (true, false)] {
+        let store = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(53),
+            TotpPolicy::default(),
+        )));
+        let signer = Arc::new(CountingSigner {
+            inner: fixture_signer(INSECURE_TEST_ONLY_RSA_A_HEX),
+            signs: AtomicUsize::new(0),
+            verifies: AtomicUsize::new(0),
+        });
+        store.lock().unwrap().set_signer(signer.clone());
+        let mut state = auth_state(store.clone());
+        state.stateless_refresh_tokens = emulator_profile;
+        if registry {
+            state.registry = Some(Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+                "demo-app", store,
+            )));
+        }
+        let signed_up = handle(
+            &state,
+            "POST",
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp?key=k",
+            &json!({"email": "decode-once@example.com", "password": "password1", "returnSecureToken": true}),
+        );
+        assert_eq!(signed_up.status, 200, "{}", signed_up.body);
+        let id_token = &signed_up.body["idToken"];
+        for (method, body) in [
+            ("accounts:lookup", json!({"idToken": id_token})),
+            (
+                "accounts:update",
+                json!({"idToken": id_token, "displayName": "x"}),
+            ),
+            (
+                "accounts:sendOobCode",
+                json!({"idToken": id_token, "requestType": "VERIFY_EMAIL"}),
+            ),
+        ] {
+            let before = signer.verifies.load(Ordering::SeqCst);
+            let response = handle(
+                &state,
+                "POST",
+                &format!("/identitytoolkit.googleapis.com/v1/{method}?key=k"),
+                &body,
+            );
+            assert_eq!(response.status, 200, "{method}: {}", response.body);
+            assert_eq!(
+                signer.verifies.load(Ordering::SeqCst) - before,
+                2,
+                "registry {registry}, emulator profile {emulator_profile}, {method}"
+            );
+        }
+    }
 }

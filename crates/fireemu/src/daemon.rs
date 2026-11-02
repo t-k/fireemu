@@ -1941,11 +1941,6 @@ fn make_clock(cfg: &RuntimeConfig, reading: Option<i128>) -> Arc<Mutex<VirtualCl
 const FUNCTIONS_STAGE_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
 const STAGE_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// How long the runtime is given to finish its blocking tasks once the daemon has stopped. They
-/// hold nothing that persists (the largest is the App Check key generation, which a debug build
-/// takes seconds for), so they are left behind rather than waited for.
-const BLOCKING_DRAIN: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Runs one shutdown stage for at most `bound`, saying so when it does not finish.
 async fn bounded_stage<T>(
     stage: &str,
@@ -1963,20 +1958,11 @@ async fn bounded_stage<T>(
     }
 }
 
-/// Stops the runtime, waiting at most `bound` for its blocking tasks. Returns whether some were
-/// still running, which it has said so about.
-fn drain_runtime(runtime: tokio::runtime::Runtime, bound: std::time::Duration) -> bool {
-    let started = std::time::Instant::now();
-    runtime.shutdown_timeout(bound);
-    let left_behind = started.elapsed() >= bound;
-    if left_behind {
-        eprintln!(
-            "warning: shutdown: background tasks (such as the App Check key generation) were still \
-             running after {} ms and are left behind",
-            bound.as_millis()
-        );
-    }
-    left_behind
+/// Stops the runtime once the daemon has stopped. Dropping it waits for the blocking tasks that
+/// are still running, which is what lets an export (an admin Hub export, a Functions snapshot
+/// copy) that began before the signal finish writing instead of being cut off mid-file.
+fn stop_runtime(runtime: tokio::runtime::Runtime) {
+    drop(runtime);
 }
 
 /// How often a clock that follows real time publishes its running time to its observers.
@@ -2211,13 +2197,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 )?;
                 // Generated in the background once the daemon is up, so a run that uses App
                 // Check does not pay for the prime search on its first request, and a run that
-                // never does only spends spare CPU.
+                // never does only spends spare CPU. It runs on a thread of its own, not on the
+                // runtime's blocking pool: nothing persists from it, and the runtime waits for
+                // its pool on the way out, which would hold a stopping daemon for the whole
+                // prime search (seconds in a debug build). The end of the process ends it.
                 let warm = signer.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Err(error) = warm.prewarm() {
-                        eprintln!("warning: the App Check key could not be generated: {error}");
-                    }
-                });
+                std::thread::Builder::new()
+                    .name("fireemu-app-check-prewarm".to_owned())
+                    .spawn(move || {
+                        if let Err(error) = warm.prewarm() {
+                            eprintln!(
+                                "warning: the App Check key could not be generated: {error}"
+                            );
+                        }
+                    })
+                    .map_err(|e| format!("cannot start the App Check key generation: {e}"))?;
                 Some(signer)
             }
             None => None,
@@ -2483,7 +2477,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         let ready = assemble_suite(assembly, exec.is_some())?;
         serve_suite(ready, exec, signals, ready_file, owner_stdin).await
     });
-    drain_runtime(runtime, BLOCKING_DRAIN);
+    stop_runtime(runtime);
     match result {
         Ok(code) => ExitCode::from(reportable_exit_code(code)),
         Err(e) => {
@@ -2625,10 +2619,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_shutdown_stage_is_bounded_and_says_so() {
+    async fn a_shutdown_stage_is_bounded() {
         use std::time::Duration;
         let done = super::bounded_stage("a quick stage", Duration::from_secs(5), async { 7 }).await;
         assert_eq!(done, Some(7));
+        let slow = super::bounded_stage("a slow stage", Duration::from_secs(5), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            9
+        })
+        .await;
+        assert_eq!(slow, Some(9), "a stage inside its bound is waited for");
         let started = std::time::Instant::now();
         let late = super::bounded_stage(
             "a stuck stage",
@@ -2641,34 +2641,29 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_does_not_wait_for_blocking_tasks_past_its_drain() {
+    fn stopping_the_runtime_lets_a_running_blocking_task_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
         use std::time::{Duration, Instant};
-        let build = || {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .unwrap()
-        };
-        // Nothing left running: it stops at once and reports nothing left behind.
-        let idle = build();
-        let started = Instant::now();
-        assert!(!super::drain_runtime(idle, Duration::from_millis(500)));
-        assert!(started.elapsed() < Duration::from_millis(400));
-        // A blocking task that outlives the drain is left behind, and the stop does not wait.
-        let busy = build();
-        let (release, held) = std::sync::mpsc::channel::<()>();
-        busy.spawn_blocking(move || {
-            let _ = held.recv_timeout(Duration::from_secs(30));
+        // An export in flight when the daemon is told to stop runs on the runtime's blocking
+        // pool; it must finish its write, not be abandoned half way.
+        let runtime = super::build_runtime().unwrap();
+        let written = Arc::new(AtomicBool::new(false));
+        let flag = written.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            started_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+            flag.store(true, Ordering::SeqCst);
         });
+        started_rx.recv().unwrap();
         let started = Instant::now();
-        assert!(super::drain_runtime(busy, Duration::from_millis(100)));
-        let took = started.elapsed();
+        super::stop_runtime(runtime);
         assert!(
-            took >= Duration::from_millis(100) && took < Duration::from_secs(2),
-            "{took:?}"
+            written.load(Ordering::SeqCst),
+            "the blocking task was cut off"
         );
-        drop(release);
+        assert!(started.elapsed() >= Duration::from_millis(100));
     }
 
     #[test]

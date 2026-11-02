@@ -617,18 +617,44 @@ fn a_sigterm_the_instant_the_daemon_is_ready_still_removes_the_locator() {
 fn a_sigterm_stops_the_daemon_without_waiting_for_background_work() {
     let mut daemon = Daemon::start("demo-hub-sigterm-latency", &[]);
     let pid = i32::try_from(daemon.child.id()).expect("a pid");
+    // The children it owns are recorded while it is alive: once it is reaped they would be
+    // reparented and no longer found by their parent.
+    let children: Vec<i32> = census::descendants_of(pid).iter().map(|p| p.pid).collect();
     let started = Instant::now();
-    let status = daemon.terminate_and_wait();
+    rustix::process::kill_process(
+        rustix::process::Pid::from_raw(pid).expect("a live pid"),
+        rustix::process::Signal::TERM,
+    )
+    .expect("SIGTERM is sent");
+    let deadline = started + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = daemon.child.try_wait().expect("the daemon is polled") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = daemon.child.kill();
+            let _ = daemon.child.wait();
+            panic!("the daemon had not stopped 10 s after SIGTERM");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let took = started.elapsed();
+    daemon.stopped = true;
     assert_eq!(status.code(), Some(0), "{status:?}");
     assert!(
         took < Duration::from_secs(2),
         "the daemon took {took:?} to stop after SIGTERM"
     );
-    assert!(
-        census::wait_for_no_descendants(pid, Duration::from_secs(5)).is_empty(),
-        "the daemon left children behind"
-    );
+    let grace = Instant::now() + Duration::from_secs(5);
+    while children.iter().any(|child| census::alive(*child)) && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let left: Vec<i32> = children
+        .iter()
+        .copied()
+        .filter(|child| census::alive(*child))
+        .collect();
+    assert!(left.is_empty(), "the daemon left children behind: {left:?}");
 }
 
 #[cfg(unix)]

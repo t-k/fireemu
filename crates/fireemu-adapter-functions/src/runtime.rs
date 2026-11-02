@@ -2253,6 +2253,35 @@ impl FunctionsRuntime {
         else {
             return false;
         };
+        Self::enqueue_encoded(
+            inner,
+            session,
+            source,
+            function,
+            event_type,
+            subject,
+            time,
+            Arc::new(payload.clone()),
+            raw_data.map(Arc::from),
+            retained_bytes,
+        )
+    }
+
+    /// [`Self::enqueue`] for a payload whose copy and retained size were taken before the
+    /// runtime lock, so the locked part does no O(payload bytes) work.
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_encoded(
+        inner: &mut Inner,
+        session: SessionId,
+        source: EventSource,
+        function: &str,
+        event_type: &str,
+        subject: &str,
+        time: LogicalInstant,
+        payload: Arc<Value>,
+        raw_data: Option<Arc<str>>,
+        retained_bytes: usize,
+    ) -> bool {
         if !Self::can_admit_events(inner, source, 1, retained_bytes) {
             *inner.admission_refusals.entry("capacity").or_default() += 1;
             return false;
@@ -2291,8 +2320,8 @@ impl FunctionsRuntime {
                 id,
                 QueuedPayload {
                     function: function.to_owned(),
-                    payload: Arc::new(payload.clone()),
-                    raw_data: raw_data.map(Arc::from),
+                    payload,
+                    raw_data,
                     retained_bytes,
                     source,
                     admitted_at: time,
@@ -2722,26 +2751,50 @@ impl FunctionsRuntime {
         let Some(time) = commit.commit_time else {
             return Ok(self.empty_event_reservation());
         };
+        // Trigger matching reads only the immutable manifest, and the document data (the
+        // O(document bytes) part of an event) depends only on the change, so both are done
+        // before the runtime lock is taken: once per change, as the locked pass used to.
+        let matched: Vec<_> = commit
+            .changes
+            .iter()
+            .filter_map(|change| {
+                let kind = change_kind(change.before.as_deref(), change.after.as_deref())?;
+                let relative = change.path.relative();
+                let matches = self
+                    .manifest
+                    .firestore_matches(&commit.database, &relative, kind);
+                let raw_data = matches
+                    .iter()
+                    .any(|m| matches!(m.function.trigger, Trigger::Firestore { .. }))
+                    .then(|| {
+                        let data = crate::events::firestore_event_data(
+                            change.before.as_deref(),
+                            change.after.as_deref(),
+                        );
+                        Arc::<str>::from(
+                            serde_json::to_string(&data).expect("Firestore data serializes"),
+                        )
+                    });
+                Some((kind, relative, matches, raw_data))
+            })
+            .collect();
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| SourceEventAdmissionError::Unavailable)?;
         let mut drafts = Vec::new();
         let mut draft_bytes = 0usize;
-        for change in commit.changes.iter() {
-            let Some(kind) = change_kind(change.before.as_deref(), change.after.as_deref()) else {
-                continue;
-            };
-            let relative = change.path.relative();
-            let mut common_data: Option<Arc<str>> = None;
-            for m in self
-                .manifest
-                .firestore_matches(&commit.database, &relative, kind)
-            {
+        for (kind, relative, matches, raw_data) in &matched {
+            let (kind, relative) = (*kind, relative.as_str());
+            for m in matches {
                 let Trigger::Firestore {
                     event: declared, ..
                 } = &m.function.trigger
                 else {
+                    continue;
+                };
+                // Encoded above for every change with a Firestore match.
+                let Some(raw_data) = raw_data else {
                     continue;
                 };
                 // A `written` trigger receives the written type; others their own kind.
@@ -2771,16 +2824,10 @@ impl FunctionsRuntime {
                     &commit.project,
                     &commit.database,
                     &self.config.location,
-                    &relative,
+                    relative,
                     reported,
-                    common_data
-                        .is_none()
-                        .then_some(change.before.as_deref())
-                        .flatten(),
-                    common_data
-                        .is_none()
-                        .then_some(change.after.as_deref())
-                        .flatten(),
+                    None,
+                    None,
                     time,
                     with_auth.then(|| {
                         self.auth_context_of(
@@ -2789,14 +2836,6 @@ impl FunctionsRuntime {
                         )
                     }),
                 );
-                let raw_data = common_data
-                    .get_or_insert_with(|| {
-                        Arc::from(
-                            serde_json::to_string(&payload["data"])
-                                .expect("Firestore data serializes"),
-                        )
-                    })
-                    .clone();
                 payload["data"] = Value::Null;
                 payload["params"] = json!(m.params);
                 let event_type = payload
@@ -2833,7 +2872,7 @@ impl FunctionsRuntime {
                         subject: subject.clone(),
                         time,
                         payload: Arc::clone(&payload),
-                        raw_data: Some(Arc::clone(&raw_data)),
+                        raw_data: Some(Arc::clone(raw_data)),
                         retained_bytes: one_delivery,
                         parent: Some(format!(
                             "firestore-commit:{}@{}",
@@ -3572,6 +3611,7 @@ impl FunctionsRuntime {
     }
 
     /// Atomically admits and enqueues one Eventarc publish request.
+    #[allow(clippy::too_many_lines)]
     pub fn publish_registered_custom_events(
         &self,
         channel: &str,
@@ -3581,6 +3621,31 @@ impl FunctionsRuntime {
             return Ok(0);
         }
         let time = self.now();
+        // The O(payload bytes) work -- measuring the serialized event and copying it and its
+        // raw data into shared buffers -- is done before either lock is taken. Errors are kept
+        // and raised at the event's turn below, so admission decides exactly as before.
+        let encoded: Vec<_> = events
+            .iter()
+            .map(|event| {
+                EventType::try_new(&event.event_type).is_ok().then(|| {
+                    #[cfg(test)]
+                    crate::events::probe_payload_encoding();
+                    let payload_bytes = serde_json::to_vec(&event.event)
+                        .map_err(|_| EventarcPublishError::InvalidEvent)
+                        .and_then(|encoded| {
+                            encoded
+                                .len()
+                                .checked_add(event.raw_data.as_deref().map_or(0, str::len))
+                                .ok_or(EventarcPublishError::Capacity)
+                        });
+                    (
+                        payload_bytes,
+                        Arc::new(event.event.clone()),
+                        event.raw_data.as_deref().map(Arc::<str>::from),
+                    )
+                })
+            })
+            .collect();
         let registry = self
             .eventarc_registry
             .lock()
@@ -3592,22 +3657,18 @@ impl FunctionsRuntime {
         let mut planned = Vec::new();
         let mut delivery_count = 0usize;
         let mut retained_bytes = 0usize;
-        for event in events {
+        for (event, encoded) in events.iter().zip(&encoded) {
             // A type the runtime cannot hold (outside `[A-Za-z0-9._-]`, or longer than 256 bytes) cannot name a
             // function's trigger either. The official emulator looks the trigger up by the type's text and
             // answers 200 whatever the type is, so such an event is logged and not delivered; it does not
             // refuse the publication.
-            if EventType::try_new(&event.event_type).is_err() {
+            let Some((payload_bytes, payload, raw_data)) = encoded else {
                 eprintln!(
                     "[functions] eventarc: an event on {channel} with a type this emulator cannot deliver was not delivered"
                 );
                 continue;
-            }
-            let payload_bytes = serde_json::to_vec(&event.event)
-                .map_err(|_| EventarcPublishError::InvalidEvent)?
-                .len()
-                .checked_add(event.raw_data.as_deref().map_or(0, str::len))
-                .ok_or(EventarcPublishError::Capacity)?;
+            };
+            let payload_bytes = (*payload_bytes)?;
             let remaining = MAX_ACTIVE_EVENTARC_RECORDS.saturating_sub(delivery_count);
             let functions = registry
                 .matching_functions(channel, &event.event_type, &event.attributes, remaining)
@@ -3624,14 +3685,16 @@ impl FunctionsRuntime {
                 delivery_count = delivery_count
                     .checked_add(copies)
                     .ok_or(EventarcPublishError::Capacity)?;
-                let bytes = Self::retained_event_bytes_from_payload_len(
+                let one_delivery = Self::retained_event_bytes_from_payload_len(
                     &function,
                     &event.event_type,
                     channel,
                     payload_bytes,
                 )
-                .and_then(|bytes| bytes.checked_mul(copies))
                 .ok_or(EventarcPublishError::Capacity)?;
+                let bytes = one_delivery
+                    .checked_mul(copies)
+                    .ok_or(EventarcPublishError::Capacity)?;
                 retained_bytes = retained_bytes
                     .checked_add(bytes)
                     .ok_or(EventarcPublishError::Capacity)?;
@@ -3643,7 +3706,7 @@ impl FunctionsRuntime {
                 ) {
                     return Err(EventarcPublishError::Capacity);
                 }
-                planned.push((function, event, copies));
+                planned.push((function, event, payload, raw_data, one_delivery, copies));
             }
         }
         if !Self::can_admit_events(
@@ -3654,9 +3717,9 @@ impl FunctionsRuntime {
         ) {
             return Err(EventarcPublishError::Capacity);
         }
-        for (function, event, copies) in planned {
+        for (function, event, payload, raw_data, one_delivery, copies) in planned {
             for _ in 0..copies {
-                let admitted = Self::enqueue(
+                let admitted = Self::enqueue_encoded(
                     &mut inner,
                     self.config.session,
                     EventSource::Eventarc,
@@ -3664,8 +3727,9 @@ impl FunctionsRuntime {
                     &event.event_type,
                     channel,
                     time,
-                    &event.event,
-                    event.raw_data.as_deref(),
+                    Arc::clone(payload),
+                    raw_data.clone(),
+                    one_delivery,
                 );
                 debug_assert!(admitted, "pre-admitted Eventarc delivery must enqueue");
             }
@@ -6522,6 +6586,100 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    /// Records, at each source-event payload encoding on this thread, whether the runtime
+    /// lock and the Eventarc registry lock were held.
+    fn locks_held_while_encoding(runtime: &Arc<FunctionsRuntime>) -> Arc<Mutex<Vec<(bool, bool)>>> {
+        use std::sync::TryLockError::WouldBlock;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (runtime, record) = (Arc::downgrade(runtime), Arc::clone(&seen));
+        crate::events::PAYLOAD_ENCODING_PROBE.set(Some(Box::new(move || {
+            let runtime = runtime.upgrade().unwrap();
+            let inner = matches!(runtime.inner.try_lock(), Err(WouldBlock));
+            let registry = matches!(runtime.eventarc_registry.try_lock(), Err(WouldBlock));
+            record.lock().unwrap().push((inner, registry));
+        })));
+        seen
+    }
+
+    #[tokio::test]
+    async fn firestore_admission_encodes_document_data_outside_the_runtime_lock() {
+        use fireemu_core_firestore::value::Value as FsValue;
+
+        let runtime = runtime().await;
+        runtime.runner().kill_now();
+        let mut commit = created_commit();
+        let mut change = commit.changes[0].clone();
+        let after = Arc::make_mut(change.after.as_mut().unwrap());
+        after
+            .fields
+            .insert("blob".to_owned(), FsValue::String("x".repeat(256 * 1024)));
+        let mut before = after.clone();
+        before
+            .fields
+            .insert("blob".to_owned(), FsValue::String("y".repeat(1024)));
+        change.before = Some(Arc::new(before));
+        commit.changes = Arc::from([change]);
+        let held = locks_held_while_encoding(&runtime);
+        let reservation = runtime.reserve_commit_events(&commit);
+        crate::events::PAYLOAD_ENCODING_PROBE.set(None);
+        let reservation = reservation.unwrap();
+        let deliveries = reservation.deliveries.as_deref().unwrap();
+        assert!(!deliveries.is_empty());
+        for delivery in deliveries {
+            assert!(delivery.payload.raw_data.as_deref().unwrap().len() > 256 * 1024);
+        }
+        // One encoding for the one change, with the runtime lock free.
+        assert_eq!(*held.lock().unwrap(), [(false, false)]);
+    }
+
+    #[tokio::test]
+    async fn eventarc_admission_encodes_payloads_outside_both_locks() {
+        const CHANNEL: &str = "projects/demo-app/locations/us-central1/channels/custom";
+        let runtime = runtime().await;
+        runtime.runner().kill_now();
+        let event = crate::eventarc::PublishedEvent {
+            event_type: "com.example.done".to_owned(),
+            attributes: [("region".to_owned(), "eu".to_owned())].into(),
+            event: json!({
+                "specversion": "1.0",
+                "id": "e-1",
+                "source": "demo",
+                "type": "com.example.done",
+                "data": {"blob": "x".repeat(64 * 1024)},
+            }),
+            raw_data: Some(r#"{"z":1,"blob":"y","a":2}"#.to_owned()),
+        };
+        let held = locks_held_while_encoding(&runtime);
+        let delivered =
+            runtime.publish_registered_custom_events(CHANNEL, &[event.clone(), event.clone()]);
+        crate::events::PAYLOAD_ENCODING_PROBE.set(None);
+        assert_eq!(delivered, Ok(2));
+        // One encoding per published event, with neither lock held.
+        assert_eq!(*held.lock().unwrap(), [(false, false); 2]);
+        // The admitted deliveries carry the published payload and raw data, charged exactly
+        // what `enqueue` charges for them.
+        let inner = runtime.inner.lock().unwrap();
+        assert_eq!(inner.payloads.len(), 2);
+        let mut charged = 0;
+        for payload in inner.payloads.values() {
+            assert_eq!(*payload.payload, event.event);
+            assert_eq!(payload.raw_data.as_deref(), event.raw_data.as_deref());
+            let expected = FunctionsRuntime::retained_event_bytes(
+                &payload.function,
+                &event.event_type,
+                CHANNEL,
+                &event.event,
+            )
+            .unwrap()
+                + event.raw_data.as_deref().unwrap().len();
+            assert_eq!(payload.retained_bytes, expected);
+            charged += expected;
+        }
+        assert_eq!(inner.active_eventarc_bytes, charged);
+        assert_eq!(inner.active_event_bytes, charged);
+        assert_eq!(inner.active_eventarc_records, 2);
     }
 
     #[tokio::test]

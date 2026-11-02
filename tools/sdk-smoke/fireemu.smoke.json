@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "profile": "strict",
   "firestore": { "edition": "standard", "apiMode": "native" },
-  "daemon": { "clockStart": "2026-08-29T12:01:00Z", "clock": "frozen" },
+  "daemon": { "clockStart": "2026-08-29T12:01:00Z" },
   "appCheck": {
     "enabled": true,
     "tokenSigning": "instance-rsa",

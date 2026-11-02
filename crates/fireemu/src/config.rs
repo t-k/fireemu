@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClockMode {
     /// The clock runs with real time from its start; `clock:advance` and the like add an
-    /// offset on top. The default.
+    /// offset on top. The default unless `daemon.clockStart` pins the start.
     Realtime,
     /// The clock stands still until it is moved, for tests that need exact times.
     Frozen,
@@ -1084,8 +1084,8 @@ pub struct RuntimeConfig {
     /// expiry against real time (the Admin SDK's `verifyIdToken`); a pinned start keeps
     /// runs reproducible.
     pub clock_start_pinned: bool,
-    /// `daemon.clock`, when set. The virtual clock follows real time unless `frozen` (see
-    /// [`Self::clock_frozen`]).
+    /// `daemon.clock`, when set. Unset, the virtual clock follows real time unless
+    /// `daemon.clockStart` pins it (see [`Self::clock_frozen`]).
     pub clock_mode: Option<ClockMode>,
     /// Deterministic seed.
     pub seed: u64,
@@ -5003,13 +5003,13 @@ impl RuntimeConfig {
     }
 
     /// Whether the virtual clock stands still until moved. Unless `daemon.clock` says so, it
-    /// follows real time, except that a virtual `functions.clock` needs a clock that only
-    /// moves when told to.
+    /// follows real time from the start time of the daemon, and a pinned `daemon.clockStart`
+    /// (a reproducible run, which a virtual `functions.clock` also needs) keeps it still.
     #[must_use]
     pub fn clock_frozen(&self) -> bool {
         match self.clock_mode {
             Some(mode) => mode == ClockMode::Frozen,
-            None => self.functions_clock.any_virtual(),
+            None => self.clock_start_pinned,
         }
     }
 
@@ -6941,7 +6941,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_clock_defaults_to_real_time_and_frozen_is_chosen_or_implied() {
+    fn daemon_clock_defaults_to_real_time_and_a_pinned_start_keeps_it_still() {
         let build = |body: Value| {
             let mut full = json!({"schemaVersion": 1});
             full.as_object_mut()
@@ -6950,24 +6950,17 @@ mod tests {
             RuntimeConfig::inspect_json(&full)
         };
         assert!(!build(json!({})).unwrap().clock_frozen());
-        assert!(
-            !build(json!({"daemon": {"clockStart": "2026-01-01T00:00:00Z"}}))
-                .unwrap()
-                .clock_frozen()
-        );
-        assert!(build(json!({"daemon": {"clock": "frozen"}}))
-            .unwrap()
-            .clock_frozen());
-        assert!(!build(json!({"daemon": {"clock": "realtime"}}))
-            .unwrap()
-            .clock_frozen());
-        // A virtual functions clock needs one that only moves when told to, unless the
-        // configuration says otherwise.
-        let virtual_date = json!({"functions": {"clock": {"date": "virtual"}}});
-        assert!(build(virtual_date.clone()).unwrap().clock_frozen());
-        let mut explicit = virtual_date;
-        explicit["daemon"] = json!({"clock": "realtime"});
-        assert!(!build(explicit).unwrap().clock_frozen());
+        // A pinned start is a reproducible run: the clock stands still unless it is told to
+        // follow real time.
+        let pinned = json!({"clockStart": "2026-01-01T00:00:00Z"});
+        assert!(build(json!({"daemon": pinned})).unwrap().clock_frozen());
+        let with = |clock: &str, start: bool| {
+            let mut daemon = if start { pinned.clone() } else { json!({}) };
+            daemon["clock"] = json!(clock);
+            build(json!({"daemon": daemon})).unwrap().clock_frozen()
+        };
+        assert!(with("frozen", false) && with("frozen", true));
+        assert!(!with("realtime", false) && !with("realtime", true));
         for bad in [json!("virtual"), json!(true), json!(null), json!("Frozen")] {
             let error = build(json!({"daemon": {"clock": bad}})).unwrap_err();
             assert!(error.0.contains("daemon.clock"), "{bad}: {error:?}");

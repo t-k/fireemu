@@ -37,7 +37,7 @@ The runtime validates service codebase suffixes (`[A-Za-z0-9_-]+`), URL and toke
 }
 ```
 
-Each mode accepts `real` or `virtual`. A virtual mode requires an explicit pinned `daemon.clockStart`. A test world keeps its clock still (`daemon.clock` is `frozen`) unless `config.daemon.clock` says `realtime`, so a world is reproducible; the daemon default outside worlds follows real time. Virtual timers require virtual Date. The bundled Node runner installs the policy before importing user code. Custom runners must advertise the clock protocol capability; startup refuses a virtual Date policy when the runner cannot acknowledge it.
+Each mode accepts `real` or `virtual`. A virtual mode requires an explicit pinned `daemon.clockStart`. A world pins `daemon.clockStart`, so its clock stands still until it is moved; a daemon without a pinned start follows real time. Virtual timers require virtual Date. The bundled Node runner installs the policy before importing user code. Custom runners must advertise the clock protocol capability; startup refuses a virtual Date policy when the runner cannot acknowledge it.
 
 Clock control commands acknowledge the current Functions runner generations before returning success. Date reads after that acknowledgement use the destination instant, including after an `await`, a reload or runner recovery. `new Date(value)`, `Date.parse`, `Date.UTC`, prototypes and subclasses keep their JavaScript meaning. Nanoseconds are converted to whole epoch milliseconds by flooring, including before the Unix epoch. Moves outside JavaScript's Date range are refused without publishing new clock state, including fault delays and fixture ticks.
 

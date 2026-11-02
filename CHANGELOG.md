@@ -10,7 +10,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- The daemon's virtual clock now follows real time by default, from `daemon.clockStart` or from the start time. `clock:advance`, `clock:advanceTo` and `clock:set` add an offset on top. Realtime Database `ServerValue.TIMESTAMP`, Firestore and Storage times, token expiry, Rules `request.time` and schedules all read this clock, so they move as they do in production. Set `daemon.clock` to `"frozen"` for the previous behavior, a clock that stands still until it is moved. A virtual `functions.clock` keeps a frozen clock as its default, and `fireemu/testing` worlds are frozen unless `config.daemon.clock` says otherwise.
+- The daemon's virtual clock now follows real time from the daemon's start time by default. `clock:advance`, `clock:advanceTo` and `clock:set` add an offset on top. Realtime Database `ServerValue.TIMESTAMP`, Firestore and Storage times, token expiry, Rules `request.time` and schedules all read this clock, so they move as they do in production. A pinned `daemon.clockStart` still gives a clock that stands still until it is moved, so reproducible runs and `fireemu/testing` worlds are unchanged; `daemon.clock` (`"realtime"` or `"frozen"`) chooses either way explicitly.
 
 ## [0.41.0] - 2026-10-31
 

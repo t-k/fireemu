@@ -1315,11 +1315,11 @@ fn the_default_clock_follows_real_time() {
 }
 
 #[test]
-fn a_pinned_start_runs_on_from_its_instant_and_frozen_stands_still() {
+fn a_pinned_start_stands_still_unless_the_clock_follows_real_time() {
     const START_MILLIS: i64 = 1_767_225_600_000; // 2026-01-01T00:00:00Z
     let dir = Scratch::new("database", "clock-modes");
     for (clock, frozen) in [
-        (None, false),
+        (None, true),
         (Some("frozen"), true),
         (Some("realtime"), false),
     ] {

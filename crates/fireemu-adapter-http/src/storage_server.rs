@@ -256,6 +256,9 @@ const FORWARDED_HEADERS: &[&str] = &[
     // on one header an unusual browser may omit (see `loopback::BROWSER_METADATA_HEADERS`).
     "referer",
     "cookie",
+    // The Google client libraries' marker: the anonymous XML read of the Go library is admitted
+    // on it (`storage::has_client_library_marker`).
+    "x-goog-api-client",
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.

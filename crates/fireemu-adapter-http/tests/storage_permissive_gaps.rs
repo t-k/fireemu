@@ -1552,6 +1552,49 @@ fn a_google_client_library_read_without_credentials_is_admitted_and_a_plain_fetc
     assert_eq!(blank.status, 403, "an empty header proves nothing");
 }
 
+/// One HTTP/1.1 request over a real socket to the storage server, and the whole response text.
+async fn raw_get(addr: std::net::SocketAddr, path: &str, extra_headers: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Connection: close\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// The marker test above builds the request by hand, so it cannot see whether the server hands the
+/// header to the handler at all. The Go Admin SDK smoke found it did not: the anonymous object
+/// download of the Go library failed `xml_read_admission` in the daemon.
+#[tokio::test]
+async fn the_served_xml_read_sees_the_client_library_marker_header() {
+    static BUDGET: fireemu_adapter_http::storage_server::BodyBudget =
+        fireemu_adapter_http::storage_server::BodyBudget::new(1_572_864);
+    let s = Arc::new(strict());
+    upload_as_owner(&s, "a.txt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(
+        fireemu_adapter_http::storage_server::serve_storage_with_budget(listener, s, &BUDGET),
+    );
+    let path = format!("/{DEFAULT_BUCKET}/a.txt");
+    let library = raw_get(
+        addr,
+        &path,
+        "x-goog-api-client: gl-go/1.22 gccl/1.50.0 gccl-invocation-id/x\r\n",
+    )
+    .await;
+    assert!(library.starts_with("HTTP/1.1 200"), "{library}");
+    assert!(library.ends_with("hello"), "{library}");
+    // Near misses over the same socket path: no header, and an empty one, stay refused.
+    let plain = raw_get(addr, &path, "").await;
+    assert!(plain.starts_with("HTTP/1.1 403"), "{plain}");
+    let blank = raw_get(addr, &path, "x-goog-api-client: \r\n").await;
+    assert!(blank.starts_with("HTTP/1.1 403"), "{blank}");
+    server.abort();
+}
+
 #[test]
 fn only_a_non_empty_bearer_counts_as_a_credential_on_the_public_url() {
     let s = strict();

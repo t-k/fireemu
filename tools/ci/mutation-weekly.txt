@@ -6,6 +6,8 @@
 # the rotation is fixed by the file. The weekly run has 16 shards of at most 360 minutes: a package too
 # large for that is split here by file, and the last line of a split package excludes the files of
 # its other lines, so a new file of the package is still mutated by that last line.
+# The runners are Linux: a file compiled for macOS only (cfg(target_os = "macos")) cannot be killed there, so it
+# is excluded, and a package that is macOS only (fireemu-fd-acl) is not listed.
 # Regenerate the counts with `cargo mutants --list -p <package> --file <glob>`.
 fireemu crates/fireemu/src/functions.rs crates/fireemu/src/import_export.rs crates/fireemu/src/session_rsa_cache.rs crates/fireemu/src/ui.rs  # 1600
 fireemu crates/fireemu/src/config.rs crates/fireemu/src/daemon.rs crates/fireemu/src/hub.rs crates/fireemu/src/main.rs crates/fireemu/src/readiness.rs  # 1586
@@ -43,5 +45,4 @@ fireemu-core-rules !crates/fireemu-core-rules/src/civil.rs !crates/fireemu-core-
 fireemu-core-session  # 248
 fireemu-core-storage  # 631
 fireemu-core-types  # 958
-fireemu-export-publication  # 307
-fireemu-fd-acl  # 20
+fireemu-export-publication !crates/fireemu-export-publication/src/acl.rs !crates/fireemu-export-publication/src/volume.rs  # 275

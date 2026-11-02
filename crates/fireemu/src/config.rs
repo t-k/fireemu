@@ -2463,11 +2463,22 @@ pub struct FirebaseJsonReport {
     pub notices: Vec<String>,
 }
 
-/// The `firebase.json` keys that name a Firestore database entry.
-const FIRESTORE_ENTRY_KEYS: [&str; 4] = ["database", "rules", "indexes", "index"];
+/// The `firebase.json` keys that name a Firestore database entry. The deploy hooks
+/// (`predeploy`, `postdeploy`) belong to `firebase deploy`; firebase-tools 15.28.2 accepts them
+/// here, so they are accepted and ignored, as for Functions.
+const FIRESTORE_ENTRY_KEYS: [&str; 6] = [
+    "database",
+    "rules",
+    "indexes",
+    "index",
+    "predeploy",
+    "postdeploy",
+];
 
-/// The official keys of one Cloud Storage configuration entry.
-const STORAGE_ENTRY_KEYS: [&str; 2] = ["target", "rules"];
+/// The official keys of one Cloud Storage configuration entry. The deploy hooks (`predeploy`,
+/// `postdeploy`) belong to `firebase deploy`; firebase-tools 15.28.2 accepts them here, so they
+/// are accepted and ignored, as for Functions.
+const STORAGE_ENTRY_KEYS: [&str; 4] = ["target", "rules", "predeploy", "postdeploy"];
 
 /// The official keys of one Realtime Database configuration entry: `rules` for every
 /// instance, or `instance` / `target` naming the instance an entry of the array form serves.
@@ -8712,6 +8723,59 @@ mod tests {
             cfg.functions_source.as_deref(),
             Some(under_proj("fb-functions").as_str())
         );
+    }
+
+    /// firebase-tools 15.28.2 accepts the deploy hooks in every product section; they belong to
+    /// `firebase deploy`, so the loader accepts and ignores them wherever they appear.
+    #[test]
+    fn deploy_hooks_are_accepted_in_every_product_section() {
+        let base = std::path::Path::new("/proj");
+        for ok in [
+            json!({"firestore": {"rules": "firestore.rules", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"firestore": [
+                {"database": "(default)", "rules": "a.rules", "predeploy": "echo a"},
+                {"database": "other", "rules": "b.rules", "postdeploy": ["x", "y"]}
+            ]}),
+            json!({"storage": {"rules": "storage.rules", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"storage": [
+                {"target": "main", "rules": "a.rules", "predeploy": "echo a", "postdeploy": ["x"]}
+            ]}),
+            json!({"database": {"rules": "database.rules.json", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+            json!({"functions": {"source": "functions", "predeploy": ["echo a"], "postdeploy": "echo b"}}),
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            let result = cfg.apply_firebase_json(&ok, base, &Selection::default());
+            assert!(result.is_ok(), "{ok}: {result:?}");
+        }
+    }
+
+    /// Accepting the deploy hooks does not weaken the allow-lists: any other key is refused.
+    #[test]
+    fn unknown_keys_beside_deploy_hooks_are_still_refused() {
+        let base = std::path::Path::new("/proj");
+        for (bad, message) in [
+            (
+                json!({"firestore": {"rules": "r", "predeploy": "echo", "bogus": 1}}),
+                "unknown key firestore.bogus",
+            ),
+            (
+                json!({"firestore": [{"rules": "r", "postdeploy": "echo", "bogus": 1}]}),
+                "unknown key firestore[0].bogus",
+            ),
+            (
+                json!({"storage": {"rules": "r", "predeploy": "echo", "bogus": 1}}),
+                "unknown key storage.bogus",
+            ),
+            (
+                json!({"storage": [{"target": "t", "rules": "r", "postdeploy": "echo", "bogus": 1}]}),
+                "unknown key storage[0].bogus",
+            ),
+        ] {
+            let error = RuntimeConfig::default()
+                .apply_firebase_json(&bad, base, &Selection::default())
+                .expect_err(&bad.to_string());
+            assert!(error.0.contains(message), "{bad}: {}", error.0);
+        }
     }
 
     #[test]

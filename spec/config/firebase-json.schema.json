@@ -72,7 +72,9 @@
         "database": { "type": "string", "minLength": 1 },
         "rules": { "type": "string", "minLength": 1 },
         "indexes": { "type": "string", "minLength": 1 },
-        "index": { "type": "string", "minLength": 1 }
+        "index": { "type": "string", "minLength": 1 },
+        "predeploy": {},
+        "postdeploy": {}
       }
     },
     "storageGlobalEntry": {
@@ -80,7 +82,9 @@
       "additionalProperties": false,
       "required": ["rules"],
       "properties": {
-        "rules": { "type": "string", "minLength": 1 }
+        "rules": { "type": "string", "minLength": 1 },
+        "predeploy": {},
+        "postdeploy": {}
       }
     },
     "storageTargetEntry": {
@@ -89,7 +93,9 @@
       "required": ["target", "rules"],
       "properties": {
         "target": { "type": "string", "minLength": 1 },
-        "rules": { "type": "string", "minLength": 1 }
+        "rules": { "type": "string", "minLength": 1 },
+        "predeploy": {},
+        "postdeploy": {}
       }
     },
     "databaseEntry": {

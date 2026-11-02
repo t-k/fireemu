@@ -30,3 +30,8 @@ Fireemu validates the file at startup, including rules the schema cannot express
 | `appCheck` | Apps, debug tokens and enforcement | [App Check](../../products/app-check/) |
 | `daemon` | Ports, project, start time | [Time and scheduled functions](../../guides/time/) |
 | `network` | Listening off loopback | [CI and containers](../../guides/ci-and-containers/) |
+| `bind` | Accepted, currently no effect: the daemon binds the loopback address, and `emulators.<name>.host` in `firebase.json` sets a host per service | [CI and containers](../../guides/ci-and-containers/) |
+| `projects` | Whether only `demo-` project IDs are accepted (`requireDemoPrefix`), and whether a request naming another project is served or refused (`unknownProjects`) | [Profiles and productionExact](../../guides/profiles/) |
+| `limits` | Reserved for limit catalogs, warnings, quota accounting and plan overrides. No member changes behavior yet: each is accepted with no effect, or accepts only its empty or default value and refuses any other. Firestore's limits are switched by `firestore.enforceLimits` | |
+| `events` | Delivery of function trigger events: `maxAttempts` for functions declared with `retry` (default 4); `delivery` accepts only `exactly-once-test` | [Profiles and productionExact](../../guides/profiles/) |
+| `trace` | Accepted, currently no effect | |

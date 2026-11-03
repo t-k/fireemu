@@ -667,8 +667,19 @@ export async function readbackIam({ target, runId, deps, out, preflight }) {
  * The reviewed standalone removal, for a run whose removal was unknown or failed: reads the
  * signer's policy, removes the run's binding (from `iam-grant-plan.json`) on its etag, deletes the
  * role this run created, and reads both back. The same code and the same shape checks as the run.
+ * `roleCreate` is the outcome of the run's role create read from its journal (`roleCreateOutcome`):
+ * the role is deleted only for `created` and `unknown`; for `refused`, `none` or a missing value it
+ * is kept and reported, because it may not be the run's.
  */
-export async function removeSignerAccess({ target, runId, deps, out, preflight, plan }) {
+export async function removeSignerAccess({
+  target,
+  runId,
+  deps,
+  out,
+  preflight,
+  plan,
+  roleCreate,
+}) {
   const budget = new RequestBudget(12, 12);
   const { wire, unknownLabels } = createWire({
     target,
@@ -682,7 +693,8 @@ export async function removeSignerAccess({ target, runId, deps, out, preflight, 
     wire: (label, request, options) => wire(label, request, { admin: true, ...options }),
     events,
   };
-  const ctx = { grantAttempted: true, roleCreateAttempted: true, saPolicy: preflight.policy };
+  const roleIsOurs = roleCreate === "created" || roleCreate === "unknown";
+  const ctx = { grantAttempted: true, roleCreateAttempted: roleIsOurs, saPolicy: preflight.policy };
   let error = null;
   try {
     await iamRemove({ io, target, ctx, ours: plan.binding });
@@ -700,6 +712,8 @@ export async function removeSignerAccess({ target, runId, deps, out, preflight, 
     policyEqualsPreflight: finalPolicy ? finalPolicy.equalsPreflight : null,
     bindingPresent: finalPolicy ? finalPolicy.present : null,
     roleDeleted: finalRole ? finalRole.deleted : null,
+    roleCreate: roleCreate ?? null,
+    roleKept: !events.some((e) => e.resource === "role" && e.event === "delete"),
   };
   report.clean =
     !error &&

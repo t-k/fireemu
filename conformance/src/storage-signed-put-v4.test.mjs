@@ -6,6 +6,7 @@ import "./storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { roleCreateOutcome } from "./storage-signed-put/iam.mjs";
 import { observe, removeSignerAccess } from "./storage-signed-put/observe.mjs";
 import { ROLE_ID } from "./storage-signed-put/plan.mjs";
 import {
@@ -117,5 +118,98 @@ describe("the role is kept while the final policy references it", () => {
     assert.equal(roleDeletes(world).length, 1);
     assert.equal(report.iam.roleDeleted, true);
     assert.equal(report.closureReady, true);
+  });
+});
+
+const respond = (status, body = "{}") => ({ status, body: Buffer.from(body) });
+const isRoleCreate = (request) => request.method === "POST" && urlOf(request).endsWith("/roles");
+
+async function stuckRun(createFault) {
+  // A run whose removal answer was unknown, so the binding (and the role, if made) remain.
+  const world = createFakeWorld({ target: PRODUCTION_LIKE, clock: createVirtualClock() });
+  const net = world.deps.net;
+  const out = memoryOut();
+  const sets = () => world.log.filter((e) => urlOf(e).endsWith(":setIamPolicy")).length;
+  await observe({
+    target: PRODUCTION_LIKE,
+    runId: RUN,
+    deps: {
+      ...world.deps,
+      net: async (request) => {
+        if (isRoleCreate(request) && createFault) return createFault(request, net);
+        if (urlOf(request).endsWith(":setIamPolicy") && sets() === 1) return respond(503);
+        return net(request);
+      },
+    },
+    out,
+    iam: IAM_CONFIG,
+  });
+  return { world, out, net };
+}
+
+describe("the standalone removal deletes only a role this run made (Opus S1)", () => {
+  it("reads the role create outcome from the run's journal", async () => {
+    const outcome = async (fault) => roleCreateOutcome((await stuckRun(fault)).out.entries);
+    assert.equal(await outcome(undefined), "created");
+    assert.equal(await outcome(() => respond(409)), "refused");
+    assert.equal(await outcome(() => respond(403)), "refused");
+    assert.equal(await outcome((request, net) => net(request).then(() => respond(503))), "unknown");
+    assert.equal(await outcome(() => "transport"), "unknown");
+    assert.equal(roleCreateOutcome([]), "none");
+    assert.equal(roleCreateOutcome([{ phase: "before", label: "role-create" }]), "unknown");
+    assert.equal(roleCreateOutcome([{ phase: "before", label: "bucket" }]), "none");
+  });
+
+  for (const outcome of ["refused", "none"]) {
+    it(`keeps the role and says so when the run's role create was ${outcome}`, async () => {
+      const { world, out } = await stuckRun();
+      const report = await removeSignerAccess({
+        target: PRODUCTION_LIKE,
+        runId: RUN,
+        deps: world.deps,
+        out: memoryOut(),
+        preflight: out.saved.get("iam-preflight.json"),
+        plan: out.saved.get("iam-grant-plan.json"),
+        roleCreate: outcome,
+      });
+      assert.equal(roleDeletes(world).length, 0, "a role the run did not make is not deleted");
+      assert.equal(report.roleDeleted, null);
+      assert.equal(report.roleKept, true);
+      assert.equal(report.roleCreate, outcome);
+      assert.equal(report.bindingPresent, false, "the binding itself is still removed");
+    });
+  }
+
+  for (const outcome of ["created", "unknown"]) {
+    it(`deletes the role when the run's role create was ${outcome}`, async () => {
+      const { world, out } = await stuckRun();
+      const report = await removeSignerAccess({
+        target: PRODUCTION_LIKE,
+        runId: RUN,
+        deps: world.deps,
+        out: memoryOut(),
+        preflight: out.saved.get("iam-preflight.json"),
+        plan: out.saved.get("iam-grant-plan.json"),
+        roleCreate: outcome,
+      });
+      assert.equal(roleDeletes(world).length, 1);
+      assert.equal(report.roleDeleted, true);
+      assert.equal(report.roleKept, false);
+      assert.equal(report.clean, true);
+    });
+  }
+
+  it("fails closed when the outcome is not given", async () => {
+    const { world, out } = await stuckRun();
+    const report = await removeSignerAccess({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: world.deps,
+      out: memoryOut(),
+      preflight: out.saved.get("iam-preflight.json"),
+      plan: out.saved.get("iam-grant-plan.json"),
+    });
+    assert.equal(roleDeletes(world).length, 0);
+    assert.equal(report.roleKept, true);
   });
 });

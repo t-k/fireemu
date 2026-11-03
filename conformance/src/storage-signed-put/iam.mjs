@@ -403,6 +403,21 @@ export async function iamRemove({ io, target, ctx, ours }) {
 }
 
 /**
+ * What the run's journal says about its role create: `created` (answered 200), `refused` (a
+ * definitive non-200), `unknown` (sent, answer unknown or not recorded) or `none` (never sent).
+ * The standalone removal deletes the role only for `created` and `unknown`.
+ */
+export function roleCreateOutcome(entries) {
+  const mine = entries.filter((e) => e.label === "role-create");
+  if (!mine.some((e) => e.phase === "before")) return "none";
+  if (mine.some((e) => e.phase === "unknown")) return "unknown";
+  const after = mine.find((e) => e.phase === "after");
+  if (!after) return "unknown";
+  if (after.status === 200) return "created";
+  return isUnknownStatus(after.status) ? "unknown" : "refused";
+}
+
+/**
  * Settlement of the IAM changes, by the sandbox rules (presubmission checklist 3), as unresolved
  * items. A binding or role whose grant or create answer was unknown settles only through an own
  * positive read followed by its removal; a 404 or an absent binding never settles it. An unknown

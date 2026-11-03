@@ -82,6 +82,18 @@ node tools/sdk-smoke-database/rtdb-s5.mjs judge <journal.json>
 
 `production` needs a packet that pins `SOURCES` (the recorder, its page and judge, `rtdb-admin.mjs`, `rtdb-residual.mjs`, `adc-preflight.mjs` and `cv11-genuine-auth.mjs`). The recorder imports from `rtdb-residual.mjs` and changes none of the residual files. Recorded offline: the official emulator gives A. Production gave A in both rounds (RTDB-S5-20261027-01, 2026-10-27); fireemu gave B until the broken-node rule of `on_disconnect.rs` and gives A now, in both profiles. `rtdb-s5-fixture.mjs` builds the committed fixtures (`fixtures/production-rtdb-s5.json`, `fixtures/local-rtdb-s5.json`) and compares them (`summary`); the comparison is a match only when both sides gave the same settled answer.
 
+## SDK small observer (32 SDK observations)
+
+`sdk-observer/` holds the small RTDB SDK observer: two actors (writer and observer, `actor.mjs`) run a fixed case order (`sequence.mjs`) for four profiles (round 1 and 2, WebSocket in Node and long polling in headless Chromium through `page.mjs`), under the temporary Rules of `rules.mjs`. The eight cases are `key_range`, `value_equal`, `priority_range` (observer) and `push`, `update`, `multipath`, `server_timestamp`, `increment` (writer); `startup` (an empty prefix) and `seed` run first and are not observations. The SDK comes from this package's `node_modules`.
+
+```sh
+node tools/sdk-smoke-database/rtdb-sdk-small.mjs local --fireemu <fireemu binary> --out <new dir> [--profile strict|emulator]
+```
+
+`local` runs `fireemu exec --only database` with the observer in emulator mode as its command (own process group, ended on exit, timeout and signal), then writes the reduced journal (`journal.json`) and the comparison with `fixtures/production-sdk-small.json` (`comparison.json`). The fixture is the reduction (`rtdb-sdk-small-fixture.mjs`) of production run RTDB-SMALL-20261102-01 (2026-11-02, 32 of 32 observed, cleanup verified); it pins the SHA-256 of the case files above, which are the bytes that ran in production. `rtdb-sdk-small-judge.mjs` compares by the recorded structure: identical values for the queries, `update` and `multipath`; for `push` the format of the two SDK ids (20 characters of the push alphabet, ascending) and identical values; `server_timestamp` an integer inside each side's own before..after window; `increment` identical except `at`, which must be the same profile's server timestamp; per-role connection events identical (timings and the interleaving of the two roles are not compared). Anything else, a missing or extra row, a failed case or a journal fault fails closed. fireemu 0.41.0 gave 24 of 32 (a frozen server clock); the daemon clock now follows real time and the replay gives 32 of 32 in both profiles.
+
+The production entry is `sdk-observer/observer.mjs --target production`: it needs an approval line binding the script manifest (`--print-manifest`), a project lease and a `--production-config` file outside the repository, and it restores the prefix and the Rules (byte-equal) in `finally`.
+
 ## Production comparisons
 
 Three tools compare a local `fireemu` (strict profile, `fireemu up --only auth,database` on free loopback ports, stopped afterwards) with production recordings committed under `fixtures/`. None of them sends anything to production.

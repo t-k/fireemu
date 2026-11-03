@@ -1,0 +1,237 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import {
+  GuardError,
+  RequestBudget,
+  classifyRequest,
+  dropSignature,
+  isUnknownStatus,
+  redactSignedUrl,
+  tamperSignature,
+} from "./storage-signed-put/guard.mjs";
+import { LOCAL_LIKE, PRODUCTION_LIKE } from "./storage-signed-put/world.fake.mjs";
+
+const prefix = "storage-signed-put/sp-0123abcd/";
+const sig = "ab".repeat(256);
+const signed = (name, extra = "") =>
+  `https://storage.googleapis.com/${PRODUCTION_LIKE.bucket}/${prefix}${name}?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=s%40x%2F20261103%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261103T120000Z&X-Goog-Expires=300&X-Goog-SignedHeaders=host&X-Goog-Signature=${sig}${extra}`;
+const json = (suffix) =>
+  `https://storage.googleapis.com/storage/v1/b/${PRODUCTION_LIKE.bucket}${suffix}`;
+const kind = (request, target = PRODUCTION_LIKE) => classifyRequest(target, request, prefix);
+const refused = (request, target = PRODUCTION_LIKE) =>
+  assert.throws(() => kind(request, target), GuardError, `${request.method} ${request.url}`);
+
+function prng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+describe("signed PUT request guard", () => {
+  it("accepts exactly the forms the observer sends", () => {
+    assert.equal(kind({ method: "GET", url: json("") }), "bucket-get");
+    assert.equal(
+      kind({ method: "GET", url: json(`/o?prefix=${encodeURIComponent(prefix)}&maxResults=1000`) }),
+      "list",
+    );
+    assert.equal(
+      kind({ method: "GET", url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}`) }),
+      "object-get",
+    );
+    assert.equal(
+      kind({
+        method: "GET",
+        url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}?alt=media`),
+      }),
+      "object-get",
+    );
+    assert.equal(
+      kind({
+        method: "DELETE",
+        url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}?ifGenerationMatch=12`),
+      }),
+      "object-delete",
+    );
+    assert.equal(kind({ method: "PUT", url: signed("rec1/ok.png") }), "xml-put");
+    assert.equal(kind({ method: "OPTIONS", url: signed("rec1/ok.png") }), "xml-options");
+    assert.equal(
+      kind({
+        method: "GET",
+        url: `https://iam.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}/serviceAccounts/${PRODUCTION_LIKE.signer}`,
+      }),
+      "signer-get",
+    );
+    assert.equal(
+      kind({
+        method: "POST",
+        url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${PRODUCTION_LIKE.signer}:signBlob`,
+      }),
+      "sign-blob",
+    );
+  });
+
+  it("refuses other hosts, schemes, ports, users and redirect-style hosts", () => {
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace(
+        "https://storage.googleapis.com",
+        "http://storage.googleapis.com",
+      ),
+    });
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace("storage.googleapis.com", "storage.googleapis.com:8443"),
+    });
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace("storage.googleapis.com", "evil.example.com"),
+    });
+    refused({ method: "PUT", url: signed("rec1/ok.png").replace("https://", "https://user:pw@") });
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace(
+        "storage.googleapis.com",
+        "storage.googleapis.com.evil.example",
+      ),
+    });
+    refused({ method: "GET", url: "https://firestore.googleapis.com/v1/projects/p" });
+  });
+
+  it("refuses objects outside the run prefix, other buckets, dot segments and control characters", () => {
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace(prefix, "storage-signed-put/sp-ffffffff/"),
+    });
+    refused({ method: "PUT", url: signed("rec1/ok.png").replace(prefix, "other/") });
+    refused({
+      method: "PUT",
+      url: signed("rec1/ok.png").replace(PRODUCTION_LIKE.bucket, "other-bucket"),
+    });
+    refused({ method: "PUT", url: signed("rec1/../../x.png") });
+    refused({ method: "PUT", url: signed("rec1/a%00b.png") });
+    refused({ method: "GET", url: json(`/o/${encodeURIComponent("elsewhere/ok.png")}`) });
+    refused({ method: "GET", url: json(`/o?prefix=${encodeURIComponent("storage-signed-put/")}`) });
+    refused({ method: "GET", url: json("/o") });
+    refused({ method: "GET", url: "https://storage.googleapis.com/storage/v1/b/other-bucket" });
+  });
+
+  it("refuses wrong methods and extra query parameters", () => {
+    refused({ method: "DELETE", url: json("") });
+    refused({ method: "POST", url: json("") });
+    refused({ method: "POST", url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}`) });
+    refused({ method: "GET", url: signed("rec1/ok.png") });
+    refused({ method: "DELETE", url: signed("rec1/ok.png") });
+    refused({ method: "PUT", url: signed("rec1/ok.png", "&uploadType=media") });
+    refused({
+      method: "GET",
+      url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}?alt=json`),
+    });
+    refused({
+      method: "DELETE",
+      url: json(`/o/${encodeURIComponent(`${prefix}rec1/ok.png`)}?force=1`),
+    });
+    refused({
+      method: "POST",
+      url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/other@x.iam.gserviceaccount.com:signBlob`,
+    });
+  });
+
+  it("never lets a signed request carry an Authorization header, and needs the signing parameters", () => {
+    refused({ method: "PUT", url: signed("rec1/ok.png"), headers: { Authorization: "Bearer x" } });
+    refused({ method: "PUT", url: signed("rec1/ok.png").replace("X-Goog-Expires=300&", "") });
+    refused({
+      method: "PUT",
+      url: `https://storage.googleapis.com/${PRODUCTION_LIKE.bucket}/${prefix}rec1/ok.png`,
+    });
+  });
+
+  it("holds the local target to its own origin", () => {
+    const local = (path) => `${LOCAL_LIKE.origin}${path}`;
+    assert.equal(
+      kind({ method: "GET", url: local(`/storage/v1/b/${LOCAL_LIKE.bucket}`) }, LOCAL_LIKE),
+      "bucket-get",
+    );
+    refused(
+      { method: "GET", url: "http://127.0.0.1:9200/storage/v1/b/" + LOCAL_LIKE.bucket },
+      LOCAL_LIKE,
+    );
+    refused({ method: "GET", url: json("") }, LOCAL_LIKE);
+    refused(
+      { method: "GET", url: local(`/storage/v1/b/${LOCAL_LIKE.bucket}`) },
+      { ...LOCAL_LIKE, name: "elsewhere" },
+    );
+  });
+
+  it("property: random mutations of a good object URL never pass outside the prefix", () => {
+    const next = prng(0x51a9ed);
+    const alphabet = ["", "x", "..", "%2e%2e", "%00", "a/b", "/", " ", "%2F", "é"];
+    for (let i = 0; i < 400; i += 1) {
+      const part = alphabet[Math.floor(next() * alphabet.length)];
+      const name = `${part}${i}.png`;
+      const url = signed(name).replace(
+        prefix,
+        next() < 0.5 ? "storage-signed-put/sp-aaaaaaaa/" : "",
+      );
+      assert.throws(() => kind({ method: "PUT", url }), GuardError, url);
+    }
+  });
+
+  it("budgets requests with a main cap and a higher total cap for cleanup", () => {
+    const budget = new RequestBudget(2, 4);
+    budget.take();
+    budget.take();
+    assert.throws(() => budget.take(), GuardError);
+    budget.cleanup = true;
+    budget.take();
+    budget.take();
+    assert.throws(() => budget.take(), GuardError);
+    assert.equal(budget.count, 4);
+  });
+
+  it("property: a status is unknown exactly when below 200, 3xx or 5xx and above", () => {
+    for (let status = 0; status < 700; status += 1) {
+      const expected = status < 200 || (status >= 300 && status < 400) || status >= 500;
+      assert.equal(isUnknownStatus(status), expected, String(status));
+    }
+    assert.equal(isUnknownStatus(Number.NaN), true);
+    assert.equal(isUnknownStatus(undefined), true);
+    assert.equal(isUnknownStatus(409), false);
+    assert.equal(isUnknownStatus(412), false);
+  });
+
+  it("property: tampering flips one hex digit and keeps every other byte; dropping removes only the signature", () => {
+    const next = prng(0xbadc0de);
+    for (let i = 0; i < 200; i += 1) {
+      const hex = Array.from(
+        { length: 512 },
+        () => "0123456789abcdef"[Math.floor(next() * 16)],
+      ).join("");
+      const url = signed("rec1/ok.png").replace(sig, hex);
+      const tampered = tamperSignature(url);
+      assert.equal(tampered.length, url.length);
+      const diffs = [...url].flatMap((c, k) => (c === tampered[k] ? [] : [k]));
+      assert.deepEqual(diffs, [url.length - 1]);
+      assert.match(tampered, /X-Goog-Signature=[0-9a-f]{512}$/);
+      const dropped = dropSignature(url);
+      assert.ok(!dropped.includes("X-Goog-Signature"));
+      assert.equal(dropped, url.replace(`&X-Goog-Signature=${hex}`, ""));
+    }
+    assert.throws(() => tamperSignature(signed("a").replace(sig, "")), GuardError);
+    assert.throws(() => dropSignature("https://x/y?a=b"), GuardError);
+  });
+
+  it("redacts signatures and credentials from any stored text", () => {
+    const text = redactSignedUrl(signed("rec1/ok.png"));
+    assert.ok(!text.includes(sig));
+    assert.ok(!text.includes("s%40x"));
+    assert.match(text, /X-Goog-Signature=<redacted>/);
+    assert.match(text, /X-Goog-Credential=<redacted>/);
+    assert.ok(text.includes("X-Goog-Expires=300"));
+  });
+});

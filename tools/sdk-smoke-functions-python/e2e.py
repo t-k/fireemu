@@ -6,6 +6,8 @@ The environment is what `exec` gives a test command (`FIREEMU_FUNCTIONS_HOST`, `
 `FIREBASE_AUTH_EMULATOR_HOST`); `E2E_PROFILE` is `emulator` or `strict`. The standard library only.
 """
 
+import base64
+import http.client
 import json
 import os
 import sys
@@ -31,6 +33,26 @@ def call(method, url, body=None, headers=None):
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
+
+
+def b64(value):
+    return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+
+def call_with_two_authorizations(first, second):
+    """POST to the callable `add` with the `Authorization` header twice (urllib cannot send it twice)."""
+    connection = http.client.HTTPConnection(os.environ["FIREEMU_FUNCTIONS_HOST"], timeout=30)
+    body = json.dumps({"data": {"a": 1, "b": 1}}).encode()
+    connection.putrequest("POST", f"/{PROJECT}/us-central1/add")
+    connection.putheader("Content-Type", "application/json")
+    connection.putheader("Content-Length", str(len(body)))
+    connection.putheader("Authorization", first)
+    connection.putheader("Authorization", second)
+    connection.endheaders(body)
+    response = connection.getresponse()
+    result = (response.status, response.read())
+    connection.close()
+    return result
 
 
 def seen():
@@ -83,9 +105,21 @@ def main():
     status, body = call("POST", f"{FUNCTIONS}/add", {"data": {"a": 2, "b": 3}}, {"Authorization": f"Bearer {user['idToken']}"})
     assert (status, json.loads(body)) == (200, {"result": {"sum": 5, "uid": user["localId"]}}), (status, body)
     if PROFILE == "strict":
-        # The strict ingress verifies the Bearer before the SDK sees it.
-        status, body = call("POST", f"{FUNCTIONS}/add", {"data": {"a": 1, "b": 1}}, {"Authorization": "Bearer not-a-token"})
-        assert status == 401, (status, body)
+        # The strict ingress verifies the Bearer before the SDK sees it. The SDK itself, under the Auth emulator,
+        # accepts any structurally valid ID token, so each of these would reach the handler as a forged identity.
+        header, payload, _ = user["idToken"].split(".")
+        forged_header = b64({"alg": "RS256", "typ": "JWT", "kid": "forged"})
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        claims.update(user_id="forged-admin", sub="forged-admin")
+        unsigned_forged = b64({"alg": "none", "typ": "JWT"}) + "." + b64(claims) + "."
+        bad_signature = forged_header + "." + payload + "." + base64.urlsafe_b64encode(b"\x07" * 256).decode().rstrip("=")
+        for label, token in (("a token of a user that does not exist", unsigned_forged), ("a real user's claims under a forged signature", bad_signature)):
+            status, body = call("POST", f"{FUNCTIONS}/add", {"data": {"a": 1, "b": 1}}, {"Authorization": f"Bearer {token}"})
+            assert status == 401 and b"result" not in body, (label, status, body)
+        # Two Authorization headers: a server that merges them gives the SDK `Bearer <forged>, AAAA`.
+        for first, second in ((f"Bearer {unsigned_forged}", "AAAA"), (f"Bearer {user['idToken']}", "AAAA"), ("AAAA", f"Bearer {unsigned_forged}")):
+            status, body = call_with_two_authorizations(first, second)
+            assert status == 401 and b"result" not in body, ("two Authorization headers", status, body)
     print(json.dumps({"ok": True, "profile": PROFILE}))
 
 

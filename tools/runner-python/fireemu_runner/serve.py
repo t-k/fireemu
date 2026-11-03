@@ -43,7 +43,11 @@ class RunnerRouter:
         self._routes = {}
         for spec in manifest["functions"]:
             if spec["trigger"]["type"] == "http":
-                self._routes[spec["name"]] = (spec.get("region", DEFAULT_REGION), functions[spec["entryPoint"]])
+                self._routes[spec["name"]] = (
+                    spec.get("region", DEFAULT_REGION),
+                    functions[spec["entryPoint"]],
+                    spec["entryPoint"],
+                )
 
     @staticmethod
     def _plain(start_response, status: str, text: str):
@@ -66,6 +70,11 @@ class RunnerRouter:
         environ["SCRIPT_NAME"] = environ.get("SCRIPT_NAME", "") + "/".join(parts[:4])
         environ["PATH_INFO"] = "/" + "/".join(parts[4:])
         environ["fireemu.function"] = route[1]
+        # The variables a production instance has from its start name the function it serves. One process
+        # serves the whole codebase here, so they name the call that started most recently, as for events.
+        os.environ["FUNCTION_TARGET"] = route[2]
+        os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
+        os.environ["K_SERVICE"] = name
         return self._app(environ, start_response)
 
 

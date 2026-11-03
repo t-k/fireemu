@@ -51,6 +51,8 @@ def hello(request):
         body=request.get_data(as_text=True),
         secret_header=request.headers.get("x-fireemu-runner-secret"),
         k_service=os.environ.get("K_SERVICE"),
+        function_target=os.environ.get("FUNCTION_TARGET"),
+        function_signature_type=os.environ.get("FUNCTION_SIGNATURE_TYPE"),
     )
 
 

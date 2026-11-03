@@ -1,6 +1,7 @@
 """The router in front of the Flask app, driven in process with Werkzeug's test client."""
 
 import json
+import os
 
 import pytest
 from werkzeug.test import Client
@@ -289,3 +290,38 @@ def test_the_server_writes_nothing_to_stderr_for_a_request(discovered, monkeypat
     finally:
         server.shutdown()
     assert capfd.readouterr().err == ""
+
+
+def test_http_dispatch_sets_the_function_identity_variables_as_the_event_path_does(client, monkeypatch):
+    for key in ("FUNCTION_TARGET", "FUNCTION_SIGNATURE_TYPE", "K_SERVICE"):
+        monkeypatch.setenv(key, "left-by-an-earlier-event")
+    seen = json.loads(get(client, "/demo-proj/us-central1/hello").get_data())
+    assert (seen["function_target"], seen["function_signature_type"], seen["k_service"]) == ("hello", "http", "hello")
+
+
+def test_a_renamed_function_reports_its_entry_point_as_the_target_and_its_name_as_the_service(discovered, monkeypatch):
+    manifest = {"functions": [{"name": "renamed", "entryPoint": "hello", "generation": 2, "trigger": {"type": "http", "callable": False}}]}
+    client = Client(RunnerRouter(discovered, manifest, "demo-proj", SECRET))
+    monkeypatch.delenv("FUNCTION_TARGET", raising=False)
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    seen = json.loads(get(client, "/demo-proj/us-central1/renamed").get_data())
+    assert (seen["function_target"], seen["k_service"]) == ("hello", "renamed")
+
+
+def test_a_sequential_event_then_http_call_sees_each_ones_own_identity(discovered, monkeypatch):
+    from fireemu_runner.dispatch import Dispatcher
+    from test_dispatch import Collected, event
+
+    manifest = build_manifest(discovered)
+    router = RunnerRouter(discovered, manifest, "demo-proj", SECRET)
+    client = Client(router)
+    writer = Collected()
+    dispatcher = Dispatcher(discovered, manifest, writer)
+    for key in ("FUNCTION_TARGET", "FUNCTION_SIGNATURE_TYPE", "K_SERVICE"):
+        monkeypatch.delenv(key, raising=False)
+    assert dispatcher.reserve()
+    dispatcher.start({"type": "invoke", "invocationId": "e1", "function": "fs_created", "trigger": "firestore", "event": event()})
+    writer.result("e1")
+    assert os.environ["FUNCTION_SIGNATURE_TYPE"] == "cloudevent"
+    seen = json.loads(get(client, "/demo-proj/us-central1/hello").get_data())
+    assert (seen["function_target"], seen["function_signature_type"], seen["k_service"]) == ("hello", "http", "hello")

@@ -65,8 +65,9 @@ module ActionsSecurityContract
       end
     end
     if name == "ci.yml"
-      # The Python and Go Admin SDK jobs run third-party SDK code under `fireemu exec`, like sdk-latest.
-      %w[sdk-smoke-python sdk-smoke-go].each do |smoke|
+      # The Python and Go Admin SDK jobs and the Python Functions job run third-party SDK code under
+      # `fireemu exec`, like sdk-latest.
+      %w[sdk-smoke-python sdk-smoke-go functions-python].each do |smoke|
         job = jobs.fetch(smoke)
         effective = job.fetch("cache-mode", workflow["cache-mode"])
         errors << "#{smoke} must have effective read-only cache access" unless %w[read none].include?(effective)

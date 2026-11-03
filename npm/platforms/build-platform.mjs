@@ -12,7 +12,7 @@
 //
 // Layout, and why: the daemon locates its Node runner at `<directory of the executable>/
 // runner-node/index.mjs`, so the runner sources are copied to `bin/runner-node/` next to
-// `bin/fireemu`. Nothing else has to be resolved at run time -- the Emulator UI is compiled
+// `bin/fireemu`; the Python runner is found the same way at `runner-python/runner.py`. Nothing else has to be resolved at run time -- the Emulator UI is compiled
 // into the binary itself.
 
 import {
@@ -30,6 +30,18 @@ import { fileURLToPath } from "node:url";
 import { DEV_VERSION, packageName, platformByName } from "./platforms.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The Python runner sources every platform package ships, as paths below `tools/runner-python/`. */
+export const PYTHON_RUNNER_FILES = [
+  "runner.py",
+  "fireemu_runner/__init__.py",
+  "fireemu_runner/dispatch.py",
+  "fireemu_runner/events.py",
+  "fireemu_runner/framing.py",
+  "fireemu_runner/main.py",
+  "fireemu_runner/manifest.py",
+  "fireemu_runner/serve.py",
+];
 
 /** The runner sources every platform package ships. */
 export const RUNNER_FILES = [
@@ -107,7 +119,8 @@ npm install -D fireemu
 \`\`\`
 
 It contains the daemon (\`bin/fireemu${platform.exe}\`, with the Emulator UI compiled in) and the
-Node runner that hosts a Functions codebase (\`bin/runner-node/\`). Nothing is downloaded at
+Node runner that hosts a Functions codebase (\`bin/runner-node/\`) and the Python runner for
+Python codebases (\`bin/runner-python/\`). Nothing is downloaded at
 install time and there is no install script.
 `;
 }
@@ -134,6 +147,12 @@ export function buildPlatformPackage({ platformName, binaryPath, outDir, version
   mkdirSync(runnerOut, { recursive: true });
   for (const file of RUNNER_FILES) {
     copyFileSync(join(repoRoot, "tools", "runner-node", file), join(runnerOut, file));
+  }
+
+  // The Python runner sits beside it, `bin/runner-python/runner.py`, the layout the daemon looks for.
+  for (const file of PYTHON_RUNNER_FILES) {
+    mkdirSync(dirname(join(out, "bin", "runner-python", file)), { recursive: true });
+    copyFileSync(join(repoRoot, "tools", "runner-python", file), join(out, "bin", "runner-python", file));
   }
 
   writeFileSync(

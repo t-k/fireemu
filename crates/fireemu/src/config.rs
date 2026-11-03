@@ -2435,7 +2435,7 @@ pub struct FunctionsCodebase {
     pub codebase: String,
     /// `source`, resolved against the `firebase.json` directory.
     pub source: String,
-    /// `runtime` (`nodejs20`, ...), recorded and reported; the bundled runner is Node.
+    /// `runtime` (`nodejs20`, `python312`, ...); it selects the loader (Node, or Python in a `venv`).
     pub runtime: Option<String>,
     /// `ignore` globs, recorded; the runner loads the codebase itself.
     pub ignore: Vec<String>,
@@ -3827,33 +3827,65 @@ fn check_codebase_name(codebase: &str, path: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Refuses a codebase whose declared `runtime` is not one the bundled runner can execute.
-///
-/// The official emulator has three loader paths -- Node, Python (`functions-framework` in a
-/// virtual environment) and an experimental Dart one -- and picks by this field. fireemu ships
-/// the Node runner and nothing else, so a Python or Dart codebase is refused by name rather
-/// than handed to `node`, which would fail later with a syntax error from a file the project
-/// never meant Node to read.
-fn check_codebase_runtime(c: &FunctionsCodebase) -> Result<(), ConfigError> {
-    let Some(runtime) = &c.runtime else {
-        return Ok(());
-    };
+/// Python runtimes firebase-tools 15.28.2 knows (`supported/types.ts:98-127`), all of them GA.
+pub const PYTHON_RUNTIMES: [&str; 5] = [
+    "python310",
+    "python311",
+    "python312",
+    "python313",
+    "python314",
+];
+
+/// The loader a codebase's declared `runtime` selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeLanguage {
+    /// The bundled Node runner (`nodejs<major>`).
+    Node,
+    /// The bundled Python runner, run by the interpreter of the codebase's `venv`.
+    Python,
+}
+
+/// The language a declared `runtime` names, or `None` for a runtime fireemu cannot execute.
+#[must_use]
+pub fn runtime_language(runtime: &str) -> Option<RuntimeLanguage> {
     if runtime
         .strip_prefix("nodejs")
         .is_some_and(|major| !major.is_empty() && major.bytes().all(|byte| byte.is_ascii_digit()))
     {
+        Some(RuntimeLanguage::Node)
+    } else if PYTHON_RUNTIMES.contains(&runtime) {
+        Some(RuntimeLanguage::Python)
+    } else {
+        None
+    }
+}
+
+/// Refuses a codebase whose declared `runtime` is not one fireemu has a loader for.
+///
+/// The official emulator has three loader paths -- Node, Python (`functions-framework` in a
+/// virtual environment) and an experimental Dart one -- and picks by this field. fireemu runs
+/// Node and Python (`python310` to `python314`, the versions firebase-tools knows); a Dart codebase,
+/// an older Python or a malformed value is refused by name rather than handed to `node`, which
+/// would fail later with a syntax error from a file the project never meant Node to read.
+fn check_codebase_runtime(c: &FunctionsCodebase) -> Result<(), ConfigError> {
+    let Some(runtime) = &c.runtime else {
+        return Ok(());
+    };
+    if runtime_language(runtime).is_some() {
         return Ok(());
     }
-    let language = if runtime.starts_with("python") {
-        "Python"
+    let reason = if runtime.starts_with("python") {
+        format!(
+            "fireemu runs the Python runtimes {} and no other Python version",
+            PYTHON_RUNTIMES.join(", ")
+        )
     } else if runtime.starts_with("dart") {
-        "Dart"
+        "fireemu does not execute Dart functions".to_owned()
     } else {
-        "that"
+        "fireemu runs nodejs<major> and python310 to python314 codebases".to_owned()
     };
     Err(ConfigError(format!(
-        "firebase.json: the Functions codebase {:?} declares runtime {runtime}; fireemu ships \
-         one loader, the bundled Node runner, and does not execute {language} functions. \
+        "firebase.json: the Functions codebase {:?} declares runtime {runtime}; {reason}. \
          Remove the codebase from the emulator run (--only functions:<another codebase>) or \
          run it under the Firebase CLI",
         c.codebase
@@ -9295,15 +9327,40 @@ mod tests {
             assert_eq!(cfg.functions_to_load().len(), 1);
         }
 
-        // A runtime the bundled Node runner cannot execute is refused by name.
-        let mut cfg = RuntimeConfig::default();
-        let python = json!({"functions": [{"source": "fn", "runtime": "python312"}]});
-        let message = cfg
-            .apply_firebase_json(&python, base, &Selection::default())
-            .unwrap_err()
-            .0;
-        assert!(message.contains("python312"), "{message}");
-        assert!(message.contains("Python"), "{message}");
+        // The Python runtimes firebase-tools 15.28.2 knows (python310 to python314) are accepted;
+        // the loader for them is chosen at startup.
+        for runtime in [
+            "python310",
+            "python311",
+            "python312",
+            "python313",
+            "python314",
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            let python = json!({"functions": [{"source": "fn", "runtime": runtime}]});
+            cfg.apply_firebase_json(&python, base, &Selection::default())
+                .unwrap_or_else(|error| panic!("{runtime}: {}", error.0));
+            assert_eq!(cfg.functions_codebases[0].runtime.as_deref(), Some(runtime));
+        }
+
+        // A runtime fireemu cannot execute is refused by name: an older Python, Dart, or a
+        // malformed Python version.
+        for (runtime, language) in [
+            ("python39", "Python"),
+            ("python3", "Python"),
+            ("python3.12", "Python"),
+            ("python315", "Python"),
+            ("dart3", "Dart"),
+        ] {
+            let mut cfg = RuntimeConfig::default();
+            let json = json!({"functions": [{"source": "fn", "runtime": runtime}]});
+            let message = cfg
+                .apply_firebase_json(&json, base, &Selection::default())
+                .unwrap_err()
+                .0;
+            assert!(message.contains(runtime), "{message}");
+            assert!(message.contains(language), "{message}");
+        }
 
         let mut cfg = RuntimeConfig::default();
         let malformed = json!({"functions": [{"source": "fn", "runtime": "nodejs-latest"}]});

@@ -186,3 +186,28 @@ def test_pubsub_and_database_times_are_never_changed(monkeypatch, family):
 def test_no_profile_is_the_emulator_profile(monkeypatch):
     monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
     assert storage_cloud_event(event(time="2026-01-01T00:00:02Z"))._get_attributes()["time"] == "2026-01-01T00:00:02.000Z"
+
+
+# --- survivors of the first mutation run on slice 2a ---------------------------------------------------
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "application/json; charset=utf-8", "APPLICATION/JSON", "application/json; charset=utf-8; boundary=x", "application/vnd.api+json", "application/x.thing+JSON"])
+def test_text_data_with_a_json_content_type_is_a_json_string(adapter, content_type):
+    # A JSON content type means the body is the JSON text of the data: a string becomes a JSON string literal.
+    assert adapter(event(datacontenttype=content_type, data="hello")).get_data() == "hello"
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "text/plain; charset=utf-8", "application/octet-stream", "application/jsonx"])
+def test_text_data_with_another_content_type_is_the_raw_text(adapter, content_type):
+    assert adapter(event(datacontenttype=content_type, data="hello")).get_data() == b"hello"
+
+
+@pytest.mark.parametrize("declared", [5, True, ["application/json"], {"a": 1}])
+def test_a_content_type_that_is_not_a_string_is_ignored_for_the_default(adapter, declared):
+    delivered = adapter(event(datacontenttype=declared, data="hello"))
+    assert delivered._get_attributes()["datacontenttype"] == "application/json"
+    assert delivered.get_data() == "hello"
+
+
+def test_an_empty_content_type_is_the_default(adapter):
+    assert adapter(event(datacontenttype=""))._get_attributes()["datacontenttype"] == "application/json"

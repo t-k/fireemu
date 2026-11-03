@@ -484,3 +484,82 @@ def test_an_event_type_without_a_channel_that_fireemu_does_not_serve_is_reported
     # The Node runner classifies the same event types the same way (`DEFERRED_TRIGGER_PRODUCTS`).
     unserved = _unserved(_event(event_type))
     assert unserved[:2] == (trigger_type, scope)
+
+
+# --- survivors of the first mutation run on slice 2a, each pinned by an exact answer -----------------
+
+
+def test_a_firestore_document_that_is_not_a_string_names_its_own_field_and_family():
+    assert _unserved(_event(FS + "created", eventFilterPathPatterns={"document": 3})) == (
+        "firestore", "unsupported", "eventFilterPathPatterns.document did not resolve to a string"
+    )
+    assert _unserved(_event(FS + "created", eventFilters={"document": 3})) == (
+        "firestore", "unsupported", "eventFilters.document did not resolve to a string"
+    )
+
+
+def test_an_event_type_given_as_an_enum_value_reaches_the_firestore_trigger_resolved():
+    import enum
+
+    class Kind(enum.Enum):
+        CREATED = FS + "created"
+
+    trigger = sdk_manifest.EventTrigger(eventType=Kind.CREATED, retry=False, eventFilters={"document": "a/b"})
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))
+    assert described["trigger"]["eventType"] == FS + "created"
+
+
+def test_a_pubsub_topic_keeps_what_follows_the_last_topics_segment():
+    trigger = sdk_manifest.EventTrigger(eventType=PS, retry=False, eventFilters={"topic": "projects/p/topics/a/topics/b"})
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))
+    assert described["trigger"]["topic"] == "b"
+
+
+def test_a_database_instance_pattern_that_is_not_a_string_names_its_field_and_family():
+    assert _unserved(_event(DB + "written", eventFilterPathPatterns={"ref": "a", "instance": 5})) == (
+        "database", "unsupported", "eventFilterPathPatterns.instance did not resolve to a string"
+    )
+
+
+def test_only_slashes_are_trimmed_from_a_database_reference():
+    described = describe_endpoint("f", _event(DB + "written", eventFilters={"ref": "/Xray/{id}X/"}))
+    assert described["trigger"]["ref"] == "/Xray/{id}X"
+
+
+def test_an_eventarc_filter_without_a_value_is_refused_not_dropped():
+    assert _unserved(_event("acme.x", channel="locations/l/channels/c", eventFilters={"a": None})) == (
+        "eventarc", "unsupported", "eventFilters.a did not resolve to a string"
+    )
+
+
+def test_an_event_without_a_type_says_so_in_its_reason():
+    trigger = sdk_manifest.EventTrigger(eventType=None, retry=False)
+    assert _unserved_endpoint(sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger)) == (
+        "unknown", "unsupported", "event type  is not recognised"
+    )
+
+
+def _unserved_endpoint(endpoint_value):
+    from fireemu_runner.manifest import Unserved
+
+    with pytest.raises(Unserved) as error:
+        describe_endpoint("f", endpoint_value)
+    return (error.value.trigger_type, error.value.scope, error.value.reason)
+
+
+def test_the_unserved_products_carry_the_node_runners_exact_reasons():
+    assert _unserved(_event("google.firebase.remoteconfig.update")) == (
+        "remoteConfig", "deferred", "deferred: Remote Config has no emulator in the active supported surface"
+    )
+    assert _unserved(_event("google.firebase.dataconnect.x")) == (
+        "dataconnect", "deferred", "deferred: the Data Connect emulator is not in the active supported surface"
+    )
+    assert _unserved(_event("google.firebase.ailogic.x")) == (
+        "ai", "notPlanned", "not planned: Firebase AI Logic blocking triggers have no local emulator"
+    )
+    assert _unserved(_event("google.firebase.analytics.x")) == (
+        "analytics", "notPlanned", "not planned: Google Analytics triggers have no local emulator"
+    )
+    assert _unserved(_event("google.firebase.testing.x")) == (
+        "testLab", "notPlanned", "not planned: Test Lab triggers have no local emulator"
+    )

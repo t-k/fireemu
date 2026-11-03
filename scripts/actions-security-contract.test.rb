@@ -32,6 +32,21 @@ class ActionsSecurityContractTest < Minitest::Test
     ActionsSecurityContract.violations(source, name: name)
   end
 
+  CI = File.read(File.expand_path("../.github/workflows/ci.yml", __dir__))
+
+  def functions_python_job
+    CI[/^  functions-python:.*?(?=^  # tools\/sdk-smoke-go)/m]
+  end
+
+  def test_the_python_functions_job_runs_third_party_code_read_only_and_without_credentials
+    job = functions_python_job
+    assert job, "the functions-python job is in ci.yml"
+    assert_empty errors(CI, "ci.yml")
+    refute_empty errors(CI.sub(job, job.sub("cache-mode: read", "cache-mode: write")), "ci.yml")
+    refute_empty errors(CI.sub(job, job.sub("persist-credentials: false", "persist-credentials: true")), "ci.yml")
+    refute_empty errors(CI.sub(job, job.sub('save-if: "false"', 'save-if: "true"')), "ci.yml")
+  end
+
   def test_real_workflows
     ActionsSecurityContract.check!(File.expand_path("..", __dir__))
   end

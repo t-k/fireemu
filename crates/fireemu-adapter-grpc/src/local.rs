@@ -5059,6 +5059,8 @@ impl LocalBackend {
         let expires_at = fireemu_core_firestore::ttl::timestamp_at(now);
         let mut deleted = 0;
         let mut complete = true;
+        // A later collection group still has the rest of the budget, so this does not stop the walk.
+        let mut deferred = false;
         for (collection_group, _) in policies {
             let Ok(mut expired) = self.select_ttl_expiry(
                 &parent,
@@ -5094,6 +5096,9 @@ impl LocalBackend {
                     }
                 }
                 if !expired.has_more() {
+                    // The chain is at its end. A document it skipped belongs to a later chain,
+                    // so the database stays due instead of waiting another interval.
+                    deferred |= expired.has_deferred();
                     break;
                 }
                 if deleted >= budget {
@@ -5119,7 +5124,7 @@ impl LocalBackend {
                 break;
             }
         }
-        (deleted, complete)
+        (deleted, complete && !deferred)
     }
 
     fn select_ttl_expiry(

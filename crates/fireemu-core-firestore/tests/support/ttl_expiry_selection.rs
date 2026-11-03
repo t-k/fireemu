@@ -600,7 +600,8 @@ fn a_resumed_batch_refills_kept_candidates_but_skips_documents_written_after_cap
         .select_ttl_expiry(&policies, &group, timestamp(50), 4, Some(&second))
         .unwrap();
     assert_eq!(third.paths.as_slice(), [Arc::new(path(9))]);
-    assert!(third.has_more(), "the skipped document keeps the work incomplete");
+    assert!(!third.has_more(), "the chain is at its end");
+    assert!(third.has_deferred(), "the skipped document keeps the work incomplete");
     let fresh = state
         .select_ttl_expiry(&policies, &group, timestamp(50), 4, None)
         .unwrap();

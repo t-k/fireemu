@@ -1234,9 +1234,10 @@ pub struct TtlExpirySelection {
     cursor: Option<(Timestamp, DocumentPath)>,
     /// The commit version the first batch of the chain was taken at.
     captured_at: CommitVersion,
-    /// Whether this chain passed an expired document written after `captured_at`.
+    /// Whether this chain passed an expired document written after `captured_at`: it is left
+    /// for a later chain and is never visited again by this one.
     skipped: bool,
-    /// Whether expired index entries remain that this chain has not yet returned.
+    /// Whether expired index entries remain past this batch that this chain can still visit.
     more: bool,
     #[cfg(test)]
     inspected: usize,
@@ -1256,10 +1257,20 @@ impl TtlExpirySelection {
         self.paths.len() == 0
     }
 
-    /// Whether expired entries remain past this batch, for a resumed selection to take.
+    /// Whether expired entries remain past this batch, for a resumed selection to take. A
+    /// skipped document does not count: the chain has passed it, so a resumed selection would
+    /// not return it, and counting it would keep an exhausted chain resuming forever.
     #[must_use]
     pub const fn has_more(&self) -> bool {
         self.more
+    }
+
+    /// Whether this chain passed an expired document written after its first batch was taken.
+    /// That document is left for a later chain, so a caller that reaches the end of this one
+    /// reports its work incomplete rather than waiting another interval.
+    #[must_use]
+    pub const fn has_deferred(&self) -> bool {
+        self.skipped
     }
 }
 
@@ -1913,7 +1924,8 @@ impl FirestoreState {
     /// the first unexpired entry or one entry past `limit`, and only the taken batch is
     /// sorted into resource-name order. With `resume`, the walk starts after the last entry
     /// that selection passed and skips documents written after the chain's first batch was
-    /// taken; such a skipped document still makes [`TtlExpirySelection::has_more`] true, so
+    /// taken; such a skipped document makes [`TtlExpirySelection::has_deferred`] true (and not
+    /// [`TtlExpirySelection::has_more`], which counts only what the chain can still visit), so
     /// the caller leaves its work incomplete instead of waiting another interval.
     pub fn select_ttl_expiry(
         &mut self,
@@ -1994,7 +2006,7 @@ impl FirestoreState {
             cursor,
             captured_at,
             skipped,
-            more: more || skipped,
+            more,
             #[cfg(test)]
             inspected,
             #[cfg(test)]

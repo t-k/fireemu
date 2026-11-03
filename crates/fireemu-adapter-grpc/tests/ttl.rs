@@ -985,6 +985,47 @@ fn multiple_ttl_policies_preserve_frozen_membership_and_finish_finite_backlogs()
     assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 1);
 }
 
+/// A document the first batch selected is extended and the one entry past the batch is rewritten
+/// (still expired) after the scan: the resumed batch skips the rewritten document and finds nothing
+/// else, so the chain is at its end. The sweep must stop there, incomplete, instead of resuming an
+/// exhausted chain forever while holding its sweep claim.
+#[test]
+fn a_chain_that_skips_its_last_entry_ends_incomplete_instead_of_spinning() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    write_sessions(&backend, (0..=budget).map(|i| format!("s{i:05}")), 1_100);
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let sweeper = Arc::clone(&backend);
+    std::thread::spawn(move || {
+        let writer = Arc::clone(&sweeper);
+        let deleted = sweeper.sweep_expired_documents_now_with_hook(&everything(), due, &|| {
+            // The first batch holds s00000..s01023 and the cursor stands past s01023.
+            write_document(&writer, "sessions/s00000", Some(timestamp(200_000)));
+            write_document(
+                &writer,
+                &format!("sessions/s{budget:05}"),
+                Some(timestamp(1_200)),
+            );
+        });
+        let _ = done_tx.send(deleted);
+    });
+    let deleted = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the sweep ended instead of resuming an exhausted chain forever");
+    assert_eq!(deleted, budget - 1);
+    assert!(exists(&backend, "sessions/s00000"));
+    assert!(exists(&backend, &format!("sessions/s{budget:05}")));
+    // The rewritten document belongs to a later chain: the sweep ended incomplete, so the database
+    // is due at once and the next sweep deletes it.
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 1);
+    assert!(!exists(&backend, &format!("sessions/s{budget:05}")));
+    assert!(exists(&backend, "sessions/s00000"));
+}
+
 /// Writes `ids` under `sessions` with `expires_at`, 500 writes per commit.
 fn write_sessions(backend: &LocalBackend, ids: impl Iterator<Item = String>, expires_at: i64) {
     let ids: Vec<_> = ids.collect();

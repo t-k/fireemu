@@ -333,6 +333,14 @@ test("the current clock controls are bound to the current binary and the pinned 
   assert.equal(timestamps.evidence.clockDiffControlSha256, ir.clockDiffControlSha256);
 });
 
+test("the record states the platform of its controls and what the release job reruns", () => {
+  const note = closure.integratedRegression.platformNote;
+  assert.match(note, /Darwin arm64/);
+  assert.match(note, /linux-x64 package/);
+  assert.match(note, /no native Linux arm64 replay is required/);
+  assert.equal(json(closure.integratedRegression.buildReceiptPath).host, "Darwin arm64");
+});
+
 test("the 166 rows added after v0.35 are the rows that changed from MISMATCH to MATCH", () => {
   const promotion = closure.recordedLeafReview.currentPromotion;
   const approved = closure.closureReview.decision === "APPROVED";

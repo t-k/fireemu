@@ -3187,7 +3187,8 @@
     "clockControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock.json",
     "clockControlSha256": "bf333ba5606f3b20960e2d5330b606642aa913d83e3deed0e15d57a2f9b78e9f",
     "clockDiffControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock-diff.json",
-    "clockDiffControlSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb"
+    "clockDiffControlSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb",
+    "platformNote": "The release build, the lane check and export, and the pinned-clock controls ran on Darwin arm64. The release workflow reruns the lane (R21) on the linux-x64 package it publishes, installed as a user installs it, at every release. The clock controls are not rerun on that package and no native Linux arm64 replay is required by this closure: FS-TRANSACTION closed on the installed release-profile CHECK and EXPORT of the published package, with no separate platform replay. The v0.41 record's pending native Linux arm64 clock replay (conformance/fs-ent-pipeline-v041-additional-adjudication.json) is therefore listed as not required here, not as pending work."
   },
   "recordedLeafReview": {
     "decision": "APPROVED_RECORDED_ROWS_ONLY",

@@ -238,19 +238,16 @@ describe("production dependencies: SDK paths", () => {
   });
 
   it("sentinel: an attempted request is refused and recorded, so the hook at the end would fail", () => {
-    assert.throws(() => https.request("https://storage.googleapis.com/"), /egress refused/);
+    assert.throws(() => https.request("https://probe.invalid/"), /egress refused/);
+    assert.throws(() => http.get({ hostname: "metadata.invalid", path: "/" }), /egress refused/);
     assert.throws(
-      () => http.get({ hostname: "metadata.google.internal", path: "/" }),
-      /egress refused/,
-    );
-    assert.throws(
-      () => globalThis.fetch("https://storage.googleapis.com/storage/v1/b/x"),
+      () => globalThis.fetch("https://probe.invalid/storage/v1/b/x"),
       /fetch is not allowed/,
     );
     assert.deepEqual(attempts, [
-      "http: storage.googleapis.com",
-      "http: metadata.google.internal",
-      "fetch: https://storage.googleapis.com/storage/v1/b/x",
+      "http: probe.invalid",
+      "http: metadata.invalid",
+      "fetch: https://probe.invalid/storage/v1/b/x",
     ]);
     attempts.length = 0;
   });

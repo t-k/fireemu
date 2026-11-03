@@ -29,14 +29,11 @@ describe("network sentinel preload", () => {
   });
 
   it("refuses and records requests outside loopback, whatever the call form", () => {
-    assert.throws(() => https.request("https://storage.googleapis.com/"), /egress refused/);
-    assert.throws(
-      () => globalThis.fetch("https://storage.googleapis.com/storage/v1/b/x"),
-      /not allowed/,
-    );
+    assert.throws(() => https.request("https://probe.invalid/"), /egress refused/);
+    assert.throws(() => globalThis.fetch("https://probe.invalid/storage/v1/b/x"), /not allowed/);
     assert.deepEqual(attempts, [
-      "http: storage.googleapis.com",
-      "fetch: https://storage.googleapis.com/storage/v1/b/x",
+      "http: probe.invalid",
+      "fetch: https://probe.invalid/storage/v1/b/x",
     ]);
     attempts.length = 0;
   });
@@ -70,7 +67,7 @@ describe("network sentinel preload", () => {
       assert.equal(run("quiet.test.mjs", "").status, 0);
       const swallowedHttp = run(
         "http.test.mjs",
-        'try { https.request("https://storage.googleapis.com/"); } catch {}',
+        'try { https.request("https://probe.invalid/"); } catch {}',
       );
       assert.notEqual(swallowedHttp.status, 0);
       assert.match(
@@ -79,7 +76,7 @@ describe("network sentinel preload", () => {
       );
       const swallowedFetch = run(
         "fetch.test.mjs",
-        'try { await fetch("https://storage.googleapis.com/"); } catch {}',
+        'try { await fetch("https://probe.invalid/"); } catch {}',
       );
       assert.notEqual(swallowedFetch.status, 0);
     } finally {

@@ -164,7 +164,7 @@ describe("egress guard", () => {
       () => http.get({ host: "example.test:8080", path: "/" }),
       /egress refused: example.test/,
     );
-    assert.throws(() => https.request("https://storage.googleapis.com/"), /egress refused/);
+    assert.throws(() => https.request("https://probe.invalid/"), /egress refused/);
     assert.throws(() => https.get({ path: "/" }), /egress refused/);
   });
 });

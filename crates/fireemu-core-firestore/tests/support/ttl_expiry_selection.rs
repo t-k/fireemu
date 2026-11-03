@@ -48,10 +48,10 @@ fn steady_sparse_selection_visits_only_expired_prefix_and_boundary() {
     let catalog = catalog();
     let group = CollectionId::try_new("items").unwrap();
     state
-        .select_ttl_expiry(&catalog, &group, timestamp(50))
+        .select_ttl_expiry(&catalog, &group, timestamp(50), usize::MAX, None)
         .unwrap();
     let mut selected = state
-        .select_ttl_expiry(&catalog, &group, timestamp(50))
+        .select_ttl_expiry(&catalog, &group, timestamp(50), usize::MAX, None)
         .unwrap();
     assert_eq!(
         selected.next_page(std::num::NonZeroUsize::new(3).unwrap()),
@@ -91,7 +91,7 @@ fn capture(
     page: usize,
 ) -> Vec<Arc<DocumentPath>> {
     let mut selection = state
-        .select_ttl_expiry(catalog, &CollectionId::try_new("items").unwrap(), now)
+        .select_ttl_expiry(catalog, &CollectionId::try_new("items").unwrap(), now, usize::MAX, None)
         .unwrap();
     let mut paths = Vec::new();
     while !selection.is_exhausted() {
@@ -145,7 +145,7 @@ fn selection_is_path_ordered_frozen_and_exact_at_the_last_page() {
     let group = CollectionId::try_new("items").unwrap();
     let expected = reference(&state, &policies, &group, timestamp(50)).unwrap();
     let mut selection = state
-        .select_ttl_expiry(&policies, &group, timestamp(50))
+        .select_ttl_expiry(&policies, &group, timestamp(50), usize::MAX, None)
         .unwrap();
     import_fields(&mut state, 0, BTreeMap::new());
     import_fields(
@@ -296,12 +296,12 @@ fn sparse_dense_work_and_physical_retention_are_measured_separately_from_cold_bu
             let mut state = fixture(count, expired);
             TTL_INDEX_BUILD_VISITS.with(|counter| counter.set(0));
             let cold = state
-                .select_ttl_expiry(&policies, &group, timestamp(50))
+                .select_ttl_expiry(&policies, &group, timestamp(50), usize::MAX, None)
                 .unwrap();
             assert_eq!(TTL_INDEX_BUILD_VISITS.with(std::cell::Cell::get), count);
             TTL_INDEX_BUILD_VISITS.with(|counter| counter.set(0));
             let mut steady = state
-                .select_ttl_expiry(&policies, &group, timestamp(50))
+                .select_ttl_expiry(&policies, &group, timestamp(50), usize::MAX, None)
                 .unwrap();
             assert_eq!(TTL_INDEX_BUILD_VISITS.with(std::cell::Cell::get), 0);
             assert_eq!(steady.inspected, expired + usize::from(expired < count));
@@ -439,7 +439,7 @@ fn literal_nested_and_absent_fields_have_the_same_success_contract_as_projection
         .enable(group.clone(), FieldPath::parse("__name__").unwrap())
         .is_err());
     assert!(state
-        .select_ttl_expiry(&policies, &group, timestamp(2))
+        .select_ttl_expiry(&policies, &group, timestamp(2), usize::MAX, None)
         .unwrap()
         .is_exhausted());
 }
@@ -468,4 +468,150 @@ fn a_field_replaced_between_selections_rebuilds_without_an_intermediate_disabled
         expected
     );
     assert_index(&state);
+}
+
+/// Deletes `paths` through ordinary commits, as the sweep's per-path deletion does.
+fn delete_paths(state: &mut FirestoreState, paths: &[Arc<DocumentPath>]) {
+    for chunk in paths.chunks(500) {
+        let writes: Vec<_> = chunk
+            .iter()
+            .map(|path| Write {
+                op: WriteOp::Delete {
+                    path: (**path).clone(),
+                },
+                precondition: None,
+                transforms: Vec::new(),
+            })
+            .collect();
+        state
+            .commit(&writes, None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+    }
+}
+
+const SWEEP_BUDGET: usize = 1024;
+
+/// One budgeted sweep over a single policy, as the adapter's sweep drives it: a fresh batch,
+/// then resumed batches while candidates remain and budget is left. Returns the deleted
+/// count, whether the sweep reached the end of the expired prefix, and the summed counters.
+fn sweep(
+    state: &mut FirestoreState,
+    policies: &crate::ttl::TtlCatalog,
+    now: Timestamp,
+    budget: usize,
+) -> (usize, bool, usize, usize) {
+    let group = CollectionId::try_new("items").unwrap();
+    let (mut deleted, mut inspected, mut retained) = (0, 0, 0);
+    let mut selection = state
+        .select_ttl_expiry(policies, &group, now, budget, None)
+        .unwrap();
+    loop {
+        inspected += selection.inspected;
+        retained = retained.max(selection.retained_capacity);
+        let page = selection.next_page(std::num::NonZeroUsize::new(budget.max(1)).unwrap());
+        delete_paths(state, &page);
+        deleted += page.len();
+        if !selection.has_more() {
+            return (deleted, true, inspected, retained);
+        }
+        if deleted >= budget {
+            return (deleted, false, inspected, retained);
+        }
+        selection = state
+            .select_ttl_expiry(policies, &group, now, budget - deleted, Some(&selection))
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_budgeted_drain_inspects_and_retains_only_the_budget_per_sweep() {
+    // Before the bounded selection, the same drain measured: first sweep inspected=100000,
+    // retained_capacity=131072; whole drain (98 sweeps) inspected=4932928 and summed
+    // retained_capacity=7252992.
+    let total = 100_000;
+    let mut state = fixture(total, total);
+    let policies = catalog();
+    let (mut first, mut inspected, mut retained, mut sweeps, mut deleted) = (None, 0, 0, 0, 0);
+    loop {
+        let (swept, complete, sweep_inspected, sweep_retained) =
+            sweep(&mut state, &policies, timestamp(50), SWEEP_BUDGET);
+        sweeps += 1;
+        first.get_or_insert((sweep_inspected, sweep_retained));
+        inspected += sweep_inspected;
+        retained += sweep_retained;
+        deleted += swept;
+        if complete {
+            break;
+        }
+    }
+    eprintln!(
+        "TTL drain (E={total}, budget={SWEEP_BUDGET}): first sweep (inspected, retained_capacity)={first:?}; \
+         drain sweeps={sweeps}, inspected={inspected}, retained_capacity_sum={retained}, deleted={deleted}"
+    );
+    let (first_inspected, first_retained) = first.unwrap();
+    assert!(first_inspected <= SWEEP_BUDGET + 1, "first sweep inspected {first_inspected}");
+    assert!(first_retained <= SWEEP_BUDGET, "first sweep retained {first_retained}");
+    assert_eq!(deleted, total);
+    assert_eq!(sweeps, total.div_ceil(SWEEP_BUDGET));
+    assert!(inspected <= total + sweeps, "drain inspected {inspected}");
+    assert!(state.ttl_expiry_indexes.values().all(|index| index.entries.is_empty()));
+}
+
+#[test]
+fn a_few_expired_among_many_future_documents_inspect_only_the_expired_prefix() {
+    let mut state = fixture(100_000, 3);
+    let policies = catalog();
+    let (deleted, complete, inspected, retained) =
+        sweep(&mut state, &policies, timestamp(50), SWEEP_BUDGET);
+    eprintln!("TTL mixed sweep (N=100000, E=3): inspected={inspected}, retained_capacity={retained}");
+    assert_eq!((deleted, complete), (3, true));
+    assert_eq!(inspected, 4, "three expired entries and the unexpired boundary");
+    assert!(retained <= SWEEP_BUDGET);
+    for i in 0..100_000 {
+        assert_eq!(state.get(&path(i)).is_some(), i >= 3);
+    }
+}
+
+#[test]
+fn a_resumed_batch_refills_kept_candidates_but_skips_documents_written_after_capture() {
+    let mut state = fixture(10, 10);
+    let policies = catalog();
+    let group = CollectionId::try_new("items").unwrap();
+    let first = state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 4, None)
+        .unwrap();
+    assert!(first.has_more());
+    assert_eq!(first.paths.as_slice(), (0..4).map(|i| Arc::new(path(i))).collect::<Vec<_>>());
+    // Written after the capture, still expired: left for the next sweep, never admitted.
+    import_fields(
+        &mut state,
+        6,
+        BTreeMap::from([("expires".into(), Value::Timestamp(timestamp(0)))]),
+    );
+    let second = state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 4, Some(&first))
+        .unwrap();
+    assert_eq!(
+        second.paths.as_slice(),
+        [4, 5, 7, 8].map(|i| Arc::new(path(i)))
+    );
+    assert!(second.has_more());
+    let third = state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 4, Some(&second))
+        .unwrap();
+    assert_eq!(third.paths.as_slice(), [Arc::new(path(9))]);
+    assert!(third.has_more(), "the skipped document keeps the work incomplete");
+    let fresh = state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 4, None)
+        .unwrap();
+    assert_eq!(fresh.paths.len(), 4);
+    let exact = state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 10, None)
+        .unwrap();
+    assert_eq!(exact.paths.len(), 10);
+    assert!(!exact.has_more(), "an exactly spent limit with nothing past it is complete");
+    assert!(state
+        .select_ttl_expiry(&policies, &group, timestamp(50), 0, None)
+        .unwrap()
+        .has_more());
 }

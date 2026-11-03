@@ -5060,33 +5060,60 @@ impl LocalBackend {
         let mut deleted = 0;
         let mut complete = true;
         for (collection_group, _) in policies {
-            let Ok(mut expired) =
-                self.select_ttl_expiry(&parent, policies, collection_group, expires_at)
-            else {
+            let Ok(mut expired) = self.select_ttl_expiry(
+                &parent,
+                policies,
+                collection_group,
+                expires_at,
+                budget.saturating_sub(deleted),
+                None,
+            ) else {
                 continue;
             };
             // The scan is over; anything a client writes from here on is seen by the
             // re-evaluation each deletion performs, not by the selection above.
             after_scan();
             loop {
-                // Pages bound transfer, while the frozen selection retains O(E) handles.
-                let page =
-                    expired.next_page(std::num::NonZeroUsize::new(64).expect("nonzero TTL page"));
-                if page.is_empty() {
-                    break;
-                }
-                for path in page {
-                    if deleted >= budget {
-                        complete = false;
+                // A batch holds at most the remaining budget, so neither it nor the scan that
+                // took it grows with the number of expired documents.
+                loop {
+                    let page = expired
+                        .next_page(std::num::NonZeroUsize::new(64).expect("nonzero TTL page"));
+                    if page.is_empty() {
                         break;
                     }
-                    if self.delete_if_still_expired(&parent, &path, collection_group, expires_at) {
-                        deleted += 1;
+                    for path in page {
+                        if self.delete_if_still_expired(
+                            &parent,
+                            &path,
+                            collection_group,
+                            expires_at,
+                        ) {
+                            deleted += 1;
+                        }
                     }
                 }
-                if !complete {
+                if !expired.has_more() {
                     break;
                 }
+                if deleted >= budget {
+                    complete = false;
+                    break;
+                }
+                // Candidates the re-evaluation kept give their budget back to the next batch,
+                // which resumes after this one and admits no path written since the scan.
+                let Ok(next) = self.select_ttl_expiry(
+                    &parent,
+                    policies,
+                    collection_group,
+                    expires_at,
+                    budget - deleted,
+                    Some(&expired),
+                ) else {
+                    complete = false;
+                    break;
+                };
+                expired = next;
             }
             if !complete {
                 break;
@@ -5101,12 +5128,14 @@ impl LocalBackend {
         policies: &TtlCatalog,
         group: &fireemu_core_types::ids::CollectionId,
         now: fireemu_core_firestore::value::Timestamp,
+        limit: usize,
+        resume: Option<&fireemu_core_firestore::store::TtlExpirySelection>,
     ) -> Result<fireemu_core_firestore::store::TtlExpirySelection, Status> {
         let _admitted = self.barrier.admit();
         let handle = self.database_handle(parent)?;
         handle.with(|state| {
             state
-                .select_ttl_expiry(policies, group, now)
+                .select_ttl_expiry(policies, group, now, limit, resume)
                 .map_err(|error| status_from_error(&error))
         })
     }

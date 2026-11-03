@@ -1218,12 +1218,26 @@ struct TtlExpiryIndex {
     entries: BTreeSet<(Timestamp, Arc<DocumentPath>)>,
 }
 
-/// Frozen expired-path membership in resource-name order.
+/// A bounded batch of expired paths, taken from the expiry index in expiration order.
 ///
-/// Selection retains O(E) path handles; pages bound transfer size, not total memory.
+/// One selection holds at most the `limit` it was taken with, sorted into resource-name
+/// order, so its allocation is bounded by the caller's budget rather than by the number of
+/// expired documents. [`Self::has_more`] reports whether expired entries remain past the
+/// batch; [`FirestoreState::select_ttl_expiry`] with this selection as `resume` takes the
+/// next batch after it, in index order, admitting only documents last written no later than
+/// the first batch of the chain was taken.
 #[derive(Debug)]
 pub struct TtlExpirySelection {
     paths: std::vec::IntoIter<Arc<DocumentPath>>,
+    /// The last index entry this chain of batches passed; the next batch starts after it.
+    /// An owned copy, so a consumed selection pins no shared path handle.
+    cursor: Option<(Timestamp, DocumentPath)>,
+    /// The commit version the first batch of the chain was taken at.
+    captured_at: CommitVersion,
+    /// Whether this chain passed an expired document written after `captured_at`.
+    skipped: bool,
+    /// Whether expired index entries remain that this chain has not yet returned.
+    more: bool,
     #[cfg(test)]
     inspected: usize,
     #[cfg(test)]
@@ -1240,6 +1254,12 @@ impl TtlExpirySelection {
     #[must_use]
     pub fn is_exhausted(&self) -> bool {
         self.paths.len() == 0
+    }
+
+    /// Whether expired entries remain past this batch, for a resumed selection to take.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.more
     }
 }
 
@@ -1887,15 +1907,28 @@ impl FirestoreState {
         retained.map_or_else(|| Arc::new(path.clone()), Arc::clone)
     }
 
-    /// Captures expired membership for one policy in the supplied catalog.
+    /// Captures at most `limit` expired paths for one policy in the supplied catalog.
+    ///
+    /// Entries are taken from the expiry index in expiration order, so the walk stops at
+    /// the first unexpired entry or one entry past `limit`, and only the taken batch is
+    /// sorted into resource-name order. With `resume`, the walk starts after the last entry
+    /// that selection passed and skips documents written after the chain's first batch was
+    /// taken; such a skipped document still makes [`TtlExpirySelection::has_more`] true, so
+    /// the caller leaves its work incomplete instead of waiting another interval.
     pub fn select_ttl_expiry(
         &mut self,
         catalog: &crate::ttl::TtlCatalog,
         group: &CollectionId,
         now: Timestamp,
+        limit: usize,
+        resume: Option<&TtlExpirySelection>,
     ) -> Result<TtlExpirySelection, FirestoreError> {
         self.sync_ttl_expiry_indexes(catalog);
+        let captured_at = resume.map_or(self.version, |previous| previous.captured_at);
+        let mut cursor = resume.and_then(|previous| previous.cursor.clone());
+        let mut skipped = resume.is_some_and(|previous| previous.skipped);
         let mut paths = Vec::new();
+        let mut more = false;
         #[cfg(test)]
         let mut inspected = 0;
         if let Some(index) = self.ttl_expiry_indexes.get(group) {
@@ -1904,7 +1937,17 @@ impl FirestoreState {
                 .find(|(key, _)| *key == group)
                 .map(|(_, policy)| policy)
                 .expect("registered TTL groups belong to the captured catalog");
-            for (at, path) in &index.entries {
+            let after = cursor
+                .as_ref()
+                .map(|(at, path)| (*at, Arc::new(path.clone())));
+            let entries = match &after {
+                Some(after) => index
+                    .entries
+                    .range((std::ops::Bound::Excluded(after), std::ops::Bound::Unbounded)),
+                None => index.entries.range::<(Timestamp, Arc<DocumentPath>), _>(..),
+            };
+            let mut passed = None;
+            for (at, path) in entries {
                 #[cfg(test)]
                 {
                     inspected += 1;
@@ -1921,7 +1964,26 @@ impl FirestoreState {
                 {
                     break;
                 }
-                paths.push(Arc::clone(path));
+                if paths.len() == limit {
+                    // The first expired entry past the batch: it stays for the next batch.
+                    more = true;
+                    break;
+                }
+                let written_after_capture = self
+                    .history
+                    .get(path.as_ref())
+                    .and_then(|history| history.last())
+                    .is_some_and(|(version, _)| *version > captured_at);
+                if written_after_capture {
+                    // Left for a later chain, which captures it as ordinary membership.
+                    skipped = true;
+                } else {
+                    paths.push(Arc::clone(path));
+                }
+                passed = Some((at, path));
+            }
+            if let Some((at, path)) = passed {
+                cursor = Some((*at, DocumentPath::clone(path)));
             }
         }
         paths.sort_unstable();
@@ -1929,6 +1991,10 @@ impl FirestoreState {
         let retained_capacity = paths.capacity();
         Ok(TtlExpirySelection {
             paths: paths.into_iter(),
+            cursor,
+            captured_at,
+            skipped,
+            more: more || skipped,
             #[cfg(test)]
             inspected,
             #[cfg(test)]

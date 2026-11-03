@@ -4,6 +4,8 @@
 //! These tests need the fixture's virtual environment (`README.md` there); CI creates it and runs
 //! them with `--ignored`, so a missing environment is a failure there and not a skip.
 
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;

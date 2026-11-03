@@ -209,7 +209,8 @@ pub fn locate_runner() -> Result<PathBuf, String> {
     .map(|script| script.path)
 }
 
-#[cfg(test)]
+// Python Functions are Linux and macOS only, and the tests build fake interpreters from shell scripts.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::config::runtime_language;
@@ -244,7 +245,6 @@ mod tests {
 
     /// Installs `venv/bin/python` as a shell script that prints `stdout` and `stderr` and exits
     /// with `code`, whatever it is asked to run.
-    #[cfg(unix)]
     fn fake_interpreter(source: &Path, stdout: &str, stderr: &str, code: i32) {
         use std::os::unix::fs::PermissionsExt;
         let bin = source.join("venv/bin");
@@ -355,7 +355,6 @@ mod tests {
 
     /// Detection and preflight over the whole product of the four axes of the coverage ledger
     /// (80 rows; the PICT table is a subset).
-    #[cfg(unix)]
     #[test]
     fn every_combination_of_runtime_files_and_venv_state_has_the_expected_outcome() {
         let mut checked = 0;
@@ -376,7 +375,6 @@ mod tests {
         assert_eq!(checked, 80);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_messages_are_firebase_tools_wording_with_the_fix_named() {
         let scratch = Scratch::new();
@@ -436,7 +434,6 @@ mod tests {
             .contains("needs Python 3.12"));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_ready_environment_reports_the_interpreter_and_the_sdk_version() {
         let scratch = Scratch::new();

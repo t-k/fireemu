@@ -6,7 +6,11 @@ import "./storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseJournal, roleCreateOutcome } from "./storage-signed-put/iam.mjs";
+import {
+  parseJournal,
+  roleCreateFromJournal,
+  roleCreateOutcome,
+} from "./storage-signed-put/iam.mjs";
 import { observe, removeSignerAccess } from "./storage-signed-put/observe.mjs";
 import { ROLE_ID } from "./storage-signed-put/plan.mjs";
 import {
@@ -247,11 +251,18 @@ describe("backlog from the v4 review: the role create outcome from a damaged jou
 
   it("a journal cut after a complete line keeps the role unless the terminal line is there", () => {
     const full = [line(before), line(after(200))];
-    const outcome = (lines) => {
-      const { entries, malformed } = parseJournal(lines.join("\n"));
-      return roleCreateOutcome(entries, { malformed });
-    };
+    const outcome = (lines) => roleCreateFromJournal(lines.join("\n"));
     assert.equal(outcome(full), "created");
+    assert.equal(
+      outcome([...full.slice(0, 1), "{not json"]),
+      "incomplete",
+      "an unreadable line after the request",
+    );
+    assert.equal(
+      outcome(["{not json"]),
+      "incomplete",
+      "an unreadable line alone may be the request",
+    );
     assert.equal(outcome(full.slice(0, 1)), "incomplete", "cut between the request and its answer");
     assert.equal(
       outcome([]),
@@ -261,10 +272,7 @@ describe("backlog from the v4 review: the role create outcome from a damaged jou
   });
 
   it("a malformed line hides a role create that may have been sent: the role is kept", () => {
-    const outcome = (lines) => {
-      const { entries, malformed } = parseJournal(lines.join("\n"));
-      return roleCreateOutcome(entries, { malformed });
-    };
+    const outcome = (lines) => roleCreateFromJournal(lines.join("\n"));
     assert.equal(outcome(["{not json"]), "incomplete");
     assert.equal(outcome([line({ phase: "before", label: "bucket" }), "{not json"]), "incomplete");
     assert.equal(

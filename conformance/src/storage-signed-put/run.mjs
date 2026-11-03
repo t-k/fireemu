@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
 import { createLocalDeps, createProductionDeps, fetchNet, installEgressGuard } from "./deps.mjs";
 import { validateSigner } from "./guard.mjs";
-import { parseJournal, roleCreateOutcome, validateMember, validateWindow } from "./iam.mjs";
+import { roleCreateFromJournal, validateMember, validateWindow } from "./iam.mjs";
 import { compareTargets } from "./judge.mjs";
 import { observe, readbackAbsent, readbackIam, removeSignerAccess } from "./observe.mjs";
 import {
@@ -273,7 +273,6 @@ async function iamRemoveCommand() {
   const preflight = JSON.parse(readFileSync(join(dir, "iam-preflight.json"), "utf8"));
   const plan = JSON.parse(readFileSync(join(dir, "iam-grant-plan.json"), "utf8"));
   // Whether the role is the run's own is read from the run's journal, never assumed.
-  const journal = parseJournal(readFileSync(join(dir, "journal.jsonl"), "utf8"));
   const report = await removeSignerAccess({
     target,
     runId: header.runId,
@@ -281,7 +280,7 @@ async function iamRemoveCommand() {
     out,
     preflight,
     plan,
-    roleCreate: roleCreateOutcome(journal.entries, { malformed: journal.malformed }),
+    roleCreate: roleCreateFromJournal(readFileSync(join(dir, "journal.jsonl"), "utf8")),
   });
   console.log(JSON.stringify(report));
   return report;

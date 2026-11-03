@@ -421,6 +421,12 @@ export function parseJournal(text) {
   return { entries, malformed };
 }
 
+/** The role create outcome of a run, read from the text of its journal. */
+export function roleCreateFromJournal(text) {
+  const { entries, malformed } = parseJournal(text);
+  return roleCreateOutcome(entries, { malformed });
+}
+
 /**
  * What the run's journal says about its role create: `created` (answered 200), `refused` (a
  * definitive non-200), `unknown` (sent, the answer unknown), `incomplete` (sent, or possibly sent

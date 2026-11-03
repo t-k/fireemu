@@ -853,6 +853,9 @@ fn walk_items<'a>(
     let mut raised = None;
     for item in items {
         if let Item::Match(block) = item {
+            if first_segment_excludes(&block.path, remaining) {
+                continue;
+            }
             match walk_match(block, remaining, ctx, ev, matched_any) {
                 Ok(true) => return Ok(true),
                 Ok(false) | Err(EvalError::Soft(_) | EvalError::Unknown) => {}
@@ -1012,6 +1015,29 @@ struct BlockReachability {
     complete_offsets: Vec<bool>,
 }
 
+/// Whether a match block's literal first header segment rules it out for `segments`.
+///
+/// Invariant: when this returns `true`, `pattern_reachable_offsets` would return all `false`
+/// for the block (its first transition is a literal that the first remaining segment does not
+/// equal, and an abstract segment never equals a literal), so `block_reachability` would report
+/// `can_reach_allow == false` and `covers_path == false`, and `match_path` would visit nothing.
+/// Skipping such a block therefore leaves every reachability result, the `matched_any` flag,
+/// the allow/deny decision and the expression budget unchanged. The only difference is that
+/// the skipped block charges no prefilter or matcher work, so those internal safety bounds are
+/// reached no earlier than before. Blocks whose first segment is a wildcard, a recursive
+/// wildcard, a binding, or that have an empty header are never skipped here.
+fn first_segment_excludes(path: &[PathSegment], segments: &[MatchSegment]) -> bool {
+    #[cfg(test)]
+    if REFERENCE_REACHABILITY.with(core::cell::Cell::get) {
+        return false;
+    }
+    matches!(
+        path.first(),
+        Some(PathSegment::Literal(literal))
+            if !segments.first().is_some_and(|segment| segment.matches_literal(literal))
+    )
+}
+
 /// Returns whether a match block or one of its descendants can consume the complete request.
 ///
 /// A block with direct `allow` statements needs a complete path match. A block with nested
@@ -1025,6 +1051,8 @@ fn block_reachability(
     work: &AtomicU64,
     cache: &mut BTreeMap<(String, Vec<MatchSegment>, bool), Vec<bool>>,
 ) -> Option<BlockReachability> {
+    #[cfg(test)]
+    BLOCKS_EXAMINED.with(|examined| examined.set(examined.get() + 1));
     let reachable =
         pattern_reachable_offsets(block.path.as_slice(), segments, zero_or_more, work, cache)?;
     let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
@@ -1038,7 +1066,7 @@ fn block_reachability(
             continue;
         };
         for (offset, can_reach) in reachable.iter().copied().enumerate() {
-            if can_reach {
+            if can_reach && !first_segment_excludes(&child.path, &segments[offset..]) {
                 let child_reachability =
                     block_reachability(child, &segments[offset..], zero_or_more, work, cache)?;
                 if child_reachability.can_reach_allow {
@@ -1058,6 +1086,65 @@ fn block_reachability(
     })
 }
 
+/// The reachability walk as it was before sibling blocks were filtered by their first path
+/// segment: every child is examined at every reachable offset. Kept as the differential
+/// reference for [`block_reachability`].
+#[cfg(test)]
+fn block_reachability_reference(
+    block: &MatchBlock,
+    segments: &[MatchSegment],
+    zero_or_more: bool,
+    work: &AtomicU64,
+    cache: &mut BTreeMap<(String, Vec<MatchSegment>, bool), Vec<bool>>,
+) -> Option<BlockReachability> {
+    BLOCKS_EXAMINED.with(|examined| examined.set(examined.get() + 1));
+    let reachable =
+        pattern_reachable_offsets(block.path.as_slice(), segments, zero_or_more, work, cache)?;
+    let covers_path = reachable.get(segments.len()).copied().unwrap_or(false);
+    let mut complete_offsets = vec![false; segments.len() + 1];
+    if !block.allows.is_empty() && covers_path {
+        complete_offsets[segments.len()] = true;
+    }
+
+    for item in &block.items {
+        let Item::Match(child) = item else {
+            continue;
+        };
+        for (offset, can_reach) in reachable.iter().copied().enumerate() {
+            if can_reach {
+                let child_reachability = block_reachability_reference(
+                    child,
+                    &segments[offset..],
+                    zero_or_more,
+                    work,
+                    cache,
+                )?;
+                if child_reachability.can_reach_allow {
+                    complete_offsets[offset] = true;
+                }
+            }
+            if can_reach && work.load(Ordering::Relaxed) > MATCH_PATH_PREFILTER_WORK_MAX {
+                return None;
+            }
+        }
+    }
+    let can_reach_allow = complete_offsets.iter().copied().any(|reachable| reachable);
+    Some(BlockReachability {
+        can_reach_allow,
+        covers_path,
+        complete_offsets,
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Counts match blocks whose reachability was computed, for the per-request work tests.
+    static BLOCKS_EXAMINED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    /// Evaluates with [`block_reachability_reference`] and without sibling filtering, so the
+    /// differential tests can compare both walks.
+    static REFERENCE_REACHABILITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
 #[cfg(test)]
 std::thread_local! {
     /// Counts request-local function capture tables built while walking match blocks.
@@ -1072,6 +1159,12 @@ fn walk_match<'a>(
     ev: &mut Evaluator<'a>,
     matched_any: &mut bool,
 ) -> Result<bool, EvalError> {
+    #[cfg(test)]
+    let block_reachability = if REFERENCE_REACHABILITY.with(core::cell::Cell::get) {
+        block_reachability_reference
+    } else {
+        block_reachability
+    };
     let reachability = block_reachability(
         block,
         remaining,
@@ -7465,6 +7558,214 @@ service cloud.firestore {
         fn list_to_set_matches_duplicate_heavy_reference(values in proptest::collection::vec(-8i64..8, 0..2048)) {
             let items: Vec<_> = values.into_iter().map(RulesValue::Int).collect();
             proptest::prop_assert_eq!(super::list_to_set(&items), linear_set(items.iter().cloned()));
+        }
+    }
+
+    /// One generated match block: header segments, allow condition, nested children.
+    /// Segment kinds: 0..=2 literal `a`/`b`/`c`, 3 single wildcard, 4 recursive wildcard.
+    #[derive(Debug, Clone)]
+    struct GeneratedBlock {
+        segments: Vec<u8>,
+        allow: Option<u8>,
+        children: Vec<GeneratedBlock>,
+    }
+
+    fn generated_block(depth: u32) -> proptest::strategy::BoxedStrategy<GeneratedBlock> {
+        let leaf = (
+            proptest::collection::vec(0u8..5, 1..4),
+            proptest::option::of(0u8..6),
+        )
+            .prop_map(|(segments, allow)| GeneratedBlock {
+                segments,
+                allow,
+                children: Vec::new(),
+            });
+        if depth == 0 {
+            return leaf.boxed();
+        }
+        (
+            proptest::collection::vec(0u8..5, 1..4),
+            proptest::option::of(0u8..6),
+            proptest::collection::vec(generated_block(depth - 1), 0..4),
+        )
+            .prop_map(|(segments, allow, children)| GeneratedBlock {
+                segments,
+                allow,
+                children,
+            })
+            .boxed()
+    }
+
+    fn write_generated_block(source: &mut String, block: &GeneratedBlock, names: &mut usize) {
+        source.push_str(" match ");
+        let mut captures = Vec::new();
+        for kind in &block.segments {
+            match kind {
+                0..=2 => {
+                    let _ = write!(source, "/{}", char::from(b'a' + kind));
+                }
+                3 => {
+                    *names += 1;
+                    let _ = write!(source, "/{{w{names}}}");
+                    captures.push(format!("w{names}"));
+                }
+                _ => {
+                    *names += 1;
+                    let _ = write!(source, "/{{r{names}=**}}");
+                    // A recursive wildcard must be the last header segment.
+                    break;
+                }
+            }
+        }
+        source.push_str(" {");
+        if let Some(allow) = block.allow {
+            let condition = match (allow, captures.last()) {
+                (0, _) => "true".to_owned(),
+                (1, _) => "false".to_owned(),
+                (2, Some(capture)) => format!("{capture} == 'a'"),
+                // A missing member is a soft error that only makes this allow false.
+                (3, _) => "request.resource.data.missing == 1".to_owned(),
+                // Spends several expressions before deciding, so the budget count is observable.
+                (4, _) => "1 + 1 == 3 || 2 + 2 == 5 || request.auth != null".to_owned(),
+                _ => "request.method == 'get'".to_owned(),
+            };
+            let _ = write!(source, " allow get, create: if {condition};");
+        }
+        for child in &block.children {
+            write_generated_block(source, child, names);
+        }
+        source.push_str(" }");
+    }
+
+    fn generated_reachability_rules(version_two: bool, blocks: &[GeneratedBlock]) -> String {
+        let mut source = String::new();
+        if version_two {
+            source.push_str("rules_version = '2'; ");
+        }
+        source.push_str("service cloud.firestore {");
+        let mut names = 0;
+        for block in blocks {
+            write_generated_block(&mut source, block, &mut names);
+        }
+        source.push_str(" }");
+        source
+    }
+
+    fn reference_report(
+        ruleset: &crate::ast::Ruleset,
+        context: &RequestContext,
+    ) -> super::EvaluationReport {
+        super::REFERENCE_REACHABILITY.with(|enabled| enabled.set(true));
+        let report = evaluate_request(ruleset, context);
+        super::REFERENCE_REACHABILITY.with(|enabled| enabled.set(false));
+        report
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(512))]
+        #[test]
+        fn sibling_filtering_matches_reference_reachability(
+            version_two in proptest::bool::ANY,
+            blocks in proptest::collection::vec(generated_block(2), 1..12),
+            requests in proptest::collection::vec(
+                (proptest::collection::vec(0u8..5, 0..6), proptest::bool::ANY, proptest::bool::ANY),
+                1..6,
+            ),
+        ) {
+            let source = generated_reachability_rules(version_two, &blocks);
+            let ruleset = parse_ruleset(&source).unwrap();
+            for (path, write, abstract_path) in requests {
+                // 0..=2 are the literals the headers use, 3 is a name no header uses and 4 is
+                // the abstract segment marker (a concrete name unless the path is abstract).
+                let path = path
+                    .iter()
+                    .map(|kind| match kind {
+                        0..=2 => char::from(b'a' + kind).to_string(),
+                        3 => "z".to_owned(),
+                        _ => super::ABSTRACT_SEGMENT.to_owned(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let context = RequestContext {
+                    service: RulesService::Firestore,
+                    method: if write { Method::Create } else { Method::Get },
+                    path: format!("/{path}"),
+                    auth: None,
+                    resource: None,
+                    request_resource: None,
+                    time_unix_nanos: 0,
+                    abstract_path,
+                    request_query: None,
+                };
+                let expected = reference_report(&ruleset, &context);
+                let actual = evaluate_request(&ruleset, &context);
+                proptest::prop_assert_eq!(&actual.decision, &expected.decision, "{} {:?}", source, context.path);
+                proptest::prop_assert_eq!(actual.expressions_evaluated, expected.expressions_evaluated);
+                proptest::prop_assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+            }
+        }
+    }
+
+    /// Blocks whose reachability one evaluation of `request` computes.
+    fn blocks_examined(
+        ruleset: &crate::ast::Ruleset,
+        request: &RequestContext,
+        reference: bool,
+    ) -> (usize, Decision) {
+        super::REFERENCE_REACHABILITY.with(|enabled| enabled.set(reference));
+        super::BLOCKS_EXAMINED.with(|examined| examined.set(0));
+        let decision = evaluate_request(ruleset, request).decision;
+        super::REFERENCE_REACHABILITY.with(|enabled| enabled.set(false));
+        (super::BLOCKS_EXAMINED.with(core::cell::Cell::get), decision)
+    }
+
+    /// The bench's ruleset shape: unrelated blocks nested beside the allowing block.
+    fn nested_early_allow_rules(unrelated: usize) -> crate::ast::Ruleset {
+        let mut source = String::from(
+            "rules_version = '2'; service cloud.firestore { match /databases/{db}/documents { match /notes/{id} { allow get: if true; }",
+        );
+        for index in 0..unrelated {
+            let _ = write!(
+                source,
+                " match /unrelated{index}/{{id}} {{ allow get: if id == 'x'; }}"
+            );
+        }
+        source.push_str(" } }");
+        parse_ruleset(&source).unwrap()
+    }
+
+    #[test]
+    fn unrelated_sibling_blocks_are_not_examined_after_an_early_allow() {
+        let mut counts = Vec::new();
+        for unrelated in [0, 100, 1_000] {
+            for (shape, ruleset) in [
+                ("top-level", early_allow_rules(unrelated, "true")),
+                ("nested", nested_early_allow_rules(unrelated)),
+            ] {
+                let (reference, expected) = blocks_examined(&ruleset, &note_request(), true);
+                let (examined, decision) = blocks_examined(&ruleset, &note_request(), false);
+                assert_eq!(decision, expected);
+                assert_eq!(decision, Decision::Allow);
+                println!(
+                    "blocks examined per request, {shape:9} unrelated={unrelated:5}: reference {reference:5}, filtered {examined:5}"
+                );
+                counts.push((shape, unrelated, examined));
+            }
+        }
+        for shape in ["top-level", "nested"] {
+            let baseline = counts
+                .iter()
+                .find(|&&(name, unrelated, _)| name == shape && unrelated == 0)
+                .map(|&(_, _, examined)| examined);
+            for &(name, unrelated, examined) in &counts {
+                if name == shape {
+                    assert_eq!(
+                        Some(examined),
+                        baseline,
+                        "{shape} early allow with {unrelated} unrelated blocks"
+                    );
+                }
+            }
         }
     }
 }

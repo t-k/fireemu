@@ -152,13 +152,13 @@
     },
     {
       "id": "R9",
-      "decision": "R2 (as amended by R4 to R7) is amended for the families recorded in production from 2026-10-28 to 2026-10-29 and replayed against fireemu in both profiles, for the recorded shapes only: REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH and writeSizeLimit=small (NEXT4), orderBy with equalTo/endAt/startAfter/endBefore, and the five REST .sv shapes (RTDB/rest-verbs-and-options); Rules cascade, .validate and data/newData/root snapshots, query-based Rules, the recorded Rules-language, method and operator cases and seven Rules identity cells (RTDB/rules-evaluation-finite); and the healing re-registration, nested-priority and string-priority onDisconnect shapes, which stay under RTDB/ondisconnect-prioritized-split (v035RecordedPriority). Every other shape R2 lists stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
-      "rationale": "These rows have replayed without a mismatch in the v0.34, v0.35 and v0.41 recorded revalidations, but R2, the contract and /outOfScope still called them unverified.",
+      "decision": "R2 (as amended by R4 to R7) is amended for the families recorded in production from 2026-10-28 to 2026-11-02 and replayed against fireemu in both profiles, for the recorded shapes only: REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH and writeSizeLimit=small (NEXT4), orderBy with equalTo/endAt/startAfter/endBefore, and the five REST .sv shapes (RTDB/rest-verbs-and-options); Rules cascade, .validate and data/newData/root snapshots, query-based Rules, the recorded Rules-language, method and operator cases and seven Rules identity cells (RTDB/rules-evaluation-finite); the healing re-registration, nested-priority and string-priority onDisconnect shapes, which stay under RTDB/ondisconnect-prioritized-split (v035RecordedPriority); and the web SDK's one-shot get of orderByKey, orderByValue and orderByPriority ranges, push, update, a multi-path update, serverTimestamp and increment over WebSocket and long polling, recorded on 2026-11-02 and replayed on the v0.43.0 release (RTDB/sdk-small-queries-and-writes). Every other shape R2 lists stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
+      "rationale": "These rows have replayed without a mismatch in the v0.34, v0.35 and v0.41 recorded revalidations and, for the small SDK observer, on the v0.43.0 release, but R2, the contract and /outOfScope still called them unverified.",
       "amends": "R2",
       "status": "FROZEN",
       "decidedBy": "project coordinator (delegated by the owner)",
       "decidedOn": "2026-11-03",
-      "decisionRef": "docs.local/instructions/owner-decisions.md (1915, 1936, 1938, 1948, 1956, 1963, 1988, 2118, 2206, 2217, 2218); docs.local/runs/rtdb-closure-4a/inventory.md (the frozen list of shapes that stay unobserved)"
+      "decisionRef": "docs.local/instructions/owner-decisions.md (1915, 1936, 1938, 1948, 1956, 1963, 1988, 2118, 2202, 2203, 2206, 2217, 2218); docs.local/runs/rtdb-closure-4a/inventory.md (the frozen list of shapes that stay unobserved)"
     }
   ],
   "conditions": [
@@ -1091,6 +1091,59 @@
         ],
         "scope": "Finite recorded Rules cases only, not complete Rules or query parity: auth.token claims, .indexOn refusal variants, other grammar, load texts and lexing stay unobserved (/outOfScope)."
       }
+    },
+    {
+      "conditionId": "RTDB/sdk-small-queries-and-writes",
+      "coverageLedgerRows": [
+        "RTDB-CV-07",
+        "RTDB-CV-08"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "observer, one-shot get: orderByKey startAt('b')/endAt('d'), orderByValue equalTo(2), orderByPriority startAfter(1)/endBefore(4)",
+        "writer: two push ids and their values, update of one child, a multi-path update at the root, serverTimestamp through update (inside each side's before..after window), increment(5) on a numeric, an absent and a string child",
+        "per-role connection events; 8 cases x 4 profiles (r1/r2 x WebSocket/long polling) = 32 observations"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-SMALL-20261102-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-02",
+            "profiles": 4,
+            "observations": 32
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-small.json",
+        "fixtureSha256": "ed2b866ffa7d33ba76c3bab870a02293d2033a4a2587b01eb897affd88deb57f",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
+        "comparisonSha256": "6f2a3cd1eaeef8ecb092c75de83a88de85bad4e21cabcf7af86a3429361393af",
+        "release": "v0.43.0",
+        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
+        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+        "toolCommit": "5f92a92c42ec8f6309b9b55c8eef91addeeb687a",
+        "rows": {
+          "strict": {
+            "MATCH": 32
+          },
+          "emulator": {
+            "MATCH": 32
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2202: the production run RTDB-SMALL-20261102-01; 2203: the default clock follows real time; 2218 D6: the closure binary is the v0.43.0 release)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-small-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-small-fixture.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-small.test.mjs",
+          "conformance/src/rtdb-release-replay.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs"
+        ],
+        "scope": "The 32 recorded observations only: one-shot gets, not listeners; child events, windows, compound cursors, transaction variants and Admin SDK paths stay unobserved (/outOfScope)."
+      }
     }
   ],
   "integratedRegression": {
@@ -1181,6 +1234,24 @@
           }
         },
         "binding": "Recorded REST replay on signed source 81dca801d0f67f002dc7a63e8950f30017f17d9f, binary SHA-256 988a5fce8727bc8c7e1c45a320f4f044aff7753f7d8c54e3c64b0e99ef1b2f52; historical SDK, Auth, residual and S5 evidence is not rebound."
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
+        "sha256": "6f2a3cd1eaeef8ecb092c75de83a88de85bad4e21cabcf7af86a3429361393af",
+        "rows": 32,
+        "summary": {
+          "strict": {
+            "MATCH": 32,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 32,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the published v0.43.0 release binary a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b (fireemu-0.43.0-darwin-arm64.tar.gz, verified against the release's SHA256SUMS) of tag commit afe1234851c593031c1eea2e2304f3e2a0dc3f01; release run R28"
       }
     ],
     "productionRequests": 0,

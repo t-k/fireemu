@@ -2029,7 +2029,7 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });
 
-test("reopened RTDB retains its seven disclosed comparisons", () => {
+test("reopened RTDB retains its eight disclosed comparisons", () => {
   const closures = committedClosures();
   const rtdb = closures.find((entry) => entry.closure.parent === "RTDB");
   assert.equal(rtdb.closure.parentStatus, "IMPLEMENTING");
@@ -2046,9 +2046,14 @@ test("reopened RTDB retains its seven disclosed comparisons", () => {
     "spec/compatibility/closure/evidence/RTDB-rest-v033-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-s5-comparison.json",
     "spec/compatibility/closure/evidence/RTDB-sdk-ondisconnect-comparison.json",
+    "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json",
   ]);
   assert.ok(planned.every((entry) => entry.parents.join() === "RTDB" && entry.runIds.length === 1));
-  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 6);
+  assert.equal(new Set(planned.map((entry) => entry.runIds[0])).size, 7);
+  assert.deepEqual(
+    planned.find((entry) => entry.path.endsWith("RTDB-sdk-small-comparison.json")).runIds,
+    ["R28"],
+  );
   rtdb.closure.integratedRegression.comparisons = [];
   assert.ok(planComparisons(closures, readJson).errors.some((error) => error.includes("RTDB:")));
 });
@@ -2956,7 +2961,7 @@ test("RTDB replay dependencies are locked and installed before the offline relea
 });
 
 test("RTDB release entries bind every local producer to the installed binary", () => {
-  for (const id of ["R22", "R23", "R24", "R25", "R26", "R27"]) {
+  for (const id of ["R22", "R23", "R24", "R25", "R26", "R27", "R28"]) {
     const run = RUNS.find((entry) => entry.id === id);
     assert.ok(run);
     for (const command of run.commands) {
@@ -2971,6 +2976,7 @@ test("RTDB release entries bind every local producer to the installed binary", (
     }
   }
   assert.equal(RUNS.find((entry) => entry.id === "R22").commands[1].argv[3], "smoke");
+  assert.equal(RUNS.find((entry) => entry.id === "R28").commands[0].argv[3], "sdk-small");
 });
 
 test("RTDB release planning rejects an unserved or ambiguously served comparison path", () => {
@@ -3019,7 +3025,7 @@ test("RTDB run entries expand the owned output and binary, and reject producer f
       out: dir,
       env: { PATH: dir },
     };
-    for (const id of ["R22", "R23", "R24", "R25", "R26", "R27"]) {
+    for (const id of ["R22", "R23", "R24", "R25", "R26", "R27", "R28"]) {
       const run = clone(RUNS.find((entry) => entry.id === id));
       const result = await runEntry(run, context);
       assert.deepEqual(result.record.errors, [], id);
@@ -3093,6 +3099,21 @@ test("each REST history binds its own fixture identity and recomputes local payl
   corrupt.R22.result.rows[0].local = { status: 599, bodyText: "corrupt", etag: "wrong" };
   for (const path of [oldPath, newPath])
     assert.notDeepEqual(judge(cmp(path), corrupt, context), []);
+});
+
+test("R28 judges only a matching sdk-small export bound to the installed binary", () => {
+  const path = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json";
+  const cmp = { path, kind: "rtdb-production-comparison-v1", runIds: ["R28"] };
+  const context = { readJson, binarySha256: BINARY };
+  const ok = { campaign: "sdk-small", binarySha256: BINARY, match: true };
+  assert.deepEqual(judge(cmp, { R28: ok }, context), []);
+  for (const observed of [
+    { ...ok, campaign: "s5" },
+    { ...ok, match: false },
+    { ...ok, binarySha256: "0".repeat(64) },
+    undefined,
+  ])
+    assert.notDeepEqual(judge(cmp, { R28: observed }, context), []);
 });
 
 test("local timeout returns while namespace teardown remains responsible for detached children", async () => {

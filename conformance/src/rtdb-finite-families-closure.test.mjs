@@ -20,6 +20,8 @@ const V041 = {
   sourceCommit: "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
   binarySha256: "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
 };
+const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json";
+const V043 = { sourceCommit: "afe1234851c593031c1eea2e2304f3e2a0dc3f01" };
 
 const closure = () => json(CLOSURE);
 const condition = (id) => closure().conditions.find((entry) => entry.conditionId === id);
@@ -94,6 +96,7 @@ test("R9 amends R2 for the recorded families under the cited owner rows", () => 
   for (const id of [
     "RTDB/rest-verbs-and-options",
     "RTDB/rules-evaluation-finite",
+    "RTDB/sdk-small-queries-and-writes",
     "RTDB/ondisconnect-prioritized-split",
   ])
     assert.ok(r9.decision.includes(id), id);
@@ -127,6 +130,35 @@ test("the three v0.35 priority shapes stay under the prioritized-split condition
   const ids = record.conditions.map((entry) => entry.conditionId);
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(!ids.includes("RTDB/priority-shapes"));
+});
+
+test("the small SDK observer comparison binds the v0.43.0 release binary in both profiles", () => {
+  const entry = condition("RTDB/sdk-small-queries-and-writes");
+  assert.ok(entry);
+  assert.equal(entry.status, "VERIFIED");
+  const evidence = entry.evidence;
+  assert.equal(evidence.comparisonPath, SDK_SMALL);
+  assert.equal(sha(SDK_SMALL), evidence.comparisonSha256);
+  assert.equal(sha(evidence.fixturePath), evidence.fixtureSha256);
+  const comparison = json(SDK_SMALL);
+  assert.equal(comparison.kind, "rtdb-production-comparison-v1");
+  assert.equal(comparison.parent, "RTDB");
+  assert.deepEqual(comparison.conditions, ["RTDB/sdk-small-queries-and-writes"]);
+  assert.equal(comparison.binding.sourceCommit, V043.sourceCommit);
+  assert.match(comparison.binding.binarySha256, /^[0-9a-f]{64}$/);
+  assert.equal(comparison.binding.productionRequests, 0);
+  assert.equal(comparison.fixture.sha256, sha(comparison.fixture.path));
+  for (const profile of ["strict", "emulator"]) {
+    const run = comparison.profiles[profile];
+    assert.equal(run.binarySha256, comparison.binding.binarySha256);
+    assert.deepEqual(run.counts, { MATCH: 32, MISMATCH: 0, NEEDS_REVIEW: 0 });
+    assert.equal(run.match, true);
+  }
+  assert.deepEqual(comparison.summary.counts, { MATCH: 32, MISMATCH: 0, NEEDS_REVIEW: 0 });
+  const regression = closure().integratedRegression.comparisons.find((c) => c.path === SDK_SMALL);
+  assert.ok(regression);
+  assert.equal(regression.sha256, evidence.comparisonSha256);
+  assert.equal(regression.rows, 32);
 });
 
 // Each item of the frozen inventory (docs.local/runs/rtdb-closure-4a/inventory.md, G6-G10, G13,

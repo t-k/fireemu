@@ -385,3 +385,12 @@ def test_a_scheduled_function_with_a_secret_is_gated_too(monkeypatch):
     dispatcher.reserve()
     dispatcher.start(schedule_message())
     assert writer.result("s-1")["ok"] is True and seen == {"key": "k"}
+
+
+def test_a_schedule_frame_whose_event_is_not_an_object_is_a_failed_result():
+    message = schedule_message()
+    message["event"] = "not an event"
+    ran = []
+    writer = run_schedule(ran.append, message)
+    assert writer.result("s-1") == {"type": "result", "invocationId": "s-1", "ok": False, "error": "the scheduled run names no job name"}
+    assert ran == []

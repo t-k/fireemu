@@ -747,3 +747,9 @@ def test_each_blocking_token_flag_is_read_from_its_own_option():
         assert {name: described["trigger"][name] for name in ("accessToken", "idToken", "refreshToken")} == {
             "accessToken": flag == "accessToken", "idToken": flag == "idToken", "refreshToken": flag == "refreshToken"
         }
+
+
+def test_an_unresolvable_blocking_event_type_expression_names_its_field():
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": _Unresolved()})) == (
+        "unknown", "unsupported", "blockingTrigger.eventType expression did not resolve to a value"
+    )

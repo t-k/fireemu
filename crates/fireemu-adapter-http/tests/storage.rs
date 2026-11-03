@@ -10153,6 +10153,11 @@ fn spelled(spelling: &str) -> Vec<(&'static str, &'static str)> {
         "canonical-empty" => vec![(CANONICAL, "")],
         "canonical-host+lower-empty" => vec![(CANONICAL, "host"), (LOWER, "")],
         "mixed-empty" => vec![(MIXED, "")],
+        // Two lists that both refuse, for different headers: the first in byte order is named.
+        "canonical-names+lower-range" => vec![
+            (CANONICAL, NAMES),
+            (LOWER, "host;x-goog-content-length-range"),
+        ],
         other => panic!("unknown spelling {other}"),
     }
 }
@@ -10336,7 +10341,7 @@ fn url_verdict(strict: bool, url: &str) -> Option<Refusal> {
 fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator() {
     let refused_malformed: Refusal = (400, "MalformedSecurityHeader", Some("content-type"));
     let empty: Refusal = (400, "InvalidArgument", None);
-    let cases: [(&str, bool, &str, bool, Option<Refusal>); 10] = [
+    let cases: [(&str, bool, &str, bool, Option<Refusal>); 12] = [
         // M1: the canonical list needs content-type, a second spelling signs only host.
         (
             "canonical-names+mixed-host",
@@ -10357,6 +10362,21 @@ fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator()
         (
             "canonical-host+lower-names",
             true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        // Both lists refuse; the first in the byte order of the parameter names is the one named.
+        (
+            "canonical-names+lower-range",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        (
+            "canonical-names+lower-range",
+            false,
             "valid",
             false,
             Some(refused_malformed),
@@ -10430,48 +10450,28 @@ fn signed_xml_put_header_spelling_pict_cases() {
         ("emulator", "valid", "canonical-empty", "present", "absent"),
         ("emulator", "valid", "mixed-names", "absent", "absent"),
         (
-            "emulator",
-            "expired",
-            "canonical-host+lower-empty",
-            "present",
-            "sent",
-        ),
-        (
-            "emulator",
-            "no-signature",
-            "canonical-names+mixed-host",
-            "absent",
-            "sent",
-        ),
-        ("emulator", "no-signature", "lower-empty", "absent", "sent"),
-        ("strict", "valid", "mixed-empty", "present", "sent"),
-        (
             "strict",
-            "no-signature",
-            "canonical-host+lower-empty",
+            "valid",
+            "canonical-names+lower-range",
             "absent",
             "absent",
-        ),
-        (
-            "strict",
-            "expired",
-            "canonical-host+lower-names",
-            "present",
-            "sent",
         ),
         (
             "emulator",
             "valid",
-            "canonical-host+lower-empty",
-            "present",
-            "sent",
+            "canonical-names+lower-range",
+            "absent",
+            "absent",
         ),
-        ("strict", "expired", "canonical-names", "present", "absent"),
-        ("strict", "expired", "mixed-names", "present", "sent"),
-        ("strict", "no-signature", "mixed-names", "absent", "sent"),
-        ("strict", "expired", "canonical-empty", "absent", "sent"),
         (
             "strict",
+            "valid",
+            "canonical-names+lower-range",
+            "present",
+            "absent",
+        ),
+        (
+            "emulator",
             "no-signature",
             "canonical-host+lower-names",
             "absent",
@@ -10479,21 +10479,23 @@ fn signed_xml_put_header_spelling_pict_cases() {
         ),
         (
             "emulator",
-            "no-signature",
-            "mixed-empty",
-            "absent",
-            "absent",
-        ),
-        (
-            "strict",
-            "no-signature",
-            "canonical-empty",
+            "expired",
+            "canonical-names+lower-range",
             "present",
             "sent",
         ),
-        ("strict", "expired", "mixed-empty", "present", "absent"),
-        ("emulator", "expired", "lower-empty", "present", "absent"),
-        ("strict", "expired", "lower-names", "absent", "sent"),
+        ("strict", "no-signature", "lower-empty", "absent", "sent"),
+        ("strict", "valid", "mixed-empty", "present", "absent"),
+        ("strict", "expired", "canonical-empty", "absent", "sent"),
+        (
+            "strict",
+            "valid",
+            "canonical-host+lower-empty",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "expired", "lower-names", "present", "sent"),
+        ("emulator", "no-signature", "mixed-empty", "absent", "sent"),
         (
             "emulator",
             "no-signature",
@@ -10503,13 +10505,53 @@ fn signed_xml_put_header_spelling_pict_cases() {
         ),
         (
             "strict",
-            "valid",
+            "no-signature",
+            "canonical-names+lower-range",
+            "absent",
+            "sent",
+        ),
+        (
+            "emulator",
+            "no-signature",
             "canonical-names+mixed-host",
             "present",
             "sent",
         ),
+        ("strict", "expired", "mixed-names", "present", "sent"),
+        (
+            "strict",
+            "no-signature",
+            "canonical-empty",
+            "absent",
+            "sent",
+        ),
+        ("strict", "expired", "lower-empty", "absent", "absent"),
+        (
+            "emulator",
+            "no-signature",
+            "canonical-host+lower-empty",
+            "present",
+            "sent",
+        ),
+        (
+            "strict",
+            "expired",
+            "canonical-host+lower-empty",
+            "absent",
+            "sent",
+        ),
+        ("strict", "expired", "mixed-empty", "present", "absent"),
+        (
+            "strict",
+            "expired",
+            "canonical-host+lower-names",
+            "present",
+            "sent",
+        ),
+        ("emulator", "expired", "canonical-names", "present", "sent"),
+        ("strict", "no-signature", "mixed-names", "absent", "sent"),
     ];
-    assert_eq!(cases.len(), 32);
+    assert_eq!(cases.len(), 36);
     for (profile, url, spelling, content_type, range) in cases {
         let strict = profile == "strict";
         let pairs = spelled(spelling);

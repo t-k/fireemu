@@ -10551,10 +10551,12 @@ exports.add = onCall({{}}, observe("add"));
                 .await
                 .err()
                 .unwrap();
-        assert!(
-            untrusted.contains("Missing virtual environment at venv directory"),
-            "{untrusted}"
-        );
+        let expected = if cfg!(windows) {
+            "not supported on Windows"
+        } else {
+            "Missing virtual environment at venv directory"
+        };
+        assert!(untrusted.contains(expected), "{untrusted}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

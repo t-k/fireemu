@@ -4,6 +4,7 @@ import {
 	AREAS,
 	productSurfaceRows,
 	productionAreaRows,
+	verifiedAreaCount,
 	capabilityRows,
 	loadRepositoryData,
 } from './compat.mjs';
@@ -163,4 +164,23 @@ test('the suite column says what a non-emulator surface is', () => {
 		],
 	});
 	assert.deepEqual(rows.map((r) => r.inSuite), ['No (Fireemu addition)', '—', 'Yes']);
+});
+
+test('the home page counts the areas whose parent is verified against production', async () => {
+	const record = (parent, parentStatus) => ({ parent, parentStatus, conditions: [] });
+	assert.equal(
+		verifiedAreaCount([
+			record('FS-DATA-WRITE', 'COMPAT_VERIFIED'),
+			record('FS-PIPELINE', 'COMPAT_VERIFIED'),
+			record('RTDB', 'IMPLEMENTING'),
+		]),
+		2,
+	);
+	assert.equal(verifiedAreaCount([]), 0);
+	// The count on the page is the number of verified rows of the production table.
+	const closures = (await loadRepositoryData()).closures;
+	assert.equal(
+		verifiedAreaCount(closures),
+		productionAreaRows(closures).filter((row) => row.status === 'Verified against production').length,
+	);
 });

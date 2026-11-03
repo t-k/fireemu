@@ -44,7 +44,7 @@ apiMode = "native"
 
 In v0.40.0, the recorded empty `array()` and `map()` constructors return empty values. Other constructor shapes remain outside these observations.
 
-The FS-PIPELINE production compatibility assessment is in progress. Recorded cases retain their individual evidence, but mismatches and unobserved behavior remain; the parent is not verified.
+Enterprise pipelines are verified against production for the recorded corpus: 1,951 recorded cases, of which 1,906 match, 17 match within production's own variation (response framing and random `sample` positions), 26 differ only in a way the project owner accepted (the order of aggregate groups, the legal selection of groups under a `limit` or `offset` after unsorted groups, the order of rows tied on every sort key, and a value that depends on the clock) and 2 gRPC requests the recorder could not send are covered by a later observation. Shapes that were not recorded are not claimed, and the strict profile refuses many of them as unobserved; the [Production verification](../../compatibility/#production-verification) table lists the not-claimed items.
 
 On an Enterprise database, fireemu runs pipelines from the Admin SDK (gRPC) and the Web SDK's `firebase/firestore/lite/pipelines` (REST `:executePipeline`). The supported subset starts with a `collection`, `collection_group`, `documents` or finite `database` input, followed by `where`, `select`, `sort`, `add_fields`, `remove_fields`, `distinct`, `aggregate`, `offset`, `limit` and `unnest` stages in any order and number. Aggregates include `count`, `count_distinct`, `sum`, `average`, `minimum` and `maximum`, with or without groups.
 

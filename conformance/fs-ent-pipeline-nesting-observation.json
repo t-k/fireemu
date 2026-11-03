@@ -1,0 +1,44 @@
+{
+  "kind": "fs-ent-pipeline-nesting-later-observation-v1",
+  "decision": "BOUND_AS_SEPARATE_OBSERVATION",
+  "scope": "Two O-8A gRPC rows whose own recorder client could not serialize the request. The raw O-8A rows stay UNKNOWN in the comparison; this file binds a later production observation of the same requests and the local test that pins fireemu's answer. It claims these two requests only.",
+  "productionObservation": {
+    "run": "FS stage-context observation, 2026-10-29, 2 rounds per request, gRPC ExecutePipeline",
+    "sourceCommit": "a86dca7962711baa1c4e79caf5f42af6e1cd7f72",
+    "journalSha256": "5aa82e7c329016af2c82cb8ac6215eb35538f9d510be1149c8a79eefdd93376c",
+    "join": "The original O-8A corpus AST equals the observed AST; re-encoding it with the real Firestore codec under the captured database namespace gives the captured request bytes exactly (4 of 4 requests).",
+    "rows": [
+      {
+        "row": "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc",
+        "depth": 48,
+        "requestBytes": 767,
+        "requestSha256": "469b439cde2cdeda422c4915bddcd2a2ef5439257b1e1e5edeb6f35a8fa3cb61",
+        "rounds": 2,
+        "code": 3,
+        "message": "Request contains an invalid argument.",
+        "frames": 0,
+        "statusDetails": 0
+      },
+      {
+        "row": "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc",
+        "depth": 100,
+        "requestBytes": 1495,
+        "requestSha256": "743972441b77f2df0cdb29cc96b6fa8be89255f7a2ce8e29a3adbc2c11777a05",
+        "rounds": 2,
+        "code": 3,
+        "message": "Request contains an invalid argument.",
+        "frames": 0,
+        "statusDetails": 0
+      }
+    ],
+    "sameAnswerAsRecordedRow": "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc"
+  },
+  "localReplay": {
+    "profile": "strict",
+    "test": "crates/fireemu-adapter-grpc/tests/request_bytes.rs#execute_pipeline_grpc_recursion_refusal_follows_profile",
+    "depths": [47, 48, 100],
+    "strict": { "code": 3, "message": "Request contains an invalid argument." },
+    "emulator": "INVALID_ARGUMENT with the protobuf decoder's own text, which ends with \"recursion limit reached\""
+  },
+  "productionRequests": 0
+}

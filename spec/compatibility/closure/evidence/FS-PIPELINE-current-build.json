@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "f39691624719615741948045a84bcdff24ad6c51",
+  "command": "env -u CARGO_TARGET_DIR RUSTC_WRAPPER= cargo build --locked --release -p fireemu --bin fireemu --manifest-path \"$CUSTODY_MANIFEST\" --target-dir \"$CUSTODY_TARGET\"",
+  "binarySha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
+  "profile": "release",
+  "locked": true,
+  "rustcWrapper": "empty",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "host": "Darwin arm64",
+  "builtOn": "2026-11-03T00:14:14+00:00",
+  "targetDirectoryNote": "Cargo used an exclusive worktree-local target directory (target/custody) that held no earlier artifact of this build. The same command run a second time at the same source after hand mutants had been applied and restored (the files were rebuilt) produced the identical binary hash.",
+  "rustSourcesNote": "The crates are those of sourceCommit; the evidence child commit changes only conformance and spec files, none of which is compiled into the binary.",
+  "uiBundled": false,
+  "reproducibility": "Two builds of the same source in the same worktree gave the same SHA-256. Not compared across machines."
+}

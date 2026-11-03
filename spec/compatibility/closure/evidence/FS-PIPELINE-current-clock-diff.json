@@ -1,0 +1,28 @@
+{
+  "kind": "fs-ent-pipeline-timestamp-diff-clock-v1",
+  "recipe": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now",
+  "sourceCommit": "f39691624719615741948045a84bcdff24ad6c51",
+  "binarySha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
+  "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "configSha256": "92896e1fc1628c3fb471873b05cf8ca8e60976b733bbf729503a8f7b208cdb6d",
+  "configuredClock": "2031-02-03T04:05:06.123456789Z",
+  "derivedSeconds": "1927857906",
+  "status": 200,
+  "response": [
+    {
+      "executionTime": "2031-02-03T04:05:06.123456789Z",
+      "results": [
+        {
+          "fields": {
+            "v": {
+              "integerValue": "1927857906"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "rawReceiptSha256": "6db3388df261e9c79e4aee5fd50aace53917d57eaefe7f1365645d2318f0095d",
+  "productionRequests": 0,
+  "scope": "Controlled-clock exact leaf only; default comparison remains MISMATCH."
+}

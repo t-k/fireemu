@@ -3225,7 +3225,8 @@
         "role": "the O-6 evaluator (tied rows only) the coverage rules reuse",
         "sha256": "36b3fb587ce2e128bde84f54bf67d4bdddb90bac314d884edcbcb3c345b4f955"
       }
-    ]
+    ],
+    "mergedMainNote": "The build of origin/main ca61aa1a2 merged into this branch (release profile, RUSTC_WRAPPER empty, --locked, fresh target) has SHA-256 9f1af04e77e3adf719e5b6ff90f0c108ca1dc66357cbe1d4cac03bce61c51c39. The strict lane on it reproduced every row of the comparison, the summary and the fixture digest; only artifactSha256 of the export differs. The closure keeps the build above as its final artifact and is not rebound. The release job reruns the strict lane (R21) on each published package."
   },
   "recordedLeafReview": {
     "decision": "APPROVED_RECORDED_ROWS_ONLY",

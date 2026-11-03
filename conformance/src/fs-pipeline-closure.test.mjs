@@ -340,6 +340,15 @@ test("the record states the platform of its controls and what the release job re
   assert.match(note, /linux-x64 package/);
   assert.match(note, /no native Linux arm64 replay is required/);
   assert.equal(json(closure.integratedRegression.buildReceiptPath).host, "Darwin arm64");
+  const merged = closure.integratedRegression.mergedMainNote;
+  assert.match(merged, /9f1af04e77e3adf719e5b6ff90f0c108ca1dc66357cbe1d4cac03bce61c51c39/);
+  assert.match(merged, /reproduced every row/);
+  assert.match(merged, /not rebound/);
+  assert.match(merged, /each published package/);
+  assert.notEqual(
+    "9f1af04e77e3adf719e5b6ff90f0c108ca1dc66357cbe1d4cac03bce61c51c39",
+    closure.integratedRegression.releaseBinarySha256,
+  );
 });
 
 test("the 166 rows added after v0.35 are the rows that changed from MISMATCH to MATCH", () => {

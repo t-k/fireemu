@@ -34,7 +34,7 @@
     "conformance/src/fs-ent-pipeline/o7-order-policy-data.json": "d35013550cfc3a78fae2b9b158821d33042836281093575e2e4d6567fe368a09",
     "conformance/src/fs-ent-pipeline/o7-order-policy.mjs": "4b2846e23f7e9b170403d8ec2045b6f83d19a05b4cd985b96fc9769548ac3a47",
     "conformance/src/fs-ent-text-refusal-evidence.test.mjs": "142b80fd6a7ee87c85efdb32d3a99fd7a0b00619cc31178ed9f73daa288ba03e",
-    "conformance/src/fs-pipeline-closure.test.mjs": "ca6d5f57dbadc3794455c581836ab3756341960d9d5e0bf80454b71a162657b8",
+    "conformance/src/fs-pipeline-closure.test.mjs": "824ce14c2f3047c61233b6bdaf456caeae718da8c7fd9c78b9d9b4f7c8fa17ae",
     "conformance/src/fs-query-index/run.mjs": "de7ed8ecccb95d9d69fdf4be3dca891a6bd5ebb0791c1db5e5391470fac05a4d",
     "conformance/src/rtdb-functions/compare-local.mjs": "1e951dbf0c9e3f936cb386d5207c3be58f6cb8f7f1267d4a32910a6b7248eeae",
     "conformance/src/rtdb-functions/compare-local.test.mjs": "c9bd92e6b2ae2f74934454467171a1cbbb6fb3ebc8cabb236ab19b0ca341dc8c",

@@ -399,10 +399,14 @@ fn process_is_alive(pid: u32) -> bool {
     let Some(pid) = rustix::process::Pid::from_raw(pid) else {
         return false;
     };
-    match rustix::process::test_kill_process(pid) {
-        Ok(()) | Err(rustix::io::Errno::PERM) => true,
-        Err(_) => false,
-    }
+    signal_check_means_alive(rustix::process::test_kill_process(pid))
+}
+
+/// Whether the answer of the signal-0 check shows a process: success, or `EPERM` (it exists but
+/// this user may not signal it). Any other error, `ESRCH` included, shows none.
+#[cfg(unix)]
+fn signal_check_means_alive(answer: rustix::io::Result<()>) -> bool {
+    matches!(answer, Ok(()) | Err(rustix::io::Errno::PERM))
 }
 
 #[cfg(not(unix))]
@@ -1130,9 +1134,21 @@ mod tests {
         assert!(!process_is_alive(0));
     }
 
-    /// Liveness, permission branch: a process this user may not signal still exists. Pid 1
-    /// always exists; unprivileged, the signal check answers EPERM, and as root it answers
-    /// success, so either way it must be reported alive.
+    /// Liveness, permission branch, controlled: the check counts `EPERM` as alive and every
+    /// other error as gone. (Signalling pid 1 would answer EPERM only unprivileged; as root it
+    /// succeeds, so the answer is injected here.)
+    #[cfg(unix)]
+    #[test]
+    fn a_signal_check_answer_of_eperm_means_the_process_exists() {
+        use rustix::io::Errno;
+        assert!(signal_check_means_alive(Ok(())));
+        assert!(signal_check_means_alive(Err(Errno::PERM)));
+        assert!(!signal_check_means_alive(Err(Errno::SRCH)));
+        assert!(!signal_check_means_alive(Err(Errno::INVAL)));
+    }
+
+    /// Liveness, permission branch, real: pid 1 always exists, so it is alive whether the
+    /// signal check answers EPERM (unprivileged) or success (root).
     #[cfg(unix)]
     #[test]
     fn liveness_check_counts_a_process_it_may_not_signal_as_alive() {

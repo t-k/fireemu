@@ -6,10 +6,13 @@ import "./storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
-import { buildFixture, rawAnswers } from "./storage-signed-put/fixture.mjs";
+import { buildFixture, main, rawAnswers } from "./storage-signed-put/fixture.mjs";
 import {
   compareRecordings,
   compareTargets,
@@ -272,5 +275,115 @@ describe("the fixture builder", () => {
         }),
       /no answer for 1:ok/,
     );
+  });
+});
+
+describe("the fixture builder's command line", () => {
+  const runDirectory = async (kind) => {
+    const world = createFakeWorld({ target: PRODUCTION_LIKE, clock: createVirtualClock() });
+    const out = memoryOut();
+    await observe({
+      target: PRODUCTION_LIKE,
+      runId: "sp-0123abcd",
+      deps: world.deps,
+      out,
+      iam: IAM_CONFIG,
+    });
+    const dir = mkdtempSync(join(tmpdir(), "spfixture-"));
+    writeFileSync(
+      join(dir, "journal.jsonl"),
+      `${out.entries.map((e) => JSON.stringify(e)).join("\n")}\n`,
+    );
+    if (kind === "production") {
+      writeFileSync(
+        join(dir, "run-header.json"),
+        JSON.stringify({ runId: "sp-0123abcd", target: PRODUCTION_LIKE }),
+      );
+    } else {
+      writeFileSync(join(dir, "run-report.json"), JSON.stringify({ runId: "sp-0123abcd" }));
+    }
+    return dir;
+  };
+
+  it("writes a production run with its source note and refuses to overwrite a file", async () => {
+    const dir = await runDirectory("production");
+    try {
+      const target = join(dir, "fixture.json");
+      const fixture = main(["--run-dir", dir, "--out", target]);
+      const written = JSON.parse(readFileSync(target, "utf8"));
+      assert.deepEqual(written, fixture);
+      assert.equal(readFileSync(target, "utf8"), `${JSON.stringify(fixture, null, 2)}\n`);
+      assert.equal(written.rows.length, 32);
+      assert.equal(written.source.observed, "2026-11-03");
+      assert.deepEqual([written.source.recordings, written.source.cases], [2, 16]);
+      assert.equal(
+        written.source["firebase-admin"] ?? written.source.sdk["firebase-admin"],
+        "14.3.0",
+      );
+      assert.match(written.source.target, /^production/);
+      assert.throws(() => main(["--run-dir", dir, "--out", target]), /EEXIST/);
+      assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), written, "the file is untouched");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a local run with the demo target masked and its own source note", async () => {
+    const dir = await runDirectory("local");
+    try {
+      const target = join(dir, "fixture.json");
+      const fixture = main(["--run-dir", dir, "--out", target, "--local"]);
+      assert.equal(fixture.rows.length, 32);
+      assert.match(fixture.source.target, /^fireemu/);
+      assert.equal(fixture.source.sdk, undefined);
+      assert.deepEqual([fixture.source.recordings, fixture.source.cases], [2, 16]);
+      assert.match(fixture.source.observed, /^\d{4}-\d{2}-\d{2}$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names its usage when an argument is missing, and writes nothing", () => {
+    for (const argv of [
+      [],
+      ["--run-dir", "x"],
+      ["--out", "y"],
+      ["--run-dir", "x", "--out"],
+      ["--run-dir", "--out", "y"],
+    ]) {
+      assert.throws(() => main(argv), /usage: fixture.mjs/, argv.join(" "));
+    }
+  });
+
+  it("runs as a script only when it is the entry point, not when imported", async () => {
+    const dir = await runDirectory("production");
+    try {
+      const script = new URL("./storage-signed-put/fixture.mjs", import.meta.url).pathname;
+      const target = join(dir, "script.json");
+      const ran = spawnSync(process.execPath, [script, "--run-dir", dir, "--out", target], {
+        encoding: "utf8",
+      });
+      assert.equal(ran.status, 0, ran.stderr);
+      assert.equal(JSON.parse(readFileSync(target, "utf8")).rows.length, 32);
+      const imported = join(dir, "imported.json");
+      const loaded = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import ${JSON.stringify(script)};`,
+          "--",
+          "--run-dir",
+          dir,
+          "--out",
+          imported,
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(loaded.status, 0, loaded.stderr);
+      assert.equal(existsSync(imported), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -68,7 +68,11 @@ export function readRun(runDir) {
  * directory has `run-header.json`; a local run (`record-local`) has only `run-report.json`.
  */
 export function main(argv) {
-  const value = (name) => argv[argv.indexOf(`--${name}`) + 1];
+  const value = (name) => {
+    const at = argv.indexOf(`--${name}`);
+    const next = at < 0 ? undefined : argv[at + 1];
+    return next === undefined || next.startsWith("--") ? undefined : next;
+  };
   const runDir = value("run-dir");
   const out = value("out");
   if (!runDir || !out) throw new Error("usage: fixture.mjs --run-dir <dir> --out <file> [--local]");

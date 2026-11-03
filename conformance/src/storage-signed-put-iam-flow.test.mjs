@@ -549,6 +549,13 @@ describe("signer access: the grant", () => {
         }),
       });
       assert.equal(sets(world).length, 0, "no grant after an unknown role create");
+      assert.equal(
+        world.log.filter(
+          (e) => urlOf(e).endsWith(":getIamPolicy") && !e.url.includes("cloudresourcemanager"),
+        ).length,
+        1,
+        "no policy read after the preflight when no grant was attempted",
+      );
       assert.equal(roleDeletes(world).length, 1);
       assert.equal(report.closureReady, false);
       if (applied) {

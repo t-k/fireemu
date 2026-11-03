@@ -287,7 +287,7 @@ def test_a_close_failure_is_logged_under_the_functions_name_and_not_raised(capsy
     assert "[functions] g: Traceback" in err and "IndexError" in err
 
 
-def test_a_body_with_no_close_method_is_released_all_the_same():
+def test_a_body_with_no_close_method_is_released_all_the_same(capsys):
     gate = EnvironmentGate(SECRETS)
 
     class Bare:
@@ -303,6 +303,7 @@ def test_a_body_with_no_close_method_is_released_all_the_same():
     assert list(body) == [b"x"]
     body.close()
     assert free(gate)
+    assert capsys.readouterr().err == "", "a body without a close method is normal, not a failure to log"
 
 
 def test_an_exit_from_the_view_is_logged_released_and_raised_as_a_plain_failure(capsys):

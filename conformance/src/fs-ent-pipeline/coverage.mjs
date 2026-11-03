@@ -188,14 +188,12 @@ export function stepsNeededBy(row) {
 }
 
 /**
- * The lane's exit code with coverage: 2 when the check is not sound (an uncovered row, a table
- * row the corpus lost, a fixture program the corpus lost, a failed local run), 1 while rows that
- * are not a MATCH remain, all of them covered by a recorded decision within its allowance, and 0
- * when every row passes. The release job expects 1 for this lane, so a covered row that goes
- * beyond its allowance (exit 2) fails it.
+ * The lane's exit code with coverage: 1 when the check is not sound (an uncovered row, a table
+ * row the corpus lost, a fixture program the corpus lost, a failed local run), 0 when every row
+ * that is not a MATCH is named by a recorded decision and its answer stays inside the decision's
+ * allowance. The export keeps the raw statuses either way, and the release job expects 0.
  */
-export function laneExitCode({ coverage, rows, passing, orphans, failures }) {
-  if (coverage.uncovered.length > 0 || coverage.missing.length > 0) return 2;
-  if (orphans.length > 0 || failures.length > 0) return 2;
-  return rows.every((row) => passing.has(row.status)) ? 0 : 1;
+export function laneExitCode({ coverage, orphans, failures }) {
+  if (coverage.uncovered.length > 0 || coverage.missing.length > 0) return 1;
+  return orphans.length > 0 || failures.length > 0 ? 1 : 0;
 }

@@ -344,21 +344,14 @@ test("the lane judges coverage: an uncovered row, a lost row or a refused answer
   );
 });
 
-test("the lane exits 2 on an unsound check, 1 while covered rows remain, 0 when all pass", () => {
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
-  const rows = [
-    { row: "a", status: "MISMATCH" },
-    { row: "b", status: "MATCH" },
-  ];
+test("the lane exits 1 on an unsound check and 0 when every kept row is covered", () => {
   const clean = { covered: [{ row: "a" }], uncovered: [], missing: [] };
-  const run = (change) =>
-    laneExitCode({ coverage: clean, rows, passing, orphans: [], failures: [], ...change });
-  assert.equal(run({}), 1);
-  assert.equal(run({ rows: [rows[1]], coverage: { ...clean, covered: [] } }), 0);
-  assert.equal(run({ coverage: { ...clean, uncovered: [{ row: "x" }] } }), 2);
-  assert.equal(run({ coverage: { ...clean, missing: ["y"] } }), 2);
-  assert.equal(run({ orphans: ["program"] }), 2);
-  assert.equal(run({ failures: ["session"] }), 2);
+  const run = (change) => laneExitCode({ coverage: clean, orphans: [], failures: [], ...change });
+  assert.equal(run({}), 0);
+  assert.equal(run({ coverage: { ...clean, uncovered: [{ row: "x" }] } }), 1);
+  assert.equal(run({ coverage: { ...clean, missing: ["y"] } }), 1);
+  assert.equal(run({ orphans: ["program"] }), 1);
+  assert.equal(run({ failures: ["session"] }), 1);
 });
 
 test("the steps an allowance reads are the row, its companion and its prelude", () => {

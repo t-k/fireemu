@@ -391,4 +391,90 @@ describe("the expired case cannot cross the SDK's past-expiry check (Opus S2)", 
     });
     assert.ok(lateSleeps.length > 0);
   });
+
+  describe("reporting errors are deduplicated and capped", () => {
+    it("keeps one entry for a repeated error and at most twenty distinct ones", async () => {
+      const same = await go({
+        out: {
+          journal: () => {
+            throw enospc();
+          },
+          save: () => {},
+        },
+      });
+      assert.equal(same.report.reportingErrors.length, 1);
+      let n = 0;
+      const many = await go({
+        out: {
+          journal: () => {
+            n += 1;
+            throw new Error(`distinct ${n}`);
+          },
+          save: () => {},
+        },
+      });
+      assert.equal(many.report.reportingErrors.length, 20);
+      assert.deepEqual(many.report.reportingErrors.slice(0, 2), [
+        "journal: distinct 1",
+        "journal: distinct 2",
+      ]);
+      assert.equal(many.report.reportingErrors.includes("journal: distinct 21"), false);
+    });
+  });
+
+  describe("the cleanup failure file", () => {
+    it("is not written by a clean run, and carries the first cleanup error when several occur", async () => {
+      const clean = await go();
+      assert.equal(clean.out.saved.has("cleanup-failure.json"), false);
+      let lists = 0;
+      const both = await go({
+        intercept: (request) => {
+          if (request.url.includes("/o?prefix=") && (lists += 1) >= 2) return respond(403);
+          return undefined;
+        },
+      });
+      assert.match(
+        both.out.saved.get("cleanup-failure.json").message,
+        /^cleanup list answered 403$/,
+      );
+      assert.equal(both.report.cleanupError, "cleanup list answered 403");
+    });
+  });
+
+  describe("the expired case's wait for the next second, exactly", () => {
+    const sleepsAt = async (millis) => {
+      const clock = createVirtualClock(Date.UTC(2026, 10, 3, 12, 0, 0, millis));
+      const world = createFakeWorld({ target: PRODUCTION_LIKE, clock });
+      let signs = 0;
+      const sleeps = [];
+      const deps = {
+        ...world.deps,
+        sign: async (spec, meter) => {
+          signs += 1;
+          return world.deps.sign(spec, meter);
+        },
+        sleep: async (ms) => {
+          sleeps.push({ ms, signs });
+          return world.deps.sleep(ms);
+        },
+      };
+      await observe({
+        target: PRODUCTION_LIKE,
+        runId: RUN,
+        deps,
+        out: memoryOut(),
+        iam: IAM_CONFIG,
+      });
+      return sleeps.filter((s) => s.ms !== 250);
+    };
+
+    it("does not wait at 800 ms and waits the rest of the second plus 5 ms from 801 ms, before the expired case only", async () => {
+      assert.deepEqual(await sleepsAt(800), []);
+      assert.deepEqual(await sleepsAt(100), []);
+      // 15 signs come first: the probe and the fourteen cases before `expired`
+      assert.deepEqual(await sleepsAt(801), [{ ms: 204, signs: 15 }]);
+      assert.deepEqual(await sleepsAt(900), [{ ms: 105, signs: 15 }]);
+      assert.deepEqual(await sleepsAt(999), [{ ms: 6, signs: 15 }]);
+    });
+  });
 });

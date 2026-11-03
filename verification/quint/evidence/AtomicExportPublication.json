@@ -784,7 +784,7 @@
     "crates/fireemu/src/daemon.rs": "aeff2aa29adc1bb26c3ec60a17c85d590b32521184101686fc2bd1068d9320ac",
     "crates/fireemu/src/database_rules.rs": "ece14bf1651862ac00973e991f3509c0205272442b3b1e72ea769f1d889981b0",
     "crates/fireemu/src/doctor.rs": "4bd5e4f6750de698263ce046fbd02a850bbcaec3c573e1eaa3748f41865245b2",
-    "crates/fireemu/src/functions.rs": "4de341b6db4611dc7e21017d4d23189150ca8756d2b269bfbb944b418e68c13a",
+    "crates/fireemu/src/functions.rs": "9a9f06cf46066e30ec71d855c61e95c6bb50a087f94cdd1f0771f4f410c3f68e",
     "crates/fireemu/src/help.rs": "25f3b0f9ebf60707a2db168d49c5963765e20961fc7bce81481fd50305cc9935",
     "crates/fireemu/src/hub.rs": "860630dc475403b936f6d9c245192c6b13fdb5729dc3fdc47656775be5133127",
     "crates/fireemu/src/import_export.rs": "39923331758b8afd74b6cab73d701fd4a3d727fb2f0b0e4cd8e6d9764b1203c5",

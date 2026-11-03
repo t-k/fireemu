@@ -38,7 +38,7 @@ The owner opened FS-PIPELINE as a parent of its own on 2026-10-26 (ledger 1794).
 
 | Parent | Status | Scope |
 | --- | --- | --- |
-| [FS-PIPELINE](../../spec/compatibility/closure/FS-PIPELINE.json) | `IN_PROGRESS` (closure review pending) | Enterprise Native pipelines under the strict profile, for the 1,951 recorded FS-ENT-ORACLE rows (O-1 to O-9b): the stages `where`, `select`, `sort`, `limit`, `offset`, `aggregate`, `distinct`, `add_fields`, `remove_fields`, recorded `unnest`, `union` and `sample` shapes, over a collection, collection group or documents input; the recorded logical, string, math, timestamp, map, array and document functions; the order of a read without a sort (ascending CRC-32 of the document ID); the recorded refusals over REST and gRPC. |
+| [FS-PIPELINE](../../spec/compatibility/closure/FS-PIPELINE.json) | `COMPAT_VERIFIED` within its recorded scope (independent closure review approved 2026-11-03) | Enterprise Native pipelines under the strict profile, for the 1,951 recorded FS-ENT-ORACLE rows (O-1 to O-9b): the stages `where`, `select`, `sort`, `limit`, `offset`, `aggregate`, `distinct`, `add_fields`, `remove_fields`, recorded `unnest`, `union` and `sample` shapes, over a collection, collection group or documents input; the recorded logical, string, math, timestamp, map, array and document functions; the order of a read without a sort (ascending CRC-32 of the document ID); the recorded refusals over REST and gRPC. |
 
 The [comparison](../../spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json) is the strict profile's `check` of the committed fixture against the release binary named in the record: 1,906 rows match and are the rows the record's conditions list. Of the others:
 

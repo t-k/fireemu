@@ -155,7 +155,7 @@
     "spec/compatibility/closure/evidence/FS-PIPELINE-clock-v035.json": "f4dac0e877807ad40c25bc2ab95e9ae89428fb1865e61b81ab49803b8d648af1",
     "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",
     "spec/compatibility/closure/evidence/FS-PIPELINE-current-build.json": "7fef06d0f9084b449841cdd48da3489d046110476fae23c406ade5816e85012e",
-    "spec/compatibility/closure/evidence/FS-PIPELINE-current-claims.json": "6e2bf5a201c4237ba78cc96bd88ab1fff26e1c3ae4567029b620ca2ea01a509c",
+    "spec/compatibility/closure/evidence/FS-PIPELINE-current-claims.json": "32fc48f23d5a22f41810727f6fcfe8d6fe838e059dd359711fb71849efd2ba74",
     "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock-diff.json": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb",
     "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock.json": "bf333ba5606f3b20960e2d5330b606642aa913d83e3deed0e15d57a2f9b78e9f",
     "spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json": "b7a579b553a1b4202267289bd5f4d4d78164ca4e6286bfe8fe414a04cfd97db0",

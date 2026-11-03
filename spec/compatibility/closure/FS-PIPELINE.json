@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FS-PIPELINE",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -13,22 +13,23 @@
   },
   "scopeAuthority": "docs.local/instructions/owner-decisions.md (ledger 1794, option A of docs.local/reviews/2026-10-26-fs-pipeline-scope-inventory.md; ledger 1792, entpipe1 kept until the end of FS-PIPELINE observation) Ledger 2212 (2026-11-03) replaces ledger 1866 for this parent: closure on the recorded corpus plus finite contracts with an enumerated not-claimed list.",
   "closureReview": {
-    "decision": "CHANGES_REQUESTED",
-    "historicalDecision": "APPROVED",
-    "reopenDecisionRef": "docs.local/instructions/owner-decisions.md (owner 1866, 2026-10-28): subset evidence does not establish parent completion; remaining work is required",
-    "decidedOn": "2026-10-28",
-    "decider": "project coordinator under owner decision1858",
-    "decisionRef": "docs.local/instructions/owner-decisions.md (line1859)",
-    "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
+    "decision": "APPROVED",
+    "reviewScope": "FULL_PARENT",
+    "decidedOn": "2026-11-03",
+    "decider": "project coordinator under owner decisions 2211 and 2212",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (2212, 2211)",
+    "reviewedCommit": "5714a2770a191d4c69d564d9a593f191f8805223",
+    "finalArtifactSha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
     "reviews": [
       {
-        "reportPath": "docs.local/reviews/2026-10-28-pipeline-closure-sol.md",
-        "reportSha256": "a3b87e2de8f352d7eb5807b17359237410b66a00f2d867f4088ca91ebc752a60",
-        "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
-        "outcome": "Independent Sol review: APPROVE, Must 0; nonblocking clock mutation coverage remains outside the verified scope."
+        "reviewer": "Opus closure review r1/r2 + Codex r1/r2 + coordinator delta r3",
+        "reportPath": "docs.local/reviews/2026-11-03-fs-pipeline-closure-coordinator-delta-r3.md",
+        "reportSha256": "7590453e7813d4b653685d765478aae3037da620f712617d97f3c8e011d58500",
+        "reviewedCommit": "5714a2770a191d4c69d564d9a593f191f8805223",
+        "outcome": "APPROVED"
       }
     ],
-    "note": "The historical review approved 998 claimed rows. Owner decision 1897 and the recorded leaf review approved the 430 additional matching rows in the signed S comparison; parent-wide compatibility remains unproven."
+    "note": "Independent full-parent review approves the recorded corpus (1951 rows: 1906 MATCH, 17 MATCH_NONDETERMINISTIC, 26 owner-decided divergences with their raw MISMATCH kept, 2 UNKNOWN covered by a later production observation) and the finite contracts, with the not-claimed list of closureBasis. Tagging and release publication remain downstream."
   },
   "scopeDecisions": [
     {
@@ -3156,7 +3157,7 @@
       "statement": "FS-PIPELINE closes on the recorded corpus plus finite contracts (owner ledger 2212) once the independent closure review approves. The 1906 raw MATCH recipe IDs cover only recorded cases; all 1951 rows remain in the comparison, including 26 MISMATCH that are owner-decided divergences (23 aggregate rows: 20 differ in group order only (2211) and 3 return a different legal selection under a limit or an offset (2214); 2 sort-tie rows (2114); and the wall-clock timestamp-diff-now row (2211)), 17 MATCH_NONDETERMINISTIC (12 framing rows and 5 random sample rows) and two UNKNOWN client-side observations that a later production observation covers. The raw statuses are kept. Everything listed in closureBasis.notClaimedItems is not claimed."
     },
     "notClaimed_newly_matching": {
-      "statement": "All 1906 raw MATCH rows in this comparison are included in finite conditions; the 166 rows added after v0.35 are listed in FS-PIPELINE-current-claims.json and wait for the independent closure review.",
+      "statement": "All 1906 raw MATCH rows in this comparison are included in finite conditions; the 166 rows added after v0.35 are listed in FS-PIPELINE-current-claims.json and were accepted by the independent closure review.",
       "matchingRows": []
     },
     "notClaimed_unnest": {
@@ -3300,16 +3301,16 @@
       "publicRepresentation": "Repository JSON formatting only; all parsed exported values are unchanged."
     },
     "currentPromotion": {
-      "decision": "PROPOSED_PENDING_INDEPENDENT_REVIEW",
+      "decision": "ACCEPTED_AFTER_INDEPENDENT_REVIEW",
       "sourceCommit": "f39691624719615741948045a84bcdff24ad6c51",
       "binarySha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
       "comparisonPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-comparison.json",
       "comparisonSha256": "b7a579b553a1b4202267289bd5f4d4d78164ca4e6286bfe8fe414a04cfd97db0",
       "claimSetPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-claims.json",
-      "claimSetSha256": "6e2bf5a201c4237ba78cc96bd88ab1fff26e1c3ae4567029b620ca2ea01a509c",
+      "claimSetSha256": "32fc48f23d5a22f41810727f6fcfe8d6fe838e059dd359711fb71849efd2ba74",
       "addedRecipeCount": 166,
       "previousClaimedRecipeCount": 1740,
-      "result": "All 1740 previously claimed rows remain MATCH. The 166 added rows were MISMATCH in v0.35 and are MATCH in the current comparison, whose 1951 row identities and statuses equal the v0.41 baseline row by row. The parent stays IMPLEMENTING and the closure review stays CHANGES_REQUESTED until the independent review."
+      "result": "All 1740 previously claimed rows remain MATCH. The 166 added rows were MISMATCH in v0.35 and are MATCH in the current comparison, whose 1951 row identities and statuses equal the v0.41 baseline row by row. The independent closure review approved the claim set and the parent."
     }
   },
   "finiteContractEvidence": [
@@ -3477,5 +3478,24 @@
       "refused-as-unobserved": "strict refuses the request as unobserved.",
       "own-implementation-or-refusal": "fireemu either runs a finite subset by its own rules or refuses as unobserved; none of it was compared with production."
     }
+  },
+  "historicalParentStatus": "IMPLEMENTING",
+  "historicalClosureReview": {
+    "decision": "CHANGES_REQUESTED",
+    "historicalDecision": "APPROVED",
+    "reopenDecisionRef": "docs.local/instructions/owner-decisions.md (owner 1866, 2026-10-28): subset evidence does not establish parent completion; remaining work is required",
+    "decidedOn": "2026-10-28",
+    "decider": "project coordinator under owner decision1858",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (line1859)",
+    "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-28-pipeline-closure-sol.md",
+        "reportSha256": "a3b87e2de8f352d7eb5807b17359237410b66a00f2d867f4088ca91ebc752a60",
+        "reviewedCommit": "2c2306c178214cf48988e7f25a7e19a9528006cb",
+        "outcome": "Independent Sol review: APPROVE, Must 0; nonblocking clock mutation coverage remains outside the verified scope."
+      }
+    ],
+    "note": "The historical review approved 998 claimed rows. Owner decision 1897 and the recorded leaf review approved the 430 additional matching rows in the signed S comparison; parent-wide compatibility remains unproven."
   }
 }

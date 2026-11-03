@@ -1,7 +1,7 @@
 {
   "kind": "fs-ent-pipeline-current-added-claims-v1",
-  "decision": "PROPOSED_PENDING_INDEPENDENT_REVIEW",
-  "scope": "The 166 recorded rows that were MISMATCH in the v0.35 comparison and are MATCH in the current strict comparison, claimed by exact recipe ID. The independent closure review has not run.",
+  "decision": "ACCEPTED_AFTER_INDEPENDENT_REVIEW",
+  "scope": "The 166 recorded rows that were MISMATCH in the v0.35 comparison and are MATCH in the current strict comparison, claimed by exact recipe ID. The independent closure review accepted it.",
   "sourceCommit": "f39691624719615741948045a84bcdff24ad6c51",
   "binarySha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
   "previousComparisonSha256": "10214f1cb34a8d19d4378910e2a1146eb0a27a7d864c2abdd1fde65aaa987e32",

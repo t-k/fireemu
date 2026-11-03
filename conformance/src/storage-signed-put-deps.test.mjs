@@ -181,6 +181,7 @@ describe("production dependencies: SDK paths", () => {
           { name: NAME, contentType: "image/png", range: null, expires: Date.now() + 60_000 },
           null,
         ),
+        /outside an observer step/,
       );
     } finally {
       await deps.close();

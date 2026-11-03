@@ -767,4 +767,106 @@ describe("signed PUT observer on the fake world", () => {
     assert.match(out.saved.get("cleanup-failure.json").message, /cleanup list answered 403/);
     assert.match(report.cleanupError, /cleanup list answered 403/);
   });
+
+  it("deletes by name an object whose create was confirmed even when the list and the read both miss it", async () => {
+    const hidden = `${runPrefix(RUN)}rec1/ok.png`;
+    const clock = createVirtualClock();
+    const world = createFakeWorld({
+      target: PRODUCTION_LIKE,
+      clock,
+      hideFromList: new Set([hidden]),
+      intercept: (request) =>
+        request.method === "GET" &&
+        request.url.includes(`/o/${encodeURIComponent(hidden)}?`) === false &&
+        request.url.endsWith(`/o/${encodeURIComponent(hidden)}`) &&
+        !world.deleted
+          ? { status: 404, body: Buffer.from('{"error":{"code":404}}') }
+          : undefined,
+    });
+    const net = world.deps.net;
+    const deps = {
+      ...world.deps,
+      net: async (request) => {
+        if (request.method === "DELETE") world.deleted = true;
+        return net(request);
+      },
+    };
+    const { report } = await observe({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps,
+      out: memoryOut(),
+    });
+    assert.equal(world.objects.size, 0, "the 2xx PUT alone confirmed the create");
+    assert.equal(
+      report.closureReady,
+      true,
+      "the run's own 2xx delete and a 404 read after it settle the create",
+    );
+    assert.ok(report.unresolved.every((u) => u.reason !== "unknown delete"));
+  });
+
+  it("raises an unknown SDK answer as an unknown answer, and a refused request as no unknown create", async () => {
+    const unknown = await run({
+      mutateDeps: (deps) => ({
+        ...deps,
+        sign: async (spec, meter) => {
+          meter.request("signBlob", {
+            method: "POST",
+            url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${PRODUCTION_LIKE.signer}:signBlob`,
+          });
+          meter.after("signBlob", 503);
+          return "unreachable";
+        },
+      }),
+    });
+    assert.match(unknown.report.stopped, /unknown answer: signBlob \(503\)/);
+    assert.deepEqual(unknown.report.unknownRequests, ["signBlob"]);
+    const refused = await run({
+      mutateDeps: (deps) => ({
+        ...deps,
+        sign: async (spec, meter) =>
+          (await deps.sign(spec, meter)).replace(PRODUCTION_LIKE.bucket, "someone-elses-bucket"),
+      }),
+    });
+    assert.match(refused.report.stopped, /request refused/);
+    assert.deepEqual(refused.report.unresolved, []);
+    assert.equal(refused.report.cleanupVerified, true);
+  });
+
+  it("journals bodyless requests with a zero body length", async () => {
+    const { out } = await run();
+    const gets = out.entries.filter((e) => e.phase === "before" && e.method === "GET");
+    assert.ok(gets.length > 10 && gets.every((e) => e.bodyBytes === 0));
+    const puts = out.entries.filter((e) => e.phase === "before" && e.method === "PUT");
+    assert.ok(puts.every((e) => e.bodyBytes > 0));
+  });
+
+  it("journals the A2 read-back and saves its report", async () => {
+    const { world } = await run();
+    const out = memoryOut();
+    const report = await readbackAbsent({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: world.deps,
+      out,
+    });
+    assert.deepEqual(out.saved.get("a2.json"), report);
+    const before = out.entries.filter((e) => e.phase === "before");
+    const after = out.entries.filter((e) => e.phase === "after");
+    assert.equal(before.length, report.requests);
+    assert.deepEqual(
+      before.map((e) => e.n),
+      after.map((e) => e.n),
+    );
+    assert.ok(after.every((e) => Number.isInteger(e.status)));
+    const failing = memoryOut();
+    const down = createFakeWorld({
+      target: PRODUCTION_LIKE,
+      clock: createVirtualClock(),
+      faults: { "/o?prefix": "transport" },
+    });
+    await readbackAbsent({ target: PRODUCTION_LIKE, runId: RUN, deps: down.deps, out: failing });
+    assert.equal(failing.entries.filter((e) => e.phase === "unknown").length, 1);
+  });
 });

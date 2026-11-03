@@ -1163,10 +1163,31 @@ async function check() {
     console.log(`covered by a recorded decision: ${JSON.stringify(byDecision)}`);
   }
   console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
-  const failed = coverageTools
-    ? coverageTools.laneFails({ coverage, rows, passing, orphans, failures: local.failures })
-    : !rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length;
-  if (failed) process.exitCode = 1;
+  if (coverageTools) {
+    // The local answers the allowances read, kept for the committed content evidence.
+    const needed = {};
+    for (const row of coverageTools.COVERAGE.keys()) {
+      for (const stepId of coverageTools.stepsNeededBy(row)) {
+        const key = `${row.slice(0, row.lastIndexOf("#"))}#${stepId}`;
+        needed[key] = rowContext.get(key)?.localSteps?.[stepId];
+      }
+    }
+    await writeFile(
+      join(RUN_DIR, "coverage-content.json"),
+      `${JSON.stringify({ artifactSha256, covered: coverage.covered, steps: needed }, null, 2)}\n`,
+    );
+    process.exitCode = coverageTools.laneExitCode({
+      coverage,
+      rows,
+      passing,
+      orphans,
+      failures: local.failures,
+    });
+    return;
+  }
+  if (!rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length) {
+    process.exitCode = 1;
+  }
 }
 
 /** The paths where two recordings differ. */
@@ -1221,6 +1242,25 @@ async function exportComparison(out) {
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 
+/**
+ * Writes the committed content evidence of the covered rows from the last `check`: the local
+ * answers their allowances read, the artifact and the verdict of each allowance.
+ */
+async function exportContent(out) {
+  if (!out) throw new Error("usage: export-content <output.json>");
+  const content = JSON.parse(await readFile(join(RUN_DIR, "coverage-content.json"), "utf8"));
+  const { text: fixtureText } = await loadCommittedFixture(FIXTURE);
+  const evidence = {
+    kind: `${LANE.id}-divergence-content-v1`,
+    artifactSha256: content.artifactSha256,
+    fixtureSha256: sha256(fixtureText),
+    covered: content.covered,
+    steps: content.steps,
+  };
+  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify({ out, covered: evidence.covered.length }, null, 2));
+}
+
 const mode = process.argv[2];
 // `isMainModule`: a launch through a symlink or an escaped path still runs the mode.
 if (isMainModule(import.meta)) {
@@ -1231,6 +1271,7 @@ if (isMainModule(import.meta)) {
     await rebuildFixture(process.argv[3], process.argv[4] === "--skip-changed");
   else if (mode === "check") await check();
   else if (mode === "export-comparison") await exportComparison(process.argv[3]);
+  else if (mode === "export-content") await exportContent(process.argv[3]);
   else if (mode === "session-local") await sessionLocal();
   else if (mode === "local") {
     const local = await runLocal(selectPrograms(PROGRAMS));

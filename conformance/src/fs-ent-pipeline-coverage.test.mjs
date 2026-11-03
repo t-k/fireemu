@@ -10,7 +10,8 @@ import {
   CLOCK_ROW,
   coveredBy,
   judgeCoverage,
-  laneFails,
+  laneExitCode,
+  stepsNeededBy,
 } from "./fs-ent-pipeline/coverage.mjs";
 import { PROGRAMS } from "./fs-ent-pipeline/corpus.mjs";
 
@@ -43,7 +44,9 @@ function input(row, { status = "MISMATCH", local } = {}) {
 }
 const results = (steps, row) => steps[split(row)[1]].body[0].results;
 const accepted = (value, decision, rule) => {
-  assert.deepEqual(value, { decision, rule }, JSON.stringify(value));
+  assert.equal(value?.decision, decision, JSON.stringify(value));
+  assert.equal(value.rule, rule);
+  assert.equal(typeof value.proof, "string");
 };
 const rejected = (value) => {
   assert.ok(value?.rejected, JSON.stringify(value));
@@ -52,8 +55,11 @@ const rejected = (value) => {
 test("one table names every covered row, with its decision", () => {
   assert.equal(COVERAGE.size, 28);
   assert.equal(O7_ROWS.length, 23);
-  for (const row of O7_ROWS)
-    assert.deepEqual(COVERAGE.get(row), { decision: "2211", rule: "o7-groups" });
+  for (const recipe of POLICY.recipes)
+    assert.deepEqual(COVERAGE.get(recipe.id), {
+      decision: recipe.mode === "selection" ? "2214" : "2211",
+      rule: "o7-groups",
+    });
   for (const row of [V_DESC, TIES])
     assert.deepEqual(COVERAGE.get(row), { decision: "2114", rule: "o6-tie" });
   assert.deepEqual(COVERAGE.get(CLOCK_ROW), { decision: "2211", rule: "clock-value" });
@@ -79,7 +85,11 @@ test("the table covers exactly the rows of the current comparison that are not M
 
 test("O-7: the same groups in another order are covered, for every row", () => {
   for (const recipe of POLICY.recipes) {
-    accepted(coveredBy(input(recipe.id)), "2211", "o7-groups");
+    accepted(
+      coveredBy(input(recipe.id)),
+      recipe.mode === "selection" ? "2214" : "2211",
+      "o7-groups",
+    );
   }
   for (const recipe of O7_FULL.filter((item) => !item.sort)) {
     const reversed = input(recipe.id, {
@@ -334,7 +344,7 @@ test("the lane judges coverage: an uncovered row, a lost row or a refused answer
   );
 });
 
-test("the lane fails on an uncovered row, a lost table row, a lost program or a failed run", () => {
+test("the lane exits 2 on an unsound check, 1 while covered rows remain, 0 when all pass", () => {
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   const rows = [
     { row: "a", status: "MISMATCH" },
@@ -342,15 +352,21 @@ test("the lane fails on an uncovered row, a lost table row, a lost program or a 
   ];
   const clean = { covered: [{ row: "a" }], uncovered: [], missing: [] };
   const run = (change) =>
-    laneFails({ coverage: clean, rows, passing, orphans: [], failures: [], ...change });
-  assert.equal(run({}), false);
-  assert.equal(run({ coverage: { ...clean, uncovered: [{ row: "x" }] } }), true);
-  assert.equal(run({ coverage: { ...clean, missing: ["y"] } }), true);
-  assert.equal(run({ orphans: ["program"] }), true);
-  assert.equal(run({ failures: ["session"] }), true);
-  // Without coverage (the emulator-profile run) every row that is not passing fails.
-  assert.equal(run({ coverage: undefined }), true);
-  assert.equal(run({ coverage: undefined, rows: [rows[1]] }), false);
+    laneExitCode({ coverage: clean, rows, passing, orphans: [], failures: [], ...change });
+  assert.equal(run({}), 1);
+  assert.equal(run({ rows: [rows[1]], coverage: { ...clean, covered: [] } }), 0);
+  assert.equal(run({ coverage: { ...clean, uncovered: [{ row: "x" }] } }), 2);
+  assert.equal(run({ coverage: { ...clean, missing: ["y"] } }), 2);
+  assert.equal(run({ orphans: ["program"] }), 2);
+  assert.equal(run({ failures: ["session"] }), 2);
+});
+
+test("the steps an allowance reads are the row, its companion and its prelude", () => {
+  assert.deepEqual(stepsNeededBy(V_DESC), ["v-desc", "seed-vector"]);
+  assert.deepEqual(stepsNeededBy(TIES), ["g-asc-limit2", "g-asc"]);
+  assert.deepEqual(stepsNeededBy(CLOCK_ROW), ["timestamp-diff-now"]);
+  for (const recipe of O7_SELECTION)
+    assert.deepEqual(stepsNeededBy(recipe.id), [split(recipe.id)[1], split(recipe.companion)[1]]);
 });
 
 test("a recorded failure that is not the recorder's client failure is not covered", () => {

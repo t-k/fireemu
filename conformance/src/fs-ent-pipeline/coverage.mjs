@@ -5,8 +5,10 @@
 //
 //   2114  the two O-6 sort ties: all typed rows and the ordered prefix exact, only the tied rows
 //         permute (or two distinct rows of the three eligible ones are chosen)
-//   2211  the 23 O-7 aggregate rows: the same groups as a multiset (or a legal selection among
-//         the groups of the unlimited companion); the now-dependent value of timestamp-diff-now
+//   2211  the 20 O-7 aggregate rows that differ in order only: the same groups as a multiset;
+//         the now-dependent value of timestamp-diff-now
+//   2214  the 3 O-7 rows under a limit or an offset: exact count, no duplicates, every group equal
+//         to a group of the complete companion result
 //   nesting observation  the two O-8A gRPC rows the recorder could not send
 //
 // The raw statuses are never rewritten: `coveredBy` only decides whether a row may stay.
@@ -24,14 +26,16 @@ const NESTING_OBSERVATION = JSON.parse(
 );
 
 export const CLOCK_ROW = "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now";
-const O6_ROWS = [
-  "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
-  "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
-];
+const V_DESC = "fs-ent-pipeline/o6/sort-kinds-cross#v-desc";
+const TIES = "fs-ent-pipeline/o6/sort-ties#g-asc-limit2";
+const O6_ROWS = [V_DESC, TIES];
 
 /** The one table: row id to the decision that covers it and the rule that bounds the difference. */
 export const COVERAGE = new Map([
-  ...O7_POLICY.recipes.map((recipe) => [recipe.id, { decision: "2211", rule: "o7-groups" }]),
+  ...O7_POLICY.recipes.map((recipe) => [
+    recipe.id,
+    { decision: recipe.mode === "selection" ? "2214" : "2211", rule: "o7-groups" },
+  ]),
   ...O6_ROWS.map((row) => [row, { decision: "2114", rule: "o6-tie" }]),
   [CLOCK_ROW, { decision: "2211", rule: "clock-value" }],
   ...NESTING_OBSERVATION.productionObservation.rows.map((item) => [
@@ -45,7 +49,7 @@ const splitRow = (row) => {
   return [row.slice(0, at), row.slice(at + 1)];
 };
 
-function allowsClockValue(production, fireemu) {
+export function allowsClockValue(production, fireemu) {
   const valid = (step) => {
     const value = step?.body?.[0]?.results?.[0]?.fields?.v;
     return (
@@ -97,18 +101,18 @@ export function coveredBy({ row, status, program, saved, localSteps }) {
   const second = (id) => saved?.second?.[id] ?? saved?.steps?.[id];
   const step = (id) => program?.steps?.find((item) => item.id === id);
   const reject = (reason) => ({ rejected: `${row}: ${reason}` });
-  const ok = () => ({ decision: entry.decision, rule: entry.rule });
+  const ok = (proof) => ({ decision: entry.decision, rule: entry.rule, proof });
   try {
     if (entry.rule === "later-observation") {
       if (status !== "UNKNOWN") return reject(`status ${status}, not UNKNOWN`);
       return allowsLaterObservation(row, production, fireemu)
-        ? ok()
+        ? ok("RECORDED_CLIENT_FAILURE_WITH_LATER_OBSERVATION")
         : reject("the answer is not the recorded client failure");
     }
     if (status !== "MISMATCH") return reject(`status ${status}, not MISMATCH`);
     if (entry.rule === "clock-value")
       return allowsClockValue(production, fireemu)
-        ? ok()
+        ? ok("CLOCK_DEPENDENT_VALUE_ONLY")
         : reject("the difference is more than the clock-dependent value");
     const input = {
       id: row,
@@ -129,7 +133,10 @@ export function coveredBy({ row, status, program, saved, localSteps }) {
     if (entry.rule === "o7-groups") {
       const recipe = O7_POLICY.recipes.find((item) => item.id === row);
       if (recipe.companion) Object.assign(input, withCompanion(splitRow(recipe.companion)[1]));
-      return evaluateO7(input) ? ok() : reject("the groups differ from the recorded groups");
+      const proof = evaluateO7(input);
+      return proof
+        ? ok(proof.proofClassification)
+        : reject("the groups differ from the recorded groups");
     }
     if (stepId === "v-desc")
       Object.assign(input, {
@@ -138,7 +145,10 @@ export function coveredBy({ row, status, program, saved, localSteps }) {
         preludeLocal: localSteps["seed-vector"],
       });
     else Object.assign(input, withCompanion("g-asc"));
-    return evaluateO6(input) ? ok() : reject("the difference is more than the tied rows");
+    const proof = evaluateO6(input);
+    return proof
+      ? ok(proof.proofClassification)
+      : reject("the difference is more than the tied rows");
   } catch (error) {
     return reject(`the answer cannot be read (${error.message})`);
   }
@@ -167,14 +177,25 @@ export function judgeCoverage(rows, passing, cover, table = COVERAGE) {
   return { covered, uncovered, missing };
 }
 
+/** The steps of a covered row's program whose local answers its allowance reads. */
+export function stepsNeededBy(row) {
+  const stepId = splitRow(row)[1];
+  const recipe = O7_POLICY.recipes.find((item) => item.id === row);
+  if (recipe?.companion) return [stepId, splitRow(recipe.companion)[1]];
+  if (row === V_DESC) return [stepId, "seed-vector"];
+  if (row === TIES) return [stepId, "g-asc"];
+  return [stepId];
+}
+
 /**
- * Whether the lane's check fails: an uncovered row or a table row the corpus lost (with
- * coverage), any row that is not passing (without it), a fixture program the corpus lost, or a
- * failure of the local run.
+ * The lane's exit code with coverage: 2 when the check is not sound (an uncovered row, a table
+ * row the corpus lost, a fixture program the corpus lost, a failed local run), 1 while rows that
+ * are not a MATCH remain, all of them covered by a recorded decision within its allowance, and 0
+ * when every row passes. The release job expects 1 for this lane, so a covered row that goes
+ * beyond its allowance (exit 2) fails it.
  */
-export function laneFails({ coverage, rows, passing, orphans, failures }) {
-  const rowsFail = coverage
-    ? coverage.uncovered.length > 0 || coverage.missing.length > 0
-    : !rows.every((row) => passing.has(row.status));
-  return rowsFail || orphans.length > 0 || failures.length > 0;
+export function laneExitCode({ coverage, rows, passing, orphans, failures }) {
+  if (coverage.uncovered.length > 0 || coverage.missing.length > 0) return 2;
+  if (orphans.length > 0 || failures.length > 0) return 2;
+  return rows.every((row) => passing.has(row.status)) ? 0 : 1;
 }

@@ -3370,13 +3370,17 @@ impl FirestoreState {
                 .get(path)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            reclaimed = add_history_usage(
-                reclaimed,
+            // Exact accounting certifies every path's usage below saturation, so the reclaim
+            // is summed from the versions the floor drops instead of from the whole path.
+            let path_reclaim = if self.history_accounting_exact {
+                history_path_reclaim_unsaturated(path, versions, floor)
+            } else {
                 subtract_history_usage(
                     history_path_usage(path, versions),
                     history_path_usage_after_floor(path, versions, floor),
-                ),
-            );
+                )
+            };
+            reclaimed = add_history_usage(reclaimed, path_reclaim);
         }
         let removed_commit_times = u64::try_from(
             self.commit_times
@@ -3644,6 +3648,7 @@ impl FirestoreState {
     /// stay exact) and everything after the floor. A path whose only remaining version is a
     /// tombstone at or below the floor is dropped entirely: at every version the store can
     /// still be asked about, it is indistinguishable from a path that never existed.
+    #[allow(clippy::too_many_lines)]
     pub fn compact(&mut self, now: LogicalInstant) -> CommitVersion {
         self.prune_transactions(now);
         let floor = self.retention_floor(now);
@@ -3674,7 +3679,16 @@ impl FirestoreState {
             &mut self.history_accounting_exact,
         );
         self.history_usage = finish_history_usage(self.history_usage);
-        let candidates = if self.history_accounting_exact {
+        // Exact accounting selects only the paths the floor can reclaim from (the threshold
+        // index) and certifies every path's usage below saturation. Each candidate is then
+        // charged by `history_path_reclaim_unsaturated`, which visits only the versions at or
+        // before the floor, so the work of one compaction is proportional to the versions it
+        // drops. Under exact accounting `before - after == reclaimed` for every path, so the
+        // running usage and its exactness end up identical to the whole-path recount below.
+        // Legacy (inexact) accounting keeps the whole-path before/after recount: its
+        // saturating arithmetic is order and value sensitive, and it must stay unchanged.
+        let prefix_accounting = self.history_accounting_exact;
+        let candidates = if prefix_accounting {
             self.reclaim_candidates(floor)
         } else {
             self.compactable.keys().cloned().collect()
@@ -3689,10 +3703,32 @@ impl FirestoreState {
                 self.refresh_reclaim_threshold(path);
                 continue;
             };
-            let before_usage = history_path_usage(path, h);
             // Keep the newest version at or before the floor plus everything after it; drop
             // the prefix nothing can observe.
             let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
+            if prefix_accounting {
+                let emptied = match &h[cut..] {
+                    [] => true,
+                    [(v, None)] => *v <= floor,
+                    _ => false,
+                };
+                if cut == 0 && !emptied {
+                    // Nothing to drop: no accounting, only a stale threshold to repair.
+                    self.refresh_reclaim_threshold(path);
+                    continue;
+                }
+                let reclaimed = history_path_reclaim_unsaturated(path, h, floor);
+                usage_changes.push((reclaimed, HistoryUsage::default()));
+                if emptied {
+                    self.history.remove(path);
+                    removed_paths.push(path.clone());
+                } else {
+                    h.drain(..cut);
+                }
+                self.refresh_reclaim_threshold(path);
+                continue;
+            }
+            let before_usage = history_path_usage(path, h);
             if cut > 0 {
                 h.drain(..cut);
             }

@@ -705,6 +705,8 @@ async fn execute_pipeline_grpc_recursion_refusal_follows_profile() {
                 "Request contains an invalid argument.",
                 "depth {depth}"
             );
+            // Production answered these requests with no status details, four times of four.
+            assert!(error.details().is_empty(), "depth {depth}: {error:?}");
         } else {
             assert!(
                 error.message().ends_with("recursion limit reached"),

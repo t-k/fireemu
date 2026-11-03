@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::field_path::{implied_path_too_long_message, FieldPath, FieldPathError};
-use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
+use crate::index::{IndexDefinition, IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
 use crate::size::{document_name_size, index_entry_size, IndexEntryScope};
 use crate::store::{get_field, FirestoreError, LimitScope};
@@ -216,75 +216,54 @@ impl IndexSet {
             return Err(index_entry_too_large());
         }
         self.automatic_usage(document, fields, &mut Vec::new(), &mut usage, enforce)?;
+        // Only this document's collection group can hold entries for it, so only its own
+        // definitions are visited, in the order `composites()` lists them.
+        for index in self.composites_for(document.collection_id()) {
+            #[cfg(test)]
+            GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(visits.get() + 1));
+            composite_usage(
+                index,
+                document,
+                parent.as_ref(),
+                fields,
+                &mut usage,
+                enforce,
+            )?;
+        }
+        Ok(usage)
+    }
+
+    /// The accounting on main before composites were grouped: every definition in the catalog
+    /// is visited and filtered by collection group. Kept only to check the grouped selection.
+    #[cfg(test)]
+    fn index_usage_of_reference(
+        &self,
+        document: &DocumentPath,
+        fields: &BTreeMap<String, Value>,
+        enforce: bool,
+    ) -> Result<IndexUsage, FirestoreError> {
+        let mut usage = IndexUsage::default();
+        let parent = document.parent_document();
+        let name_bytes = document_name_size(document)
+            .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
+        if enforce && name_bytes > DOCUMENT_NAME_ENTRY_BYTES {
+            return Err(index_entry_too_large());
+        }
+        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage, enforce)?;
         for index in self
             .composites()
             .iter()
+            .inspect(|_| COMPOSITE_VISITS.with(|visits| visits.set(visits.get() + 1)))
             .filter(|index| &index.collection_group == document.collection_id())
         {
-            if index.fields.len() > 100
-                || index
-                    .fields
-                    .iter()
-                    .filter(|f| f.mode == IndexFieldMode::Contains)
-                    .count()
-                    > 1
-            {
-                return Err(FirestoreError::InvalidArgument(
-                    "Invalid composite index definition".into(),
-                ));
-            }
-            let name = Value::Reference(document.resource_name());
-            let mut values = Vec::new();
-            let mut array = None;
-            for field in &index.fields {
-                let value = if field.path.is_document_name() {
-                    Some(&name)
-                } else {
-                    get_field(fields, &field.path)
-                };
-                let Some(value) = value else {
-                    values.clear();
-                    break;
-                };
-                if field.path.is_document_name() {
-                    continue;
-                } // Already in the document-name charge.
-                if field.mode == IndexFieldMode::Contains {
-                    let Value::Array(items) = value else {
-                        values.clear();
-                        break;
-                    };
-                    array = Some((values.len(), items));
-                }
-                values.push(("", value));
-            }
-            if values.is_empty() {
-                continue;
-            }
-            let scope = match index.query_scope {
-                IndexQueryScope::Collection => IndexEntryScope::CompositeCollection,
-                IndexQueryScope::CollectionGroup => IndexEntryScope::CompositeCollectionGroup,
-            };
-            if let Some((position, items)) = array {
-                for IndexValue(value) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
-                    values[position].1 = value;
-                    usage.add(
-                        entry_size(scope, document, parent.as_ref(), &values)?,
-                        1,
-                        entry_limit(scope),
-                        document,
-                        enforce,
-                    )?;
-                }
-            } else {
-                usage.add(
-                    entry_size(scope, document, parent.as_ref(), &values)?,
-                    1,
-                    entry_limit(scope),
-                    document,
-                    enforce,
-                )?;
-            }
+            composite_usage(
+                index,
+                document,
+                parent.as_ref(),
+                fields,
+                &mut usage,
+                enforce,
+            )?;
         }
         Ok(usage)
     }
@@ -348,6 +327,91 @@ impl IndexSet {
         }
         Ok(())
     }
+}
+
+/// Charges one composite definition's entries for a document of its collection group,
+/// refusing an invalid definition before anything is charged for it.
+fn composite_usage(
+    index: &IndexDefinition,
+    document: &DocumentPath,
+    parent: Option<&DocumentPath>,
+    fields: &BTreeMap<String, Value>,
+    usage: &mut IndexUsage,
+    enforce: bool,
+) -> Result<(), FirestoreError> {
+    if index.fields.len() > 100
+        || index
+            .fields
+            .iter()
+            .filter(|f| f.mode == IndexFieldMode::Contains)
+            .count()
+            > 1
+    {
+        return Err(FirestoreError::InvalidArgument(
+            "Invalid composite index definition".into(),
+        ));
+    }
+    let name = Value::Reference(document.resource_name());
+    let mut values = Vec::new();
+    let mut array = None;
+    for field in &index.fields {
+        let value = if field.path.is_document_name() {
+            Some(&name)
+        } else {
+            get_field(fields, &field.path)
+        };
+        let Some(value) = value else {
+            values.clear();
+            break;
+        };
+        if field.path.is_document_name() {
+            continue;
+        } // Already in the document-name charge.
+        if field.mode == IndexFieldMode::Contains {
+            let Value::Array(items) = value else {
+                values.clear();
+                break;
+            };
+            array = Some((values.len(), items));
+        }
+        values.push(("", value));
+    }
+    if values.is_empty() {
+        return Ok(());
+    }
+    let scope = match index.query_scope {
+        IndexQueryScope::Collection => IndexEntryScope::CompositeCollection,
+        IndexQueryScope::CollectionGroup => IndexEntryScope::CompositeCollectionGroup,
+    };
+    if let Some((position, items)) = array {
+        for IndexValue(value) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
+            values[position].1 = value;
+            usage.add(
+                entry_size(scope, document, parent, &values)?,
+                1,
+                entry_limit(scope),
+                document,
+                enforce,
+            )?;
+        }
+    } else {
+        usage.add(
+            entry_size(scope, document, parent, &values)?,
+            1,
+            entry_limit(scope),
+            document,
+            enforce,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Composite definitions the reference (main's) selection scanned.
+    static COMPOSITE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Composite definitions the grouped selection visited.
+    static GROUPED_COMPOSITE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn entry_size(
@@ -524,5 +588,302 @@ mod tests {
             )
             .expect("19,999 elements stay within the entry count");
         assert_eq!(usage.entries, 40_000);
+    }
+}
+
+#[cfg(test)]
+mod composite_grouping_tests {
+    use super::{COMPOSITE_VISITS, GROUPED_COMPOSITE_VISITS};
+    use crate::field_path::FieldPath;
+    use crate::index::{IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet};
+    use crate::path::DocumentPath;
+    use crate::value::Value;
+    use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
+    use proptest::prelude::*;
+    use std::collections::BTreeMap;
+
+    /// Groups with composites; `g4` never has any.
+    const GROUPS: [&str; 5] = ["g0", "g1", "g2", "g3", "g4"];
+    const PATHS: [&str; 5] = ["a", "b", "c", "m.x", "__name__"];
+
+    fn path(index: usize) -> FieldPath {
+        if PATHS[index] == "__name__" {
+            FieldPath::document_name()
+        } else {
+            FieldPath::parse(PATHS[index]).unwrap()
+        }
+    }
+
+    fn document(relative: &str) -> DocumentPath {
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            relative,
+        )
+        .unwrap()
+    }
+
+    fn mode(code: u8) -> IndexFieldMode {
+        match code % 3 {
+            0 => IndexFieldMode::Ascending,
+            1 => IndexFieldMode::Descending,
+            _ => IndexFieldMode::Contains,
+        }
+    }
+
+    /// A composite: group (0..4), collection-group scope, `(path, mode)` fields, and whether it
+    /// is padded past the 100-field limit.
+    type CompositeSpec = (usize, bool, Vec<(usize, u8)>, bool);
+
+    fn definition((group, group_scope, fields, oversized): &CompositeSpec) -> IndexDefinition {
+        let mut fields: Vec<IndexField> = fields
+            .iter()
+            .map(|&(p, m)| IndexField {
+                path: path(p),
+                mode: mode(m),
+            })
+            .collect();
+        if *oversized {
+            while fields.len() <= 100 {
+                fields.push(IndexField {
+                    path: path(0),
+                    mode: IndexFieldMode::Ascending,
+                });
+            }
+        }
+        IndexDefinition {
+            collection_group: CollectionId::try_new(GROUPS[*group]).unwrap(),
+            query_scope: if *group_scope {
+                IndexQueryScope::CollectionGroup
+            } else {
+                IndexQueryScope::Collection
+            },
+            fields,
+        }
+    }
+
+    fn value(code: u8, seed: i64) -> Value {
+        match code % 5 {
+            0 => Value::Integer(seed),
+            1 => Value::String(format!("s{seed}")),
+            2 => Value::Array((0..(seed.rem_euclid(4))).map(Value::Integer).collect()),
+            3 => Value::Array(vec![Value::Integer(seed), Value::Integer(seed)]),
+            _ => Value::Map(BTreeMap::from([("x".to_owned(), Value::Integer(seed))])),
+        }
+    }
+
+    fn composite_strategy() -> impl Strategy<Value = CompositeSpec> {
+        (
+            0usize..4,
+            any::<bool>(),
+            proptest::collection::vec((0usize..PATHS.len(), any::<u8>()), 1..5),
+            proptest::bool::weighted(0.05),
+        )
+    }
+
+    fn build(specs: &[CompositeSpec], removals: &[usize]) -> IndexSet {
+        let mut indexes = IndexSet::default();
+        let definitions: Vec<_> = specs.iter().map(definition).collect();
+        for definition in &definitions {
+            indexes.add_composite(definition.clone());
+        }
+        for &removal in removals {
+            if !definitions.is_empty() {
+                indexes.remove_composite(&definitions[removal % definitions.len()]);
+            }
+        }
+        indexes
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        #[test]
+        fn grouped_accounting_matches_the_full_scan_for_every_catalog(
+            specs in proptest::collection::vec(composite_strategy(), 0..24),
+            removals in proptest::collection::vec(any::<usize>(), 0..4),
+            group in 0usize..GROUPS.len(),
+            nested in any::<bool>(),
+            values in proptest::collection::vec((any::<bool>(), any::<u8>(), -3i64..4), 4),
+        ) {
+            let indexes = build(&specs, &removals);
+            // The grouped selection lists exactly the filtered definitions, in list order.
+            for name in GROUPS {
+                let collection = CollectionId::try_new(name).unwrap();
+                let grouped: Vec<_> = indexes.composites_for(&collection).collect();
+                let scanned: Vec<_> = indexes
+                    .composites()
+                    .iter()
+                    .filter(|index| index.collection_group == collection)
+                    .collect();
+                prop_assert_eq!(grouped, scanned);
+            }
+            let relative = if nested {
+                format!("p/1/{}/d", GROUPS[group])
+            } else {
+                format!("{}/d", GROUPS[group])
+            };
+            let document = document(&relative);
+            let fields: BTreeMap<String, Value> = ["a", "b", "c", "m"]
+                .iter()
+                .zip(&values)
+                .filter(|(_, (present, _, _))| *present)
+                .map(|(name, &(_, code, seed))| {
+                    let value = if *name == "m" {
+                        value(4, seed)
+                    } else {
+                        value(code, seed)
+                    };
+                    ((*name).to_owned(), value)
+                })
+                .collect();
+            for enforce in [true, false] {
+                prop_assert_eq!(
+                    indexes.index_usage_of(&document, &fields, enforce),
+                    indexes.index_usage_of_reference(&document, &fields, enforce),
+                    "enforce={}", enforce
+                );
+            }
+        }
+    }
+
+    fn ordered(group: &str, field: &str) -> IndexDefinition {
+        IndexDefinition {
+            collection_group: CollectionId::try_new(group).unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: vec![
+                IndexField {
+                    path: FieldPath::parse(field).unwrap(),
+                    mode: IndexFieldMode::Ascending,
+                },
+                IndexField {
+                    path: FieldPath::parse("b").unwrap(),
+                    mode: IndexFieldMode::Descending,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn the_required_cases_match_the_full_scan() {
+        let fields = BTreeMap::from([
+            ("a".to_owned(), Value::Integer(1)),
+            ("b".to_owned(), Value::Array(vec![Value::Integer(2)])),
+        ]);
+        let mut indexes = IndexSet::default();
+        indexes.add_composite(ordered("g0", "a"));
+        let mut refused = ordered("g1", "b");
+        refused.fields[0].mode = IndexFieldMode::Contains;
+        refused.fields[1].mode = IndexFieldMode::Contains;
+        indexes.add_composite(refused);
+        indexes.add_composite(ordered("g1", "a"));
+        // A group without composites only has automatic entries.
+        let lone = document("g4/d");
+        let usage = indexes.index_usage_of(&lone, &fields, true);
+        assert_eq!(
+            usage,
+            indexes.index_usage_of_reference(&lone, &fields, true)
+        );
+        assert_eq!(
+            usage,
+            IndexSet::default().index_usage_of(&lone, &fields, true)
+        );
+        // The refused definition is still refused, before the valid one after it is charged.
+        let doomed = document("g1/d");
+        let refusal = indexes.index_usage_of(&doomed, &fields, true);
+        assert_eq!(
+            refusal,
+            Err(crate::store::FirestoreError::InvalidArgument(
+                "Invalid composite index definition".into()
+            ))
+        );
+        assert_eq!(
+            refusal,
+            indexes.index_usage_of_reference(&doomed, &fields, true)
+        );
+        // A group whose only definition is valid is charged for it.
+        let served = document("g0/d");
+        let usage = indexes.index_usage_of(&served, &fields, true).unwrap();
+        assert_eq!(
+            Ok(usage),
+            indexes.index_usage_of_reference(&served, &fields, true)
+        );
+        assert!(
+            usage.entries
+                > IndexSet::default()
+                    .index_usage_of(&served, &fields, true)
+                    .unwrap()
+                    .entries
+        );
+    }
+
+    /// 1,000 composites over 100 collection groups, ten in each.
+    fn wide_catalog() -> IndexSet {
+        let mut indexes = IndexSet::default();
+        for i in 0..1_000 {
+            indexes.add_composite(ordered(&format!("g{}", i % 100), &format!("f{}", i / 100)));
+        }
+        indexes
+    }
+
+    fn wide_fields() -> BTreeMap<String, Value> {
+        let mut fields: BTreeMap<_, _> = (0..10)
+            .map(|i| (format!("f{i}"), Value::Integer(i)))
+            .collect();
+        fields.insert("b".to_owned(), Value::Integer(7));
+        fields
+    }
+
+    #[test]
+    fn accounting_visits_only_its_own_group_s_composites() {
+        let indexes = wide_catalog();
+        let fields = wide_fields();
+        for group in [0, 42, 99] {
+            let document = document(&format!("g{group}/d"));
+            COMPOSITE_VISITS.with(|visits| visits.set(0));
+            let before = indexes.index_usage_of_reference(&document, &fields, true);
+            let before_visits = COMPOSITE_VISITS.with(std::cell::Cell::get);
+            GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(0));
+            let after = indexes.index_usage_of(&document, &fields, true);
+            let after_visits = GROUPED_COMPOSITE_VISITS.with(std::cell::Cell::get);
+            println!(
+                "g{group}: composite definitions visited per document: before (main) \
+                 {before_visits}, after {after_visits}"
+            );
+            assert_eq!(after, before);
+            assert_eq!(before_visits, 1_000);
+            assert_eq!(after_visits, 10);
+        }
+        // A group without composites visits none.
+        GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(0));
+        indexes
+            .index_usage_of(&document("none/d"), &fields, true)
+            .unwrap();
+        assert_eq!(GROUPED_COMPOSITE_VISITS.with(std::cell::Cell::get), 0);
+    }
+
+    /// Times 10,000 accounting calls against 1,000 composites, before and after. Run with
+    /// `cargo test --release -p fireemu-core-firestore -- --ignored --nocapture composite_accounting_timing`.
+    #[test]
+    #[ignore = "timing measurement, not a check"]
+    fn composite_accounting_timing() {
+        let indexes = wide_catalog();
+        let fields = wide_fields();
+        let documents: Vec<_> = (0..100).map(|g| document(&format!("g{g}/d"))).collect();
+        let time = |grouped: bool| {
+            let start = std::time::Instant::now();
+            for i in 0..10_000 {
+                let document = &documents[i % documents.len()];
+                let usage = if grouped {
+                    indexes.index_usage_of(document, &fields, true)
+                } else {
+                    indexes.index_usage_of_reference(document, &fields, true)
+                };
+                std::hint::black_box(usage.unwrap());
+            }
+            start.elapsed()
+        };
+        let before = time(false);
+        let after = time(true);
+        println!("10,000 accounting calls, 1,000 composites: before {before:?}, after {after:?}");
     }
 }

@@ -14815,6 +14815,65 @@ module.exports = { tick, observer };
     }
 
     #[test]
+    fn the_python_runner_is_looked_for_in_its_own_directory_and_never_mistaken_for_the_node_one() {
+        let root = synthetic_workspace("python");
+        let exe = root.join("target/debug/fireemu");
+        // Only the Node runner exists: the Python one is not found, and the Node one still is.
+        assert_eq!(
+            super::workspace_runner_from_for(&exe, "runner-python", "runner.py"),
+            None
+        );
+        std::fs::create_dir_all(root.join("tools/runner-python")).unwrap();
+        std::fs::write(root.join("tools/runner-python/runner.py"), "").unwrap();
+        assert_eq!(
+            super::workspace_runner_from_for(&exe, "runner-python", "runner.py").as_deref(),
+            Some(root.join("tools/runner-python/runner.py").as_path())
+        );
+        assert_eq!(
+            super::workspace_runner_from(&exe).as_deref(),
+            Some(root.join("tools/runner-node/index.mjs").as_path())
+        );
+        // The candidates beside the binary name the directory and the script they were asked for.
+        let candidates =
+            super::runner_candidates_for("FIREEMU_NO_SUCH_RUNNER", "runner-python", "runner.py");
+        assert!(!candidates.is_empty());
+        assert!(
+            candidates
+                .iter()
+                .all(|(_, path)| path.ends_with("runner-python/runner.py")),
+            "{candidates:?}"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_missing_runner_names_the_override_variable_and_the_script() {
+        let error = super::locate_runner_for(
+            "FIREEMU_NO_SUCH_RUNNER",
+            "runner-nowhere",
+            "start.py",
+            "the test runner",
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("the test runner (runner-nowhere/start.py) was not found; tried "),
+            "{error}"
+        );
+        assert!(
+            error.contains("Set FIREEMU_NO_SUCH_RUNNER to a start.py, or reinstall"),
+            "{error}"
+        );
+        let node = super::locate_runner_for(
+            "FIREEMU_NO_SUCH_RUNNER",
+            "runner-none",
+            "index.mjs",
+            "the bundled Node runner",
+        )
+        .unwrap_err();
+        assert!(node.contains("to an index.mjs,"), "{node}");
+    }
+
+    #[test]
     fn workspace_runner_walk_is_bounded_and_needs_both_markers() {
         let root = synthetic_workspace("bounded");
         let too_deep = (0..super::WORKSPACE_RUNNER_SEARCH_DEPTH)

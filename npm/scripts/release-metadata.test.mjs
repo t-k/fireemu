@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { buildPlatformPackage, platformManifest, RUNNER_FILES } from "../platforms/build-platform.mjs";
+import { buildPlatformPackage, platformManifest, PYTHON_RUNNER_FILES, RUNNER_FILES } from "../platforms/build-platform.mjs";
 import { PLATFORMS } from "../platforms/platforms.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -40,6 +40,38 @@ test("every public distribution reference names the canonical repository", () =>
     { cwd: repoRoot, encoding: "utf8" },
   );
   assert.equal(search.status, 1, search.stdout || search.stderr);
+});
+
+test("the platform package includes every Python runner module", () => {
+  const root = resolve(repoRoot, "tools/runner-python");
+  const onDisk = [
+    "runner.py",
+    ...readdirSync(resolve(root, "fireemu_runner"))
+      .filter(name => name.endsWith(".py"))
+      .map(name => `fireemu_runner/${name}`),
+  ];
+  assert.deepEqual([...PYTHON_RUNNER_FILES].sort(), onDisk.sort());
+});
+
+test("the platform package carries the Python runner beside the binary, byte for byte", () => {
+  const temp = mkdtempSync(resolve(tmpdir(), "fireemu-package-python-"));
+  try {
+    const binary = resolve(temp, "unused-native-fixture");
+    writeFileSync(binary, "not a native artifact\n");
+    const output = buildPlatformPackage({
+      platformName: PLATFORMS[0].name, binaryPath: binary,
+      outDir: resolve(temp, "platform"), version: "0.0.0-offline-test",
+    });
+    for (const file of PYTHON_RUNNER_FILES) {
+      assert.deepEqual(
+        readFileSync(resolve(output, "bin/runner-python", file)),
+        readFileSync(resolve(repoRoot, "tools/runner-python", file)),
+        file,
+      );
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
 
 test("the platform package includes every local runner module", () => {

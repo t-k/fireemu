@@ -38,6 +38,7 @@ const MODULES = [
   "wire.mjs",
   "iam.mjs",
   "observe.mjs",
+  "egress.mjs",
   "deps.mjs",
   "run.mjs",
 ];
@@ -80,9 +81,9 @@ function pins() {
   return {
     gitSha: execFileSync("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     dirty:
-      execFileSync("git", ["-C", HERE, "status", "--porcelain", "--", "."], {
-        encoding: "utf8",
-      }).trim() !== "",
+      // The whole checkout: the lock library and the tests are inputs too.
+      execFileSync("git", ["-C", HERE, "status", "--porcelain"], { encoding: "utf8" }).trim() !==
+      "",
     modules: Object.fromEntries(MODULES.map((file) => [file, digest(file)])),
     node: process.version,
     firebaseAdmin: version("firebase-admin"),
@@ -98,8 +99,13 @@ function finish(out, report, extra) {
     estimatedUsd: ESTIMATED_USD,
     finishedAt: new Date().toISOString(),
   };
-  out.save("run-report.json", full);
+  // The receipt goes to stdout first: a full disk must not lose it.
   console.log(JSON.stringify(full));
+  try {
+    out.save("run-report.json", full);
+  } catch (error) {
+    console.error(`run-report.json not saved: ${error.message}`);
+  }
   return full;
 }
 
@@ -115,7 +121,10 @@ async function recordProduction() {
     Number(argValue("window-minutes") ?? DEFAULT_WINDOW_MINUTES),
   );
   const pin = pins();
-  if (pin.dirty) throw new Error("the recorder's checkout has uncommitted or untracked files");
+  if (pin.dirty)
+    throw new Error(
+      "the recorder's checkout (the whole worktree) has uncommitted or untracked files",
+    );
   const out = newOutDir(required("out"));
   const startedAt = new Date().toISOString();
   installEgressGuard([

@@ -3,19 +3,20 @@
 
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
-import http from "node:http";
-import https from "node:https";
 import { createRequire } from "node:module";
 
 import { cert, deleteApp, initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 
+import { installEgressGuard } from "./egress.mjs";
 import { isUnknownStatus } from "./guard.mjs";
-import { BUCKET, PROJECT, RANGE_HEADER } from "./plan.mjs";
+import { BUCKET, PROJECT, RANGE_HEADER, REQUEST_TIMEOUT_MS } from "./plan.mjs";
 
 const requireHere = createRequire(import.meta.url);
 
 /** fetch with no redirect following; status, lower-case headers and the exact body bytes. */
+export { installEgressGuard };
+
 export async function fetchNet({ method, url, headers, body, timeoutMs }) {
   const init = { method, headers, redirect: "manual", signal: AbortSignal.timeout(timeoutMs) };
   if (body !== undefined) init.body = body;
@@ -41,36 +42,18 @@ function signedUrlOptions(spec) {
 }
 
 /**
- * Throws on any outbound http/https request to a host outside `hosts`, after telling `onRefuse`. The SDKs open sockets
- * through these modules; fetch (used only by `fetchNet`, after the observer's own guard) does not.
- */
-export function installEgressGuard(hosts, { onRefuse } = {}) {
-  const allowed = new Set(hosts);
-  for (const module of [http, https]) {
-    for (const name of ["request", "get"]) {
-      const original = module[name];
-      module[name] = function guarded(first, ...rest) {
-        const host =
-          typeof first === "string" || first instanceof URL
-            ? new URL(first).hostname
-            : (first.hostname ?? first.host ?? "").replace(/:\d+$/, "");
-        if (!allowed.has(host)) {
-          onRefuse?.(host);
-          throw new Error(`egress refused: ${host}`);
-        }
-        return original.call(this, first, ...rest);
-      };
-    }
-  }
-}
-
-/**
  * Production: the owner's user ADC access token is the source credential; the Admin SDK's
  * `File#getSignedUrl` signs through IAM Credentials signBlob of the signer service account (no
  * key file). Every request the SDKs make goes through the source client's transporter, which
  * reports to the observer's meter, takes the project lock lease and disables SDK retries.
  */
-export function createProductionDeps({ accessToken, lease, transport, signer }) {
+export function createProductionDeps({
+  accessToken,
+  lease,
+  transport,
+  signer,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+}) {
   const storageDir = createRequire(requireHere.resolve("firebase-admin"));
   const storagePath = storageDir.resolve("@google-cloud/storage");
   const auth = createRequire(storagePath)("google-auth-library");
@@ -97,8 +80,18 @@ export function createProductionDeps({ accessToken, lease, transport, signer }) 
     try {
       outcome = await lease.dispatch(async () => {
         try {
+          // No retries, no redirects (a redirect would leave the guard unseen) and the packet's
+          // timeout on every SDK request, signBlob included.
           return {
-            response: await original({ ...options, retry: false, retryConfig: { retry: 0 } }),
+            response: await original({
+              ...options,
+              retry: false,
+              retryConfig: { retry: 0 },
+              maxRedirects: 0,
+              follow: 0,
+              timeout: timeoutMs,
+              signal: AbortSignal.timeout(timeoutMs),
+            }),
           };
         } catch (error) {
           const status = error?.response?.status;

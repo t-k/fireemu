@@ -1,3 +1,5 @@
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -99,7 +101,8 @@ describe("signed PUT plan", () => {
     assert.ok(bounds.total <= TOTAL_CAP, `total ${bounds.total}`);
     assert.ok(expectedRequests() <= bounds.total);
     assert.ok(expectedRequests(CASES, 2, "local") < expectedRequests());
-    assert.equal(TOTAL_CAP, 220);
+    assert.equal(bounds.main, MAIN_CAP);
+    assert.equal(bounds.total, TOTAL_CAP);
   });
 
   it("lists every name a recording can create under the recording prefix", () => {
@@ -131,7 +134,7 @@ describe("signed PUT plan", () => {
         ESTIMATED_USD,
         RECORDINGS,
       ],
-      [150, 220, 45, 30_000, 2500, 5000, 0.05, 2],
+      [130, 205, 45, 30_000, 2500, 5000, 0.05, 2],
     );
     assert.equal(CASES.length, 16);
     assert.deepEqual(staticBounds(), {
@@ -139,9 +142,9 @@ describe("signed PUT plan", () => {
       iamGrant: 15,
       perRecording: 50,
       main: 130,
-      iamRemove: 5,
-      cleanup: 71,
-      total: 201,
+      iamRemove: 9,
+      cleanup: 75,
+      total: 205,
     });
     assert.equal(expectedRequests(), 9 + 9 + 2 * 50 + 2 + 2 * 5 * 2);
     assert.equal(expectedRequests(CASES, 2, "local"), 1 + 2 * 34 + 2 + 2 * 5 * 2);

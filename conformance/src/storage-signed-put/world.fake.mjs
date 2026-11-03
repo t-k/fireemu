@@ -42,6 +42,7 @@ export function createFakeWorld({
   hideFromList = new Set(),
   intercept = () => undefined,
   iam: iamOptions = {},
+  signDelayMs = 0,
 }) {
   const iamConfig = {
     member: IAM_CONFIG.member,
@@ -265,6 +266,23 @@ export function createFakeWorld({
     return view;
   }
 
+  function versionOneView() {
+    const view = policyView();
+    view.version = 1;
+    if (view.bindings) {
+      view.bindings = view.bindings.map((b) => {
+        if (!b.condition) return b;
+        const { condition, ...rest } = b;
+        const hash = createHash("sha256")
+          .update(JSON.stringify(condition))
+          .digest("hex")
+          .slice(0, 8);
+        return { ...rest, role: `${b.role}_withcond_${hash}` };
+      });
+    }
+    return view;
+  }
+
   function iamRequest(url, request, segments) {
     const email = target.signer;
     if (url.hostname === "cloudresourcemanager.googleapis.com") {
@@ -274,7 +292,14 @@ export function createFakeWorld({
     const path = decodeURIComponent(url.pathname);
     const account = `/v1/projects/${target.project}/serviceAccounts/${email}`;
     if (path === account) return json(200, { email, disabled: false });
-    if (path === `${account}:getIamPolicy`) return json(200, policyView());
+    if (path === `${account}:getIamPolicy`) {
+      // The documented form is the query parameter with no body. Anything else is served the
+      // version 1 view, in which a conditional binding is a `_withcond_` role without its condition.
+      const documented =
+        url.searchParams.getAll("options.requestedPolicyVersion").join() === "3" &&
+        (request.body === undefined || request.body.length === 0);
+      return json(200, documented ? policyView() : versionOneView());
+    }
     if (path === `${account}:setIamPolicy`) {
       const { policy } = bodyOf(request);
       if (!policy || policy.etag !== iamState.policy.etag) {
@@ -334,6 +359,10 @@ export function createFakeWorld({
       meter.after("signBlob", answer);
       if (answer !== 200) throw new Error(`signBlob refused with ${answer}`);
     }
+    // The SDK refuses an expiry that is already in the past when it checks it, a little after the
+    // caller read the clock.
+    await clock.sleep(typeof signDelayMs === "function" ? signDelayMs(spec) : signDelayMs);
+    if (spec.expires < clock.now()) throw new Error("Expiration date is in the past");
     const issued = spec.accessibleAt ?? Math.floor(clock.now() / 1000) * 1000;
     const period = Math.floor(spec.expires / 1000) - Math.floor(issued / 1000);
     const signedHeaders = ["host"];

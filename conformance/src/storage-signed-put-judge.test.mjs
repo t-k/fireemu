@@ -1,3 +1,5 @@
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -165,10 +167,10 @@ describe("signed PUT judge", () => {
     });
     assert.deepEqual(compareRecordings([row(1, "a"), row(2, "a")]), []);
     assert.deepEqual(compareRecordings([row(1, "a"), row(2, "a", { bodyBytes: 11 })]), [
-      { id: "a", fields: ["bodyBytes"] },
+      { id: "a", fields: ["bodyBytes"], digestOnly: false },
     ]);
     assert.deepEqual(compareRecordings([row(1, "a")]), [
-      { id: "a", fields: ["missing-recording"] },
+      { id: "a", fields: ["missing-recording"], digestOnly: false },
     ]);
     const prod = [row(1, "a"), row(1, "b"), row(2, "a")];
     const local = [
@@ -185,7 +187,14 @@ describe("signed PUT judge", () => {
     );
     assert.deepEqual(rows[0].fields, ["status", "code", "shape", "bodyBytes"]);
     assert.deepEqual(compareTargets([row(1, "c")], []), [
-      { id: "c", match: false, fields: ["missing-local"] },
+      {
+        id: "c",
+        match: false,
+        exact: false,
+        fields: ["missing-local"],
+        exactFields: ["missing-local"],
+        extra: [],
+      },
     ]);
   });
 

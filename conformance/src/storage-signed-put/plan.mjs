@@ -37,8 +37,9 @@ export const RANGE_HEADER = "x-goog-content-length-range";
 export const PNG_MAGIC = Uint8Array.from([137, 80, 78, 71]);
 
 /** Request caps: the main phase (setup and both recordings) and the whole run with cleanup. */
-export const MAIN_CAP = 150;
-export const TOTAL_CAP = 220;
+// The reviewed worst cases themselves (staticBounds().main and .total), not a margin above them.
+export const MAIN_CAP = 130;
+export const TOTAL_CAP = 205;
 /** A2 read-back (a separate command, at least 10 minutes after the last request). */
 export const READBACK_CAP = 45;
 /** Per-request timeout, from the 30000 ms of the existing Storage recorders (no signed-PUT latency is recorded yet). */
@@ -197,7 +198,8 @@ export function staticBounds(
   }
   const main = setup + iamGrant + perRecording * recordings;
   const names = new Set(cases.map((c) => caseObjects(c).sent)).size * recordings;
-  const iamRemove = 5;
+  // Per attempt one policy read and one write, then the final read, the role delete and its read-back.
+  const iamRemove = 2 * MAX_REMOVE_ATTEMPTS + 3;
   const cleanup = 2 + 2 * names + iamRemove;
   return { setup, iamGrant, perRecording, main, iamRemove, cleanup, total: main + cleanup };
 }

@@ -2,6 +2,8 @@
 // any change, the grant, and the removal that must happen on every path, with the unknown-answer
 // rules of the sandbox process.
 
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -307,7 +309,7 @@ describe("signer access: the preflight stops before any change", () => {
     );
     await stops(
       { intercept: (r) => (urlOf(r).endsWith(`${SA}:getIamPolicy`) ? respond(403) : undefined) },
-      /signer policy read answered 403/,
+      /signer-policy answered 403/,
     );
     await stops(
       { intercept: (r) => (urlOf(r).startsWith("/v1/roles/") ? respond(404) : undefined) },
@@ -809,24 +811,31 @@ describe("signer access: more paths", () => {
   const cleanTotal = async () => (await go()).report.requests;
 
   it("asks for policy version 3 on every policy read and write", async () => {
-    const bodies = [];
+    const reads = [];
+    const writes = [];
     await go({
       intercept: (request) => {
         const path = urlOf(request);
-        if (path.endsWith(":getIamPolicy"))
-          bodies.push(["get", JSON.parse(Buffer.from(request.body).toString())]);
-        if (path.endsWith(":setIamPolicy"))
-          bodies.push(["set", JSON.parse(Buffer.from(request.body).toString()).policy.version]);
+        if (path.endsWith(":getIamPolicy")) {
+          reads.push({
+            project: request.url.includes("cloudresourcemanager"),
+            search: new URL(request.url).search,
+            body: request.body ? Buffer.from(request.body).toString() : "",
+          });
+        }
+        if (path.endsWith(":setIamPolicy")) {
+          writes.push(JSON.parse(Buffer.from(request.body).toString()).policy.version);
+        }
         return undefined;
       },
     });
-    const gets = bodies.filter(([kind]) => kind === "get").map(([, body]) => body);
-    assert.equal(gets.length, 5, "signer, project, read-back, removal read, final read");
-    assert.ok(gets.every((body) => body.options.requestedPolicyVersion === 3));
-    assert.deepEqual(
-      bodies.filter(([kind]) => kind === "set").map(([, version]) => version),
-      [3, 3],
-    );
+    assert.equal(reads.length, 5, "signer, project, read-back, removal read, final read");
+    for (const read of reads) {
+      if (read.project)
+        assert.deepEqual(JSON.parse(read.body), { options: { requestedPolicyVersion: 3 } });
+      else assert.deepEqual([read.search, read.body], ["?options.requestedPolicyVersion=3", ""]);
+    }
+    assert.deepEqual(writes, [3, 3]);
   });
 
   it("accepts exactly eight roles and reads each", async () => {
@@ -966,11 +975,11 @@ describe("signer access: A2 and standalone removal, more paths", () => {
   it("reads the signer role as absent, saves its report and asks for policy version 3", async () => {
     const world = createFakeWorld({ target: PRODUCTION_LIKE, clock: createVirtualClock() });
     const out = memoryOut();
-    const bodies = [];
+    const seen = [];
     const deps = {
       ...world.deps,
       net: async (r) => {
-        if (r.body) bodies.push(JSON.parse(Buffer.from(r.body).toString()));
+        seen.push([r.url.slice(r.url.indexOf("?")), r.body ? "body" : ""]);
         return world.deps.net(r);
       },
     };
@@ -983,7 +992,7 @@ describe("signer access: A2 and standalone removal, more paths", () => {
     });
     assert.deepEqual([report.roleState, report.clean, report.requests], ["absent", true, 2]);
     assert.deepEqual(out.saved.get("a2-iam.json"), report);
-    assert.deepEqual(bodies, [{ options: { requestedPolicyVersion: 3 } }]);
+    assert.deepEqual(seen[0], ["?options.requestedPolicyVersion=3", ""]);
   });
 
   it("reports the standalone removal's state, saves it, and is not clean while the binding or an extra binding remains", async () => {

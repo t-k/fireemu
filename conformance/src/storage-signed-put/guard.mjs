@@ -42,10 +42,11 @@ function checkName(name, prefix) {
   return name;
 }
 
+export const POLICY_VERSION_PARAM = "options.requestedPolicyVersion";
 const ROLE_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** The iam.googleapis.com forms: the signer, its policy, the signer role, and role definitions. */
-function classifyIam(target, method, segments, only) {
+function classifyIam(target, method, segments, only, { url, body }) {
   const decoded = segments.map(decodeSegment);
   if (decoded[0] !== "v1") fail("IAM version");
   const account = `serviceAccounts`;
@@ -68,7 +69,15 @@ function classifyIam(target, method, segments, only) {
     ]) {
       if (leaf === `${target.signer}${suffix}`) {
         if (method !== "POST") fail("IAM policy method");
-        only([]);
+        if (kind === "signer-get-policy") {
+          // serviceAccounts.getIamPolicy takes the policy version as a query parameter and has no body.
+          only([POLICY_VERSION_PARAM]);
+          const values = url.searchParams.getAll(POLICY_VERSION_PARAM);
+          if (values.length !== 1 || values[0] !== "3") fail("IAM policy version");
+          if (body !== undefined && body.length !== 0) fail("IAM policy read has no body");
+        } else {
+          only([]);
+        }
         return kind;
       }
     }
@@ -139,7 +148,9 @@ export function classifyRequest(target, request, prefix) {
   };
   const jsonBase = ["storage", "v1", "b", bucket];
 
-  if (url.hostname === "iam.googleapis.com") return classifyIam(target, method, segments, only);
+  if (url.hostname === "iam.googleapis.com") {
+    return classifyIam(target, method, segments, only, { url, body: request.body });
+  }
   if (url.hostname === "cloudresourcemanager.googleapis.com") {
     if (method !== "POST") fail("resource manager method");
     const expected = ["v1", `projects`, `${target.project}:getIamPolicy`];

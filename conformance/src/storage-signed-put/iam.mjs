@@ -5,7 +5,7 @@
 // every policy this module writes is checked to differ from the policy it read by exactly the
 // run's own binding.
 
-import { GuardError, isUnknownStatus } from "./guard.mjs";
+import { GuardError, POLICY_VERSION_PARAM, isUnknownStatus } from "./guard.mjs";
 import { UnknownAnswer } from "./wire.mjs";
 import {
   MAX_REMOVE_ATTEMPTS,
@@ -27,10 +27,7 @@ const stop = (message) => {
 };
 
 export function validateMember(value) {
-  if (
-    typeof value !== "string" ||
-    !/^user:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(value)
-  ) {
+  if (typeof value !== "string" || !/^user:[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(value)) {
     throw new GuardError("request refused: the member must be user:<email>");
   }
   return value;
@@ -100,7 +97,20 @@ export function normalizePolicy(policy) {
 export const samePolicy = (a, b) =>
   JSON.stringify(normalizePolicy(a)) === JSON.stringify(normalizePolicy(b));
 
-export const holdsRole = (policy, role) => (policy?.bindings ?? []).some((b) => b.role === role);
+/**
+ * Whether any binding names the signer role or a role id that starts with it. IAM reports a
+ * conditional binding as `<role>_withcond_<hash>` without its condition when the policy is read as
+ * version 1, so the prefix is what must fail closed.
+ */
+export const holdsRole = (policy, role) =>
+  (policy?.bindings ?? []).some((b) => typeof b.role === "string" && b.role.startsWith(role));
+
+export const validEtag = (etag) => typeof etag === "string" && etag.length > 0;
+
+const needEtag = (policy) => {
+  if (!validEtag(policy?.etag))
+    throw new GuardError("request refused: the policy to write has no etag");
+};
 
 const isOurs = (binding, ours) =>
   binding.role === ours.role &&
@@ -133,6 +143,7 @@ export function withoutBinding(policy, ours) {
 
 /** Throws unless `after` is `before` with exactly the run's binding added. */
 export function assertGrantShape(before, after, ours) {
+  needEtag(before);
   if (!samePolicy(after, withBinding(before, ours))) {
     throw new GuardError(
       "request refused: the policy to write differs from the one read by more than the run's binding",
@@ -144,6 +155,7 @@ export function assertGrantShape(before, after, ours) {
 
 /** Throws unless `after` is `before` with exactly the run's binding removed. */
 export function assertRemovalShape(before, after, ours) {
+  needEtag(before);
   if (!samePolicy(after, withoutBinding(before, ours))) {
     throw new GuardError(
       "request refused: the policy to write differs from the one read by more than the run's binding",
@@ -176,6 +188,20 @@ export function storageVerdict(roleDefinitions) {
 }
 
 const json = (response) => JSON.parse(response.body.toString("utf8"));
+
+/** `serviceAccounts.getIamPolicy`: the version is a query parameter and the request has no body. */
+export const signerPolicyRequest = (target) => ({
+  method: "POST",
+  url: `https://iam.googleapis.com/v1/projects/${target.project}/serviceAccounts/${target.signer}:getIamPolicy?${POLICY_VERSION_PARAM}=3`,
+});
+
+async function readSignerPolicy(io, target, label) {
+  const read = await io.wire(label, signerPolicyRequest(target));
+  if (read.status !== 200) throw new IamStop(`${label} answered ${read.status}`);
+  const policy = json(read);
+  if (!validEtag(policy.etag)) throw new IamStop(`${label} returned a policy without an etag`);
+  return policy;
+}
 const post = (body) => ({
   headers: { "content-type": "application/json" },
   body: Buffer.from(JSON.stringify(body)),
@@ -189,14 +215,7 @@ const POLICY_OPTIONS = { options: { requestedPolicyVersion: 3 } };
  */
 export async function iamPreflight({ io, target }) {
   const base = `https://iam.googleapis.com/v1/projects/${target.project}`;
-  const signerUrl = `${base}/serviceAccounts/${target.signer}`;
-  const policyResponse = await io.wire(
-    "signer-policy",
-    { method: "POST", url: `${signerUrl}:getIamPolicy`, ...post(POLICY_OPTIONS) },
-    { context: { requestJson: POLICY_OPTIONS } },
-  );
-  if (policyResponse.status !== 200) stop(`signer policy read answered ${policyResponse.status}`);
-  const saPolicy = json(policyResponse);
+  const saPolicy = await readSignerPolicy(io, target, "signer-policy");
   if (holdsRole(saPolicy, roleName(target.project))) {
     stop("the signer's policy already holds the signer role");
   }
@@ -292,15 +311,7 @@ export async function iamGrant({ io, target, ctx, ours }) {
   }
   io.events.push({ resource: "binding", event: "grant", status: set.status });
   if (set.status !== 200) stop(`signer grant answered ${set.status}`);
-  const back = await io.wire(
-    "signer-grant-readback",
-    {
-      method: "POST",
-      url: `${base}/serviceAccounts/${target.signer}:getIamPolicy`,
-      ...post(POLICY_OPTIONS),
-    },
-    { context: { requestJson: POLICY_OPTIONS } },
-  );
+  const back = await io.wire("signer-grant-readback", signerPolicyRequest(target));
   if (back.status !== 200) stop(`signer policy read-back answered ${back.status}`);
   if (!samePolicy(json(back), { ...next }))
     stop("the signer's policy does not read back as granted");
@@ -316,19 +327,19 @@ export async function iamGrant({ io, target, ctx, ours }) {
 export async function iamRemove({ io, target, ctx, ours }) {
   const base = `https://iam.googleapis.com/v1/projects/${target.project}`;
   const policyUrl = `${base}/serviceAccounts/${target.signer}`;
-  const readPolicy = async (label) => {
-    const read = await io.wire(
-      label,
-      { method: "POST", url: `${policyUrl}:getIamPolicy`, ...post(POLICY_OPTIONS) },
-      { context: { requestJson: POLICY_OPTIONS } },
-    );
-    if (read.status !== 200) throw new IamStop(`${label} answered ${read.status}`);
-    return json(read);
-  };
+  const readPolicy = (label) => readSignerPolicy(io, target, label);
   let unknownRemoval = false;
   if (ctx.grantAttempted) {
     for (let attempt = 0; attempt < MAX_REMOVE_ATTEMPTS; attempt += 1) {
       const current = await readPolicy("signer-policy-before-removal");
+      const foreign = (current.bindings ?? []).filter(
+        (b) => typeof b.role === "string" && b.role.startsWith(ours.role) && !isOurs(b, ours),
+      );
+      if (foreign.length > 0) {
+        throw new IamStop(
+          "the signer's policy holds a binding of the signer role that is not the run's binding; nothing was written",
+        );
+      }
       if ((current.bindings ?? []).some((b) => isOurs(b, ours))) {
         io.events.push({ resource: "binding", event: "read", status: 200, present: true });
       }
@@ -360,7 +371,7 @@ export async function iamRemove({ io, target, ctx, ours }) {
       event: "final-read",
       status: 200,
       equalsPreflight: samePolicy(final, ctx.saPolicy),
-      present: (final.bindings ?? []).some((b) => isOurs(b, ours)),
+      present: holdsRole(final, ours.role),
     });
   }
   // A role still referenced by a binding that could not be removed is kept, and reported.

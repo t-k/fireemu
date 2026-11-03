@@ -104,18 +104,26 @@ export function putRow({ recording, testCase, answer, verdict, masks }) {
     shape: verdict.shape,
     bodyBytes: bytes.length,
     bodySha256: sha256(bytes),
-    body: normalizeBody(bytes.toString("utf8"), masks),
+    // The recording number is masked too, so the two recordings' paths do not tell them apart.
+    body: normalizeBody(bytes.toString("utf8"), [...masks, [`/rec${recording}/`, "/<rec>/"]]),
     headers: normalizeHeaders(answer.headers),
   };
 }
 
-const COMPARED = ["status", "class", "code", "shape", "bodyBytes", "body", "headers"];
+// Everything a row holds that two recordings of the same target must agree on, including the
+// digest of the exact response bytes. The body text is a normalized view (run-specific names and
+// the recording number masked); the digest is the identity.
+const COMPARED = ["status", "class", "code", "shape", "bodyBytes", "body", "bodySha256", "headers"];
 
 function sameValue(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Rows that differ between two recordings of the same target (to be normalized or marked). */
+/**
+ * Rows that differ between two recordings of the same target (to be normalized or marked).
+ * `digestOnly` says that the exact bytes differ while every normalized field agrees: the
+ * difference sits inside masked values or in bytes the text view cannot tell apart.
+ */
 export function compareRecordings(rows) {
   const byId = new Map();
   for (const row of rows) {
@@ -128,19 +136,31 @@ export function compareRecordings(rows) {
     const first = entry[1];
     const second = entry[2];
     if (!first || !second) {
-      differences.push({ id, fields: ["missing-recording"] });
+      differences.push({ id, fields: ["missing-recording"], digestOnly: false });
       continue;
     }
     const fields = COMPARED.filter((field) => !sameValue(first[field], second[field]));
-    if (fields.length) differences.push({ id, fields });
+    if (fields.length) {
+      differences.push({
+        id,
+        fields,
+        digestOnly: fields.length === 1 && fields[0] === "bodySha256",
+      });
+    }
   }
   return differences;
 }
 
+// The normalized comparison of two targets: the status, the XML error code, the body shape, the
+// body length in bytes and the normalized body text. Two bodies of equal length and different
+// text do not match. The exact comparison also needs the digest of the bytes.
+const NORMALIZED_FIELDS = ["status", "code", "shape", "bodyBytes", "body"];
+const EXACT_FIELDS = ["status", "code", "shape", "bodyBytes", "bodySha256"];
+
 /**
- * Production against local, row by row on the first recording. `fields` names what differs among
- * status, code, shape, bodyBytes; the body text and headers are listed when they differ too so a
- * reader sees all of it.
+ * Production against local, row by row on the first recording. `match` is the normalized
+ * comparison and `fields` lists what differs in it; `exact` additionally requires identical bytes
+ * (`exactFields` lists what differs, `bodySha256` included); `extra` lists differing headers.
  */
 export function compareTargets(production, local) {
   const localById = new Map(local.filter((r) => r.recording === 1).map((r) => [r.id, r]));
@@ -148,14 +168,27 @@ export function compareTargets(production, local) {
   for (const prod of production.filter((r) => r.recording === 1)) {
     const mine = localById.get(prod.id);
     if (!mine) {
-      rows.push({ id: prod.id, match: false, fields: ["missing-local"] });
+      rows.push({
+        id: prod.id,
+        match: false,
+        exact: false,
+        fields: ["missing-local"],
+        exactFields: ["missing-local"],
+        extra: [],
+      });
       continue;
     }
-    const fields = ["status", "code", "shape", "bodyBytes"].filter(
-      (f) => !sameValue(prod[f], mine[f]),
-    );
-    const extra = ["body", "headers"].filter((f) => !sameValue(prod[f], mine[f]));
-    rows.push({ id: prod.id, match: fields.length === 0, fields, extra });
+    const fields = NORMALIZED_FIELDS.filter((f) => !sameValue(prod[f], mine[f]));
+    const exactFields = EXACT_FIELDS.filter((f) => !sameValue(prod[f], mine[f]));
+    const extra = ["headers"].filter((f) => !sameValue(prod[f], mine[f]));
+    rows.push({
+      id: prod.id,
+      match: fields.length === 0,
+      exact: exactFields.length === 0,
+      fields,
+      exactFields,
+      extra,
+    });
   }
   return rows;
 }

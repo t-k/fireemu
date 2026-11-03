@@ -49,11 +49,13 @@ import {
 import {
   iamGrant,
   iamPreflight,
+  holdsRole,
   iamRemove,
   ourBinding,
   roleName,
   samePolicy,
   settleIam,
+  signerPolicyRequest,
   validateMember,
   validateWindow,
 } from "./iam.mjs";
@@ -96,10 +98,33 @@ export async function observe({
   cases = CASES,
   recordings = RECORDINGS,
   deps,
-  out,
+  out: rawOut,
   iam = null,
   caps = { main: MAIN_CAP, total: TOTAL_CAP },
 }) {
+  // A failure to journal or save (a full disk) is reported, never allowed to end the run before the
+  // object cleanup and the IAM removal have happened.
+  const reportingErrors = [];
+  const noteReportingError = (label, error) => {
+    const text = `${label}: ${error?.message ?? error}`;
+    if (reportingErrors.length < 20 && !reportingErrors.includes(text)) reportingErrors.push(text);
+  };
+  const out = {
+    journal(entry) {
+      try {
+        rawOut.journal(entry);
+      } catch (error) {
+        noteReportingError("journal", error);
+      }
+    },
+    save(name, data) {
+      try {
+        rawOut.save(name, data);
+      } catch (error) {
+        noteReportingError(name, error);
+      }
+    },
+  };
   if (target.name === "production") {
     if (!iam) throw new StopRun("the production run needs the signer IAM settings");
     validateMember(iam.member);
@@ -260,8 +285,14 @@ export async function observe({
     const names = caseObjects(testCase);
     const signedName = `${recordingPrefix(runId, recording)}${names.signed}`;
     const sentName = `${recordingPrefix(runId, recording)}${names.sent}`;
-    const now = deps.now();
     const short = testCase.short === true;
+    let now = deps.now();
+    // The SDK refuses an expiry in the past, and signing takes a moment: do not start the shortest
+    // lifetime in the last part of a second.
+    if (short && now % 1000 > 800) {
+      await deps.sleep(1000 - (now % 1000) + 5);
+      now = deps.now();
+    }
     const accessibleAt = short ? Math.floor(now / 1000) * 1000 : undefined;
     const expires = short ? accessibleAt + 1000 : now + 5 * 60 * 1000;
     let url = await deps.sign(
@@ -324,7 +355,15 @@ export async function observe({
     }
     events.push({ name: sentName, event: "create", status: answer.status });
     const verdict = judgePut(testCase, answer);
-    rows.push(putRow({ recording, testCase, answer, verdict, masks }));
+    rows.push(
+      putRow({
+        recording,
+        testCase,
+        answer,
+        verdict,
+        masks,
+      }),
+    );
     out.save("results.json", {
       source: "production observation; not a canonical fixture",
       rows,
@@ -338,12 +377,19 @@ export async function observe({
     await followUps(recording, testCase, sentName, verdict);
   }
 
+  const cleanupErrors = [];
   async function cleanup() {
     budget.cleanup = true;
-    const listed = await wire("cleanup-list", { method: "GET", url: listUrl }, { admin: true });
-    if (listed.status !== 200) throw new Error(`cleanup list answered ${listed.status}`);
-    const items = JSON.parse(listed.body.toString("utf8")).items ?? [];
     const generation = new Map();
+    let items = [];
+    // A failed list does not stop the deletion of the objects this run already confirmed.
+    try {
+      const listed = await wire("cleanup-list", { method: "GET", url: listUrl }, { admin: true });
+      if (listed.status !== 200) throw new Error(`cleanup list answered ${listed.status}`);
+      items = JSON.parse(listed.body.toString("utf8")).items ?? [];
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
     for (const item of items) {
       events.push({ name: item.name, event: "listed" });
       generation.set(item.name, item.generation);
@@ -353,67 +399,57 @@ export async function observe({
       ...confirmed,
       ...items.map((item) => item.name).filter((name) => planned.has(name)),
     ]);
-    for (const name of targets) {
-      const precondition = generation.get(name) ? `?ifGenerationMatch=${generation.get(name)}` : "";
-      try {
-        const deleted = await wire(
-          "cleanup-delete",
-          { method: "DELETE", url: objectUrl(name, precondition) },
-          { admin: true },
-        );
-        events.push({ name, event: "delete", status: deleted.status });
-      } catch (error) {
-        if (!(error instanceof UnknownAnswer)) throw error;
-        events.push({ name, event: "delete", status: error.status });
-        continue;
+    try {
+      for (const name of targets) {
+        const precondition = generation.get(name)
+          ? `?ifGenerationMatch=${generation.get(name)}`
+          : "";
+        try {
+          const deleted = await wire(
+            "cleanup-delete",
+            { method: "DELETE", url: objectUrl(name, precondition) },
+            { admin: true },
+          );
+          events.push({ name, event: "delete", status: deleted.status });
+        } catch (error) {
+          if (!(error instanceof UnknownAnswer)) throw error;
+          events.push({ name, event: "delete", status: error.status });
+          continue;
+        }
+        try {
+          const readBack = await wire(
+            "cleanup-readback",
+            { method: "GET", url: objectUrl(name) },
+            { admin: true },
+          );
+          events.push({ name, event: "read-after-delete", status: readBack.status });
+        } catch (error) {
+          if (!(error instanceof UnknownAnswer)) throw error;
+        }
       }
-      try {
-        const readBack = await wire(
-          "cleanup-readback",
-          { method: "GET", url: objectUrl(name) },
-          { admin: true },
-        );
-        events.push({ name, event: "read-after-delete", status: readBack.status });
-      } catch (error) {
-        if (!(error instanceof UnknownAnswer)) throw error;
-      }
+    } catch (error) {
+      cleanupErrors.push(error);
+      return [];
     }
-    const after = await wire(
-      "cleanup-list-final",
-      { method: "GET", url: listUrl },
-      { admin: true },
-    );
-    if (after.status !== 200) throw new Error(`final cleanup list answered ${after.status}`);
-    return (JSON.parse(after.body.toString("utf8")).items ?? []).map((item) => item.name);
+    try {
+      const after = await wire(
+        "cleanup-list-final",
+        { method: "GET", url: listUrl },
+        { admin: true },
+      );
+      if (after.status !== 200) throw new Error(`final cleanup list answered ${after.status}`);
+      return (JSON.parse(after.body.toString("utf8")).items ?? []).map((item) => item.name);
+    } catch (error) {
+      cleanupErrors.push(error);
+      return [];
+    }
   }
 
-  let remaining = [];
-  let cleanupError = null;
-  try {
-    await preflight();
-    await grantAndAwaitSigner();
-    for (let recording = 1; recording <= recordings; recording += 1) {
-      for (const testCase of cases) await runCase(recording, testCase);
-    }
-    finished = true;
-  } catch (error) {
-    stopped = error instanceof Error ? error.message : String(error);
-    out.save("failure.json", {
-      message: normalizeBody(stopped, masks),
-      kind: error?.constructor?.name,
-    });
-  } finally {
-    try {
-      remaining = await cleanup();
-    } catch (error) {
-      cleanupError = error;
-      out.save("cleanup-failure.json", {
-        message: normalizeBody(String(error?.message ?? error), masks),
-      });
-    }
-  }
   let iamError = null;
-  if (target.name === "production" && (iamCtx.grantAttempted || iamCtx.roleCreateAttempted)) {
+  async function removeSignerAccessInRun() {
+    if (target.name !== "production" || !(iamCtx.grantAttempted || iamCtx.roleCreateAttempted)) {
+      return;
+    }
     budget.cleanup = true;
     try {
       await iamRemove({ io, target, ctx: iamCtx, ours });
@@ -424,6 +460,35 @@ export async function observe({
       });
     }
   }
+
+  let remaining = [];
+  try {
+    try {
+      await preflight();
+      await grantAndAwaitSigner();
+      for (let recording = 1; recording <= recordings; recording += 1) {
+        for (const testCase of cases) await runCase(recording, testCase);
+      }
+      finished = true;
+    } catch (error) {
+      stopped = error instanceof Error ? error.message : String(error);
+      out.save("failure.json", {
+        message: normalizeBody(stopped, masks),
+        kind: error?.constructor?.name,
+      });
+    } finally {
+      remaining = await cleanup();
+      if (cleanupErrors.length > 0) {
+        out.save("cleanup-failure.json", {
+          message: normalizeBody(String(cleanupErrors[0]?.message ?? cleanupErrors[0]), masks),
+        });
+      }
+    }
+  } finally {
+    // Last and unconditional: the signer access ends whatever happened above.
+    await removeSignerAccessInRun();
+  }
+  const cleanupError = cleanupErrors[0] ?? null;
   const iamTouched = iamEvents.length > 0;
   const iamUnresolved = [
     ...settleIam(iamEvents, { touched: iamTouched }),
@@ -472,9 +537,18 @@ export async function observe({
     unknownRequests: unknownLabels,
     cleanupError: cleanupError ? String(cleanupError.message) : null,
     // Everything this run created is deleted and read back absent, with no unknown answer.
-    cleanupVerified: !cleanupError && unresolved.length === 0 && unknownLabels.length === 0,
+    reportingErrors,
+    cleanupVerified:
+      !cleanupError &&
+      unresolved.length === 0 &&
+      unknownLabels.length === 0 &&
+      reportingErrors.length === 0,
     closureReady:
-      finished && !cleanupError && unresolved.length === 0 && unknownLabels.length === 0,
+      finished &&
+      !cleanupError &&
+      unresolved.length === 0 &&
+      unknownLabels.length === 0 &&
+      reportingErrors.length === 0,
     unresolved: unresolved.map((item) => ({
       reason: item.reason,
       name: normalizeBody(item.name, masks),
@@ -558,17 +632,7 @@ export async function readbackIam({ target, runId, deps, out, preflight }) {
   const base = `https://iam.googleapis.com/v1/projects/${target.project}`;
   const report = { runId, requests: 0, unreadable: false };
   try {
-    const body = { options: { requestedPolicyVersion: 3 } };
-    const policy = await wire(
-      "a2-signer-policy",
-      {
-        method: "POST",
-        url: `${base}/serviceAccounts/${target.signer}:getIamPolicy`,
-        headers: { "content-type": "application/json" },
-        body: Buffer.from(JSON.stringify(body)),
-      },
-      { admin: true },
-    );
+    const policy = await wire("a2-signer-policy", signerPolicyRequest(target), { admin: true });
     const current = policy.status === 200 ? JSON.parse(policy.body.toString("utf8")) : null;
     const role = await wire(
       "a2-role",
@@ -576,9 +640,7 @@ export async function readbackIam({ target, runId, deps, out, preflight }) {
       { admin: true },
     );
     report.policyEqualsPreflight = current ? samePolicy(current, preflight.policy) : null;
-    report.bindingPresent = current
-      ? (current.bindings ?? []).some((b) => b.role === roleName(target.project))
-      : null;
+    report.bindingPresent = current ? holdsRole(current, roleName(target.project)) : null;
     report.roleState =
       role.status === 404
         ? "absent"

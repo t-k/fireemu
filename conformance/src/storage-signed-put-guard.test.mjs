@@ -1,3 +1,5 @@
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -350,7 +352,11 @@ describe("signed PUT request guard", () => {
     it("accepts exactly the signer, its policy, the signer role and role definitions", () => {
       const cases = [
         ["GET", iam(account), "signer-get"],
-        ["POST", iam(`${account}:getIamPolicy`), "signer-get-policy"],
+        [
+          "POST",
+          iam(`${account}:getIamPolicy?options.requestedPolicyVersion=3`),
+          "signer-get-policy",
+        ],
         ["POST", iam(`${account}:setIamPolicy`), "signer-set-policy"],
         ["POST", iam(roles), "role-create"],
         ["GET", iam(`${roles}/${ROLE_ID}`), "role-get"],

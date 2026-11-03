@@ -1,6 +1,8 @@
 // The signer role and binding (owner ledger 2216): the pure policy edits, the settlement rules and
 // the steps against a fake IAM, including every failure path that must still remove the access.
 
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 

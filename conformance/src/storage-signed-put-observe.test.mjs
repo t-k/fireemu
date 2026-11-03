@@ -1,3 +1,5 @@
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -434,7 +436,8 @@ describe("signed PUT observer on the fake world", () => {
       out: memoryOut(),
     });
     const bounds = staticBounds(CASES, 2, { roleReads: 1, probes: 1 });
-    assert.equal(report.requests, bounds.total);
+    // the bound counts two removal retries; a clean removal is five requests, not nine
+    assert.equal(report.requests, bounds.total - (bounds.iamRemove - 5));
     assert.equal(report.rows, 2 * CASES.length);
     assert.equal(report.closureReady, true, JSON.stringify(report.unresolved));
     assert.equal(world.objects.size, 0);
@@ -443,9 +446,9 @@ describe("signed PUT observer on the fake world", () => {
       iamGrant: 4,
       perRecording: 50,
       main: 112,
-      iamRemove: 5,
-      cleanup: 71,
-      total: 183,
+      iamRemove: 9,
+      cleanup: 75,
+      total: 187,
     });
   });
 

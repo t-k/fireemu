@@ -4,33 +4,18 @@
 // sends it through its own HTTP client, outside the guard, so the observer reads existence from its
 // metered metadata GET instead (the SDK's exists() is that same GET).
 
+import "./storage-signed-put/test-preload.mjs";
+
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import http from "node:http";
 import https from "node:https";
-import { after, describe, it } from "node:test";
+import { describe, it } from "node:test";
 
-import { createProductionDeps, installEgressGuard } from "./storage-signed-put/deps.mjs";
+import { createProductionDeps } from "./storage-signed-put/deps.mjs";
 import { classifyRequest } from "./storage-signed-put/guard.mjs";
 import { UnknownAnswer } from "./storage-signed-put/observe.mjs";
+import { attempts } from "./storage-signed-put/test-preload.mjs";
 import { BUCKET, PROJECT, SIGNER, runPrefix } from "./storage-signed-put/plan.mjs";
-
-// No test here may reach a network: any outbound http(s) request or fetch is refused and recorded,
-// and the `after` hook at the end of the file fails the run if any attempt was recorded, even one
-// an SDK swallowed. (On 2026-11-03 an earlier version of this file let `file.exists()` reach
-// storage.googleapis.com; see the sentinel test below.)
-const attempts = [];
-installEgressGuard([], { onRefuse: (host) => attempts.push(`http: ${host}`) });
-globalThis.fetch = (url) => {
-  attempts.push(`fetch: ${String(url?.url ?? url)}`);
-  throw new Error("fetch is not allowed in this test");
-};
-after(() => {
-  assert.deepEqual(attempts, [], "a real network request was attempted");
-});
 
 const RUN = "sp-0123abcd";
 const target = { name: "production", bucket: BUCKET, project: PROJECT, signer: SIGNER };
@@ -270,43 +255,80 @@ describe("production dependencies: SDK paths", () => {
     attempts.length = 0;
   });
 
-  it("sentinel: a test file built like this one fails when it attempts a real request, and passes when it does not", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sp-sentinel-"));
+  it("sends signBlob with no redirects, the packet's timeout and an abort signal (Codex 1)", async () => {
+    const { deps, sent, meter } = harness(signBlobAnswer);
     try {
-      const depsUrl = new URL("./storage-signed-put/deps.mjs", import.meta.url).href;
-      const fixture = (body) => `
-        import assert from "node:assert/strict";
-        import https from "node:https";
-        import { after, it } from "node:test";
-        import { installEgressGuard } from ${JSON.stringify(depsUrl)};
-        const attempts = [];
-        installEgressGuard([], { onRefuse: (host) => attempts.push(host) });
-        after(() => assert.deepEqual(attempts, [], "a real network request was attempted"));
-        it("body", () => { ${body} });
-      `;
-      const run = (name, body) => {
-        const file = join(dir, name);
-        writeFileSync(file, fixture(body));
-        // The test runner marks its children through NODE_TEST_CONTEXT; a nested run must not inherit it.
-        const env = { ...process.env };
-        delete env.NODE_TEST_CONTEXT;
-        return spawnSync(process.execPath, ["--test", file], {
-          encoding: "utf8",
-          timeout: 60_000,
-          env,
-        });
-      };
-      const quiet = run("quiet.test.mjs", "assert.ok(true);");
-      assert.equal(quiet.status, 0, quiet.stdout);
-      // The attempt is swallowed by the test itself, as an SDK might: only the hook can notice it.
-      const swallowed = run(
-        "swallowed.test.mjs",
-        'try { https.request("https://storage.googleapis.com/"); } catch {}',
+      await deps.sign(
+        { name: NAME, contentType: "image/png", range: null, expires: Date.now() + 60_000 },
+        meter,
       );
-      assert.notEqual(swallowed.status, 0);
-      assert.match(swallowed.stdout, /a real network request was attempted/);
+      const [options] = sent;
+      assert.equal(options.maxRedirects, 0);
+      assert.equal(options.follow, 0);
+      assert.equal(options.timeout, 30_000);
+      assert.ok(options.signal instanceof AbortSignal);
+      assert.equal(options.signal.aborted, false);
+      assert.equal(options.retry, false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await deps.close();
+    }
+  });
+
+  it("a stalled signBlob ends at the timeout as an unknown answer and fails the lease", async () => {
+    const events = [];
+    const lease = {
+      verifyHeld: async () => events.push("verify"),
+      dispatch: async (work) => {
+        try {
+          return await work();
+        } catch (error) {
+          events.push("dispatch-failed");
+          throw error;
+        }
+      },
+    };
+    const metered = [];
+    const meter = {
+      request: (label, request) => metered.push({ label, url: request.url }),
+      after: (label, status) => {
+        metered.push({ label, status });
+        if (!Number.isInteger(status) || status >= 500) throw new UnknownAnswer(label, status);
+      },
+    };
+    const deps = createProductionDeps({
+      accessToken: "synthetic-token",
+      signer: SIGNER,
+      lease,
+      timeoutMs: 50,
+      // A transport that honours the signal the way gaxios does and otherwise never answers.
+      transport: (options) =>
+        new Promise((_, reject) => {
+          // Without a signal this request would hang for ever, as the real one could.
+          options.signal?.addEventListener("abort", () =>
+            reject(new Error("The operation was aborted")),
+          );
+        }),
+    });
+    try {
+      const started = Date.now();
+      const hung = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("the stalled signBlob was never ended")), 2000).unref(),
+      );
+      await assert.rejects(
+        Promise.race([
+          deps.sign(
+            { name: NAME, contentType: "image/png", range: null, expires: Date.now() + 60_000 },
+            meter,
+          ),
+          hung,
+        ]),
+        /unknown answer: signBlob/,
+      );
+      assert.ok(Date.now() - started < 5000);
+      assert.ok(events.includes("dispatch-failed"));
+      assert.deepEqual(metered.at(-1), { label: "signBlob", status: Number.NaN });
+    } finally {
+      await deps.close();
     }
   });
 });

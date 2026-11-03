@@ -14,7 +14,7 @@ import threading
 import time
 
 from firebase_admin import initialize_app
-from firebase_functions import firestore_fn, https_fn, logger, pubsub_fn, scheduler_fn
+from firebase_functions import firestore_fn, https_fn, logger
 from flask import Response, jsonify
 
 initialize_app()
@@ -139,13 +139,3 @@ def fs_created_auth(event):
 @firestore_fn.on_document_written(document="items/{id}", database="other", region="europe-west1", memory=512, timeout_sec=90)
 def fs_options(event):
     _record(_firestore_entry("fs_options", event))
-
-
-@pubsub_fn.on_message_published(topic="jobs")
-def ps_later(event):
-    _record({"function": "ps_later"})
-
-
-@scheduler_fn.on_schedule(schedule="every 5 minutes")
-def sched_later(event):
-    _record({"function": "sched_later"})

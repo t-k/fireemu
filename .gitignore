@@ -42,3 +42,6 @@ tools/bench/exec_engine
 
 # Runner-built copies of the fs-write-txn tool directory (tools/compat-broad/fs-write-txn/runall.py and fs_txn_expiry_idle_replay.py): never tracked
 tools/compat-broad/fs-write-txn-overlay-*/
+
+# The virtual environment the Python Functions tests install (see tools/sdk-smoke-functions-python/README.md).
+/tools/sdk-smoke-functions-python/venv

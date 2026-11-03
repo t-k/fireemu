@@ -93,21 +93,10 @@ def test_region_timeout_memory_and_database_options_are_carried(manifest):
     }
 
 
-def test_families_the_runner_does_not_serve_yet_are_reported_as_planned_never_dropped(manifest):
-    ignored = {entry["name"]: entry for entry in manifest["ignored"]}
-    assert set(ignored) == {"ps_later", "sched_later"}
-    assert ignored["ps_later"]["triggerType"] == "pubsub"
-    assert ignored["sched_later"]["triggerType"] == "schedule"
-    for entry in ignored.values():
-        assert entry["scope"] == "planned"
-        assert entry["region"] == "us-central1"
-        assert "Python" in entry["reason"]
-    assert {entry["name"] for entry in manifest["functions"]}.isdisjoint(ignored)
-
-
 def test_every_discovered_function_is_either_served_or_ignored(discovered, manifest):
     names = {entry["name"] for entry in manifest["functions"]} | {entry["name"] for entry in manifest["ignored"]}
     assert names == set(discovered)
+    assert manifest["ignored"] == []
 
 
 def endpoint(**overrides):

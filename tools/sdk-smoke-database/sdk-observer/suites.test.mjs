@@ -156,3 +156,19 @@ test('the small suite\'s case code is byte-identical to the bytes pinned by the 
   const pinned = JSON.parse(readFileSync(path.join(HERE, '..', 'fixtures', 'production-sdk-small.json'), 'utf8')).provenance.caseSources;
   for (const [name, digest] of Object.entries(pinned)) assert.equal(sha256(readFileSync(path.join(HERE, name))), digest, name);
 });
+
+// ---- mutation run 1 (2026-11-04) ----
+test('the process backstop is the suite\'s run deadline plus two minutes (small: 12 minutes as before)', async () => {
+  const { backstopMs } = await import('./observer.mjs');
+  assert.deepEqual(['small', 'events', 'admin', 'events+admin', 'unknown'].map(backstopMs), [720000, 1020000, 1020000, 1020000, 720000]);
+});
+test('LP events page: the WebSocket the page opens for the writer is counted when it is created', async () => {
+  const { eventsLpProfile } = await import('./observer.mjs'), { withTimeout } = await import('./sequence.mjs');
+  const server = await fakeServer(), counter = createCounter({ direct: 200 }), rows = [];
+  const ctx = { profile: 'r1-lp', scope: 'p/sdk-events/r1-lp', transport: 'lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write: row => rows.push(row) }, counter, abort: () => {}, caseMs: 5000, closeMs: 1000, closers: [] };
+  await withTimeout(6000, 'events lp', eventsLpProfile(ctx)).catch(() => {});
+  for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {});
+  server.close();
+  const sockets = rows.filter(r => r.kind === 'raw-page-ws');
+  assert.ok(sockets.length >= 1, JSON.stringify(rows.map(r => r.kind))); assert.ok(counter.used().direct >= sockets.length);
+});

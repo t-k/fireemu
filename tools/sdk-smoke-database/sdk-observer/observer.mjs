@@ -35,6 +35,8 @@ export const SUITES = {
   'events+admin': { parts: ['events', 'admin'], basis: '2217', capMax: 250, plan: [...eventsPlan, ...adminPlan], profileMs: 200000, runMs: 900000 },
 };
 const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES };
+/** The process backstop: above the suite's run deadline plus the bounded cleanup (small: 12 min as before). */
+export const backstopMs = suite => (Object.hasOwn(SUITES, suite) ? SUITES[suite].runMs : SUITES.small.runMs) + 2 * 60 * 1000;
 /** How many case rows a finished run of the suite holds. */
 export const expectedObservations = suite => SUITES[suite].plan.reduce((n, p) => n + (p.suite === 'small' ? CASE_ORDER.length : SUITE_CASES[p.suite].length), 0);
 const PINS = { firebase: ['firebase', '12.18.0'], database: ['@firebase/database', '1.1.5'], playwright: ['playwright', '1.62.1'] };
@@ -129,7 +131,7 @@ async function eventsWsProfile(ctx) {
   if (ctx.cancelled) throw new Error('cancelled');
   return runEventsProfile({ D, A, cfg: eventsCfg(ctx), emit: row => ctx.journal.write({ ...row, profile: ctx.profile }), onApp: (app, db) => ctx.closers.push(async () => { try { D.goOffline(db); } catch { /* already deleted by the recorder */ } await A.deleteApp(app).catch(() => {}); }) });
 }
-const eventsLpProfile = ctx => lpProfile(ctx, EVENTS_PAGE, (page, cfg) => page.evaluate(c => window.__runEvents(c), cfg));
+export const eventsLpProfile = ctx => lpProfile(ctx, EVENTS_PAGE, (page, cfg) => page.evaluate(c => window.__runEvents(c), cfg));
 /** The endpoint a tls.connect / net.connect call dials: (options[, cb]) or (port[, host][, options][, cb]). */
 export function endpointOf(args) {
   const [a, b] = args;
@@ -289,6 +291,6 @@ async function main(argv) {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const suite = process.argv.includes('--suite') ? process.argv[process.argv.indexOf('--suite') + 1] : 'small';
-  setTimeout(() => process.exit(4), (Object.hasOwn(SUITES, suite) ? SUITES[suite].runMs : 600000) + 2 * 60 * 1000).unref();   // hard backstop above runMs plus the bounded cleanup; leaves the claims in place
+  setTimeout(() => process.exit(4), backstopMs(suite)).unref();   // hard backstop above runMs plus the bounded cleanup; leaves the claims in place
   main(process.argv.slice(2)).then(code => process.exit(code), error => { console.error(String(error?.message)); process.exit(2); });
 }

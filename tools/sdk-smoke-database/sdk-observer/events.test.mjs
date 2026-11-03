@@ -214,3 +214,50 @@ test('suite Rules: deny everywhere except the profile scopes; events scopes open
     assert.throws(() => suiteRules(suites, prefix), undefined, JSON.stringify([suites, prefix]));
 });
 test('withTimeout is the one deadline wrapper the suites share', async () => { await assert.rejects(withTimeout(10, 'x', new Promise(() => {})), /x timed out/); });
+
+// ---- mutation run 1 (2026-11-04) ----
+test('shapeOf: an undefined export is recorded as a null leaf', () => {
+  assert.deepEqual(shapeOf({ hasChildren: () => false, exportVal: () => undefined }), { leaf: null });
+});
+test('quiesce: a callback long before the call still waits quietMs from the call', async () => {
+  let t = 1000; const now = () => t, log = createLog(() => 0);
+  assert.equal(await quiesce(log, { quietMs: 100, maxMs: 1000, now, sleep: async () => { t += 10; } }), true); assert.equal(t, 1100);
+});
+test('runCase: prevName is null when the SDK passes none; child_removed carries no prevName; a get of a missing path says exists false', async () => {
+  const D = fakeD();
+  const spec = { id: 'x', listeners: [{ label: 'L', path: 'p', query: null, kinds: ['value', 'child_added', 'child_removed'] }], steps: [{ kind: 'attach', label: 'attach' }, { kind: 'get', label: 'g', run: () => Promise.resolve(snap('m', null)) }] };
+  later(5, () => D.fire('p', 'child_added', snap('a', 1), undefined)); later(6, () => D.fire('p', 'child_removed', snap('a', 1), 'z')); later(8, () => D.fire('p', 'value', snap('p', null)));
+  const row = await runCase(spec, { D, at, timing: timing() });
+  assert.deepEqual(row.steps[0].observer.slice(0, 2), [{ l: 'L', e: 'child_added', k: 'a', p: null, v: 1 }, { l: 'L', e: 'child_removed', k: 'a', v: 1 }]);
+  assert.deepEqual(row.steps[1].result, { exists: false, v: { leaf: null } });
+});
+test('runCase: the updater input is recorded as it was when the updater ran; the transaction runs on the transaction writer', async () => {
+  const D = fakeD(), paths = [];
+  D.runTransaction = (r, update) => { paths.push(r.path); const input = { n: 1 }; const out = update(input); input.n = 99; return Promise.resolve({ committed: true, snapshot: snap('t', out) }); };
+  const spec = { id: 'x', listeners: [], steps: [{ kind: 'transaction', label: 'txn', path: 't', update: v => ({ n: v.n + 1 }) }] };
+  later(5, () => D.fire('txn/t', 'value', snap('t', null)));
+  const row = await runCase(spec, { D, at: { w: p => ({ path: `writer/${p}` }), o: p => ({ path: `observer/${p}` }), t: p => ({ path: `txn/${p}` }) }, timing: timing() });
+  assert.deepEqual(paths, ['txn/t']); assert.deepEqual(row.steps[0].result.inputs, [{ n: 1 }]); assert.equal(row.steps[0].ready, true);
+});
+test('runCase: a callback the SDK delivers after the case ended is not added to its last step', async () => {
+  const D = fakeD(), kept = [];
+  const sticky = { ...D, onValue: (target, cb) => { kept.push(cb); return () => {}; } };
+  const spec = { id: 'x', listeners: [{ label: 'L', path: 'p', query: null, kinds: ['value'] }], steps: [{ kind: 'attach', label: 'attach' }] };
+  later(5, () => kept[0](snap('p', 1)));
+  const row = await runCase(spec, { D: sticky, at, timing: timing() });
+  kept[0](snap('p', 2)); assert.equal(row.steps[0].observer.length, 1);
+});
+test('profile: a non-empty scope seen by the observer stops the profile at startup-observer', async () => {
+  const f = fakeApp(); const get = f.D.get;
+  f.D.get = r => (r.app === 'events-observer-r1-lp' ? Promise.resolve(snap('x', { left: 1 })) : get(r));
+  const rows = await runEventsProfile({ D: f.D, A: f.A, cfg: cfg() });
+  assert.deepEqual(rows.map(r => [r.id, r.ok]), [['startup', true], ['startup-observer', false]]);
+});
+test('admin profile: after a failed startup read the cases still run; a transaction runs on its own path', async () => {
+  const calls = [];
+  const node = p => ({ path: p, get: () => Promise.reject(new Error('permission_denied')), child: c => node(`${p}/${c}`), set: () => { calls.push(`set ${p}`); return Promise.resolve(); },
+    on: (event, f) => { calls.push(`on ${event} ${p}`); setTimeout(() => f(snap(p, null)), 5); return f; }, off: () => {}, transaction: u => { calls.push(`transaction ${p}`); return Promise.resolve({ committed: true, snapshot: snap(p, u(null)) }); } });
+  const rows = await runAdminProfile({ db: { ref: node }, cfg: { scope: 'pre/sdk-admin/r1-admin', name: 'r1-admin', quietMs: 20 }, cases: ['set', 'transaction_absent'] });
+  assert.deepEqual(rows.map(r => [r.id, r.ok]), [['startup', false], ['set', true], ['transaction_absent', true]]);
+  assert.deepEqual(calls, ['set pre/sdk-admin/r1-admin/a', 'on value pre/sdk-admin/r1-admin/ta', 'transaction pre/sdk-admin/r1-admin/ta']);
+});

@@ -52,8 +52,8 @@ test('reduce: refuses rows it cannot place', () => {
     'not an object',
   ];
   for (const row of bad) assert.throws(() => reduceEventsJournal([...journal(), row], RESULT), Error, JSON.stringify(row));
-  assert.throws(() => reduceEventsJournal({}, RESULT)); assert.throws(() => reduceEventsJournal(journal(), null));
-  assert.throws(() => reduceEventsJournal(journal(), { ...RESULT, suite: 'small' }), /suite/);
+  assert.throws(() => reduceEventsJournal({}, RESULT), /journal rows must be an array/); assert.throws(() => reduceEventsJournal(journal(), null), /result.json is missing/);
+  assert.throws(() => reduceEventsJournal(journal(), { ...RESULT, suite: 'small' }), /result.json suite small is not an events or admin suite/);
 });
 test('reduce: a single suite run has only its own profiles', () => {
   const rows = journal().filter(r => r.kind !== 'case' || r.suite === 'admin');

@@ -155,3 +155,34 @@ test('a judge that throws on an unreadable record answers no match', () => {
   const d = copy(FIXTURE); d.profiles[0].rows = 'x';
   const s = summarize(FIXTURE, d); assert.equal(s.match, false);
 });
+
+// ---- mutation run 1 (2026-11-04): an unrecorded shape that is the same on both sides is still never a match ----
+test('step: an unrecorded shape on both sides is NEEDS_REVIEW, not a match (event fields, get and transaction results, markers)', () => {
+  const T = { step: 'absent', observer: [], writer: [{ l: 'W', e: 'value', k: 'ta', v: { leaf: null } }, { l: 'txn', e: 'resolved' }], ready: true, result: { inputs: [null], committed: true, snapshot: { leaf: 1 } }, quiet: true };
+  const ts = { kind: 'transaction', label: 'absent' }, tl = { observer: ['TA'], writer: ['W', 'txn'] };
+  const G = { step: 'get', observer: [], writer: [], result: { exists: true, v: { leaf: 1 } }, quiet: true }, gs = { kind: 'get', label: 'get' };
+  const cases = [
+    [{ ...T, writer: [T.writer[0], { l: 'txn', e: 'exploded' }] }, ts, tl],
+    [{ ...T, result: { ...T.result, committed: 'yes' } }, ts, tl],
+    [{ ...T, result: { inputs: [null], error: 3 } }, ts, tl],
+    [{ ...W, observer: [{ l: 'Q1', e: 'cancel', code: 5 }] }, spec, labels],
+    [{ ...W, observer: [{ ...W.observer[0], k: 5 }] }, spec, labels],
+    [{ ...W, observer: [{ ...W.observer[0], p: 5 }] }, spec, labels],
+    [{ ...G, result: { exists: true, v: { weird: 1 } } }, gs, labels],
+    [{ ...G, result: { exists: true, v: { children: [['a']] } } }, gs, labels],
+    [{ ...G, result: { exists: true, v: { children: [[1, 2]] } } }, gs, labels],
+    [{ ...G, result: { exists: 'yes', v: { leaf: 1 } } }, gs, labels],
+    [{ ...G, result: { exists: true } }, gs, labels],
+  ];
+  for (const [step, s, l] of cases) assert.equal(judgeStep(step, copy(step), s, l).verdict, 'NEEDS_REVIEW', JSON.stringify(step));
+  assert.equal(judgeStep(G, copy(G), gs, labels).verdict, 'MATCH');
+  assert.equal(judgeStep({ ...G, result: { error: 'permission-denied' } }, { ...G, result: { error: 'permission-denied' } }, gs, labels).verdict, 'MATCH');
+});
+test('document: an extra member of the document or of its result is never a match, even on both sides', () => {
+  for (const change of [d => { d.extra = 1; }, d => { d.result.extra = 1; }]) { const d = copy(FIXTURE); change(d); assert.equal(summarize(d, copy(d)).match, false, change.toString()); }
+});
+test('a record that throws while it is read answers no match with the reason', () => {
+  const d = copy(FIXTURE), p = d.profiles[0];
+  d.profiles[0] = new Proxy(p, { get: (t, k) => { if (k === 'rows') throw new Error('poisoned'); return t[k]; } });
+  const s = summarize(FIXTURE, d); assert.equal(s.match, false); assert.match(s.problems[0], /unreadable: poisoned/);
+});

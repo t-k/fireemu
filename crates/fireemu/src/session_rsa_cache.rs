@@ -109,8 +109,10 @@ fn default_cache_base() -> Option<PathBuf> {
 
 /// Loads or creates the deterministic Auth session signer without exposing cache material.
 ///
-/// Cache access is an optimization. An absent, unavailable, or invalid cache falls back to
-/// deterministic in-memory generation without modifying an unsafe existing entry.
+/// Cache access is an optimization. An absent, unavailable, or unsafe cache falls back to
+/// deterministic in-memory generation without reading or modifying an unsafe existing entry.
+/// An entry that passes every security check but does not decode for the seed is replaced
+/// with a freshly published entry, so the next load hits it.
 pub fn load_or_generate(seed: u64) -> Result<Arc<RsaSigner>, String> {
     let Some(root) = default_cache_base() else {
         return generate(seed).map(|generated| generated.signer);
@@ -138,12 +140,31 @@ fn load_or_generate_at(root: &Path, seed: u64) -> Result<CachedSessionSigner, St
             #[cfg(test)]
             hit: true,
         }),
-        EntryLoad::UnsafeOrInvalid => generate(seed),
+        EntryLoad::Unsafe(reason) => {
+            eprintln!(
+                "note: session RSA key cache entry not used ({reason}); generating in memory"
+            );
+            generate(seed)
+        }
+        EntryLoad::Invalid(rejected) => {
+            let generated = generate(seed)?;
+            if let Ok(document) = generated.signer.to_pkcs8_der() {
+                let envelope = encode_envelope(seed, document.as_bytes());
+                publish_entry(
+                    &directory,
+                    &name,
+                    seed,
+                    &envelope,
+                    Publication::Replace(rejected),
+                );
+            }
+            Ok(generated)
+        }
         EntryLoad::Missing => {
             let generated = generate(seed)?;
             if let Ok(document) = generated.signer.to_pkcs8_der() {
                 let envelope = encode_envelope(seed, document.as_bytes());
-                publish_entry(&directory, &name, seed, &envelope);
+                publish_entry(&directory, &name, seed, &envelope, Publication::Create);
             }
             Ok(generated)
         }
@@ -277,14 +298,60 @@ fn acl_reader() -> AclReader {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 enum EntryLoad {
     Missing,
-    UnsafeOrInvalid,
+    /// The entry failed a security check and was not read; the reason names the check.
+    Unsafe(&'static str),
+    /// The entry passed every security check but its contents do not decode for the seed.
+    Invalid(RejectedEntry),
     Hit(Arc<RsaSigner>),
+}
+
+/// The identity of an entry that passed the security checks and failed decoding.
+///
+/// A repair replaces the entry only while the name still refers to this same file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct RejectedEntry {
+    device: u64,
+    inode: u64,
+}
+
+/// How `publish_entry` installs its new file under the entry name.
+#[derive(Clone, Copy)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+enum Publication {
+    /// Only when no entry exists.
+    Create,
+    /// Over the given invalid entry, only while the name still refers to it unchanged.
+    Replace(RejectedEntry),
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has read the contents of a cache entry.
+    static CONTENT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The one place the contents of a cache entry are read, after every security check. The whole
+/// entry must be read and match the size its metadata gave.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_entry_contents(file: std::fs::File, size: u64) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read as _;
+
+    #[cfg(test)]
+    CONTENT_READS.with(|reads| reads.set(reads.get() + 1));
+    let capacity = usize::try_from(size).unwrap_or(0);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+    file.take(CACHE_MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 == size {
+        Ok(bytes)
+    } else {
+        Err(std::io::ErrorKind::InvalidData.into())
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn load_entry(directory: &std::fs::File, name: &str, seed: u64) -> EntryLoad {
     use rustix::fs::{Mode, OFlags};
-    use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
 
     let descriptor = match rustix::fs::openat(
@@ -295,11 +362,12 @@ fn load_entry(directory: &std::fs::File, name: &str, seed: u64) -> EntryLoad {
     ) {
         Ok(descriptor) => descriptor,
         Err(rustix::io::Errno::NOENT) => return EntryLoad::Missing,
-        Err(_) => return EntryLoad::UnsafeOrInvalid,
+        Err(rustix::io::Errno::LOOP) => return EntryLoad::Unsafe("the entry is a symbolic link"),
+        Err(_) => return EntryLoad::Unsafe("the entry cannot be opened without following a link"),
     };
     let file = std::fs::File::from(descriptor);
     let Ok(metadata) = file.metadata() else {
-        return EntryLoad::UnsafeOrInvalid;
+        return EntryLoad::Unsafe("the entry metadata cannot be read");
     };
     let actual = CacheFileMetadata {
         regular: metadata.file_type().is_file(),
@@ -308,30 +376,96 @@ fn load_entry(directory: &std::fs::File, name: &str, seed: u64) -> EntryLoad {
         links: metadata.nlink(),
         size: metadata.len(),
     };
-    if !secure_file_metadata(actual, rustix::process::geteuid().as_raw()) {
-        return EntryLoad::UnsafeOrInvalid;
+    if let Some(reason) = insecure_file_reason(actual, rustix::process::geteuid().as_raw()) {
+        return EntryLoad::Unsafe(reason);
     }
     #[cfg(target_os = "macos")]
     if reject_extended_acl(&file).is_err() {
-        return EntryLoad::UnsafeOrInvalid;
+        return EntryLoad::Unsafe("the entry has an extended ACL or its ACL cannot be read");
     }
-    let capacity = usize::try_from(actual.size).unwrap_or(0);
-    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-    if file
-        .take(CACHE_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() as u64 != actual.size
-    {
-        return EntryLoad::UnsafeOrInvalid;
-    }
+    // Every security check above ran before the first read of the entry contents.
+    let rejected = RejectedEntry {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+    let Ok(bytes) = read_entry_contents(file, actual.size) else {
+        return EntryLoad::Invalid(rejected);
+    };
     decode_envelope(seed, &bytes)
         .map(EntryLoad::Hit)
-        .unwrap_or(EntryLoad::UnsafeOrInvalid)
+        .unwrap_or(EntryLoad::Invalid(rejected))
+}
+
+/// Names the first owner-only contract check that `metadata` fails, if any.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn insecure_file_reason(metadata: CacheFileMetadata, effective_uid: u32) -> Option<&'static str> {
+    if secure_file_metadata(metadata, effective_uid) {
+        None
+    } else if !metadata.regular {
+        Some("the entry is not a regular file")
+    } else if metadata.owner != effective_uid {
+        Some("the entry is owned by another user")
+    } else if metadata.mode & 0o7777 != 0o600 {
+        Some("the entry mode is not 0600")
+    } else if metadata.links != 1 {
+        Some("the entry has more than one hard link")
+    } else {
+        Some("the entry is larger than the cache limit")
+    }
+}
+
+/// Answers whether `name` still refers to `rejected`, unchanged and owner-only, so that a
+/// repair never replaces an entry that failed a security check.
+///
+/// The entry is opened without following a link and checked through that descriptor; its
+/// contents are not read.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn still_the_rejected_entry(
+    directory: &std::fs::File,
+    name: &str,
+    rejected: RejectedEntry,
+) -> bool {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Ok(descriptor) = rustix::fs::openat(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) else {
+        return false;
+    };
+    let file = std::fs::File::from(descriptor);
+    let Ok(metadata) = file.metadata() else {
+        return false;
+    };
+    let actual = CacheFileMetadata {
+        regular: metadata.file_type().is_file(),
+        owner: metadata.uid(),
+        mode: metadata.mode(),
+        links: metadata.nlink(),
+        size: metadata.len(),
+    };
+    #[cfg(target_os = "macos")]
+    if reject_extended_acl(&file).is_err() {
+        return false;
+    }
+    secure_file_metadata(actual, rustix::process::geteuid().as_raw())
+        && RejectedEntry {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        } == rejected
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn publish_entry(directory: &std::fs::File, name: &str, seed: u64, envelope: &[u8]) {
+fn publish_entry(
+    directory: &std::fs::File,
+    name: &str,
+    seed: u64,
+    envelope: &[u8],
+    publication: Publication,
+) {
     use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
     use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -380,13 +514,23 @@ fn publish_entry(directory: &std::fs::File, name: &str, seed: u64, envelope: &[u
             let _ = rustix::fs::unlinkat(directory, &temporary, AtFlags::empty());
             return;
         }
-        let published = rustix::fs::renameat_with(
-            directory,
-            &temporary,
-            directory,
-            name,
-            RenameFlags::NOREPLACE,
-        );
+        let published = match publication {
+            Publication::Create => rustix::fs::renameat_with(
+                directory,
+                &temporary,
+                directory,
+                name,
+                RenameFlags::NOREPLACE,
+            ),
+            // The rename replaces the directory entry itself and never follows a link at the
+            // destination. The new file is the owner-only temporary checked above.
+            Publication::Replace(rejected)
+                if still_the_rejected_entry(directory, name, rejected) =>
+            {
+                rustix::fs::renameat(directory, &temporary, directory, name)
+            }
+            Publication::Replace(_) => Err(rustix::io::Errno::EXIST),
+        };
         if published.is_ok() {
             let _ = rustix::fs::fsync(directory);
         } else {
@@ -646,37 +790,157 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Replaces the entry for `seed` with `bytes` as a regular, owner-only, single-link file.
+    #[cfg(unix)]
+    fn overwrite_owner_only_entry(root: &std::path::Path, seed: u64, bytes: &[u8]) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let entry = cache_entry_path(root, seed);
+        std::fs::remove_file(&entry).unwrap();
+        std::fs::write(&entry, bytes).unwrap();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
-    fn corrupt_hard_linked_and_wrong_seed_entries_are_left_untouched() {
+    fn a_corrupt_owner_only_entry_is_replaced_and_the_next_load_hits_it() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        let root = scratch("invalid");
-        let _ = load_or_generate_at(&root, 10).unwrap();
+        let root = scratch("repair-corrupt");
+        let first = load_or_generate_at(&root, 10).unwrap();
+        assert!(!first.hit);
         let entry = cache_entry_path(&root, 10);
+        let valid = std::fs::read(&entry).unwrap();
+        overwrite_owner_only_entry(&root, 10, b"corrupt cache entry");
 
-        std::fs::write(&entry, b"corrupt cache entry").unwrap();
-        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let corrupt = std::fs::read(&entry).unwrap();
-        assert!(!load_or_generate_at(&root, 10).unwrap().hit);
-        assert_eq!(std::fs::read(&entry).unwrap(), corrupt);
+        let repaired = load_or_generate_at(&root, 10).unwrap();
+        assert!(!repaired.hit);
+        assert_eq!(first.signer.kid(), repaired.signer.kid());
+        assert_eq!(std::fs::read(&entry).unwrap(), valid);
+        let metadata = std::fs::symlink_metadata(&entry).unwrap();
+        assert!(metadata.file_type().is_file());
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+        assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(metadata.nlink(), 1);
 
-        std::fs::remove_file(&entry).unwrap();
-        let _ = load_or_generate_at(&root, 10).unwrap();
-        let alias = root.join("hard-link-alias");
-        std::fs::hard_link(&entry, &alias).unwrap();
+        let hit = load_or_generate_at(&root, 10).unwrap();
+        assert!(hit.hit);
+        assert_eq!(first.signer.kid(), hit.signer.kid());
+        let directory = entry.parent().unwrap();
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_truncated_or_foreign_seed_entry_is_replaced_for_its_own_seed() {
+        let root = scratch("repair-foreign");
+        let first = load_or_generate_at(&root, 10).unwrap();
+        let entry = cache_entry_path(&root, 10);
+        let valid = std::fs::read(&entry).unwrap();
+
+        overwrite_owner_only_entry(&root, 10, &valid[..valid.len() / 2]);
         assert!(!load_or_generate_at(&root, 10).unwrap().hit);
-        assert_eq!(std::fs::metadata(&entry).unwrap().nlink(), 2);
-        std::fs::remove_file(alias).unwrap();
+        assert_eq!(std::fs::read(&entry).unwrap(), valid);
+        assert!(load_or_generate_at(&root, 10).unwrap().hit);
 
         let _ = load_or_generate_at(&root, 11).unwrap();
-        let other = cache_entry_path(&root, 11);
-        let foreign = std::fs::read(other).unwrap();
-        std::fs::remove_file(&entry).unwrap();
-        std::fs::write(&entry, &foreign).unwrap();
-        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(!load_or_generate_at(&root, 10).unwrap().hit);
-        assert_eq!(std::fs::read(&entry).unwrap(), foreign);
+        let foreign = std::fs::read(cache_entry_path(&root, 11)).unwrap();
+        overwrite_owner_only_entry(&root, 10, &foreign);
+        let repaired = load_or_generate_at(&root, 10).unwrap();
+        assert!(!repaired.hit);
+        assert_eq!(first.signer.kid(), repaired.signer.kid());
+        assert_eq!(std::fs::read(&entry).unwrap(), valid);
+        assert_eq!(std::fs::read(cache_entry_path(&root, 11)).unwrap(), foreign);
+        assert!(load_or_generate_at(&root, 10).unwrap().hit);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn content_reads() -> usize {
+        super::CONTENT_READS.with(std::cell::Cell::get)
+    }
+
+    fn reset_content_reads() {
+        super::CONTENT_READS.with(|reads| reads.set(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_only_entry_is_read_once_which_is_what_the_read_counter_counts() {
+        let root = scratch("read-counter");
+        let _ = load_or_generate_at(&root, 12).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(12), 12),
+            EntryLoad::Hit(_)
+        ));
+        assert_eq!(content_reads(), 1);
+        overwrite_owner_only_entry(&root, 12, b"corrupt cache entry");
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(12), 12),
+            EntryLoad::Invalid(_)
+        ));
+        assert_eq!(content_reads(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_linked_entry_is_not_read_and_not_replaced() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = scratch("hard-link");
+        let first = load_or_generate_at(&root, 12).unwrap();
+        let entry = cache_entry_path(&root, 12);
+        // A corrupt body. A repair rejects a hard-linked entry on its own, so the unchanged
+        // inode, link count and bytes below pin the replacement; the zero content reads pin
+        // that the security checks run before the first read.
+        overwrite_owner_only_entry(&root, 12, b"corrupt cache entry");
+        let alias = root.join("hard-link-alias");
+        std::fs::hard_link(&entry, &alias).unwrap();
+        let inode = std::fs::symlink_metadata(&entry).unwrap().ino();
+
+        let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(12), 12),
+            EntryLoad::Unsafe(_)
+        ));
+        // The security checks fail before the first read of the contents.
+        assert_eq!(content_reads(), 0);
+        let uncached = load_or_generate_at(&root, 12).unwrap();
+        assert!(!uncached.hit);
+        assert_eq!(first.signer.kid(), uncached.signer.kid());
+        // Neither the load nor the generation that followed it read the entry.
+        assert_eq!(content_reads(), 0);
+        let metadata = std::fs::symlink_metadata(&entry).unwrap();
+        assert_eq!(metadata.ino(), inode);
+        assert_eq!(metadata.nlink(), 2);
+        assert_eq!(std::fs::read(&entry).unwrap(), b"corrupt cache entry");
+        assert_eq!(std::fs::read(&alias).unwrap(), b"corrupt cache entry");
+        assert!(!load_or_generate_at(&root, 12).unwrap().hit);
+        assert_eq!(content_reads(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_fails_a_security_check_is_never_read() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = scratch("unread");
+        let _ = load_or_generate_at(&root, 13).unwrap();
+        let entry = cache_entry_path(&root, 13);
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(13), 13),
+            EntryLoad::Unsafe(_)
+        ));
+        assert_eq!(content_reads(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -700,7 +964,7 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(matches!(
             load_entry(&directory, &entry_name(12), 12),
-            EntryLoad::UnsafeOrInvalid
+            EntryLoad::Unsafe(_)
         ));
         assert!(started.elapsed() < std::time::Duration::from_millis(100));
         let _ = std::fs::remove_dir_all(root);
@@ -818,7 +1082,7 @@ mod tests {
         let directory = open_cache_directory(&root).unwrap();
         assert!(matches!(
             load_entry(&directory, &entry_name(24), 24),
-            EntryLoad::UnsafeOrInvalid
+            EntryLoad::Unsafe(_)
         ));
         let uncached = load_or_generate_at(&root, 24).unwrap();
         assert!(!uncached.hit);
@@ -882,7 +1146,7 @@ mod tests {
             let directory = open_cache_directory(&root).unwrap();
             assert!(matches!(
                 load_entry(&directory, &entry_name(27), 27),
-                EntryLoad::UnsafeOrInvalid
+                EntryLoad::Unsafe(_)
             ));
             let uncached = load_or_generate_at(&root, 27).unwrap();
             assert!(!uncached.hit);
@@ -949,7 +1213,7 @@ mod tests {
         let directory = open_cache_directory(&root).unwrap();
         assert!(matches!(
             load_entry(&directory, &entry_name(28), 28),
-            EntryLoad::UnsafeOrInvalid
+            EntryLoad::Unsafe(_)
         ));
         let uncached = load_or_generate_at(&root, 28).unwrap();
         assert!(!uncached.hit);

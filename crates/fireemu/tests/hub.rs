@@ -1254,3 +1254,96 @@ fn the_export_route_writes_a_bare_relative_path_under_the_daemon_working_directo
     );
     drop(daemon);
 }
+
+/// The trigger switches answer a request that carries no browser metadata (no `Origin`, no
+/// `Sec-Fetch-Site`) without the control token, exactly as they answer the token path. This is
+/// what `withFunctionTriggersDisabled` from `@firebase/rules-unit-testing` sends, and the
+/// official Hub accepts it.
+#[test]
+fn the_trigger_switches_accept_a_tokenless_request_without_browser_metadata() {
+    let daemon = Daemon::start("demo-hub-triggers-tokenless", &[]);
+    let port = daemon.hub_port();
+    let authorization = format!("Bearer {}", daemon.control_token());
+    for path in [
+        "/functions/disableBackgroundTriggers",
+        "/functions/enableBackgroundTriggers",
+    ] {
+        let (token_status, _, token_body) = request_with_headers(
+            port,
+            "PUT",
+            path,
+            "127.0.0.1",
+            &[("Authorization", &authorization)],
+            "",
+        );
+        let (status, _, body) = request_with_headers(port, "PUT", path, "127.0.0.1", &[], "");
+        assert_eq!(status, token_status, "PUT {path} -> {body}");
+        assert_eq!(body, token_body, "PUT {path}");
+        assert_eq!(status, 400, "PUT {path} -> {body}");
+    }
+    daemon.stop();
+}
+
+/// A request that carries an `Origin` header still needs the control token on the switches.
+#[test]
+fn the_trigger_switches_refuse_a_tokenless_request_with_an_origin() {
+    let daemon = Daemon::start("demo-hub-triggers-origin", &[]);
+    let port = daemon.hub_port();
+    for path in [
+        "/functions/disableBackgroundTriggers",
+        "/functions/enableBackgroundTriggers",
+    ] {
+        for origin in ["http://127.0.0.1:4000", "https://attacker.example"] {
+            let (status, _, body) =
+                request_with_headers(port, "PUT", path, "127.0.0.1", &[("Origin", origin)], "");
+            assert_eq!(status, 403, "PUT {path} from {origin} -> {body}");
+        }
+    }
+    daemon.stop();
+}
+
+/// A request that carries `Sec-Fetch-Site` (and no `Origin`) still needs the control token on
+/// the switches.
+#[test]
+fn the_trigger_switches_refuse_a_tokenless_request_with_fetch_metadata() {
+    let daemon = Daemon::start("demo-hub-triggers-fetch-metadata", &[]);
+    let port = daemon.hub_port();
+    for path in [
+        "/functions/disableBackgroundTriggers",
+        "/functions/enableBackgroundTriggers",
+    ] {
+        for site in ["cross-site", "same-origin"] {
+            let (status, _, body) = request_with_headers(
+                port,
+                "PUT",
+                path,
+                "127.0.0.1",
+                &[("Sec-Fetch-Site", site)],
+                "",
+            );
+            assert_eq!(
+                status, 403,
+                "PUT {path} with Sec-Fetch-Site {site} -> {body}"
+            );
+        }
+    }
+    daemon.stop();
+}
+
+/// The export route stays token-gated even for a request without browser metadata: an export
+/// writes the whole suite's state to disk.
+#[test]
+fn the_export_route_refuses_a_tokenless_request_without_browser_metadata() {
+    let daemon = Daemon::start("demo-hub-export-tokenless", &[]);
+    let port = daemon.hub_port();
+    let (status, _, body) = request_with_headers(
+        port,
+        "POST",
+        "/_admin/export",
+        "127.0.0.1",
+        &[("Content-Type", "application/json")],
+        "{}",
+    );
+    assert_eq!(status, 403, "{body}");
+    daemon.stop();
+}

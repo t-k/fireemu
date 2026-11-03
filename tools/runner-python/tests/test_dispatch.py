@@ -230,3 +230,158 @@ def test_the_traceback_is_joined_without_a_separator():
     assert "XX" not in log["message"]
     assert log["message"].count("Traceback (most recent call last):") == 1
     assert log["message"].endswith("RuntimeError: two\nlines\n")
+
+
+# --- scheduled runs (slice 2b) -----------------------------------------------------------------------
+
+
+def schedule_message(invocation="s-1", data=None, function="f"):
+    event_data = {"jobName": "projects/p/locations/l/jobs/job-1", "scheduleTime": "2026-10-05T08:45:00Z"} if data is None else data
+    return {
+        "type": "invoke", "invocationId": invocation, "function": function, "trigger": "schedule",
+        "event": {"specversion": "1.0", "id": "e-1", "type": "google.cloud.scheduler.job.v1.executed", "data": event_data},
+    }
+
+
+def run_schedule(function, message=None, **spec_kwargs):
+    dispatcher, writer = build({"f": function}, [spec(trigger="schedule", **spec_kwargs)])
+    dispatcher.reserve()
+    dispatcher.start(message or schedule_message())
+    return writer
+
+
+def test_a_scheduled_run_calls_the_function_with_the_schedulers_request_and_answers_ok(monkeypatch):
+    monkeypatch.delenv("FUNCTION_SIGNATURE_TYPE", raising=False)
+    seen = {}
+
+    def function(request):
+        seen.update(job=request.headers["X-CloudScheduler-JobName"], method=request.method, signature=os.environ["FUNCTION_SIGNATURE_TYPE"])
+
+        class Answer:
+            status_code = 200
+
+        return Answer()
+
+    writer = run_schedule(function)
+    assert writer.result("s-1") == {"type": "result", "invocationId": "s-1", "ok": True}
+    assert seen == {"job": "job-1", "method": "POST", "signature": "http"}
+
+
+def test_a_scheduled_function_that_answers_500_is_a_failed_attempt_with_the_answer():
+    class Answer:
+        status_code = 500
+
+        def get_data(self, as_text=False):
+            return "it broke"
+
+    writer = run_schedule(lambda request: Answer())
+    assert writer.result("s-1") == {"type": "result", "invocationId": "s-1", "ok": False, "error": "the scheduled function answered 500: it broke"}
+
+
+@pytest.mark.parametrize("data", [None, {}, {"jobName": "j"}, "text"])
+def test_a_scheduled_run_without_a_job_and_time_is_a_failed_result_and_runs_nothing(data):
+    ran = []
+    message = schedule_message(data=data)
+    if data is None:
+        message["event"] = {"specversion": "1.0"}
+    writer = run_schedule(ran.append, message)
+    assert writer.result("s-1")["ok"] is False and ran == []
+
+
+def test_a_schedule_frame_for_a_function_the_manifest_serves_otherwise_is_refused():
+    ran = []
+    dispatcher, writer = build({"f": ran.append}, [spec(trigger="firestore")])
+    dispatcher.reserve()
+    dispatcher.start(schedule_message())
+    assert writer.result("s-1")["error"] == "trigger does not match the function manifest" and ran == []
+
+
+def test_a_failed_scheduled_attempt_logs_its_one_line_not_a_runner_traceback():
+    # The SDK wrapper already logged the user's exception; the runner adds the status the Scheduler judged by.
+    class Answer:
+        status_code = 500
+
+        def get_data(self, as_text=False):
+            return "it broke"
+
+    writer = run_schedule(lambda request: Answer())
+    log = writer.wait_for(lambda f: f["type"] == "log" and f["invocationId"] == "s-1")
+    assert log["message"] == "f: the scheduled function answered 500: it broke"
+    assert log["level"] == "error"
+
+
+# --- secrets (slice 2b) ------------------------------------------------------------------------------
+
+from fireemu_runner.environment import EnvironmentGate  # noqa: E402
+
+
+def build_with_gate(functions, specs, secrets):
+    writer = Collected()
+    return Dispatcher(functions, {"functions": specs}, writer, EnvironmentGate(secrets)), writer
+
+
+def secret_spec(name, secrets):
+    return {**spec(name=name), "platformOptions": {"secrets": secrets}} if secrets is not None else spec(name=name)
+
+
+def test_an_event_function_sees_the_secrets_it_declares_and_a_plain_one_sees_none(monkeypatch):
+    for name in ("API_KEY", "TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    seen = {}
+
+    def declares(_):
+        seen["declares"] = {n: os.environ.get(n) for n in ("API_KEY", "TOKEN")}
+
+    def plain(_):
+        seen["plain"] = {n: os.environ.get(n) for n in ("API_KEY", "TOKEN")}
+
+    dispatcher, writer = build_with_gate(
+        {"declares": declares, "plain": plain},
+        [secret_spec("declares", ["API_KEY"]), secret_spec("plain", None)],
+        {"API_KEY": "k", "TOKEN": "t"},
+    )
+    for invocation, function in (("a", "declares"), ("b", "plain")):
+        dispatcher.reserve()
+        dispatcher.start({"type": "invoke", "invocationId": invocation, "function": function, "trigger": "firestore", "event": event()})
+        assert writer.result(invocation)["ok"] is True
+    assert seen == {"declares": {"API_KEY": "k", "TOKEN": None}, "plain": {"API_KEY": None, "TOKEN": None}}
+    assert "API_KEY" not in os.environ and "TOKEN" not in os.environ
+
+
+def test_a_failing_function_with_a_secret_frees_the_gate_for_the_next_invocation(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+    order = []
+
+    def breaks(_):
+        order.append("breaks")
+        raise RuntimeError("no")
+
+    def after(_):
+        order.append("after")
+
+    dispatcher, writer = build_with_gate(
+        {"breaks": breaks, "after": after}, [secret_spec("breaks", ["API_KEY"]), secret_spec("after", ["API_KEY"])], {"API_KEY": "k"}
+    )
+    for invocation, function in (("a", "breaks"), ("b", "after")):
+        dispatcher.reserve()
+        dispatcher.start({"type": "invoke", "invocationId": invocation, "function": function, "trigger": "firestore", "event": event()})
+        writer.result(invocation)
+    assert order == ["breaks", "after"] and writer.result("a")["ok"] is False and writer.result("b")["ok"] is True
+
+
+def test_a_scheduled_function_with_a_secret_is_gated_too(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+    seen = {}
+
+    def function(request):
+        seen["key"] = os.environ.get("API_KEY")
+
+        class Answer:
+            status_code = 200
+
+        return Answer()
+
+    dispatcher, writer = build_with_gate({"f": function}, [{**spec(trigger="schedule"), "platformOptions": {"secrets": ["API_KEY"]}}], {"API_KEY": "k"})
+    dispatcher.reserve()
+    dispatcher.start(schedule_message())
+    assert writer.result("s-1")["ok"] is True and seen == {"key": "k"}

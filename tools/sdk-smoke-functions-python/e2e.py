@@ -22,6 +22,8 @@ AUTH = f"http://{os.environ['FIREBASE_AUTH_EMULATOR_HOST']}/identitytoolkit.goog
 PUBSUB = f"http://{os.environ['PUBSUB_EMULATOR_HOST']}/v1/projects/{PROJECT}"
 STORAGE = f"http://{os.environ['FIREBASE_STORAGE_EMULATOR_HOST'].removeprefix('http://')}"
 DATABASE = f"http://{os.environ['FIREBASE_DATABASE_EMULATOR_HOST']}"
+CONTROL = f"http://{os.environ['FIREBASE_AUTH_EMULATOR_HOST']}/v1/sessions/default"
+TASKS = "http://" + os.environ["CLOUD_TASKS_EMULATOR_HOST"].removeprefix("http://")
 EVENTARC = "http://" + os.environ["CLOUD_EVENTARC_EMULATOR_HOST"].removeprefix("http://")
 PROFILE = os.environ.get("E2E_PROFILE", "emulator")
 
@@ -170,6 +172,65 @@ def other_families():
     assert deleted["value"] == {"text": "hi", "n": 2}, deleted
 
 
+def await_idle():
+    status, body = call("POST", f"{CONTROL}:awaitIdle", {"timeoutSeconds": 60})
+    assert status == 200, (status, body)
+
+
+def request_families():
+    """Scheduler, task queue and Auth blocking functions: the daemon calls the Python SDK's HTTP wrappers."""
+    # Scheduler: the daemon's clock runs the five-minute schedule; a manual run works too.
+    status, body = call("POST", f"{CONTROL}/clock:advance", {"seconds": 6 * 60})
+    assert status == 200, (status, body)
+    await_idle()
+    ran = wait_for(lambda e: e["function"] == "sch_ok", "sch_ok")
+    assert ran["job_name"] == "firebase-schedule-sch_ok-us-central1" and ran["schedule_time"], ran
+    wait_for(lambda e: e["function"] == "sch_boom", "sch_boom (it raises; the attempt fails and is not retried)")
+    before = len([e for e in seen() if e["function"] == "sch_ok"])
+    status, body = call("POST", f"{CONTROL}/functions/sch_ok:run", {})
+    assert status == 200, (status, body)
+    await_idle()
+    assert len([e for e in seen() if e["function"] == "sch_ok"]) == before + 1
+
+    # Task queue: the Cloud Tasks emulator posts the callable-format body to the function.
+    task = {"httpRequest": {"url": "", "headers": {"Content-Type": "application/json"}, "body": base64.b64encode(json.dumps({"data": {"n": 5}}).encode()).decode()}}
+    status, body = call("POST", f"{TASKS}/projects/{PROJECT}/locations/us-central1/queues/tk_echo/tasks", {"task": task})
+    assert status == 200, (status, body)
+    await_idle()
+    wait_for(lambda e: e["function"] == "tk_echo" and e["data"] == {"n": 5}, "tk_echo")
+
+    # Auth blocking: beforeCreate runs when the Auth emulator creates the account, beforeSignIn when it signs in.
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "plain@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    created = wait_for(lambda e: e["function"] == "bc_user" and e["email"] == "plain@example.com", "bc_user")
+    assert created["uid"] and created["event_type"].endswith("beforeCreate"), created
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "blocked@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 400 and b"no accounts for you" in body, (status, body)
+    status, body = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "claims@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    assert json.loads(base64.urlsafe_b64decode(json.loads(body)["idToken"].split(".")[1] + "==")).get("tier") == "gold", body
+    status, body = call("POST", f"{AUTH}/accounts:signInWithPassword?key=fake", {"email": "plain@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, body)
+    wait_for(lambda e: e["function"] == "bs_user" and e["email"] == "plain@example.com", "bs_user")
+
+
+def secrets_by_function():
+    """`.secret.local` holds API_KEY and TOKEN; a function sees only the ones it declares."""
+    def env(path):
+        status, body = call("GET", f"{FUNCTIONS}/{path}")
+        assert status == 200, (path, status, body)
+        return json.loads(body)["env"]
+
+    assert env("reads_key") == {"API_KEY": "e2e-key-value", "TOKEN": None}
+    assert env("reads_nothing") == {"API_KEY": None, "TOKEN": None}
+    status, body = call("GET", f"{FUNCTIONS}/reads_token")
+    assert status == 200 and json.loads(body)["param"] == "e2e-token-value", (status, body)
+    call("POST", f"{FIRESTORE}/secret?documentId=s1", {"fields": {}}, OWNER)
+    call("POST", f"{FIRESTORE}/plain?documentId=p1", {"fields": {}}, OWNER)
+    assert wait_for(lambda e: e["function"] == "fs_secret", "fs_secret")["env"] == {"API_KEY": "e2e-key-value", "TOKEN": None}
+    assert wait_for(lambda e: e["function"] == "fs_plain", "fs_plain")["env"] == {"API_KEY": None, "TOKEN": None}
+
+
 def main():
     status, body = call("GET", f"{FUNCTIONS}/hello/a/b?q=1")
     assert status == 200, (status, body)
@@ -219,6 +280,8 @@ def main():
             status, body = call_with_two_authorizations(first, second)
             assert status == 401 and b"result" not in body, ("two Authorization headers", status, body)
     other_families()
+    request_families()
+    secrets_by_function()
     print(json.dumps({"ok": True, "profile": PROFILE}))
 
 
@@ -226,5 +289,8 @@ if __name__ == "__main__":
     try:
         main()
     except AssertionError as error:
+        import traceback
+
+        traceback.print_exc()
         print(f"e2e failed: {error}", file=sys.stderr)
         sys.exit(1)

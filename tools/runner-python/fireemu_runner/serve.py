@@ -1,4 +1,4 @@
-"""The HTTP server for `onRequest` and `onCall` functions.
+"""The HTTP server for `onRequest`, `onCall`, task queue and Auth blocking functions.
 
 The daemon proxies `/<project>/<region>/<name>/...` here with the `x-fireemu-runner-secret` header
 (`crates/fireemu-adapter-functions/src/http.rs`, `tools/runner-node/http-admission.mjs`). The
@@ -6,16 +6,21 @@ function sees the path below its mount point, as it does in production, and answ
 `flask.Request` handlers the SDK wraps. An unhandled error is functions-framework's crash response.
 """
 
+import contextlib
 import hmac
 import os
 
 import flask
 from functions_framework import crash_handler, read_request
 from werkzeug.serving import WSGIRequestHandler, make_server
+from werkzeug.wsgi import ClosingIterator
 
+from .environment import EnvironmentGate
 from .manifest import DEFAULT_REGION
 
 SECRET_ENVIRON_KEY = "HTTP_X_FIREEMU_RUNNER_SECRET"
+# Task queue and Auth blocking functions enter through the HTTP wrapper as well (the Node runner's `signatureType`).
+HTTP_TRIGGERS = frozenset(("http", "tasks", "blockingAuth"))
 _METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 
@@ -36,17 +41,19 @@ def _flask_app() -> flask.Flask:
 class RunnerRouter:
     """Admission and routing in front of the Flask app."""
 
-    def __init__(self, functions: dict, manifest: dict, project: str, secret: str):
+    def __init__(self, functions: dict, manifest: dict, project: str, secret: str, gate: EnvironmentGate | None = None):
         self._app = _flask_app()
+        self._gate = gate if gate is not None else EnvironmentGate({})
         self._project = project
         self._secret = secret.encode()
         self._routes = {}
         for spec in manifest["functions"]:
-            if spec["trigger"]["type"] == "http":
+            if spec["trigger"]["type"] in HTTP_TRIGGERS:
                 self._routes[spec["name"]] = (
                     spec.get("region", DEFAULT_REGION),
                     functions[spec["entryPoint"]],
                     spec["entryPoint"],
+                    spec.get("platformOptions", {}).get("secrets"),
                 )
 
     @staticmethod
@@ -70,12 +77,21 @@ class RunnerRouter:
         environ["SCRIPT_NAME"] = environ.get("SCRIPT_NAME", "") + "/".join(parts[:4])
         environ["PATH_INFO"] = "/" + "/".join(parts[4:])
         environ["fireemu.function"] = route[1]
-        # The variables a production instance has from its start name the function it serves. One process
-        # serves the whole codebase here, so they name the call that started most recently, as for events.
-        os.environ["FUNCTION_TARGET"] = route[2]
-        os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
-        os.environ["K_SERVICE"] = name
-        return self._app(environ, start_response)
+        # The environment this function is entitled to is held until its response is finished, a streamed body
+        # included: the secrets it declares are in the process environment for exactly that long.
+        held = contextlib.ExitStack()
+        held.enter_context(self._gate.hold(route[3]))
+        try:
+            # The variables a production instance has from its start name the function it serves. One process
+            # serves the whole codebase here, so they name the call that started most recently, as for events.
+            os.environ["FUNCTION_TARGET"] = route[2]
+            os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
+            os.environ["K_SERVICE"] = name
+            body = self._app(environ, start_response)
+        except BaseException:
+            held.close()
+            raise
+        return ClosingIterator(body, held.close)
 
 
 class _QuietHandler(WSGIRequestHandler):
@@ -83,9 +99,9 @@ class _QuietHandler(WSGIRequestHandler):
         pass
 
 
-def start_server(functions: dict, manifest: dict, secret: str):
+def start_server(functions: dict, manifest: dict, secret: str, gate: EnvironmentGate | None = None):
     """Starts the server on a free loopback port; returns `(server, port)`."""
-    router = RunnerRouter(functions, manifest, os.environ.get("GCLOUD_PROJECT", ""), secret)
+    router = RunnerRouter(functions, manifest, os.environ.get("GCLOUD_PROJECT", ""), secret, gate)
     server = make_server("127.0.0.1", 0, router, threaded=True, request_handler=_QuietHandler)
     import threading
 

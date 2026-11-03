@@ -11,20 +11,31 @@ from .events import (
     pubsub_cloud_event,
     storage_cloud_event,
 )
+from .environment import EnvironmentGate
 from .framing import FrameWriter
+from .scheduler import SchedulerFailure, deliver_schedule
 
 MAX_ACTIVE_INVOCATIONS = 4096
 _MAX_ERROR_CHARS = 4096
 _MAX_DIAGNOSTIC_CHARS = 256 * 1024
 
-# Trigger types that arrive as an `invoke` frame, and how each becomes the handler's argument.
-_EVENT_ADAPTERS = {
-    "firestore": firestore_cloud_event,
-    "pubsub": pubsub_cloud_event,
-    "storage": storage_cloud_event,
-    "eventarc": eventarc_cloud_event,
-    "database": database_cloud_event,
+def _cloud_event(adapter):
+    """A delivery that hands the handler the CloudEvent the adapter builds."""
+    return lambda function, event: function(adapter(event))
+
+
+# Trigger types that arrive as an `invoke` frame, and how each is delivered to the function.
+_DELIVERIES = {
+    "firestore": _cloud_event(firestore_cloud_event),
+    "pubsub": _cloud_event(pubsub_cloud_event),
+    "storage": _cloud_event(storage_cloud_event),
+    "eventarc": _cloud_event(eventarc_cloud_event),
+    "database": _cloud_event(database_cloud_event),
+    # A Gen2 scheduled function is an HTTP function: the SDK wrapper takes the scheduler's request.
+    "schedule": lambda function, event: deliver_schedule(function, event.get("data") if isinstance(event, dict) else None),
 }
+# What `FUNCTION_SIGNATURE_TYPE` says for each (the Node runner's `signatureType`).
+_SIGNATURE_TYPES = {"schedule": "http"}
 
 
 def _bound(text: str, limit: int) -> str:
@@ -34,7 +45,8 @@ def _bound(text: str, limit: int) -> str:
 class Dispatcher:
     """Runs `invoke` frames against the functions the manifest serves."""
 
-    def __init__(self, functions: dict, manifest: dict, writer: FrameWriter):
+    def __init__(self, functions: dict, manifest: dict, writer: FrameWriter, gate: EnvironmentGate | None = None):
+        self._gate = gate if gate is not None else EnvironmentGate({})
         self._functions = functions
         self._specs = {spec["name"]: spec for spec in manifest["functions"]}
         self._writer = writer
@@ -48,7 +60,7 @@ class Dispatcher:
         if "entryPoint" in message and message["entryPoint"] != spec["entryPoint"]:
             raise LookupError("entry point does not match the function manifest")
         trigger = spec["trigger"]["type"]
-        if message["trigger"] != trigger or trigger not in _EVENT_ADAPTERS:
+        if message["trigger"] != trigger or trigger not in _DELIVERIES:
             raise LookupError("trigger does not match the function manifest")
         function = self._functions.get(spec["entryPoint"])
         if not callable(function):
@@ -71,15 +83,17 @@ class Dispatcher:
         try:
             try:
                 spec, function = self._check(message)
-                # One process serves the whole codebase, so these name the invocation that started most
-                # recently, not a fixed target (the design memo, section 5).
-                os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
-                os.environ["FUNCTION_SIGNATURE_TYPE"] = "cloudevent"
-                os.environ["K_SERVICE"] = spec["name"]
-                function(_EVENT_ADAPTERS[message["trigger"]](message["event"]))
+                with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
+                    # One process serves the whole codebase, so these name the invocation that started most
+                    # recently, not a fixed target (the design memo, section 5).
+                    os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
+                    os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
+                    os.environ["K_SERVICE"] = spec["name"]
+                    _DELIVERIES[message["trigger"]](function, message["event"])
                 result = {"type": "result", "invocationId": invocation, "ok": True}
             except BaseException as error:  # a SystemExit in user code must still answer the daemon
-                diagnostic = "".join(traceback.format_exception(error))
+                # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.
+                diagnostic = str(error) if isinstance(error, SchedulerFailure) else "".join(traceback.format_exception(error))
                 self._send_log("error", f"{message['function']}: {diagnostic}", invocation, message["function"])
                 text = str(error) or type(error).__name__
                 result = {"type": "result", "invocationId": invocation, "ok": False, "error": _bound(text, _MAX_ERROR_CHARS)}

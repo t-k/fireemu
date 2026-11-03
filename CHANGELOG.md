@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- Python Functions codebases now also run scheduled (`scheduler_fn.on_schedule`), task queue (`tasks_fn.on_task_dispatched`) and Auth blocking (`identity_fn.before_user_created`, `before_user_signed_in`) functions with `firebase-functions` 0.6.0. A scheduled run reaches the SDK wrapper as the request Cloud Scheduler sends (the strict profile writes the schedule time in Los Angeles time as production does), and a handler that raises fails the attempt. Secrets in `.secret.local` reach a Python function as environment variables only while that function runs: a function that declares a secret runs alone, and every other function runs with the secrets hidden, as for Node.
+
 ## [0.43.0] - 2026-11-03
 
 Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against production within the recorded corpus, and Cloud Functions codebases written in Python run.

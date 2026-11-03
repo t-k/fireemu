@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 
 import pytest
 from werkzeug.test import Client
@@ -22,7 +23,9 @@ def get(client, path, secret=SECRET, **kwargs):
     headers = dict(kwargs.pop("headers", {}))
     if secret is not None:
         headers["x-fireemu-runner-secret"] = secret
-    return client.open(path, headers=headers, **kwargs)
+    # buffered: the server calls `close` on the response body, which releases the environment gate; the test client
+    # only does so when it buffers.
+    return client.open(path, headers=headers, buffered=True, **kwargs)
 
 
 def test_the_environ_key_is_the_wsgi_spelling_of_the_header():
@@ -325,3 +328,232 @@ def test_a_sequential_event_then_http_call_sees_each_ones_own_identity(discovere
     assert os.environ["FUNCTION_SIGNATURE_TYPE"] == "cloudevent"
     seen = json.loads(get(client, "/demo-proj/us-central1/hello").get_data())
     assert (seen["function_target"], seen["function_signature_type"], seen["k_service"]) == ("hello", "http", "hello")
+
+
+# --- task queue and blocking Auth functions (slice 2b) -------------------------------------------------
+
+import base64  # noqa: E402
+import time  # noqa: E402
+
+BLOCK = "providers/cloud.auth/eventTypes/user."
+
+
+def post(client, name, body, headers=None, region="us-central1"):
+    return client.open(
+        f"/demo-proj/{region}/{name}",
+        buffered=True,
+        method="POST",
+        data=json.dumps(body),
+        headers={"x-fireemu-runner-secret": SECRET, "content-type": "application/json", **(headers or {})},
+    )
+
+
+def test_a_task_queue_function_is_served_at_its_name_with_the_callable_body_format(client):
+    response = post(client, "tk_echo", {"data": {"n": 1}}, headers={"x-cloudtasks-queuename": "tk_echo"})
+    assert response.status_code == 200
+    assert json.loads(response.get_data()) == {"result": {"echo": {"n": 1}}}
+
+
+def test_a_task_queue_function_that_raises_an_https_error_answers_its_status(client):
+    response = post(client, "tk_refuse", {"data": None})
+    assert response.status_code == 400
+    assert json.loads(response.get_data())["error"]["status"] == "FAILED_PRECONDITION"
+
+
+def test_a_task_queue_function_rejects_a_body_that_is_not_the_callable_format(client):
+    response = post(client, "tk_echo", {"nothing": 1})
+    assert response.status_code == 400
+    assert json.loads(response.get_data())["error"]["status"] == "INVALID_ARGUMENT"
+
+
+def test_a_task_or_blocking_function_is_only_served_in_its_own_region(client):
+    for name in ("tk_echo", "bc_user"):
+        assert post(client, name, {"data": {}}, region="europe-west1").status_code == 404
+
+
+def test_the_task_and_blocking_routes_need_the_runner_secret_too(client):
+    for name in ("tk_echo", "bc_user"):
+        response = client.open(f"/demo-proj/us-central1/{name}", method="POST", data="{}", headers={"content-type": "application/json"}, buffered=True)
+        assert response.status_code == 403
+
+
+def test_the_identity_variables_name_the_task_or_blocking_function_as_an_http_function(client, monkeypatch):
+    for name in ("FUNCTION_TARGET", "FUNCTION_SIGNATURE_TYPE", "K_SERVICE"):
+        monkeypatch.delenv(name, raising=False)
+    post(client, "tk_echo", {"data": 1})
+    assert (os.environ["FUNCTION_TARGET"], os.environ["FUNCTION_SIGNATURE_TYPE"], os.environ["K_SERVICE"]) == ("tk_echo", "http", "tk_echo")
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9")
+    post(client, "bc_user", {"data": {"jwt": blocking_token("beforeCreate", "plain@example.com")}})
+    assert (os.environ["FUNCTION_TARGET"], os.environ["FUNCTION_SIGNATURE_TYPE"], os.environ["K_SERVICE"]) == ("bc_user", "http", "bc_user")
+
+
+def _segment(value):
+    return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+
+def blocking_token(kind, email, uid="uid-1", provider="password"):
+    """The unsigned token the daemon sends (`blocking_auth_claims` in crates/fireemu/src/functions.rs)."""
+    now = int(time.time())
+    millis = str(now * 1000)
+    claims = {
+        "iss": "https://securetoken.google.com/demo-proj",
+        "aud": "http://127.0.0.1:1/demo-proj/us-central1/f",
+        "iat": now,
+        "exp": now + 70,
+        "event_id": "fireemu-blocking-1",
+        "event_type": BLOCK + kind,
+        "user_agent": "ua",
+        "ip_address": "127.0.0.1",
+        "locale": "en",
+        "sub": uid,
+        "email": email,
+        "sign_in_method": provider,
+        "user_record": {
+            "uid": uid,
+            "email": email,
+            "email_verified": False,
+            "disabled": False,
+            "metadata": {"creation_time": millis, "last_sign_in_time": millis},
+            "provider_data": [],
+            "custom_claims": None,
+        },
+    }
+    return _segment({"alg": "none", "typ": "JWT"}) + "." + _segment(claims) + "."
+
+
+def blocking(client, name, kind, email, **extra):
+    return post(client, name, {"data": {"jwt": blocking_token(kind, email, **extra)}})
+
+
+@pytest.fixture
+def emulated_auth(monkeypatch):
+    # The SDK checks the token's signature unless the Auth emulator is configured, as the daemon configures it.
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9")
+
+
+def test_a_blocking_function_with_no_decision_answers_an_empty_object(client, emulated_auth):
+    response = blocking(client, "bc_user", "beforeCreate", "plain@example.com")
+    assert (response.status_code, json.loads(response.get_data())) == (200, {})
+
+
+def test_a_blocking_function_that_changes_the_user_answers_the_update_payload(client, emulated_auth):
+    response = blocking(client, "bc_user", "beforeCreate", "claims@example.com")
+    body = json.loads(response.get_data())
+    assert response.status_code == 200
+    assert body["userRecord"]["displayName"] == "Renamed"
+    assert json.loads(body["userRecord"]["customClaims"] if isinstance(body["userRecord"]["customClaims"], str) else json.dumps(body["userRecord"]["customClaims"])) == {"tier": "gold"}
+    assert body["userRecord"]["updateMask"]
+
+
+def test_a_blocking_function_that_refuses_answers_the_https_error(client, emulated_auth):
+    response = blocking(client, "bc_user", "beforeCreate", "blocked@example.com")
+    assert response.status_code == 403
+    assert json.loads(response.get_data())["error"] == {"status": "PERMISSION_DENIED", "message": "no accounts for you"}
+
+
+def test_a_sign_in_function_returns_session_claims(client, emulated_auth):
+    response = blocking(client, "bs_user", "beforeSignIn", "s@example.com")
+    assert response.status_code == 200
+    assert "seen" in json.dumps(json.loads(response.get_data()))
+
+
+def test_a_blocking_request_without_a_token_is_a_bad_request_and_the_handler_does_not_run(client, emulated_auth, discovered):
+    before = len(discovered["bc_user"].__wrapped__.__globals__["SEEN"])
+    for body in ({}, {"data": {}}, {"data": {"jwt": "not.a.token"}}):
+        response = post(client, "bc_user", body)
+        assert response.status_code >= 400
+    assert len(discovered["bc_user"].__wrapped__.__globals__["SEEN"]) == before
+
+
+def test_a_blocking_function_sees_the_user_the_token_names(client, emulated_auth, discovered):
+    blocking(client, "bc_user", "beforeCreate", "who@example.com", uid="uid-who")
+    entry = [e for e in discovered["bc_user"].__wrapped__.__globals__["SEEN"] if e["function"] == "bc_user"][-1]
+    assert (entry["uid"], entry["email"], entry["ip"], entry["event_type"]) == ("uid-who", "who@example.com", "127.0.0.1", BLOCK + "beforeCreate")
+
+
+# --- secrets (slice 2b) ------------------------------------------------------------------------------
+
+import threading  # noqa: E402
+
+from fireemu_runner.environment import EnvironmentGate  # noqa: E402
+
+LOCAL = {"API_KEY": "key-value", "TOKEN": "token-value"}
+
+
+@pytest.fixture
+def secret_client(discovered, monkeypatch):
+    for name in LOCAL:
+        monkeypatch.delenv(name, raising=False)
+    router = RunnerRouter(discovered, build_manifest(discovered), "demo-proj", SECRET, EnvironmentGate(LOCAL))
+    return Client(router)
+
+
+def env_of(response):
+    return json.loads(response.get_data())["env"]
+
+
+def test_an_http_function_sees_only_the_secrets_it_declares(secret_client):
+    assert env_of(get(secret_client, "/demo-proj/us-central1/reads_key")) == {"API_KEY": "key-value", "TOKEN": None}
+    assert env_of(get(secret_client, "/demo-proj/us-central1/reads_nothing")) == {"API_KEY": None, "TOKEN": None}
+
+
+def test_a_secret_parameter_reads_its_value_inside_the_function(secret_client):
+    body = json.loads(get(secret_client, "/demo-proj/us-central1/reads_token").get_data())
+    assert body["param"] == "token-value" and body["env"] == {"API_KEY": None, "TOKEN": "token-value"}
+
+
+def test_a_streamed_response_keeps_its_environment_until_it_is_finished(secret_client):
+    # The body is produced after the view returned; a plain request must not run, or see the secret, before it ends.
+    results = {}
+
+    def stream():
+        results["stream"] = get(secret_client, "/demo-proj/us-central1/streams_key").get_data(as_text=True)
+
+    thread = threading.Thread(target=stream, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+    started = time.monotonic()
+    plain = env_of(get(secret_client, "/demo-proj/us-central1/reads_nothing"))
+    waited = time.monotonic() - started
+    thread.join(10)
+    assert plain == {"API_KEY": None, "TOKEN": None}
+    assert waited > 0.15, "the plain request must wait for the streaming secret request"
+    assert json.loads(results["stream"].removeprefix("first ")) == {"API_KEY": "key-value", "TOKEN": None}
+
+
+def test_a_plain_request_does_not_wait_for_another_plain_request(secret_client):
+    results = []
+
+    def slow():
+        results.append(get(secret_client, "/demo-proj/us-central1/reads_nothing?hold=0.5"))
+
+    thread = threading.Thread(target=slow, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+    started = time.monotonic()
+    get(secret_client, "/demo-proj/us-central1/reads_nothing")
+    assert time.monotonic() - started < 0.3
+    thread.join(10)
+
+
+def test_a_failing_secret_function_frees_the_gate(secret_client):
+    # `boom` declares nothing, so use the callable that raises with a declared secret through a broken stand-in.
+    gate = EnvironmentGate(LOCAL)
+
+    def broken(request):
+        raise RuntimeError("boom")
+
+    broken.__firebase_endpoint__ = None
+    manifest = {"functions": [{"name": "broken", "entryPoint": "broken", "region": "us-central1", "trigger": {"type": "http"}, "platformOptions": {"secrets": ["API_KEY"]}}]}
+    router = RunnerRouter({"broken": broken}, manifest, "demo-proj", SECRET, gate)
+    client = Client(router)
+    assert get(client, "/demo-proj/us-central1/broken").status_code == 500
+    with gate.hold(["API_KEY"]):
+        assert os.environ["API_KEY"] == "key-value"
+    assert "API_KEY" not in os.environ
+
+
+def test_a_router_without_a_gate_leaves_the_environment_alone(discovered, monkeypatch):
+    monkeypatch.setenv("API_KEY", "process-value")
+    client = Client(RunnerRouter(discovered, build_manifest(discovered), "demo-proj", SECRET))
+    assert env_of(get(client, "/demo-proj/us-central1/reads_nothing"))["API_KEY"] == "process-value"

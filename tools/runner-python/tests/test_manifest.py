@@ -125,16 +125,6 @@ def test_an_endpoint_with_no_trigger_is_unsupported():
     assert result["ignored"][0]["scope"] == "unsupported"
 
 
-def test_task_queue_and_blocking_triggers_are_planned_families():
-    tasks = sdk_manifest.ManifestEndpoint(entryPoint="t", taskQueueTrigger={})
-    blocking = sdk_manifest.ManifestEndpoint(entryPoint="b", blockingTrigger={"eventType": "providers/cloud.auth/eventTypes/user.beforeCreate"})
-    result = build_manifest({"t": _wrapped(tasks), "b": _wrapped(blocking)})
-    assert {entry["name"]: (entry["triggerType"], entry["scope"]) for entry in result["ignored"]} == {
-        "t": ("tasks", "planned"),
-        "b": ("blockingAuth", "planned"),
-    }
-
-
 def test_the_region_list_serves_its_first_entry_and_an_empty_list_none():
     assert describe_endpoint("f", endpoint(region=["us-east1", "europe-west1"]))["region"] == "us-east1"
     assert "region" not in describe_endpoint("f", endpoint(region=[]))
@@ -228,13 +218,6 @@ def test_a_region_that_is_not_a_non_empty_string_is_unsupported(region):
     assert _unserved(endpoint(region=region)) == ("unknown", "unsupported", "region did not resolve to a non-empty string")
 
 
-def test_the_exact_reasons_of_the_families_not_served_yet():
-    planned = "Python {} triggers are planned for a later slice and are not served yet"
-    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger={})) == ("tasks", "planned", planned.format("task queue"))
-    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", scheduleTrigger={"schedule": "x"})) == ("schedule", "planned", planned.format("schedule"))
-    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "x"})) == ("blockingAuth", "planned", planned.format("Auth blocking"))
-
-
 def test_the_other_unsupported_shapes_have_exact_reasons():
     assert _unserved(endpoint(platform="gcfv1")) == ("unknown", "unsupported", "endpoint platform is not recognised")
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f")) == ("unknown", "unsupported", "the endpoint declares no trigger")
@@ -259,16 +242,16 @@ def test_a_retrying_firestore_trigger_says_so():
 
 
 def test_the_ignored_entry_takes_the_declared_region_or_the_default():
-    unserved = sdk_manifest.ManifestEndpoint(entryPoint="f", region=["europe-west1"], scheduleTrigger={"schedule": "x"})
+    unserved = sdk_manifest.ManifestEndpoint(entryPoint="f", region=["europe-west1"], eventTrigger=sdk_manifest.EventTrigger(eventType="google.firebase.remoteconfig.update", retry=False))
     entry = build_manifest({"f": _wrapped(unserved)})["ignored"][0]
     assert entry == {
         "name": "f",
         "region": "europe-west1",
-        "triggerType": "schedule",
-        "scope": "planned",
-        "reason": "Python schedule triggers are planned for a later slice and are not served yet",
+        "triggerType": "remoteConfig",
+        "scope": "deferred",
+        "reason": "deferred: Remote Config has no emulator in the active supported surface",
     }
-    broken = sdk_manifest.ManifestEndpoint(entryPoint="f", region=[3], scheduleTrigger={"schedule": "x"})
+    broken = sdk_manifest.ManifestEndpoint(entryPoint="f", region=[3], eventTrigger=sdk_manifest.EventTrigger(eventType="google.firebase.remoteconfig.update", retry=False))
     assert build_manifest({"f": _wrapped(broken)})["ignored"][0]["region"] == "us-central1"
 
 
@@ -563,3 +546,158 @@ def test_the_unserved_products_carry_the_node_runners_exact_reasons():
     assert _unserved(_event("google.firebase.testing.x")) == (
         "testLab", "notPlanned", "not planned: Test Lab triggers have no local emulator"
     )
+
+
+# --- slice 2b: schedule, task queue and blocking Auth triggers ----------------------------------------
+
+SCHEDULE_RETRY = {"retryCount": None, "maxRetrySeconds": None, "maxBackoffSeconds": None, "maxDoublings": None, "minBackoffSeconds": None}
+
+
+def _schedule(**fields):
+    return sdk_manifest.ManifestEndpoint(entryPoint="f", scheduleTrigger=fields)
+
+
+def test_a_schedule_without_options_has_null_retry_numbers_no_time_zone_and_no_retry(manifest):
+    assert function(manifest, "sch_ok") == {
+        "name": "sch_ok",
+        "entryPoint": "sch_ok",
+        "generation": 2,
+        "retry": False,
+        "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": SCHEDULE_RETRY},
+    }
+
+
+def test_a_schedule_with_a_time_zone_a_retry_window_and_a_region_says_so(manifest):
+    assert function(manifest, "sch_retry") == {
+        "name": "sch_retry",
+        "entryPoint": "sch_retry",
+        "generation": 2,
+        "region": "europe-west1",
+        "retry": True,
+        "trigger": {
+            "type": "schedule",
+            "schedule": "0 0 * * *",
+            "timeZone": "UTC",
+            "retryConfig": {**SCHEDULE_RETRY, "retryCount": 3, "maxRetrySeconds": 60},
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "retry_config, retry",
+    [
+        ({}, False),
+        ({"retryCount": 0}, False),
+        ({"retryCount": 1}, True),
+        ({"maxRetrySeconds": 30}, True),
+        ({"maxRetrySeconds": 0, "retryCount": 0}, False),
+        ({"minBackoffSeconds": 5, "maxDoublings": 2}, False),
+        ({"retryCount": 0.5}, True),
+    ],
+)
+def test_a_schedule_retries_when_it_declares_a_retry_count_or_a_retry_window(retry_config, retry):
+    described = describe_endpoint("f", _schedule(schedule="every 5 minutes", retryConfig=retry_config))
+    assert described["retry"] is retry
+    assert described["trigger"]["retryConfig"] == retry_config
+
+
+def test_a_schedule_resolves_expressions_and_keeps_the_time_zone(monkeypatch):
+    monkeypatch.setattr(params, "_params", {})
+    monkeypatch.setenv("RUNNER_TEST_CRON", "0 9 * * *")
+    monkeypatch.setenv("RUNNER_TEST_TRIES", "4")
+    cron = params.StringParam("RUNNER_TEST_CRON")
+    tries = params.IntParam("RUNNER_TEST_TRIES")
+    described = describe_endpoint("f", _schedule(schedule=cron, timeZone="Asia/Tokyo", retryConfig={"retryCount": tries}))
+    assert described["trigger"] == {"type": "schedule", "schedule": "0 9 * * *", "timeZone": "Asia/Tokyo", "retryConfig": {"retryCount": 4}}
+    assert described["retry"] is True
+
+
+@pytest.mark.parametrize(
+    "fields, reason",
+    [
+        ({"schedule": None}, "scheduleTrigger.schedule did not resolve to a non-empty string"),
+        ({"schedule": ""}, "scheduleTrigger.schedule did not resolve to a non-empty string"),
+        ({"schedule": 5}, "scheduleTrigger.schedule did not resolve to a non-empty string"),
+        ({"schedule": "{{ params.X }}"}, "scheduleTrigger contains an unresolved deployment expression"),
+        ({"schedule": "every 1 minutes", "timeZone": "{{ params.Z }}"}, "scheduleTrigger contains an unresolved deployment expression"),
+        ({"schedule": "every 1 minutes", "timeZone": 4}, "scheduleTrigger.timeZone did not resolve to a string"),
+        ({"schedule": "every 1 minutes", "retryConfig": {"unknown": 1}}, "scheduleTrigger.retryConfig.unknown is not supported"),
+        ({"schedule": "every 1 minutes", "retryConfig": {"retryCount": "3"}}, "scheduleTrigger.retryConfig.retryCount did not resolve to a finite number"),
+        ({"schedule": "every 1 minutes", "retryConfig": {"retryCount": float("inf")}}, "scheduleTrigger.retryConfig.retryCount did not resolve to a finite number"),
+        ({"schedule": "every 1 minutes", "retryConfig": {"retryCount": True}}, "scheduleTrigger.retryConfig.retryCount did not resolve to a finite number"),
+        ({"schedule": "every 1 minutes", "retryConfig": 3}, "scheduleTrigger.retryConfig must be an object"),
+    ],
+)
+def test_a_schedule_that_cannot_be_resolved_is_unsupported_with_its_reason(fields, reason):
+    assert _unserved(_schedule(**fields)) == ("schedule", "unsupported", reason)
+
+
+TASK_RETRY = {"maxAttempts": None, "maxRetrySeconds": None, "maxBackoffSeconds": None, "maxDoublings": None, "minBackoffSeconds": None}
+TASK_RATE = {"maxConcurrentDispatches": None, "maxDispatchesPerSecond": None}
+
+
+def test_a_task_queue_function_names_its_retry_and_rate_limits(manifest):
+    assert function(manifest, "tk_echo") == {
+        "name": "tk_echo",
+        "entryPoint": "tk_echo",
+        "generation": 2,
+        "trigger": {
+            "type": "tasks",
+            "retryConfig": {**TASK_RETRY, "maxAttempts": 3, "minBackoffSeconds": 2},
+            "rateLimits": {**TASK_RATE, "maxConcurrentDispatches": 2},
+        },
+    }
+    # With no options the SDK leaves both records unset, so they are empty on the wire.
+    assert function(manifest, "tk_refuse")["trigger"] == {"type": "tasks", "retryConfig": {}, "rateLimits": {}}
+
+
+def test_a_task_queue_with_no_options_has_empty_records():
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger={}))
+    assert described["trigger"] == {"type": "tasks", "retryConfig": {}, "rateLimits": {}}
+
+
+@pytest.mark.parametrize(
+    "queue, reason",
+    [
+        ({"retryConfig": {"retryCount": 1}}, "taskQueueTrigger.retryConfig.retryCount is not supported"),
+        ({"rateLimits": {"maxAttempts": 1}}, "taskQueueTrigger.rateLimits.maxAttempts is not supported"),
+        ({"retryConfig": {"maxAttempts": "3"}}, "taskQueueTrigger.retryConfig.maxAttempts did not resolve to a finite number"),
+        ({"rateLimits": 4}, "taskQueueTrigger.rateLimits must be an object"),
+    ],
+)
+def test_a_task_queue_that_cannot_be_resolved_is_unsupported_with_its_reason(queue, reason):
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger=queue)) == ("tasks", "unsupported", reason)
+
+
+BLOCK = "providers/cloud.auth/eventTypes/user."
+
+
+def test_blocking_auth_functions_name_their_event_and_token_flags(manifest):
+    assert function(manifest, "bc_user")["trigger"] == {
+        "type": "blockingAuth", "eventType": BLOCK + "beforeCreate", "accessToken": False, "idToken": False, "refreshToken": False,
+    }
+    assert function(manifest, "bs_user")["trigger"] == {
+        "type": "blockingAuth", "eventType": BLOCK + "beforeSignIn", "accessToken": True, "idToken": True, "refreshToken": False,
+    }
+
+
+@pytest.mark.parametrize("event_type", [BLOCK + "beforeSendEmail", BLOCK + "beforeSendSms"])
+def test_the_email_and_sms_blocking_events_are_described_for_the_daemon_to_decide(event_type):
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": event_type, "options": {"idToken": True}}))
+    assert described["trigger"] == {"type": "blockingAuth", "eventType": event_type, "accessToken": False, "idToken": True, "refreshToken": False}
+
+
+def test_a_blocking_flag_counts_only_when_it_is_exactly_true():
+    for flag in (1, "true", None, [True]):
+        described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": BLOCK + "beforeCreate", "options": {"idToken": flag}}))
+        assert described["trigger"]["idToken"] is False
+    no_options = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": BLOCK + "beforeCreate"}))
+    assert no_options["trigger"]["accessToken"] is False
+
+
+def test_a_blocking_event_fireemu_does_not_know_is_reported_never_dropped():
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "providers/cloud.auth/eventTypes/user.beforeSomething"})) == (
+        "blocking", "unsupported", "blocking identity event providers/cloud.auth/eventTypes/user.beforeSomething is not served"
+    )
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "providers/ailogic/x"}))[:2] == ("ai", "notPlanned")
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={}))[:2] == ("blocking", "unsupported")

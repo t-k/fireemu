@@ -14,7 +14,11 @@ import threading
 import time
 
 from firebase_admin import initialize_app
-from firebase_functions import db_fn, eventarc_fn, firestore_fn, https_fn, logger, pubsub_fn, storage_fn
+from firebase_functions import db_fn, eventarc_fn, firestore_fn, https_fn, identity_fn, logger, pubsub_fn, scheduler_fn, storage_fn, tasks_fn
+from firebase_functions.options import RateLimits, RetryConfig
+from firebase_functions.params import SecretParam
+
+TOKEN = SecretParam("TOKEN")
 from flask import Response, jsonify
 
 initialize_app()
@@ -274,3 +278,104 @@ def db_written(event):
 @db_fn.on_value_written(reference="/config/mode", instance="demo-proj-*")
 def db_literal_glob(event):
     _record(_database_entry("db_literal_glob", event))
+
+
+@scheduler_fn.on_schedule(schedule="every 5 minutes")
+def sch_ok(event):
+    _record({"function": "sch_ok", "job_name": event.job_name, "schedule_time": _time(event.schedule_time)})
+
+
+@scheduler_fn.on_schedule(schedule="0 0 * * *", timezone=scheduler_fn.Timezone("UTC"), retry_count=3, max_retry_seconds=60, region="europe-west1")
+def sch_retry(event):
+    _record({"function": "sch_retry", "job_name": event.job_name, "schedule_time": _time(event.schedule_time)})
+
+
+@scheduler_fn.on_schedule(schedule="every 1 minutes")
+def sch_boom(event):
+    _record({"function": "sch_boom", "job_name": event.job_name})
+    raise RuntimeError("scheduled boom")
+
+
+@tasks_fn.on_task_dispatched(retry_config=RetryConfig(max_attempts=3, min_backoff_seconds=2), rate_limits=RateLimits(max_concurrent_dispatches=2))
+def tk_echo(request):
+    _record({"function": "tk_echo", "data": request.data})
+    return {"echo": request.data}
+
+
+@tasks_fn.on_task_dispatched()
+def tk_refuse(request):
+    raise https_fn.HttpsError(https_fn.FunctionsErrorCode.FAILED_PRECONDITION, "not now")
+
+
+def _blocking_entry(name, event):
+    return {
+        "function": name,
+        "event_type": event.event_type,
+        "uid": event.data.uid,
+        "email": event.data.email,
+        "ip": event.ip_address,
+        "has_id_token": getattr(event.credential, "id_token", None) is not None if event.credential else False,
+        "provider": event.credential.provider_id if event.credential else None,
+    }
+
+
+@identity_fn.before_user_created()
+def bc_user(event):
+    _record(_blocking_entry("bc_user", event))
+    email = event.data.email or ""
+    if email.startswith("blocked"):
+        raise https_fn.HttpsError(https_fn.FunctionsErrorCode.PERMISSION_DENIED, "no accounts for you")
+    if email.startswith("claims"):
+        return identity_fn.BeforeCreateResponse(display_name="Renamed", custom_claims={"tier": "gold"})
+    return None
+
+
+@identity_fn.before_user_signed_in(id_token=True, access_token=True)
+def bs_user(event):
+    _record(_blocking_entry("bs_user", event))
+    return identity_fn.BeforeSignInResponse(session_claims={"seen": "yes"})
+
+
+def _secrets_in_environment():
+    return {name: os.environ.get(name) for name in ("API_KEY", "TOKEN")}
+
+
+@https_fn.on_request(secrets=["API_KEY"])
+def reads_key(request):
+    if request.args.get("hold"):
+        time.sleep(float(request.args["hold"]))
+    return jsonify(env=_secrets_in_environment(), param=None)
+
+
+@https_fn.on_request(secrets=[TOKEN])
+def reads_token(request):
+    if request.args.get("hold"):
+        time.sleep(float(request.args["hold"]))
+    return jsonify(env=_secrets_in_environment(), param=TOKEN.value)
+
+
+@https_fn.on_request()
+def reads_nothing(request):
+    if request.args.get("hold"):
+        time.sleep(float(request.args["hold"]))
+    return jsonify(env=_secrets_in_environment())
+
+
+@https_fn.on_request(secrets=["API_KEY"])
+def streams_key(request):
+    def generate():
+        yield "first "
+        time.sleep(0.4)
+        yield json.dumps(_secrets_in_environment())
+
+    return Response(generate(), mimetype="text/plain")
+
+
+@firestore_fn.on_document_created(document="secret/{id}", secrets=["API_KEY"])
+def fs_secret(event):
+    _record({"function": "fs_secret", "env": _secrets_in_environment()})
+
+
+@firestore_fn.on_document_created(document="plain/{id}")
+def fs_plain(event):
+    _record({"function": "fs_plain", "env": _secrets_in_environment()})

@@ -452,6 +452,55 @@ mod tests {
     }
 
     #[test]
+    fn the_command_to_run_is_named_for_the_runtime_and_python3_without_one() {
+        assert_eq!(interpreter_name(Some("python312")), "python3.12");
+        assert_eq!(interpreter_name(Some("python310")), "python3.10");
+        assert_eq!(interpreter_name(Some("python3")), "python3");
+        assert_eq!(interpreter_name(Some("nodejs20")), "python3");
+        assert_eq!(interpreter_name(None), "python3");
+        assert_eq!(runtime_minor("python312").as_deref(), Some("3.12"));
+        assert_eq!(runtime_minor("python3"), None);
+        assert_eq!(runtime_minor("nodejs20"), None);
+    }
+
+    /// An interpreter that exits 0 but says too little is a broken environment, not a ready one.
+    #[test]
+    fn an_environment_that_answers_incompletely_is_not_ready() {
+        let scratch = Scratch::new();
+        let source = scratch.path().to_path_buf();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (stdout, code) in [
+            ("3.12\n", 0),
+            ("", 0),
+            ("\n0.6.0\n", 0),
+            ("3.12\n0.6.0\n", 1),
+        ] {
+            fake_interpreter(&source, stdout, "", code);
+            let error = runtime
+                .block_on(preflight(&source, Some("python312")))
+                .unwrap_err();
+            assert!(
+                error.contains("pip install -r requirements.txt"),
+                "{stdout:?} {code}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bundled_runner_is_found_in_the_workspace() {
+        let path = locate_runner().unwrap();
+        assert!(path.is_file(), "{}", path.display());
+        assert!(
+            path.ends_with("runner-python/runner.py"),
+            "{}",
+            path.display()
+        );
+    }
+
+    #[test]
     fn the_launch_environment_is_what_activate_gives() {
         let environment = PythonEnvironment {
             venv: PathBuf::from("/code/venv"),

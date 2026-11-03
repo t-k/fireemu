@@ -1209,6 +1209,13 @@ struct ReloadResources {
     node_probe_cache: Arc<NodeProbeCache>,
 }
 
+/// Whether source changes of the codebase are watched and reloaded. The reload snapshot links
+/// `node_modules` only, so it would lack the interpreter of a Python codebase's `venv`: Python reload
+/// is a later slice.
+fn reload_supervised(codebase: &FunctionsCodebase) -> bool {
+    crate::python_functions::codebase_language(codebase) != RuntimeLanguage::Python
+}
+
 fn start_reload_supervisors(
     runtime: &Arc<FunctionsRuntime>,
     cfg: &RuntimeConfig,
@@ -1222,9 +1229,7 @@ fn start_reload_supervisors(
         node_probe_cache: node_probe_cache.clone(),
     };
     for codebase in cfg.functions_to_load() {
-        if crate::python_functions::codebase_language(&codebase) == RuntimeLanguage::Python {
-            // The reload snapshot links `node_modules` only, so it would lack the interpreter of the
-            // codebase's `venv`; Python reload is a later slice.
+        if !reload_supervised(&codebase) {
             eprintln!(
                 "note: functions[{}]: source changes are not reloaded for Python codebases; restart fireemu to pick them up",
                 codebase.codebase
@@ -1865,6 +1870,20 @@ pub fn callable_trust_supported(source: &Path) -> Result<(), String> {
             "firebase-functions {version} is outside the supported range (6.x and 7.x)"
         ))
     }
+}
+
+/// Whether the callable trust boundary may be switched on for `codebase`: the Node SDK
+/// instrumentation must be readable ([`callable_trust_supported`]). The Python SDK has no switch for
+/// the SDK's own token checks, so a Python codebase never supports it (yet).
+///
+/// # Errors
+///
+/// Why it is not available.
+pub fn codebase_callable_trust(codebase: &FunctionsCodebase) -> Result<(), String> {
+    if crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python {
+        return Err("Python codebases are not supported by it yet".to_owned());
+    }
+    callable_trust_supported(Path::new(&codebase.source))
 }
 
 /// One `functions[...]` warning per secret a function declares that `.secret.local` has no value
@@ -10440,6 +10459,233 @@ exports.add = onCall({{}}, observe("add"));
                 }
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scratch codebase source holding a `requirements.txt` and no `package.json`: a Python one.
+    fn python_codebase(name: &str) -> (std::path::PathBuf, crate::config::FunctionsCodebase) {
+        let dir = std::env::temp_dir().join(format!(
+            "fireemu-python-start-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("requirements.txt"), "firebase-functions\n").unwrap();
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "py".to_owned(),
+            source: dir.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        (dir, codebase)
+    }
+
+    fn no_hosts() -> super::EmulatorHosts {
+        super::EmulatorHosts {
+            app_check: None,
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+            admin_app_check: None,
+        }
+    }
+
+    #[test]
+    fn python_reload_is_not_supervised_and_node_reload_is() {
+        let (dir, python) = python_codebase("reload");
+        assert!(!super::reload_supervised(&python));
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        assert!(
+            super::reload_supervised(&python),
+            "a package.json makes it Node"
+        );
+        let declared = crate::config::FunctionsCodebase {
+            runtime: Some("python312".to_owned()),
+            ..python
+        };
+        assert!(
+            !super::reload_supervised(&declared),
+            "a declared Python runtime wins over package.json"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn callable_trust_is_never_available_for_a_python_codebase() {
+        let (dir, python) = python_codebase("trust");
+        assert_eq!(
+            super::codebase_callable_trust(&python).unwrap_err(),
+            "Python codebases are not supported by it yet"
+        );
+        // A Node codebase is asked about its SDK, which is not installed here.
+        let node = crate::config::FunctionsCodebase {
+            runtime: Some("nodejs20".to_owned()),
+            ..python
+        };
+        assert!(super::codebase_callable_trust(&node)
+            .unwrap_err()
+            .contains("firebase-functions"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_python_codebase_is_refused_the_trusted_callable_protocol_and_needs_its_venv() {
+        let (dir, codebase) = python_codebase("start");
+        let cfg = crate::config::RuntimeConfig::default();
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+        let trusted =
+            super::start_codebase(&cfg, &codebase, &no_hosts(), "s", true, &cache, snapshot)
+                .await
+                .err()
+                .unwrap();
+        assert!(trusted.starts_with("the Functions codebase \"py\": App Check for Python callables is not available yet"), "{trusted}");
+        let untrusted =
+            super::start_codebase(&cfg, &codebase, &no_hosts(), "s", false, &cache, snapshot)
+                .await
+                .err()
+                .unwrap();
+        assert!(
+            untrusted.contains("Missing virtual environment at venv directory"),
+            "{untrusted}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--inspect-functions` is ignored for a Python codebase (a warning, as in firebase-tools): no
+    /// inspector flag reaches its command and no active inspector is demanded of it.
+    #[tokio::test]
+    async fn the_inspect_option_is_ignored_for_a_python_codebase() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let (dir, python) = python_codebase("inspect");
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, scheduled_with(json!({})).to_string()).unwrap();
+        let cache = Arc::new(super::NodeProbeCache::default());
+        for (port, dynamic) in [(Some(5_u16), false), (None, true)] {
+            let cfg = crate::config::RuntimeConfig {
+                functions_runner: Some(vec!["python3".to_owned(), script.display().to_string()]),
+                functions_manifest: Some(manifest_path.display().to_string()),
+                functions_inspect_port: port,
+                functions_inspect_dynamic: dynamic,
+                ..crate::config::RuntimeConfig::default()
+            };
+            let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+            let started =
+                super::start_codebase(&cfg, &python, &no_hosts(), "s", false, &cache, snapshot)
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("python, port {port:?}, dynamic {dynamic}: {error}")
+                    });
+            started.runner.kill_now();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[derive(Debug)]
+    struct NeverAsked;
+
+    impl fireemu_adapter_functions::admin_app_check::AdminAppCheckVerifier for NeverAsked {
+        fn verify(&self, _: &str, _: &str) -> fireemu_adapter_functions::admin_app_check::Reply {
+            fireemu_adapter_functions::admin_app_check::Reply::Unavailable
+        }
+    }
+
+    /// The Admin SDK App Check channel is a Node mechanism: only a Node runner is told about it.
+    #[tokio::test]
+    async fn the_admin_app_check_channel_is_offered_to_a_node_runner_and_not_to_a_python_one() {
+        let script = r"
+import json,os,sys
+value=json.dumps({'type':'hello','runner':'probe','manifest':{'functions':[{'name':'job','trigger':{'type':'schedule','schedule':'every 1 minutes'}}]},'adminAppCheck':{'instrumentation':'env:'+os.environ.get('FIREEMU_APP_CHECK_ADMIN','unset')}}).encode()
+sys.stdout.buffer.write(str(len(value)).encode()+b'\n'+value)
+sys.stdout.buffer.flush()
+sys.stdin.buffer.read()
+";
+        let (dir, python) = python_codebase("admin");
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, scheduled_with(json!({})).to_string()).unwrap();
+        let cfg = crate::config::RuntimeConfig {
+            functions_runner: Some(vec![
+                "python3".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ]),
+            functions_manifest: Some(manifest_path.display().to_string()),
+            ..crate::config::RuntimeConfig::default()
+        };
+        let mut hosts = no_hosts();
+        hosts.admin_app_check = Some(Arc::new(NeverAsked));
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+        let node = crate::config::FunctionsCodebase {
+            runtime: Some("nodejs20".to_owned()),
+            ..python.clone()
+        };
+        for (codebase, expected) in [(&python, "env:unset"), (&node, "env:1")] {
+            let started =
+                super::start_codebase(&cfg, codebase, &hosts, "s", false, &cache, snapshot)
+                    .await
+                    .unwrap();
+            let report = started.runner.hello().admin_app_check.clone().unwrap();
+            assert_eq!(report["instrumentation"], expected, "{}", codebase.codebase);
+            started.runner.kill_now();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_virtual_date_is_refused_for_a_runner_without_a_clock_and_the_message_names_python() {
+        // A runner that says hello and announces no clock capability, as the Python runner does.
+        let script = r"
+import json,sys
+value=json.dumps({'type':'hello','runner':'no-clock'}).encode()
+sys.stdout.buffer.write(str(len(value)).encode()+b'\n'+value)
+sys.stdout.buffer.flush()
+sys.stdin.buffer.read()
+";
+        let (dir, python) = python_codebase("clock");
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, scheduled_with(json!({})).to_string()).unwrap();
+        let mut cfg = crate::config::RuntimeConfig {
+            functions_runner: Some(vec![
+                "python3".to_owned(),
+                "-c".to_owned(),
+                script.to_owned(),
+            ]),
+            functions_manifest: Some(manifest_path.display().to_string()),
+            ..crate::config::RuntimeConfig::default()
+        };
+        cfg.functions_clock.date_virtual = true;
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let snapshot = VirtualClock::new(cfg.clock_start).snapshot();
+        let error = super::start_codebase(&cfg, &python, &no_hosts(), "s", false, &cache, snapshot)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error.ends_with(
+                "does not support the requested virtual clock (Python code runs on real time)"
+            ),
+            "{error}"
+        );
+        let node = crate::config::FunctionsCodebase {
+            runtime: Some("nodejs20".to_owned()),
+            ..python
+        };
+        let error = super::start_codebase(&cfg, &node, &no_hosts(), "s", false, &cache, snapshot)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error.ends_with("does not support the requested virtual clock"),
+            "{error}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

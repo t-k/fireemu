@@ -33,6 +33,9 @@ const NESTING = [
   "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc",
 ];
 
+// The window of a local run (milliseconds); the local clock reads about 1793664245 inside it.
+const WINDOW = { startedMs: 1_793_664_000_000, finishedMs: 1_793_664_600_000 };
+
 /** The lane's inputs for one row: the program, the saved production rows and the local answers. */
 function input(row, { status = "MISMATCH", local } = {}) {
   const [programId] = split(row);
@@ -40,7 +43,7 @@ function input(row, { status = "MISMATCH", local } = {}) {
   const saved = clone(FIXTURE[programId]);
   const localSteps = clone(saved.steps);
   local?.(localSteps, saved);
-  return { row, status, program, saved, localSteps };
+  return { row, status, program, saved, localSteps, window: WINDOW };
 }
 const results = (steps, row) => steps[split(row)[1]].body[0].results;
 const accepted = (value, decision, rule) => {
@@ -261,6 +264,34 @@ test("the clock-dependent value is the only allowed difference of timestamp-diff
   for (const [name, fault] of Object.entries(faults))
     rejected(coveredBy(input(CLOCK_ROW, { local: fault })), name);
   rejected(coveredBy(input(CLOCK_ROW, { status: "UNKNOWN" })));
+});
+
+test("the clock-dependent value must lie inside the run window", () => {
+  const at = (seconds, ...window) => {
+    const probe = input(CLOCK_ROW, {
+      local: (steps) => {
+        steps["timestamp-diff-now"].body[0].results[0].fields.v = { integerValue: String(seconds) };
+      },
+    });
+    if (window.length > 0) probe.window = window[0];
+    return probe;
+  };
+  const first = Math.floor(WINDOW.startedMs / 1000);
+  const last = Math.ceil(WINDOW.finishedMs / 1000);
+  for (const seconds of [first, last, first - 2, last + 2, (first + last) / 2])
+    accepted(coveredBy(at(seconds)), "2211", "clock-value");
+  // A value outside the window, the recorded production value and a far future value.
+  for (const seconds of [first - 3, last + 3, 1793029330, 1927857906, 0, -1])
+    rejected(coveredBy(at(seconds)));
+  // No window, a window that is not a time or runs backwards allows nothing.
+  for (const window of [
+    undefined,
+    {},
+    { startedMs: NaN, finishedMs: WINDOW.finishedMs },
+    { startedMs: WINDOW.startedMs, finishedMs: undefined },
+    { startedMs: WINDOW.finishedMs, finishedMs: WINDOW.startedMs },
+  ])
+    rejected(coveredBy(at(first, window)));
 });
 
 test("the two gRPC chains are covered while both sides are the recorder's client failure", () => {

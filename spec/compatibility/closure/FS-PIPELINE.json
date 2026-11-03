@@ -3203,7 +3203,29 @@
     "clockDiffControlSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb",
     "platformNote": "The release build, the lane check and export, and the pinned-clock controls ran on Darwin arm64. The release workflow reruns the lane (R21) on the linux-x64 package it publishes, installed as a user installs it, at every release. The clock controls are not rerun on that package and no native Linux arm64 replay is required by this closure: FS-TRANSACTION closed on the installed release-profile CHECK and EXPORT of the published package, with no separate platform replay. The v0.41 record's pending native Linux arm64 clock replay (conformance/fs-ent-pipeline-v041-additional-adjudication.json) is therefore listed as not required here, not as pending work.",
     "divergenceContentPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-divergence-content.json",
-    "divergenceContentSha256": "a57fd3eaadde93dbc209218254e92735b840a18fa854908d5e3c7a6178cd1fb9"
+    "divergenceContentSha256": "ce730149e1467282fe3a43d4226b0baebdf5bdcb7c693f61b8c49b6d319bce44",
+    "coverageSources": [
+      {
+        "path": "conformance/src/fs-ent-pipeline/coverage.mjs",
+        "role": "the table of covered rows and the allowance of each rule, run by the lane check and by the closure test",
+        "sha256": "4b75c0f0dab211209d54ebfdd11918b93f6856eef96a2cccd80c37c027755b05"
+      },
+      {
+        "path": "conformance/src/fs-ent-pipeline/o7-order-policy.mjs",
+        "role": "the O-7 evaluator (same groups as a multiset, or a legal selection) the coverage rules reuse",
+        "sha256": "4b2846e23f7e9b170403d8ec2045b6f83d19a05b4cd985b96fc9769548ac3a47"
+      },
+      {
+        "path": "conformance/src/fs-ent-pipeline/o7-order-policy-data.json",
+        "role": "the pinned O-7 recipes (digests of request, seed and recorded rows, companions) the evaluator reads",
+        "sha256": "d35013550cfc3a78fae2b9b158821d33042836281093575e2e4d6567fe368a09"
+      },
+      {
+        "path": "conformance/src/fs-ent-pipeline/o6-sort-policy.mjs",
+        "role": "the O-6 evaluator (tied rows only) the coverage rules reuse",
+        "sha256": "36b3fb587ce2e128bde84f54bf67d4bdddb90bac314d884edcbcb3c345b4f955"
+      }
+    ]
   },
   "recordedLeafReview": {
     "decision": "APPROVED_RECORDED_ROWS_ONLY",
@@ -3326,7 +3348,7 @@
     {
       "kind": "divergence-content",
       "path": "spec/compatibility/closure/evidence/FS-PIPELINE-current-divergence-content.json",
-      "sha256": "a57fd3eaadde93dbc209218254e92735b840a18fa854908d5e3c7a6178cd1fb9",
+      "sha256": "ce730149e1467282fe3a43d4226b0baebdf5bdcb7c693f61b8c49b6d319bce44",
       "binarySha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
       "scope": "The local answers of the current release binary for the 26 divergent rows, the 2 nesting rows and the steps their allowances read, with the verdict of each allowance (conformance/src/fs-ent-pipeline/coverage.mjs, which reuses the evaluators of the finite O-7 and O-6 contracts). It re-proves those contracts on the current binary; the closure test re-evaluates it against the production fixture, and the release job evaluates the same rules on the live answers."
     }

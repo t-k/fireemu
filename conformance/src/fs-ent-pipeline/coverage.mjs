@@ -49,7 +49,15 @@ const splitRow = (row) => {
   return [row.slice(0, at), row.slice(at + 1)];
 };
 
-export function allowsClockValue(production, fireemu) {
+/** The local clock may stand this many whole seconds outside the run window (rounding, start-up). */
+const CLOCK_SLACK_SECONDS = 2n;
+
+/**
+ * The value of timestamp-diff-now is the local clock in whole seconds since the epoch, so it must
+ * lie inside the window of the local run (`{ startedMs, finishedMs }`, milliseconds); production's
+ * value is its own clock of the recording day. Without a window nothing is allowed.
+ */
+export function allowsClockValue(production, fireemu, window) {
   const valid = (step) => {
     const value = step?.body?.[0]?.results?.[0]?.fields?.v;
     return (
@@ -65,6 +73,16 @@ export function allowsClockValue(production, fireemu) {
     );
   };
   if (!valid(production) || !valid(fireemu)) return false;
+  if (
+    !Number.isFinite(window?.startedMs) ||
+    !Number.isFinite(window?.finishedMs) ||
+    window.finishedMs < window.startedMs
+  )
+    return false;
+  const seconds = BigInt(fireemu.body[0].results[0].fields.v.integerValue);
+  const earliest = BigInt(Math.floor(window.startedMs / 1000)) - CLOCK_SLACK_SECONDS;
+  const latest = BigInt(Math.ceil(window.finishedMs / 1000)) + CLOCK_SLACK_SECONDS;
+  if (seconds < earliest || seconds > latest) return false;
   const blank = (step) => {
     const copy = structuredClone(step);
     copy.body[0].results[0].fields.v.integerValue = "<value>";
@@ -92,7 +110,7 @@ function allowsLaterObservation(row, production, fireemu) {
  * `localSteps` are the lane's local answers of the whole program (companions and preludes).
  * Returns `{ decision, rule }` or `{ rejected }`; `undefined` when the table does not name the row.
  */
-export function coveredBy({ row, status, program, saved, localSteps }) {
+export function coveredBy({ row, status, program, saved, localSteps, window }) {
   const entry = COVERAGE.get(row);
   if (!entry) return undefined;
   const [, stepId] = splitRow(row);
@@ -111,9 +129,9 @@ export function coveredBy({ row, status, program, saved, localSteps }) {
     }
     if (status !== "MISMATCH") return reject(`status ${status}, not MISMATCH`);
     if (entry.rule === "clock-value")
-      return allowsClockValue(production, fireemu)
+      return allowsClockValue(production, fireemu, window)
         ? ok("CLOCK_DEPENDENT_VALUE_ONLY")
-        : reject("the difference is more than the clock-dependent value");
+        : reject("the difference is more than the clock-dependent value inside the run window");
     const input = {
       id: row,
       profile: "strict",

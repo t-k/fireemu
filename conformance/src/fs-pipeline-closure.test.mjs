@@ -488,6 +488,7 @@ function coverageInput(content, row, replace = {}) {
     program: PROGRAMS.find((item) => item.id === programId),
     saved: FIXTURE[programId],
     localSteps: answers,
+    window: content.runWindow,
   };
 }
 
@@ -503,6 +504,8 @@ test("the current binary's answers are inside every allowance of the 28 covered 
   assert.equal(content.artifactSha256, closure.integratedRegression.releaseBinarySha256);
   assert.equal(evidence.binarySha256, content.artifactSha256);
   assert.equal(content.fixtureSha256, comparison.fixtureSha256);
+  assert.ok(content.runWindow.finishedMs >= content.runWindow.startedMs);
+  assert.ok(content.runWindow.finishedMs - content.runWindow.startedMs < 600_000, "a short run");
   const decisionOf = { P4: "2114", P6: "2211", P7: "2214" };
   const covered = new Map(content.covered.map((item) => [item.row, item]));
   assert.deepEqual([...covered.keys()].toSorted(), [...COVERAGE.keys()].toSorted());
@@ -540,6 +543,8 @@ test("the content check rejects an answer beyond an allowance", () => {
   // The extra result and the extra field of the review's counterexample.
   assert.ok(bad(clock, (a) => rows(a).push(structuredClone(rows(a)[0]))).rejected);
   assert.ok(bad(clock, (a) => (rows(a)[0].fields.w = { integerValue: "1" })).rejected);
+  // The recorded production value is not the local clock of this run.
+  assert.ok(bad(clock, (a) => (rows(a)[0].fields.v = { integerValue: "1793029330" })).rejected);
   const group = "fs-ent-pipeline/o7/aggregate-basic#grouped-all";
   assert.ok(bad(group, (a) => rows(a).pop()).rejected);
   assert.ok(bad(group, (a) => (rows(a)[0].fields.c = { integerValue: "-1" })).rejected);
@@ -565,13 +570,22 @@ test("the clock controls have the complete recorded response structure, with onl
   const seconds = String(Math.floor(Date.parse("2031-02-03T04:05:06.123Z") / 1000));
   assert.equal(diff.derivedSeconds, seconds);
   assert.equal(diff.response[0].results[0].fields.v.integerValue, seconds);
-  assert.equal(allowsClockValue(recorded, asStep(diff)), true);
+  // The pinned clock stands still, so its run window is the second it names.
+  const pinned = { startedMs: Number(seconds) * 1000, finishedMs: Number(seconds) * 1000 + 999 };
+  assert.equal(allowsClockValue(recorded, asStep(diff), pinned), true);
+  assert.equal(
+    allowsClockValue(recorded, asStep(diff), {
+      startedMs: pinned.startedMs + 60_000,
+      finishedMs: pinned.finishedMs + 60_000,
+    }),
+    false,
+  );
   const extraResult = structuredClone(diff);
   extraResult.response[0].results.push(structuredClone(extraResult.response[0].results[0]));
-  assert.equal(allowsClockValue(recorded, asStep(extraResult)), false);
+  assert.equal(allowsClockValue(recorded, asStep(extraResult), pinned), false);
   const extraField = structuredClone(diff);
   extraField.response[0].results[0].fields.w = { integerValue: "1" };
-  assert.equal(allowsClockValue(recorded, asStep(extraField)), false);
+  assert.equal(allowsClockValue(recorded, asStep(extraField), pinned), false);
   // current_timestamp: one result holding one timestamp, the configured clock to the microsecond.
   const instant = json(ir.clockControlPath);
   assert.equal(instant.response.length, 1);
@@ -582,6 +596,30 @@ test("the clock controls have the complete recorded response structure, with onl
     v: { timestampValue: instant.expectedClock },
   });
   assert.equal(instant.expectedClock, "2031-02-03T04:05:06.123456Z");
+});
+
+test("the sources of the coverage rules are pinned in the record", () => {
+  const sources = closure.integratedRegression.coverageSources;
+  const paths = sources.map((source) => source.path);
+  assert.equal(new Set(paths).size, paths.length);
+  for (const source of sources) {
+    assert.equal(sha256(source.path), source.sha256, source.path);
+    assert.match(source.role, /\S/);
+  }
+  // Every local file the coverage module reads is pinned here or elsewhere in the record.
+  const module = "conformance/src/fs-ent-pipeline/coverage.mjs";
+  assert.ok(paths.includes(module));
+  const code = text(module);
+  const read = [...code.matchAll(/(?:from |new URL\()"(\.\.?\/[^"]+\.(?:mjs|json))"/g)].map(
+    (match) =>
+      new URL(match[1], new URL(`../../${module}`, import.meta.url)).pathname.replace(
+        /^.*\/conformance\//,
+        "conformance/",
+      ),
+  );
+  assert.ok(read.length >= 4, "the module reads the policies and the observation");
+  const pinned = new Set([...paths, ...closure.finiteContractEvidence.map((entry) => entry.path)]);
+  for (const path of read) assert.ok(pinned.has(path), `${path} is pinned`);
 });
 
 test("the capability and generated inventory describe recorded unnest and base64 behavior", () => {

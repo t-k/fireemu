@@ -2,6 +2,10 @@
   "kind": "fs-ent-pipeline-divergence-content-v1",
   "artifactSha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
   "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "runWindow": {
+    "startedMs": 1793682948673,
+    "finishedMs": 1793682950005
+  },
   "covered": [
     {
       "row": "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
@@ -3227,7 +3231,7 @@
             {
               "fields": {
                 "v": {
-                  "integerValue": "1793676528"
+                  "integerValue": "1793682949"
                 }
               }
             }

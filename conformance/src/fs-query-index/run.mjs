@@ -1145,8 +1145,15 @@ async function check() {
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, rangeTotals, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DIVERGENCE_APPROVED"]);
+  // The local clock follows real time from the daemon's start, inside this window.
+  const runWindow = { startedMs: local.context.startedMs, finishedMs: Date.now() };
   const coverage = coverageTools?.judgeCoverage(rows, passing, (item) =>
-    coverageTools.coveredBy({ row: item.row, status: item.status, ...rowContext.get(item.row) }),
+    coverageTools.coveredBy({
+      row: item.row,
+      status: item.status,
+      window: runWindow,
+      ...rowContext.get(item.row),
+    }),
   );
   const coveredRows = new Set(coverage?.covered.map((item) => item.row));
   for (const row of rows.filter((r) => !passing.has(r.status) && !coveredRows.has(r.row))) {
@@ -1174,7 +1181,7 @@ async function check() {
     }
     await writeFile(
       join(RUN_DIR, "coverage-content.json"),
-      `${JSON.stringify({ artifactSha256, covered: coverage.covered, steps: needed }, null, 2)}\n`,
+      `${JSON.stringify({ artifactSha256, runWindow, covered: coverage.covered, steps: needed }, null, 2)}\n`,
     );
     process.exitCode = coverageTools.laneExitCode({
       coverage,
@@ -1254,6 +1261,7 @@ async function exportContent(out) {
     kind: `${LANE.id}-divergence-content-v1`,
     artifactSha256: content.artifactSha256,
     fixtureSha256: sha256(fixtureText),
+    runWindow: content.runWindow,
     covered: content.covered,
     steps: content.steps,
   };

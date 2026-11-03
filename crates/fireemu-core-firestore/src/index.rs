@@ -209,16 +209,29 @@ pub struct SingleFieldExemption {
 type SingleFieldModes = Vec<(IndexQueryScope, IndexFieldMode)>;
 type SingleFieldOverrides = BTreeMap<(String, Vec<String>), SingleFieldModes>;
 
+/// Positions in the composite list, per collection group, in list order.
+type CompositesByGroup = BTreeMap<CollectionId, Vec<usize>>;
+
 /// The set of configured indexes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexSet {
+    /// Every composite definition in the order it was added; this is what
+    /// [`Self::composites`] returns and what query planning scans.
     composites: Vec<IndexDefinition>,
+    /// The positions in `composites` of each collection group's definitions, ascending, so
+    /// per-document accounting visits only its own group. Derived from `composites` and kept in
+    /// step by every mutation, so it never changes equality.
+    composites_by_group: CompositesByGroup,
     single_fields: SingleFieldOverrides,
 }
 
 impl IndexSet {
     /// Adds a composite index.
     pub fn add_composite(&mut self, index: IndexDefinition) {
+        self.composites_by_group
+            .entry(index.collection_group.clone())
+            .or_default()
+            .push(self.composites.len());
         self.composites.push(index);
     }
 
@@ -226,7 +239,18 @@ impl IndexSet {
     pub fn remove_composite(&mut self, index: &IndexDefinition) -> bool {
         let before = self.composites.len();
         self.composites.retain(|existing| existing != index);
-        self.composites.len() != before
+        let removed = self.composites.len() != before;
+        if removed {
+            // Positions after the removed definitions shift, so rebuild the whole map.
+            self.composites_by_group.clear();
+            for (position, definition) in self.composites.iter().enumerate() {
+                self.composites_by_group
+                    .entry(definition.collection_group.clone())
+                    .or_default()
+                    .push(position);
+            }
+        }
+        removed
     }
 
     /// Adds a single-field exemption.
@@ -350,6 +374,19 @@ impl IndexSet {
     #[must_use]
     pub fn composites(&self) -> &[IndexDefinition] {
         &self.composites
+    }
+
+    /// The composite indexes of one collection group, in the order [`Self::composites`] lists
+    /// them; other groups' definitions are not visited.
+    pub(crate) fn composites_for<'a>(
+        &'a self,
+        collection_group: &CollectionId,
+    ) -> impl Iterator<Item = &'a IndexDefinition> + 'a {
+        self.composites_by_group
+            .get(collection_group)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|&position| &self.composites[position])
     }
 
     pub(crate) fn is_exempt(

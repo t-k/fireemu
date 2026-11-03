@@ -36,6 +36,9 @@ control that proves a failing mutant is noticed), then one mutant at a time. The
 as a subprocess, so the harness passes `MUTANT_UNDER_TEST` to it. Do not edit `fireemu_runner/` during a
 run: mutmut mutates a copy (`mutants/`), but its test selection is built from the first pass.
 
-The last run (mutmut 3.8.1, Python 3.12, base `origin/main` 3d8abc109, 1,267 mutants): 1,220 killed
-(22 of them by a hang), 25 survived, all judged equivalent or immaterial in the checklist of the
-submission that added this directory.
+The last run (mutmut 3.8.1, Python 3.12, 1,267 mutants of `fireemu_runner/`): 1,222 killed, 24 more ended
+in a hang, 21 survived. The survivors are equivalent or immaterial (a codec alias such as `"UTF-8"`,
+`ensure_ascii=None`, a Flask endpoint name derived from the view function, an unbuffered versus buffered
+stream that is flushed after each frame, the digit counter of the frame header whose bound the length cap
+already enforces, the case of a header name) or are killed by a process-level test that mutmut's test
+selection does not see (the two `_QuietHandler` mutants: `test_the_http_server_logs_no_request_lines_on_stderr`).

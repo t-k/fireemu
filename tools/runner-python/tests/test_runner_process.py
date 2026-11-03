@@ -64,6 +64,12 @@ def test_user_output_in_every_form_never_reaches_the_protocol_channel(runner):
         assert text in runner.stderr
 
 
+def test_the_http_server_logs_no_request_lines_on_stderr(runner):
+    # Werkzeug's own request log would otherwise land on the runner's stderr, which is for user output.
+    runner.request("/demo-proj/us-central1/hello")
+    assert "GET /" not in runner.stderr and "HTTP/1" not in runner.stderr
+
+
 def test_a_shutdown_frame_ends_the_runner_cleanly():
     process = Runner()
     process.hello()

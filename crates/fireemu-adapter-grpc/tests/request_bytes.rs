@@ -614,7 +614,13 @@ fn a_stalled_rest_body_ends_at_the_deadline_without_refusing_anyone_else() {
 
 #[tokio::test]
 async fn execute_pipeline_grpc_recursion_refusal_follows_profile() {
-    for strict in [true, false] {
+    // Depths 47, 48 and 100 are the recorded O-8A `nesting-main` chains that production refused
+    // with "Request contains an invalid argument." (47: FS-ENT-ORACLE O-8A; 48 and 100: the
+    // 2026-10-29 stage-context observation, same request bytes twice).
+    for (strict, depth) in [true, false]
+        .into_iter()
+        .flat_map(|strict| [47_usize, 48, 100].map(move |depth| (strict, depth)))
+    {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let backend = Arc::new(LocalBackend::new(
@@ -645,7 +651,7 @@ async fn execute_pipeline_grpc_recursion_refusal_follows_profile() {
         let mut value = pb::Value {
             value_type: Some(pb::value::ValueType::FieldReferenceValue("i".into())),
         };
-        for _ in 0..47 {
+        for _ in 0..depth {
             value = pb::Value {
                 value_type: Some(pb::value::ValueType::FunctionValue(pb::Function {
                     name: "array".into(),
@@ -692,11 +698,18 @@ async fn execute_pipeline_grpc_recursion_refusal_follows_profile() {
             Err(error) => error,
             Ok(response) => response.into_inner().message().await.unwrap_err(),
         };
-        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.code(), tonic::Code::InvalidArgument, "depth {depth}");
         if strict {
-            assert_eq!(error.message(), "Request contains an invalid argument.");
+            assert_eq!(
+                error.message(),
+                "Request contains an invalid argument.",
+                "depth {depth}"
+            );
         } else {
-            assert!(error.message().ends_with("recursion limit reached"));
+            assert!(
+                error.message().ends_with("recursion limit reached"),
+                "depth {depth}: {error}"
+            );
         }
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());

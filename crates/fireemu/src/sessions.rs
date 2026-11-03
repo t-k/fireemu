@@ -99,6 +99,19 @@ impl Projects {
                 "the Pub/Sub state is poisoned",
             ));
         }
+        // The Firestore catalog and each database's own lock. A poisoned one is skipped by
+        // the backend's wipe instead of reported, so it is caught here before anything else
+        // is wiped. The backend offers this check only over the whole catalog, so a poisoned
+        // database outside `scope` refuses the transition too: refusing wipes nothing.
+        if let Err(status) = self.backend.database_catalog() {
+            return Err(TransitionFailure::new(
+                "firestore",
+                format!(
+                    "the Firestore databases cannot be written: {}",
+                    status.message()
+                ),
+            ));
+        }
         let auth = match scope {
             Scope::Project(p) => self.registry.store_for(p),
             Scope::AllExcept(_) => Some(self.registry.default_store()),
@@ -1814,5 +1827,140 @@ pub(crate) mod tests {
                 .is_empty(),
             "the dynamic registrations went with the session project"
         );
+    }
+
+    /// Writes one object to the fixture's storage bucket (owned by `demo-app`).
+    fn put_storage_sentinel(projects: &Projects) -> fireemu_core_storage::name::BucketName {
+        let bucket = fireemu_core_storage::name::BucketName::try_new("demo-app.appspot.com")
+            .expect("the bucket name is valid");
+        projects
+            .storage
+            .store
+            .lock()
+            .unwrap()
+            .put(
+                &bucket,
+                &fireemu_core_storage::name::ObjectName::try_new("sentinel").unwrap(),
+                b"kept".to_vec(),
+                fireemu_core_storage::store::NewMetadata::default(),
+                fireemu_core_storage::store::Precondition::default(),
+                AT,
+            )
+            .expect("the storage sentinel is written");
+        bucket
+    }
+
+    /// Creates `project`'s `(default)` Firestore database and poisons its lock: a writer
+    /// panics while it holds the database.
+    #[allow(clippy::result_large_err)] // Database handles use tonic::Status at the adapter boundary.
+    fn poison_firestore_database(
+        projects: &Projects,
+        project: &str,
+    ) -> fireemu_adapter_grpc::decode::Parent {
+        let parent = fireemu_adapter_grpc::decode::parse_parent(&format!(
+            "projects/{project}/databases/(default)/documents"
+        ))
+        .expect("the parent is valid");
+        let handle = projects
+            .backend
+            .ensure_database(&parent)
+            .expect("the database is created");
+        std::thread::scope(|threads| {
+            assert!(threads
+                .spawn(|| {
+                    let _ = handle.with(|_| -> Result<(), _> {
+                        panic!("poison the Firestore transition probe")
+                    });
+                })
+                .join()
+                .is_err());
+        });
+        assert!(
+            handle.with(|_| Ok(())).is_err(),
+            "the database lock is poisoned"
+        );
+        parent
+    }
+
+    /// The database behind `parent` is still the poisoned one the fixture created: a reset
+    /// would have removed it from the catalog and bumped its generation.
+    #[allow(clippy::result_large_err)] // Database handles use tonic::Status at the adapter boundary.
+    fn assert_poisoned_database_kept(
+        projects: &Projects,
+        parent: &fireemu_adapter_grpc::decode::Parent,
+        generation: u64,
+    ) {
+        assert_eq!(projects.backend.database_generation(parent), generation);
+        let handle = projects
+            .backend
+            .database_handle(parent)
+            .expect("the database is still in the catalog");
+        assert!(handle.with(|_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn a_poisoned_firestore_database_refuses_project_reset_and_delete_before_any_wipe() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks.create(SECOND_PROJECT).unwrap();
+        hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .unwrap();
+        let (topic, snapshot) = populate_pubsub(&hooks, SECOND_PROJECT);
+        let bucket = put_storage_sentinel(&hooks);
+        let parent = poison_firestore_database(&hooks, SECOND_PROJECT);
+        let generation = hooks.backend.database_generation(&parent);
+
+        let reset = hooks
+            .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
+            .expect_err("the probe refuses the reset");
+        assert_eq!(reset.part, "firestore");
+        let delete = hooks
+            .remove(SECOND_PROJECT)
+            .expect_err("the probe refuses the deletion");
+        assert_eq!(delete.part, "firestore");
+
+        {
+            let mut pubsub = hooks.pubsub.lock().unwrap();
+            assert!(pubsub.topic_exists(&topic));
+            assert!(pubsub.get_snapshot(&snapshot, AT).is_ok());
+        }
+        assert!(hooks.storage.store.lock().unwrap().bucket_known(&bucket));
+        assert!(hooks.registry.store_for(SECOND_PROJECT).is_some());
+        assert_poisoned_database_kept(&hooks, &parent, generation);
+    }
+
+    #[test]
+    fn a_poisoned_firestore_database_refuses_default_reset_before_any_wipe() {
+        let gate = gate();
+        let hooks = projects(&gate);
+        hooks
+            .registry
+            .default_store()
+            .lock()
+            .unwrap()
+            .create_user_with_id(NewUser::anonymous(), Some("sentinel"), AT)
+            .unwrap();
+        let (topic, snapshot) = populate_pubsub(&hooks, "demo-app");
+        let bucket = put_storage_sentinel(&hooks);
+        let parent = poison_firestore_database(&hooks, "demo-app");
+        let generation = hooks.backend.database_generation(&parent);
+
+        let reset = hooks
+            .reset_scope(&Scope::AllExcept(BTreeSet::new()))
+            .expect_err("the probe refuses the reset");
+        assert_eq!(reset.part, "firestore");
+
+        {
+            let mut pubsub = hooks.pubsub.lock().unwrap();
+            assert!(pubsub.topic_exists(&topic));
+            assert!(pubsub.get_snapshot(&snapshot, AT).is_ok());
+        }
+        assert!(hooks.storage.store.lock().unwrap().bucket_known(&bucket));
+        assert_eq!(
+            hooks.registry.default_store().lock().unwrap().user_count(),
+            1
+        );
+        assert_poisoned_database_kept(&hooks, &parent, generation);
     }
 }

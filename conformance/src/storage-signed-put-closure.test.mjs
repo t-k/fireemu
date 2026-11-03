@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { buildFixture, main, rawAnswers } from "./storage-signed-put/fixture.mjs";
 import {
   compareRecordings,
+  compareTargetRecordings,
   compareTargets,
   judgePut,
   normalizeBody,
@@ -232,6 +233,116 @@ describe("fireemu against the recorded production answers", () => {
     // The body of an ExpiredToken names the end of the signed lifetime, which differs per signing.
     assert.deepEqual(compareRecordings(fireemu.rows), [
       { id: "expired", fields: ["bodySha256"], digestOnly: true },
+    ]);
+  });
+});
+
+describe("fireemu against the recorded production answers, both recordings and the headers", () => {
+  const production = load("storage-signed-put-production.json");
+  const fireemu = load("storage-signed-put-fireemu.json");
+  const rows = compareTargetRecordings(production.rows, fireemu.rows);
+  const successIds = ["ok", "ok-origin", "range-min-ok", "range-max-ok", "no-range"].filter((id) =>
+    production.rows.some((r) => r.id === id && r.status === 200),
+  );
+
+  it("compares every case in each of the two recordings", () => {
+    assert.equal(rows.length, 32);
+    for (const recording of [1, 2]) {
+      assert.deepEqual(
+        rows
+          .filter((r) => r.recording === recording && !r.match)
+          .map((r) => r.id)
+          .toSorted(),
+        SIGNATURE_CASES.toSorted(),
+        `recording ${recording}`,
+      );
+    }
+  });
+
+  it("agrees on the semantic response headers of every case but the four that need the key", () => {
+    for (const row of rows.filter((r) => !SIGNATURE_CASES.includes(r.id))) {
+      assert.deepEqual(
+        row.headers.semantic,
+        [],
+        `${row.id} (recording ${row.recording}): ${row.headers.semantic}`,
+      );
+    }
+  });
+
+  it("reports the transport and CORS header differences apart, and only the known ones", () => {
+    // access-control-allow-origin on the case that sends an Origin is the OPTIONS/CORS difference
+    // the owner recorded as a known one (ledger 2223): fireemu is permissive, production depends
+    // on the bucket's CORS configuration and sent none.
+    const known = new Set([
+      "server",
+      "access-control-allow-origin",
+      "access-control-expose-headers",
+      "vary",
+      "x-content-type-options",
+    ]);
+    const seen = new Set();
+    for (const row of rows) {
+      for (const name of row.headers.transport) {
+        assert.ok(known.has(name), `${row.id}: unexpected transport header ${name}`);
+        seen.add(name);
+      }
+    }
+    assert.deepEqual([...seen].toSorted(), [...known].toSorted(), "each known difference occurs");
+  });
+
+  it("claims the success headers production sent, in both recordings of both targets", () => {
+    assert.ok(successIds.length >= 4, "the success cases are in the fixture");
+    for (const target of [production, fireemu]) {
+      for (const recording of [1, 2]) {
+        for (const id of successIds) {
+          const row = target.rows.find((r) => r.recording === recording && r.id === id);
+          assert.equal(row.status, 200, id);
+          assert.equal(row.headers["content-type"], "text/html; charset=UTF-8", id);
+          assert.equal(row.headers["x-goog-stored-content-encoding"], "identity", id);
+          assert.equal(row.headers["x-goog-metageneration"], "1", id);
+          assert.match(
+            row.headers["x-goog-hash"],
+            /^crc32c=[A-Za-z0-9+/]{6}==, md5=[A-Za-z0-9+/]{22}==$/,
+            id,
+          );
+          assert.match(row.headers["x-goog-stored-content-length"], /^\d+$/, id);
+          assert.equal(row.headers["content-length"], "0", id);
+        }
+      }
+    }
+  });
+
+  it("tells a semantic header difference from a transport one, and notices a missing header", () => {
+    const row = (headers, recording = 1) => ({
+      recording,
+      id: "x",
+      status: 200,
+      code: null,
+      shape: "empty",
+      bodyBytes: 0,
+      body: "",
+      bodySha256: "0",
+      headers,
+    });
+    const base = { "content-type": "text/html", "x-goog-hash": "h", server: "UploadServer" };
+    const [same] = compareTargetRecordings([row(base)], [row(base)]);
+    assert.deepEqual(same.headers, { semantic: [], transport: [] });
+    const [diff] = compareTargetRecordings(
+      [row(base)],
+      [row({ "content-type": "text/plain", server: "x", via: "y" })],
+    );
+    assert.deepEqual(diff.headers.semantic, ["content-type", "x-goog-hash"]);
+    assert.deepEqual(diff.headers.transport, ["server", "via"]);
+    const [second] = compareTargetRecordings([row(base, 2)], [row({}, 2)]);
+    assert.equal(second.recording, 2);
+    assert.deepEqual(compareTargetRecordings([row(base, 2)], []), [
+      {
+        id: "x",
+        recording: 2,
+        match: false,
+        fields: ["missing-local"],
+        headers: { semantic: [], transport: [] },
+      },
     ]);
   });
 });

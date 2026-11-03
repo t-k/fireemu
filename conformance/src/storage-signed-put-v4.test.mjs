@@ -204,6 +204,54 @@ describe("the standalone removal deletes only a role this run made (Opus S1)", (
     });
   }
 
+  describe("from the journal text, through the removal (Codex r1)", () => {
+    const journalOf = (out) => out.entries.map((e) => JSON.stringify(e));
+    const removeFrom = async (lines) => {
+      const { world, out } = await stuckRun();
+      const text = lines(journalOf(out)).join("\n");
+      const report = await removeSignerAccess({
+        target: PRODUCTION_LIKE,
+        runId: RUN,
+        deps: world.deps,
+        out: memoryOut(),
+        preflight: out.saved.get("iam-preflight.json"),
+        plan: out.saved.get("iam-grant-plan.json"),
+        roleCreate: roleCreateFromJournal(text),
+      });
+      return { world, report };
+    };
+    const roleLines = (all) => all.filter((l) => JSON.parse(l).label === "role-create");
+
+    it("deletes the role for a complete journal (the control)", async () => {
+      const { world, report } = await removeFrom((all) => all);
+      assert.equal(roleDeletes(world).length, 1);
+      assert.equal(report.roleCreate, "created");
+    });
+
+    it("keeps the role when the journal ends after the role create request", async () => {
+      const { world, report } = await removeFrom((all) => {
+        const before = roleLines(all).find((l) => JSON.parse(l).phase === "before");
+        return all.slice(0, all.indexOf(before) + 1);
+      });
+      assert.equal(roleDeletes(world).length, 0, "no role DELETE for a truncated journal");
+      assert.equal(report.roleCreate, "incomplete");
+      assert.equal(report.roleKept, true);
+      assert.equal(report.bindingPresent, false, "the binding itself is still removed");
+    });
+
+    it("keeps the role when the answer line of the role create is cut mid-line", async () => {
+      const { world, report } = await removeFrom((all) =>
+        all.flatMap((l) => {
+          const e = JSON.parse(l);
+          if (e.label !== "role-create") return [l];
+          return e.phase === "after" ? [l.slice(0, 20)] : [l];
+        }),
+      );
+      assert.equal(roleDeletes(world).length, 0);
+      assert.equal(report.roleCreate, "incomplete");
+    });
+  });
+
   it("fails closed when the outcome is not given", async () => {
     const { world, out } = await stuckRun();
     const report = await removeSignerAccess({

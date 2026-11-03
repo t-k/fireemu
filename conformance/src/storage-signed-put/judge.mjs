@@ -198,6 +198,59 @@ export function compareTargets(production, local) {
   return rows;
 }
 
+// Response headers whose meaning a client relies on after a signed PUT; every other header
+// (server, vary, CORS and security headers) is transport and reported apart.
+const SEMANTIC_HEADERS = new Set([
+  "content-type",
+  "content-length",
+  "x-goog-hash",
+  "x-goog-generation",
+  "x-goog-metageneration",
+  "x-goog-stored-content-encoding",
+  "x-goog-stored-content-length",
+]);
+
+/** The names of the headers whose value differs or that only one side has, split by kind. */
+function headerDifferences(production, local) {
+  const semantic = [];
+  const transport = [];
+  const names = new Set([...Object.keys(production ?? {}), ...Object.keys(local ?? {})]);
+  for (const name of [...names].toSorted()) {
+    if (production?.[name] === local?.[name]) continue;
+    (SEMANTIC_HEADERS.has(name) ? semantic : transport).push(name);
+  }
+  return { semantic, transport };
+}
+
+/**
+ * Production against local, row by row in each recording (rows pair by recording and id). `match`
+ * is the normalized comparison of status, code, shape and body; `headers` lists the headers that
+ * differ, the ones a client relies on (`semantic`) apart from transport and CORS ones.
+ */
+export function compareTargetRecordings(production, local) {
+  const localByKey = new Map(local.map((r) => [`${r.recording}:${r.id}`, r]));
+  return production.map((prod) => {
+    const mine = localByKey.get(`${prod.recording}:${prod.id}`);
+    if (!mine) {
+      return {
+        id: prod.id,
+        recording: prod.recording,
+        match: false,
+        fields: ["missing-local"],
+        headers: { semantic: [], transport: [] },
+      };
+    }
+    const fields = NORMALIZED_FIELDS.filter((f) => !sameValue(prod[f], mine[f]));
+    return {
+      id: prod.id,
+      recording: prod.recording,
+      match: fields.length === 0,
+      fields,
+      headers: headerDifferences(prod.headers, mine.headers),
+    };
+  });
+}
+
 /**
  * Settlement of the objects a run touched, by the sandbox rules (presubmission checklist 3).
  * `events` is the ordered list of `{name, event, status?}` with events: `create` (a PUT; status),

@@ -1054,10 +1054,238 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
     }
 
+    /// The pid of a process that has exited and been reaped, so no process holds it. The
+    /// child is this test binary listing no tests, so no external command is involved.
+    #[cfg(unix)]
+    fn reaped_pid() -> u32 {
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("the test binary is known"))
+                .args(["--list", "--exact", "fireemu-no-such-test"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("the child starts");
+        let pid = child.id();
+        child.wait().expect("the child is reaped");
+        pid
+    }
+
+    /// Writes a locator document recording `pid` with the mode `write` gives its own files.
+    fn locator_recording(path: &std::path::Path, pid: u32) {
+        let body = format!(r#"{{"pid": {pid}, "origins": ["http://127.0.0.1:4400"]}}"#);
+        std::fs::write(path, body).expect("the locator is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .expect("the mode is set");
+        }
+    }
+
+    /// A `HubState` whose locator path is unique to the calling line, plus a guard that
+    /// removes whatever is left at that path when the test ends, even on a panic.
+    fn state_for(line: u32) -> (HubState, PathGuard) {
+        let mut hub = state();
+        hub.project = format!("fireemu-locator-test-{}-{line}", std::process::id());
+        let guard = PathGuard(Locator::path_for(&hub.project));
+        guard.clear();
+        (hub, guard)
+    }
+
+    /// Removes a path in the temp directory, whether it ended up a file or a directory.
+    struct PathGuard(PathBuf);
+
+    impl PathGuard {
+        fn clear(&self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            self.clear();
+        }
+    }
+
+    /// Liveness, signalled branch: `process_is_alive` reaches the signal check and reports a
+    /// process that exists (this one) as alive.
     #[cfg(unix)]
     #[test]
     fn liveness_check_does_not_depend_on_an_external_command() {
         assert!(process_is_alive(std::process::id()));
+        // A reaped child's pid is a valid pid with no process behind it, so the check
+        // reaches the signal call and takes its "no such process" branch rather than
+        // stopping early at a pid that cannot be represented.
+        assert!(!process_is_alive(reaped_pid()));
+    }
+
+    /// Liveness, early returns: a pid that does not fit the platform type, and pid 0 (which
+    /// would address the process group rather than one process), are never alive.
+    #[cfg(unix)]
+    #[test]
+    fn liveness_check_refuses_a_pid_that_names_no_single_process() {
+        assert!(!process_is_alive(u32::MAX));
         assert!(!process_is_alive(0));
+    }
+
+    /// Liveness, permission branch: a process this user may not signal still exists. Pid 1
+    /// always exists; unprivileged, the signal check answers EPERM, and as root it answers
+    /// success, so either way it must be reported alive.
+    #[cfg(unix)]
+    #[test]
+    fn liveness_check_counts_a_process_it_may_not_signal_as_alive() {
+        assert!(process_is_alive(1));
+    }
+
+    /// Ownership, live: a locator recording a process that still runs yields that pid.
+    #[test]
+    fn a_locator_naming_a_live_process_yields_its_pid() {
+        let dir = scratch(line!());
+        let path = dir.join("hub-live.json");
+        locator_recording(&path, std::process::id());
+        assert_eq!(existing_live_pid(&path), Some(std::process::id()));
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// Ownership, gone: a locator whose recorded process has exited yields no live pid,
+    /// although the pid itself is still read.
+    #[cfg(unix)]
+    #[test]
+    fn a_locator_naming_a_reaped_process_yields_no_live_pid() {
+        let dir = scratch(line!());
+        let path = dir.join("hub-gone.json");
+        let pid = reaped_pid();
+        locator_recording(&path, pid);
+        assert_eq!(existing_pid(&path), Some(pid));
+        assert_eq!(existing_live_pid(&path), None);
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// `write`, live owner: a locator whose process still runs is left alone, the notice
+    /// names that process, and this daemon's release does not remove the other's file.
+    #[test]
+    fn write_leaves_a_live_locator_alone_and_names_its_process() {
+        let (hub, guard) = state_for(line!());
+        locator_recording(&guard.0, std::process::id());
+        let before = std::fs::read(&guard.0).expect("the locator is read");
+
+        let (locator, notice) = Locator::write(&hub);
+        let notice = notice.expect("declining is reported");
+        assert!(notice.contains("still running"), "{notice}");
+        assert!(
+            notice.contains(&format!("pid {}", std::process::id())),
+            "{notice}"
+        );
+        assert!(locator.path.is_none(), "a declined locator owns no path");
+        assert_eq!(
+            std::fs::read(&guard.0).expect("the locator is read"),
+            before
+        );
+        assert_eq!(locator.release(), None);
+        assert!(guard.0.exists(), "the live locator was removed");
+    }
+
+    /// `write`, gone owner: a locator whose process has exited is replaced by this
+    /// daemon's, which release then removes.
+    #[cfg(unix)]
+    #[test]
+    fn write_replaces_a_locator_whose_process_is_gone() {
+        let (hub, guard) = state_for(line!());
+        locator_recording(&guard.0, reaped_pid());
+
+        let (locator, notice) = Locator::write(&hub);
+        assert_eq!(notice, None);
+        assert_eq!(locator.path.as_deref(), Some(guard.0.as_path()));
+        assert_eq!(existing_pid(&guard.0), Some(std::process::id()));
+        assert_eq!(locator.release(), None);
+        assert!(!guard.0.exists(), "the replacement outlived its daemon");
+    }
+
+    /// `write`, not a file: a directory under the locator's name is left alone and reported.
+    #[test]
+    fn write_leaves_a_path_that_is_not_a_regular_file_alone() {
+        let (hub, guard) = state_for(line!());
+        std::fs::create_dir(&guard.0).expect("the directory is created");
+
+        let (locator, notice) = Locator::write(&hub);
+        let notice = notice.expect("declining is reported");
+        assert!(notice.contains("is not a regular file"), "{notice}");
+        assert!(locator.path.is_none(), "a declined locator owns no path");
+        assert!(guard.0.is_dir(), "the directory was disturbed");
+    }
+
+    /// File identity: only a regular file has one, so a symlink or directory that takes the
+    /// name is never mistaken for the file this daemon created.
+    #[cfg(unix)]
+    #[test]
+    fn file_identity_is_known_only_for_a_regular_file() {
+        let dir = scratch(line!());
+        let file = dir.join("hub-file.json");
+        std::fs::write(&file, b"{}").expect("the file is written");
+        let link = dir.join("hub-link.json");
+        std::os::unix::fs::symlink(&file, &link).expect("the symlink is created");
+
+        assert!(file_identity(&file).is_some());
+        assert_eq!(file_identity(&link), None);
+        assert_eq!(file_identity(&dir), None);
+        assert_eq!(file_identity(&dir.join("hub-missing.json")), None);
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// Ownership, replaced by a non-file: when a directory has taken the locator's name,
+    /// release leaves it alone and reports nothing.
+    #[test]
+    fn release_leaves_a_name_now_held_by_a_directory() {
+        let dir = scratch(line!());
+        let path = dir.join("hub-dir.json");
+        let locator = owned_locator(&path);
+        std::fs::remove_file(&path).expect("the locator is removed");
+        std::fs::create_dir(&path).expect("the directory takes the name");
+        assert_eq!(locator.release(), None);
+        assert!(path.is_dir(), "the directory was disturbed");
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// Ownership, already gone: a locator someone else removed is not a failure to report.
+    #[test]
+    fn release_of_a_locator_already_removed_reports_nothing() {
+        let dir = scratch(line!());
+        let path = dir.join("hub-gone.json");
+        let locator = owned_locator(&path);
+        std::fs::remove_file(&path).expect("the locator is removed");
+        assert_eq!(locator.release(), None);
+        std::fs::remove_dir_all(&dir).expect("the scratch directory is removed");
+    }
+
+    /// Best-effort bind: a busy default port disables the Hub instead of failing startup.
+    #[tokio::test]
+    async fn hub_bind_on_a_busy_default_port_disables_the_hub_without_failing() {
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").expect("a port is held");
+        let addr = holder.local_addr().expect("the port is known").to_string();
+        assert!(matches!(bind(&addr, false).await, Ok(None)));
+    }
+
+    /// Explicit bind: a busy port that was asked for fails with the address named.
+    #[tokio::test]
+    async fn hub_bind_on_a_busy_explicit_port_fails() {
+        let holder = std::net::TcpListener::bind("127.0.0.1:0").expect("a port is held");
+        let addr = holder.local_addr().expect("the port is known").to_string();
+        let error = bind(&addr, true)
+            .await
+            .expect_err("an explicit port must be free");
+        assert!(error.contains(&format!("bind {addr}")), "{error}");
+    }
+
+    /// Explicit port 0 disables the Hub; a free port is bound.
+    #[tokio::test]
+    async fn hub_bind_disables_on_an_explicit_port_zero_and_binds_a_free_port() {
+        assert!(matches!(bind("127.0.0.1:0", true).await, Ok(None)));
+        let listener = bind("127.0.0.1:0", false)
+            .await
+            .expect("a free port binds")
+            .expect("a listener is returned");
+        assert_ne!(listener.local_addr().expect("the port is known").port(), 0);
     }
 }

@@ -90,6 +90,14 @@ const SAMPLE_ROWS = new Set(
 const O7_ROWS = new Set(json(O7_CONTRACT).proofs.map((proof) => proof.id));
 const O6_ROWS = new Set(json(O6_CONTRACT).proofs.map((proof) => proof.id));
 const CLOCK_ROW = "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now";
+// The raw MISMATCH rows are owner-decided divergences, listed in the conditions' evidence.
+const DIVERGENCES = closure.conditions.flatMap((condition) =>
+  (condition.evidence.documentedDivergences ?? []).map((divergence) => ({
+    ...divergence,
+    conditionId: condition.conditionId,
+  })),
+);
+const DIVERGENT_ROWS = new Set(DIVERGENCES.map((divergence) => divergence.row));
 const NESTING_ROWS = new Set([
   "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc",
   "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc",
@@ -98,7 +106,7 @@ const NESTING_ROWS = new Set([
 /** A status other than MATCH is allowed only for the exact rows a recorded decision covers. */
 function isUnclaimedStatusAllowed(row, status) {
   if (status === "MATCH_NONDETERMINISTIC") return FRAMING.has(row) || SAMPLE_ROWS.has(row);
-  if (status === "MISMATCH") return O7_ROWS.has(row) || O6_ROWS.has(row) || row === CLOCK_ROW;
+  if (status === "MISMATCH") return DIVERGENT_ROWS.has(row);
   if (status === "UNKNOWN") return NESTING_ROWS.has(row);
   return false;
 }
@@ -242,7 +250,12 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
   assert.deepEqual(run.clear, ["fs-ent-pipeline"]);
   assert.deepEqual(run.commands[0].expectedExitCodes, [1]);
   assert.equal(run.commands[0].env.FIREEMU_SANDBOX_LANE, "fs-ent-pipeline");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  // The parent is promoted only with every condition VERIFIED and an approved closure review.
+  assert.equal(
+    closure.parentStatus === "COMPAT_VERIFIED",
+    closure.conditions.every(({ status: value }) => value === "VERIFIED") &&
+      closure.closureReview.decision === "APPROVED",
+  );
   const plan = planComparisons([{ closure, path: CLOSURE }], (path) =>
     path === closure.integratedRegression.comparisons[0].path ? comparison : undefined,
   );
@@ -322,10 +335,15 @@ test("the current clock controls are bound to the current binary and the pinned 
 
 test("the 166 rows added after v0.35 are the rows that changed from MISMATCH to MATCH", () => {
   const promotion = closure.recordedLeafReview.currentPromotion;
-  assert.equal(promotion.decision, "PROPOSED_PENDING_INDEPENDENT_REVIEW");
+  const approved = closure.closureReview.decision === "APPROVED";
+  assert.equal(
+    promotion.decision,
+    approved ? "ACCEPTED_AFTER_INDEPENDENT_REVIEW" : "PROPOSED_PENDING_INDEPENDENT_REVIEW",
+  );
   assert.equal(sha256(promotion.claimSetPath), promotion.claimSetSha256);
   assert.equal(promotion.comparisonSha256, closure.integratedRegression.comparisons[0].sha256);
   const added = json(promotion.claimSetPath);
+  assert.equal(added.decision, promotion.decision);
   assert.equal(added.binarySha256, comparison.artifactSha256);
   assert.equal(added.sourceCommit, closure.integratedRegression.integrationCommit);
   assert.equal(added.previousComparisonSha256, sha256(V035));
@@ -343,6 +361,71 @@ test("the 166 rows added after v0.35 are the rows that changed from MISMATCH to 
   for (const row of added.strictRecipeIds) assert.ok(claimed.has(row), row);
   assert.equal(claimed.size, promotion.previousClaimedRecipeCount + added.strictRecipeIds.length);
   for (const [row, value] of v035Status) if (value === "MATCH") assert.ok(claimed.has(row), row);
+});
+
+test("every raw MISMATCH row is an owner-decided divergence of the condition that holds it", () => {
+  const mismatching = [...status].filter(([, value]) => value === "MISMATCH").map(([row]) => row);
+  assert.equal(mismatching.length, 26);
+  assert.deepEqual(DIVERGENCES.map(({ row }) => row).toSorted(), mismatching.toSorted());
+  assert.equal(DIVERGENT_ROWS.size, DIVERGENCES.length, "a row is a divergence twice");
+  const decisions = new Map(closure.scopeDecisions.map((decision) => [decision.id, decision]));
+  const ledger = { P4: ["2114", "2117"], P6: ["2211"] };
+  for (const divergence of DIVERGENCES) {
+    const label = `${divergence.conditionId}: ${divergence.row}`;
+    assert.equal(divergence.rawStatus, "MISMATCH", label);
+    assert.equal(divergence.decidedBy, "owner", label);
+    assert.equal(divergence.decidedOn, "2026-11-03", label);
+    assert.ok(divergence.reason.length > 20, label);
+    const decision = decisions.get(divergence.scopeDecision);
+    assert.equal(decision?.decidedBy, "owner", label);
+    for (const id of ledger[divergence.scopeDecision] ?? [])
+      assert.ok(decision.decisionRef.includes(id), label);
+    assert.equal(divergence.contractSha256, sha256(divergence.contractPath), label);
+    const condition = closure.conditions.find((c) => c.conditionId === divergence.conditionId);
+    assert.ok(
+      condition.rowPrefixes.some((prefix) =>
+        divergence.row.replace("fs-ent-pipeline/", "").startsWith(prefix),
+      ),
+      label,
+    );
+    assert.ok(!condition.recipeIds.includes(divergence.row), `${label} is not claimed`);
+  }
+  const rowsOf = (decision, contract) =>
+    DIVERGENCES.filter((d) => d.scopeDecision === decision && d.contractPath === contract)
+      .map(({ row }) => row)
+      .toSorted();
+  assert.deepEqual(rowsOf("P6", O7_CONTRACT), [...O7_ROWS].toSorted());
+  assert.deepEqual(rowsOf("P4", O6_CONTRACT), [...O6_ROWS].toSorted());
+  assert.deepEqual(
+    DIVERGENCES.filter((d) => d.row === CLOCK_ROW).map((d) => [d.scopeDecision, d.contractPath]),
+    [["P6", closure.integratedRegression.clockDiffControlPath]],
+  );
+  assert.equal(DIVERGENCES.length, O7_ROWS.size + O6_ROWS.size + 1);
+});
+
+test("the closure basis enumerates every unobserved item and names the owner decisions", () => {
+  const basis = closure.closureBasis;
+  assert.equal(basis.productionRequests, 0);
+  assert.ok(basis.ownerDecision.includes("(2212)"));
+  assert.ok(basis.divergenceDecision.includes("(2211)"));
+  const p5 = closure.scopeDecisions.find((decision) => decision.id === "P5");
+  assert.ok(p5.decisionRef.includes("(2212)"));
+  assert.ok(p5.decision.includes("replaces ledger 1866 for FS-PIPELINE only"));
+  const keys = basis.notClaimedItems.map((item) => item.key);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const key of keys) assert.ok(closure.knownDifferences[key]?.statement, key);
+  // The items the owner named in ledger 2212 are all listed.
+  for (const key of [
+    "notClaimed_scan_order_edges",
+    "notClaimed_is_type_vector",
+    "notClaimed_N4_standard_and_non_owner",
+    "notClaimed_N6_other_write_methods",
+    "notClaimed_duplicate_quoted_path",
+    "notClaimed_select_name_forms",
+    "notClaimed_regex_unicode",
+    "notClaimed_argument_shape_space",
+  ])
+    assert.ok(keys.includes(key), key);
 });
 
 test("the capability and generated inventory describe recorded unnest and base64 behavior", () => {

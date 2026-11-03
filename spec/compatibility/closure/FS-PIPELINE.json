@@ -11,7 +11,7 @@
     "location": "us-central1",
     "retirement": "entpipe1 is retired by the end packet after the closure review approves (owner ledger 1792); the retirement is recorded in the owner ledger and in docs.local/sandbox-oracles.md, not here"
   },
-  "scopeAuthority": "docs.local/instructions/owner-decisions.md (ledger 1794, option A of docs.local/reviews/2026-10-26-fs-pipeline-scope-inventory.md; ledger 1792, entpipe1 kept until the end of FS-PIPELINE observation)",
+  "scopeAuthority": "docs.local/instructions/owner-decisions.md (ledger 1794, option A of docs.local/reviews/2026-10-26-fs-pipeline-scope-inventory.md; ledger 1792, entpipe1 kept until the end of FS-PIPELINE observation) Ledger 2212 (2026-11-03) replaces ledger 1866 for this parent: closure on the recorded corpus plus finite contracts with an enumerated not-claimed list.",
   "closureReview": {
     "decision": "CHANGES_REQUESTED",
     "historicalDecision": "APPROVED",
@@ -58,6 +58,20 @@
       "decidedBy": "owner",
       "decidedOn": "2026-10-31",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2114, 2117)"
+    },
+    {
+      "id": "P5",
+      "decision": "Ledger 2212 (D1): FS-PIPELINE closes on the recorded production corpus (the 1951 FS-ENT-ORACLE rows) plus the finite contracts of this record. Every unobserved item stays in the enumerated not-claimed list of closureBasis: non-ASCII document IDs and CRC-32 ties, is_type of a vector, error precedence on the Standard database, base64 in other write methods, a duplicate quoted alias over gRPC, select-name forms beyond the recorded ones, regex Unicode classes, and the unbounded argument-shape space. No new production request. This replaces ledger 1866 for FS-PIPELINE only; RTDB keeps 1866.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-11-03",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2212)"
+    },
+    {
+      "id": "P6",
+      "decision": "Ledger 2211 (D2): the 23 O-7 aggregate group-order rows and o8c/timestamps-main#timestamp-diff-now are owner-decided divergences. The group count and each group's content are verified strictly (conformance/fs-ent-pipeline-o7-adjudication.json: 20 complete typed result bags and three legal selections); only the order of the groups may differ, and for the timestamp row the value that depends on the clock (a pinned-clock control proves the local value is derived from the clock). The raw MISMATCH rows are kept, in the same form as P4 (ledger 2114); nothing is extended to other rows.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-11-03",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2211)"
     }
   ],
   "conditions": [
@@ -921,7 +935,29 @@
         "rows": {
           "MATCH": 81,
           "NOT_CLAIMED": 2
-        }
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P4",
+            "reason": "Only the order inside the group of rows tied on every sort key (or the choice among tied rows under a limit) differs; typed contents and counts are verified by the finite O-6 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o6-adjudication.json",
+            "contractSha256": "95dd16d7fd895491b5b3618769a6c433f88eb1f848765ca44eb79b54d17d45d7"
+          },
+          {
+            "row": "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P4",
+            "reason": "Only the order inside the group of rows tied on every sort key (or the choice among tied rows under a limit) differs; typed contents and counts are verified by the finite O-6 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o6-adjudication.json",
+            "contractSha256": "95dd16d7fd895491b5b3618769a6c433f88eb1f848765ca44eb79b54d17d45d7"
+          }
+        ]
       }
     },
     {
@@ -1169,7 +1205,239 @@
         "rows": {
           "MATCH": 111,
           "NOT_CLAIMED": 23
-        }
+        },
+        "documentedDivergences": [
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-all",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-count-all",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-sum",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#doubles-grouped",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-limit",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-none-one-select",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-one-none",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-kinds#group-by-v",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-kinds#group-by-v-over-w",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-count-only",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-h-g",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h-n",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-nested",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-expression",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-document-id",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-name",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-group-keys#alias-is-field",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          },
+          {
+            "row": "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "Only the order of the groups differs; the group count and every group's typed content are verified by the finite O-7 contract.",
+            "contractPath": "conformance/fs-ent-pipeline-o7-adjudication.json",
+            "contractSha256": "d840ff53635e590664d8f94d83e688752c58430dbecd076ac0ad43cc3d73fc5f"
+          }
+        ]
       }
     },
     {
@@ -2659,7 +2927,19 @@
         "clockControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock.json",
         "clockControlSha256": "bf333ba5606f3b20960e2d5330b606642aa913d83e3deed0e15d57a2f9b78e9f",
         "clockDiffControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock-diff.json",
-        "clockDiffControlSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb"
+        "clockDiffControlSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb",
+        "documentedDivergences": [
+          {
+            "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now",
+            "rawStatus": "MISMATCH",
+            "decidedBy": "owner",
+            "decidedOn": "2026-11-03",
+            "scopeDecision": "P6",
+            "reason": "The recorded value is the production clock of the recording day; the pinned-clock control (clockDiffControlPath) proves fireemu derives the value from its clock.",
+            "contractPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock-diff.json",
+            "contractSha256": "0f4490baea5fb67fcca3987009ae76cdcdd4d70c773af8284d0e11a4178b6ffb"
+          }
+        ]
       }
     },
     {
@@ -2851,7 +3131,7 @@
       "statement": "The eight accepted strict sample contracts concern only the recorded requests and bounded results; they do not establish production random sequence or distribution for other inputs."
     },
     "notClaimed_scan_order_edges": {
-      "statement": "Not claimed: Non-ASCII ids and CRC-32 ties were not asked (the ids tested are ASCII and have distinct CRC-32 values)."
+      "statement": "Not claimed: Non-ASCII ids and CRC-32 ties were not asked (the ids tested are ASCII and have distinct CRC-32 values); fireemu orders by CRC-32 of the UTF-8 bytes and then by name."
     },
     "notClaimed_is_type_vector": {
       "statement": "Not claimed: is_type of a stored vector value was not asked."
@@ -2863,7 +3143,7 @@
       "statement": "Not claimed: gRPC-only differences were out of scope (owner 1794). The comparison now matches every recorded gRPC row except chain-48-grpc and chain-100-grpc, which are UNKNOWN in the recording and bound separately (see notClaimed_nesting_limits)."
     },
     "parentScope": {
-      "statement": "FS-PIPELINE remains IMPLEMENTING until the independent closure review. The 1906 raw MATCH recipe IDs cover only recorded cases; all 1951 rows remain in the comparison, including 26 MISMATCH (23 aggregate group-order rows, 2 sort-tie rows and the wall-clock timestamp-diff-now row), 17 MATCH_NONDETERMINISTIC (12 framing rows and 5 random sample rows) and two UNKNOWN client-side observations. The finite sample, O-6, O-7 and nesting contracts do not alter these raw counts."
+      "statement": "FS-PIPELINE closes on the recorded corpus plus finite contracts (owner ledger 2212) once the independent closure review approves. The 1906 raw MATCH recipe IDs cover only recorded cases; all 1951 rows remain in the comparison, including 26 MISMATCH that are owner-decided divergences (ledger 2211 and 2114: 23 aggregate group-order rows, 2 sort-tie rows, and the wall-clock timestamp-diff-now row), 17 MATCH_NONDETERMINISTIC (12 framing rows and 5 random sample rows) and two UNKNOWN client-side observations that a later production observation covers. The raw statuses are kept. Everything listed in closureBasis.notClaimedItems is not claimed."
     },
     "notClaimed_newly_matching": {
       "statement": "All 1906 raw MATCH rows in this comparison are included in finite conditions; the 166 rows added after v0.35 are listed in FS-PIPELINE-current-claims.json and wait for the independent closure review.",
@@ -2871,6 +3151,15 @@
     },
     "notClaimed_unnest": {
       "statement": "The 16 recorded unnest rows match. Recorded union and deterministic sample cases are separately listed; the five random sample positives are MATCH_NONDETERMINISTIC under the finite strict sample contract. Unobserved inputs remain unclaimed."
+    },
+    "notClaimed_select_name_forms": {
+      "statement": "Not claimed: select of __name__ in forms beyond the 12 recorded names-main rows (alone, beside another alias, quoted alias and value, second alias, then limit or where, over REST and gRPC where recorded). Strict refuses the unrecorded forms as unobserved."
+    },
+    "notClaimed_regex_unicode": {
+      "statement": "Not claimed: RE2 Unicode semantics of the regex functions: character-class shorthands (\\d \\w \\s and complements), word boundaries on non-ASCII subjects, inline flags, mixed alternatives and optional or multiple captures. Strict answers a pattern holding those constructs as unobserved (UNIMPLEMENTED) whatever the subject."
+    },
+    "notClaimed_argument_shape_space": {
+      "statement": "Not claimed: argument shapes of the recorded functions and stages that were not recorded (unrecorded literal keys and empty or reserved shapes, document-function argument shapes, limit and offset shapes, map key order over gRPC, mixed-error precedence). The space is unbounded; strict answers an unrecorded shape UNIMPLEMENTED and the emulator profile answers as the official emulator does."
     }
   },
   "integratedRegression": {
@@ -3045,5 +3334,65 @@
     "clockControlSha256": "f4dac0e877807ad40c25bc2ab95e9ae89428fb1865e61b81ab49803b8d648af1",
     "clockDiffControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-clock-diff-v035.json",
     "clockDiffControlSha256": "d91c16d7b7886abfc68957ba8d107a970a058dea2d700ef0c355f8be83ed9449"
+  },
+  "closureBasis": {
+    "decision": "Close on the recorded production corpus plus the finite contracts of this record; every unobserved item is enumerated and not claimed (owner ledger 2212, scope decision P5).",
+    "ownerDecision": "docs.local/instructions/owner-decisions.md (2212)",
+    "divergenceDecision": "docs.local/instructions/owner-decisions.md (2211)",
+    "productionRequests": 0,
+    "notClaimedItems": [
+      {
+        "item": "non-ASCII document IDs and CRC-32 ties",
+        "key": "notClaimed_scan_order_edges"
+      },
+      {
+        "item": "is_type of a stored vector",
+        "key": "notClaimed_is_type_vector"
+      },
+      {
+        "item": "error precedence on the Standard database and for a non-owner",
+        "key": "notClaimed_N4_standard_and_non_owner"
+      },
+      {
+        "item": "base64 in createDocument, patch and batchWrite",
+        "key": "notClaimed_N6_other_write_methods"
+      },
+      {
+        "item": "a duplicate quoted alias over gRPC",
+        "key": "notClaimed_duplicate_quoted_path"
+      },
+      {
+        "item": "select-name forms beyond the recorded ones",
+        "key": "notClaimed_select_name_forms"
+      },
+      {
+        "item": "regex Unicode classes and word boundaries",
+        "key": "notClaimed_regex_unicode"
+      },
+      {
+        "item": "the unbounded argument-shape space",
+        "key": "notClaimed_argument_shape_space"
+      },
+      {
+        "item": "function names, stages and inputs outside the recorded scope",
+        "key": "notClaimed_function_names_beyond_recorded"
+      },
+      {
+        "item": "stages outside the owner scope (find_nearest, replace_with, define, write stages, Standard edition, index requirements)",
+        "key": "notClaimed_stages_outside_scope"
+      },
+      {
+        "item": "a collection_group ancestor naming another database",
+        "key": "notClaimed_collection_group_other_database"
+      },
+      {
+        "item": "the production order of aggregate groups and of rows tied on every sort key",
+        "key": "notClaimed_aggregate"
+      },
+      {
+        "item": "production framing boundaries and random sample positions",
+        "key": "notClaimed_response_framing_large"
+      }
+    ]
   }
 }

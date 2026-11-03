@@ -20,6 +20,7 @@ hero:
 ---
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import VerifiedAreaCount from '../../components/VerifiedAreaCount.astro';
 
 ## Start in one command
 
@@ -51,7 +52,7 @@ npx fireemu exec -- npm test
 		Start at any point in time and advance a virtual clock. Scheduled functions run when the clock reaches them, so you can test a nightly job without waiting for night.
 	</Card>
 	<Card title="Verified against real Firebase" icon="magnifier">
-		Behavior is compared with recordings from real Firebase projects. 21 areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed and documented difference.
+		Behavior is compared with recordings from real Firebase projects. <VerifiedAreaCount /> areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed and documented difference.
 	</Card>
 	<Card title="Explains denials" icon="information">
 		While production responds to Security Rules denials with a generic error message, Fireemu also prints which `allow` conditions were evaluated and their individual results.

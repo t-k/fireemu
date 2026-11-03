@@ -59,7 +59,7 @@ export const AREAS = {
 	'FS-PIPELINE': {
 		product: 'Cloud Firestore',
 		title: 'Enterprise pipelines',
-		covers: 'Pipeline queries on an Enterprise database under the strict profile: sort, aggregate, distinct, add_fields, remove_fields, the collection group and documents inputs, the logical and recorded functions, the order of a read without a sort and the recorded refusals. The string, math, timestamp, map and array functions and union, unnest and sample are recorded but not claimed.',
+		covers: 'Pipeline queries on an Enterprise database under the strict profile: sort, aggregate, distinct, add_fields, remove_fields, the collection group and documents inputs, the logical and recorded functions, the order of a read without a sort and the recorded refusals. The recorded string, math, regex, timestamp, map, array and document functions, unnest, union and sample shapes are claimed by their recorded cases; unrecorded shapes, the order of aggregate groups and the response framing of production are not.',
 	},
 	'AUTH-ACCOUNT': {
 		product: 'Authentication',
@@ -182,6 +182,15 @@ const productRank = (product) => {
 	if (rank < 0) throw new Error(`product "${product}" has no place in PRODUCT_ORDER`);
 	return rank;
 };
+
+/**
+ * How many production areas are verified against production, from the closure records, so the
+ * sentence on the home page cannot drift from the tables.
+ * @param {Array<Record<string, any>>} closures
+ */
+export function verifiedAreaCount(closures) {
+	return closures.filter((record) => AREA_STATUS[record.parentStatus] === 'Verified against production').length;
+}
 
 /** @param {Array<Record<string, any>>} closures */
 export function productionAreaRows(closures) {

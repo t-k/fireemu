@@ -1,0 +1,6 @@
+---
+import { loadRepositoryData, verifiedAreaCount } from '../data/compat.mjs';
+
+const count = verifiedAreaCount((await loadRepositoryData()).closures);
+---
+{count}

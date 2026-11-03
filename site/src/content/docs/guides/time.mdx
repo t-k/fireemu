@@ -105,7 +105,7 @@ A rewind to before an account was created, or before its tokens were revoked, ma
 
 ## Application time in Functions
 
-By default your function code sees real time. To make `Date.now()`, timers and Cloud Tasks follow the virtual clock too, set `functions.clock` together with a pinned `daemon.clockStart`:
+By default your function code sees real time. A Python codebase always does: it is not moved onto the virtual clock, and a configuration that asks for a virtual date for the Functions runner is refused for it. To make `Date.now()`, timers and Cloud Tasks follow the virtual clock too, set `functions.clock` together with a pinned `daemon.clockStart`:
 
 <Tabs syncKey="config-format">
 <TabItem label="TOML">

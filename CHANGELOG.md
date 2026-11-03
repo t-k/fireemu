@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-03
+
+Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against production within the recorded corpus, and Cloud Functions codebases written in Python run.
+
 ### Added
 
 - Functions codebases written in Python run under `fireemu up` and `fireemu exec`: a codebase is Python when its `firebase.json` `runtime` is `python310` to `python314`, or when it declares no runtime, has no `package.json` and has a `requirements.txt`. Fireemu runs it with the interpreter of the codebase's own `venv` and checks that environment first, with the Firebase CLI's messages for a missing `venv` or `firebase_functions`. This release serves HTTP (`on_request`), callable (`on_call`), Firestore document, Pub/Sub, Cloud Storage, Eventarc custom-event and Realtime Database triggers with `firebase-functions` 0.6.0; schedule, task queue and Auth blocking functions are reported when the codebase loads and fail discovery unless `functions.unservedTriggers` is `"report"`. One Python process serves the whole codebase, time is real time, and source reload, `--inspect-functions` and App Check are not available for it; the Functions page lists the differences. The Python runner ships in the platform package beside the Node runner.
@@ -15,11 +19,21 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Changed
 
 - Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against production within the recorded corpus: 1,951 FS-ENT-ORACLE rows. 1,906 match; 17 match within production's own variation (response framing and random `sample` positions); 2 gRPC requests the recorder could not send are covered by a later production observation; 26 differ from production in a way the owner accepted, with the raw status kept: 20 aggregates return the same groups in another order, 3 aggregates under a `limit` or `offset` return a different legal selection of groups, 2 sort cases order tied rows differently or choose among them, and 1 value depends on the clock. The release job checks each of these answers against its allowance. Not claimed. Where fireemu answers from its own implementation, production's answer was not recorded: non-ASCII document IDs and CRC-32 ties; error precedence on the Standard database and for a non-owner; base64 in createDocument, patch and batchWrite; a duplicate quoted alias over gRPC; a collection_group ancestor naming another database; the production order of aggregate groups and of rows tied on every sort key; production framing boundaries and random sample positions; the byte layout of REST responses (whitespace, key order, number spelling). Where it runs a finite subset of its own or refuses, nothing was compared with production: is_type of a stored vector; function names, stages and inputs outside the recorded scope; stages outside the owner scope (find_nearest, replace_with, define, write stages, Standard edition, index requirements). The strict profile refuses as unobserved: select-name forms beyond the recorded ones; regex Unicode classes and word boundaries; the unbounded argument-shape space. No behavior changed.
+- Security Rules evaluation skips sibling `match` blocks whose first literal path segment cannot match the request, and defers the function-scope check until a function is called. Decisions, reports and the expression budget are unchanged; a ruleset with 1,000 unrelated blocks after an early `allow` no longer pays for each of them.
+- Firestore does less work per commit with the same answers: index accounting visits only the composite definitions of the document's own collection group, history compaction counts only the versions the floor drops, the commit contention check looks only at active read-write transactions, and evicting a finished transaction no longer walks the protected ones. Functions source-event payloads are encoded outside the runtime lock, and a Realtime Database trigger event is serialized once.
+- Scheduled mutation testing runs on GitHub: a nightly run of the day's Rust diff and a weekly rotation through the crates; see `docs/mutation-testing.md`.
 
 ### Fixed
 
+- Strict profile (security): a callable request that carried more than one `Authorization` header skipped the daemon's Bearer check, and the runner's HTTP server then chose which header the SDK saw, so a forged unsigned ID token could reach a Python callable (and a Node callable outside the callable trust boundary) as an identity the daemon never verified. Such a request is refused with the 401 page before anything is forwarded.
+- `PUT /functions/disableBackgroundTriggers` and `/functions/enableBackgroundTriggers` on the Hub answer a request that carries neither an `Origin` nor an `Authorization` header (a non-browser client such as `withFunctionTriggersDisabled` of `@firebase/rules-unit-testing`) as the official Hub does; before, they answered 403. A request with browser metadata still needs the control token, and `/_admin/export` stays gated.
+- Firestore TTL sweeps bound the expiry selection by the delete budget instead of re-selecting every expired document on each sweep, and a sweep chain that has only skipped documents left now ends instead of holding the sweep claim.
+- Emulator profile: a read of a transaction token that a retry named while it was live is served, as the official emulator serves it, instead of answering `ABORTED`. The strict profile is unchanged.
+- A commit waiting on a read-write transaction that holds a lock proceeds when that holder expires by time, in both profiles, instead of waiting for its own contention bound (15 s in the emulator profile, 20 s in strict).
+- Resetting or deleting a project refuses the transition, before anything is wiped, when a Firestore database lock is poisoned, and rolling back a session registration answers `Unavailable` instead of `Restored` when a tenant map is poisoned. Both are reachable only after a panic.
+- The session RSA key cache replaces an owner-only entry that fails decoding (a partial write) instead of generating a key in memory on every start, and keeps refusing an entry that fails a security check (symlink, wrong owner or mode, hard link) without reading it.
 - Firestore WebChannel form values decode `%` followed by a non-hex character (such as `%+f`) literally again, through the shared percent codec, instead of turning it into a control character.
-- A Firestore `RunQuery` without a consistency selector (the SDKs' `getDocs` / `get()`) no longer opens an internal read-only transaction that took the database's exclusive lock for every page. Its pages now read under the shared lock, so other reads of the same database run alongside a long query, and every page still reads the first page's snapshot. The responses are unchanged. Such a stream no longer fails midway when it outlives a transaction's idle or total time; a page whose snapshot was compacted away under history pressure is still answered `ABORTED`, as before.
+- A Firestore `RunQuery` without a consistency selector (the SDKs' `getDocs` / `get()`) no longer opens an internal read-only transaction that took the database's exclusive lock for every page. Its pages now read under the shared lock, so other reads of the same database run alongside a long query, and every page still reads the first page's snapshot. A page that finds the database was deleted and created again since the first page is answered `ABORTED` as an expired transaction, instead of reading the replacement at the first page's version. The responses are unchanged. Such a stream no longer fails midway when it outlives a transaction's idle or total time; a page whose snapshot was compacted away under history pressure is still answered `ABORTED`, as before.
 
 ## [0.42.0] - 2026-11-02
 
@@ -1142,7 +1156,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/t-k/fireemu/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/t-k/fireemu/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/t-k/fireemu/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/t-k/fireemu/compare/v0.39.0...v0.40.0

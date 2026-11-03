@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
 import { createLocalDeps, createProductionDeps, fetchNet, installEgressGuard } from "./deps.mjs";
+import { validateSigner } from "./guard.mjs";
 import { compareTargets } from "./judge.mjs";
 import { observe, readbackAbsent } from "./observe.mjs";
 import { BUCKET, ESTIMATED_USD, PROJECT, SIGNER, newRunId, runPrefix } from "./plan.mjs";
@@ -59,6 +60,10 @@ function pins() {
       .version;
   return {
     gitSha: execFileSync("git", ["-C", HERE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    dirty:
+      execFileSync("git", ["-C", HERE, "status", "--porcelain", "--", "."], {
+        encoding: "utf8",
+      }).trim() !== "",
     modules: Object.fromEntries(MODULES.map((file) => [file, digest(file)])),
     node: process.version,
     firebaseAdmin: version("firebase-admin"),
@@ -84,9 +89,11 @@ async function recordProduction() {
     if (FORBIDDEN_ENV.some((pattern) => pattern.test(name)))
       throw new Error(`refusing to start with ${name} set`);
   }
-  const out = newOutDir(required("out"));
   const runId = newRunId();
+  const signer = validateSigner(argValue("signer") ?? SIGNER, PROJECT);
   const pin = pins();
+  if (pin.dirty) throw new Error("the recorder's checkout has uncommitted or untracked files");
+  const out = newOutDir(required("out"));
   const startedAt = new Date().toISOString();
   installEgressGuard([
     "storage.googleapis.com",
@@ -103,7 +110,7 @@ async function recordProduction() {
   } catch {
     throw new Error("ADC token acquisition failed");
   }
-  const target = { name: "production", bucket: BUCKET, project: PROJECT, signer: SIGNER };
+  const target = { name: "production", bucket: BUCKET, project: PROJECT, signer };
   out.save("run-header.json", {
     runId,
     prefix: runPrefix(runId),
@@ -124,7 +131,7 @@ async function recordProduction() {
       legacyLockPath: argValue("legacy-lock") ?? "docs.local/runs/sandbox-ledger.jsonl.lock",
     },
     async (lease) => {
-      const deps = createProductionDeps({ accessToken, lease });
+      const deps = createProductionDeps({ accessToken, lease, signer });
       try {
         const { report } = await observe({ target, runId, deps, out });
         final = finish(out, report, { startedAt, ...pin });
@@ -168,7 +175,7 @@ async function readback() {
       stdio: ["ignore", "pipe", "pipe"],
     },
   ).trim();
-  const target = { name: "production", bucket: BUCKET, project: PROJECT, signer: SIGNER };
+  const target = { name: "production", bucket: BUCKET, project: PROJECT, signer };
   const out = {
     journal: (entry) =>
       appendFileSync(

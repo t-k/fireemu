@@ -11,7 +11,7 @@ import { cert, deleteApp, initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 
 import { isUnknownStatus } from "./guard.mjs";
-import { BUCKET, PROJECT, RANGE_HEADER, SIGNER } from "./plan.mjs";
+import { BUCKET, PROJECT, RANGE_HEADER } from "./plan.mjs";
 
 const requireHere = createRequire(import.meta.url);
 
@@ -67,7 +67,7 @@ export function installEgressGuard(hosts) {
  * key file). Every request the SDKs make goes through the source client's transporter, which
  * reports to the observer's meter, takes the project lock lease and disables SDK retries.
  */
-export function createProductionDeps({ accessToken, lease, transport }) {
+export function createProductionDeps({ accessToken, lease, transport, signer }) {
   const storageDir = createRequire(requireHere.resolve("firebase-admin"));
   const storagePath = storageDir.resolve("@google-cloud/storage");
   const auth = createRequire(storagePath)("google-auth-library");
@@ -113,7 +113,7 @@ export function createProductionDeps({ accessToken, lease, transport }) {
   };
   const impersonated = new auth.Impersonated({
     sourceClient: source,
-    targetPrincipal: SIGNER,
+    targetPrincipal: signer,
     targetScopes: ["https://www.googleapis.com/auth/cloud-platform"],
     lifetime: 300,
   });

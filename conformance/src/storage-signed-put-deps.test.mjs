@@ -52,6 +52,7 @@ function harness(respond) {
   };
   const deps = createProductionDeps({
     accessToken: "synthetic-token",
+    signer: SIGNER,
     lease,
     transport: async (options) => {
       sent.push(options);

@@ -129,6 +129,21 @@ export function classifyRequest(target, request, prefix) {
   return method === "PUT" ? "xml-put" : "xml-options";
 }
 
+/**
+ * The signer is named on the command line (the packet pins it); it must be a service account of
+ * the sandbox project, so a typo can never sign as anyone else.
+ */
+export function validateSigner(value, project) {
+  const domain = `${project}.iam.gserviceaccount.com`.replaceAll(".", "\\.");
+  if (
+    typeof value !== "string" ||
+    !new RegExp(`^[a-z][a-z0-9-]{4,28}[a-z0-9]@${domain}$`).test(value)
+  ) {
+    fail("signer is not a service account of the sandbox project");
+  }
+  return value;
+}
+
 /** A request counter with a main-phase cap and a total cap (cleanup may exceed the main cap). */
 export class RequestBudget {
   constructor(mainCap, totalCap) {

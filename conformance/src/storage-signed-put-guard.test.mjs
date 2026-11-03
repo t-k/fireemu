@@ -9,6 +9,7 @@ import {
   isUnknownStatus,
   redactSignedUrl,
   tamperSignature,
+  validateSigner,
 } from "./storage-signed-put/guard.mjs";
 import { LOCAL_LIKE, PRODUCTION_LIKE } from "./storage-signed-put/world.fake.mjs";
 
@@ -307,5 +308,36 @@ describe("signed PUT request guard", () => {
       method: "PUT",
       url: `https://storage.googleapis.com/${PRODUCTION_LIKE.bucket}/?X-Goog-Algorithm=a&X-Goog-Credential=b&X-Goog-Date=c&X-Goog-Expires=1&X-Goog-SignedHeaders=host`,
     });
+  });
+
+  it("accepts only a service account of the sandbox project as the signer", () => {
+    const project = "demo-project";
+    const good = `firebase-adminsdk-fbsvc@${project}.iam.gserviceaccount.com`;
+    assert.equal(validateSigner(good, project), good);
+    assert.equal(
+      validateSigner(`signer-abc@${project}.iam.gserviceaccount.com`, project),
+      `signer-abc@${project}.iam.gserviceaccount.com`,
+    );
+    for (const bad of [
+      undefined,
+      "",
+      null,
+      42,
+      "user@gmail.com",
+      `a@${project}.iam.gserviceaccount.com`,
+      `firebase-adminsdk-fbsvc@other-project.iam.gserviceaccount.com`,
+      `firebase-adminsdk-fbsvc@${project}.iam.gserviceaccount.com.evil.example`,
+      `x-firebase-adminsdk-fbsvc@${project}Xiam.gserviceaccount.com`,
+      `firebase-adminsdk-fbsvc@${project}.iam.gserviceaccount.com:signBlob`,
+      `firebase-adminsdk-fbsvc@${project}.iam.gserviceaccount.com/keys`,
+      `Firebase-adminsdk-fbsvc@${project}.iam.gserviceaccount.com`,
+      ` ${good}`,
+      `${good}\n`,
+      `${"a".repeat(31)}@${project}.iam.gserviceaccount.com`,
+      `-abcdef@${project}.iam.gserviceaccount.com`,
+      `abcdef-@${project}.iam.gserviceaccount.com`,
+    ]) {
+      assert.throws(() => validateSigner(bad, project), GuardError, String(bad));
+    }
   });
 });

@@ -324,3 +324,193 @@ def test_the_hook_is_installed_only_with_a_pyjwt_at_or_above_the_tested_floor(mo
     monkeypatch.setattr(app_check, "_AppCheckService", app_check._AppCheckService)
     monkeypatch.setattr(jwt, "__version__", version)
     assert appcheck.install_jwks_hook("http://127.0.0.1:1/v1/jwks") is expected
+
+
+# --- survivors of the scoped mutation run on the key client ---------------------------------------------------------
+
+from jwt.exceptions import PyJWKClientError  # noqa: E402
+
+
+def key_error(client, value):
+    with pytest.raises(PyJWKClientError) as error:
+        client.get_signing_key_from_jwt(value)
+    return str(error.value)
+
+
+def test_the_defaults_are_the_bounds_the_design_states():
+    client = appcheck.LoopbackKeyClient("http://127.0.0.1:1/v1/jwks")
+    assert (client._timeout, client._max_bytes, client._lifespan, client._refresh_interval) == (5.0, 256 * 1024, 21600, 1.0)
+
+
+def test_the_exact_messages_of_the_key_client(client_for):
+    assert key_error(client_for("http://127.0.0.1:1/v1/jwks", timeout=1), token()) == "the App Check keys could not be fetched"
+    server = JwksServer({KID: EMULATOR_KEY})
+    try:
+        client = client_for(server.url)
+        assert key_error(client, token(kid="nope")) == "unable to find a signing key that matches 'nope'"
+        no_kid = jwt.encode({"exp": int(time.time()) + 60}, EMULATOR_KEY, algorithm="RS256")
+        assert key_error(client, no_kid) == "the token has no key id"
+        empty_kid = jwt.encode({"exp": int(time.time()) + 60}, EMULATOR_KEY, algorithm="RS256", headers={"kid": ""})
+        assert key_error(client, empty_kid) == "the token has no key id"
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize(
+    "url, message",
+    [
+        ("https://127.0.0.1:9/v1/jwks", "the key URL is not a loopback http URL"),
+        ("http:///v1/jwks", "the key URL is not a loopback http URL"),
+        ("http://127.0.0.1/v1/jwks", "the key URL is not a loopback http URL"),
+        ("http://10.1.2.3:9/v1/jwks", "10.1.2.3 is not a loopback address"),
+    ],
+)
+def test_the_fetch_refuses_a_bad_url_with_its_reason(url, message):
+    with pytest.raises(OSError) as error:
+        appcheck.LoopbackKeyClient(url)._fetch()
+    assert str(error.value) == message
+
+
+def test_loopback_addresses_are_read_from_literals_and_from_names(monkeypatch):
+    assert appcheck._loopback_addresses("127.0.0.1", 9) == ["127.0.0.1"]
+    assert appcheck._loopback_addresses("[::1]", 9) == ["::1"]
+    seen = {}
+
+    def getaddrinfo(host, port, **kwargs):
+        seen.update(host=host, port=port, kwargs=kwargs)
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1%lo0", port, 0, 1)), (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    assert appcheck._loopback_addresses("localhost", 4242) == ["::1", "127.0.0.1"]
+    assert seen == {"host": "localhost", "port": 4242, "kwargs": {"type": socket.SOCK_STREAM}}
+
+
+def test_the_messages_of_a_name_that_cannot_be_used(monkeypatch):
+    def fail(*args, **kwargs):
+        raise socket.gaierror("no such name")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
+    with pytest.raises(OSError) as error:
+        appcheck._loopback_addresses("nowhere.invalid", 9)
+    assert str(error.value) == "cannot resolve nowhere.invalid"
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [])
+    with pytest.raises(OSError) as error:
+        appcheck._loopback_addresses("empty.invalid", 9)
+    assert str(error.value) == "empty.invalid is not a loopback address"
+
+
+def test_connecting_tries_each_checked_address_and_reports_the_last_failure(monkeypatch):
+    client = appcheck.LoopbackKeyClient("http://127.0.0.1:1/v1/jwks")
+    attempts = []
+
+    def create(address, timeout=None):
+        attempts.append((address, timeout))
+        raise OSError(f"refused by {address[0]}")
+
+    monkeypatch.setattr(socket, "create_connection", create)
+    with pytest.raises(OSError) as error:
+        client._connect(["::1", "127.0.0.1"], 7)
+    assert str(error.value) == "refused by 127.0.0.1"
+    assert attempts == [(("::1", 7), 5.0), (("127.0.0.1", 7), 5.0)]
+    with pytest.raises(OSError) as error:
+        client._connect([], 7)
+    assert str(error.value) == "no address"
+
+
+def test_the_request_is_a_get_of_the_path_and_query_asking_for_json_and_closing_the_connection(client_for):
+    seen = {}
+
+    def reply(handler):
+        seen.update(path=handler.path, accept=handler.headers.get("Accept"), connection=handler.headers.get("Connection"))
+        answer(handler, body=KEYS_BODY)
+
+    server = Scripted(reply)
+    try:
+        assert verifies(client_for(f"http://127.0.0.1:{server.port}/v1/jwks?format=jwk&x=1"), token())
+        assert seen == {"path": "/v1/jwks?format=jwk&x=1", "accept": "application/json", "connection": "close"}
+        assert verifies(client_for(f"http://127.0.0.1:{server.port}"), token())
+        assert seen["path"] == "/"
+    finally:
+        server.close()
+
+
+def test_a_body_that_never_ends_is_cut_at_the_bound_and_not_read_to_the_end(client_for):
+    def endless(handler):
+        handler.send_response(200)
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        try:
+            while True:
+                handler.wfile.write(b" " * 65536)
+        except OSError:
+            return
+
+    server = Scripted(endless)
+    try:
+        started = time.monotonic()
+        assert not verifies(client_for(server.url, timeout=5, max_bytes=100000), token())
+        assert time.monotonic() - started < 4, "the client read on instead of stopping at the bound"
+    finally:
+        server.close()
+
+
+def test_a_key_set_may_hold_junk_around_the_one_key_that_counts(client_for):
+    odd = [
+        "junk",
+        5,
+        None,
+        {"kty": "oct", "kid": "symmetric", "k": "c2VjcmV0"},
+        {"kty": "RSA", "kid": "broken", "n": "!!", "e": "AQAB"},
+        {"kty": "RSA", "n": "x", "e": "AQAB"},
+        {**json.loads(RSAAlgorithm.to_jwk(EMULATOR_KEY.public_key())), "kid": KID},
+    ]
+    server = Scripted(lambda h: answer(h, body=json.dumps({"keys": odd}).encode()))
+    try:
+        client = client_for(server.url)
+        assert verifies(client, token())
+        assert key_error(client_for(server.url), token(kid="symmetric")).startswith("unable to find a signing key")
+    finally:
+        server.close()
+
+
+def test_keys_are_refetched_when_their_lifespan_is_over_and_not_before(client_for):
+    server = JwksServer({KID: EMULATOR_KEY})
+    try:
+        client = client_for(server.url, lifespan=0.3, refresh_interval=0)
+        assert verifies(client, token()) and verifies(client, token())
+        assert server.requests == 1
+        time.sleep(0.35)
+        assert verifies(client, token())
+        assert server.requests == 2
+    finally:
+        server.close()
+
+
+def test_a_failed_fetch_forgets_the_old_keys_and_tries_again_after_the_interval(client_for):
+    state = {"up": True}
+
+    def reply(handler):
+        answer(handler, body=KEYS_BODY) if state["up"] else answer(handler, 503, b"{}")
+
+    server = Scripted(reply)
+    try:
+        client = client_for(server.url, lifespan=0.2, refresh_interval=0.1)
+        assert verifies(client, token())
+        state["up"] = False
+        time.sleep(0.25)
+        assert key_error(client, token()) == "the App Check keys could not be fetched"
+        state["up"] = True
+        time.sleep(0.15)
+        assert verifies(client, token())
+    finally:
+        server.close()
+
+
+def test_a_cyclic_wrapper_chain_is_not_an_async_handler():
+    from fireemu_runner.diagnostics import is_async_handler
+
+    def loops(event):
+        pass
+
+    loops.__wrapped__ = loops
+    assert is_async_handler(loops) is False

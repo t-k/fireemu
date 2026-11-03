@@ -133,3 +133,27 @@ def test_an_enforcing_callable_answers_401_to_each_of_them_and_a_plain_one_sees_
     assert status == 200 and body["result"]["app"] is None, label
     status, body = call(client, "add_enforced", token())
     assert status == 200 and body["result"]["app"] == "1:1234567890:web:app"
+
+
+def refusal(value):
+    from firebase_admin import app_check
+
+    with pytest.raises(ValueError) as error:
+        app_check.verify_token(value)
+    return str(error.value)
+
+
+def test_the_exact_messages_of_the_claim_checks(hooked):  # noqa: F811
+    assert refusal(token(drop=("exp",))) == 'The provided App Check token has no "exp" (expiration) claim.'
+    assert refusal(token(claims={"iss": ISSUER + "x"})) == 'The provided App Check token has an incorrect "iss" (issuer) claim.'
+    assert ours_accepts(token(drop=("iss",))) is False  # the stock SDK's own issuer check fails first, with an AttributeError
+    assert refusal(token(audience=["projects/999", IDENTITY])) == 'The provided App Check token has a project number in "aud" that is not its issuer\'s.'
+    assert refusal(token(claims={"sub": ""})) == 'The provided App Check token has no "sub" (app ID) claim.'
+    # A missing subject is the stock SDK's to refuse, before the runner's check.
+    assert refusal(token(drop=("sub",))) == 'The provided App Check token "sub" (subject) claim "None" must be a non-empty string.'
+
+
+def test_an_audience_given_as_a_single_string_is_refused_as_the_stock_sdk_refuses_it(hooked):  # noqa: F811
+    for audience in (IDENTITY, NUMBER):
+        value = token(audience=audience)
+        assert stock_accepts(value) is False and ours_accepts(value) is False

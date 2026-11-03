@@ -222,6 +222,7 @@ def _emulator_service(stock, url: str):
                 raise ValueError('The provided App Check token has a project number in "aud" that is not its issuer\'s.')
             subject = payload.get("sub")
             if not isinstance(subject, str) or not subject:
+                # The stock SDK refuses a missing one and lets an empty one through.
                 raise ValueError('The provided App Check token has no "sub" (app ID) claim.')
             return payload
 

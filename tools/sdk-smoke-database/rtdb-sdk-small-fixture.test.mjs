@@ -48,7 +48,7 @@ test('reduce: rows it cannot place refuse the whole journal', () => {
     { kind: 'something-new' },
     null,
   ];
-  for (const row of bad) assert.throws(() => reduceJournal([...good, row], RESULT), undefined, JSON.stringify(row));
+  for (const row of bad) assert.throws(() => reduceJournal([...good, row], RESULT), /^Error: (unknown|journal row is not an object)/, JSON.stringify(row));
   assert.throws(() => reduceJournal(good, null));
   assert.throws(() => reduceJournal('x', RESULT));
   assert.throws(() => parseJsonl('{"kind":"case"}\nnot json\n'));

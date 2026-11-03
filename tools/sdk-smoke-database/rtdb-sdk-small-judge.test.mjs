@@ -136,6 +136,10 @@ test('connection events: per-role order must be identical; the interleaving of t
   const extraRole = journal(prng(8));
   extraRole.profiles[0].events.third = ['connected'];
   assert.equal(summarize(production, extraRole).match, false);
+  // A role the observer does not have is refused even when both sides carry it identically.
+  const both = [journal(prng(7)), journal(prng(8))];
+  for (const d of both) d.profiles[2].events.third = ['connected'];
+  assert.equal(summarize(both[0], both[1]).match, false);
   const missingRole = journal(prng(8));
   delete missingRole.profiles[0].events.observer;
   assert.equal(summarize(production, missingRole).match, false);

@@ -10133,6 +10133,191 @@ fn signed_xml_put_success_carries_the_production_headers() {
     );
 }
 
+/// The full cross of the decision factors of a signed XML PUT (two profiles, five URL states,
+/// three signed-header states, content type present or not, five range cases: 240 requests after
+/// the meaningless combinations are dropped) against an independent reference of the rules the
+/// recorded production answers fix. The PICT model of the coverage ledger is a subset of it.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn signed_xml_put_decision_table_matches_the_reference_model() {
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Url {
+        Valid,
+        Expired,
+        V4NoSignature,
+        PartialNoSignature,
+        Anonymous,
+    }
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Signed {
+        All,
+        NoRange,
+        Absent,
+    }
+    let body = [137u8, 80, 78, 71];
+    let mut checked = 0;
+    for strict in [true, false] {
+        for url in [
+            Url::Valid,
+            Url::Expired,
+            Url::V4NoSignature,
+            Url::PartialNoSignature,
+            Url::Anonymous,
+        ] {
+            for signed in [Signed::All, Signed::NoRange, Signed::Absent] {
+                // An anonymous request has no query to name signed headers in; a V4 URL that
+                // names every signing parameter must name its signed headers.
+                if (url == Url::Anonymous && signed != Signed::Absent)
+                    || (url == Url::V4NoSignature && signed == Signed::Absent)
+                {
+                    continue;
+                }
+                for content_type in [true, false] {
+                    for range in [
+                        "absent",
+                        "ok",
+                        "too-large-body",
+                        "too-small-body",
+                        "malformed",
+                    ] {
+                        let s = state_with(
+                            None,
+                            if strict {
+                                TokenAcceptance::Verified
+                            } else {
+                                TokenAcceptance::EmulatorMock
+                            },
+                        );
+                        let names = match signed {
+                            Signed::All => {
+                                Some("content-type%3Bhost%3Bx-goog-content-length-range")
+                            }
+                            Signed::NoRange => Some("content-type%3Bhost"),
+                            Signed::Absent => None,
+                        };
+                        let date = if url == Url::Expired {
+                            "20260829T110000Z"
+                        } else {
+                            FRESH
+                        };
+                        let lifetime = if url == Url::Expired { "1" } else { "3600" };
+                        let mut query = Vec::new();
+                        if url != Url::Anonymous {
+                            query.push(format!("X-Goog-Date={date}"));
+                            query.push(format!("X-Goog-Expires={lifetime}"));
+                        }
+                        if matches!(url, Url::V4NoSignature | Url::PartialNoSignature) {
+                            query.push("X-Goog-Algorithm=GOOG4-RSA-SHA256".to_owned());
+                        }
+                        if url == Url::V4NoSignature {
+                            query.push("X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request".to_owned());
+                        }
+                        if let Some(names) = names {
+                            query.push(format!("X-Goog-SignedHeaders={names}"));
+                        }
+                        if matches!(url, Url::Valid | Url::Expired) {
+                            query.push("X-Goog-Signature=0123abcd".to_owned());
+                        }
+                        let path = format!("/{BUCKET}/obj.png?{}", query.join("&"));
+                        let mut headers = Vec::new();
+                        if content_type {
+                            headers.push(("content-type", "image/png"));
+                        }
+                        let range_value = match range {
+                            "ok" => Some("0,10"),
+                            "too-large-body" => Some("0,3"),
+                            "too-small-body" => Some("5,8"),
+                            "malformed" => Some("bad"),
+                            _ => None,
+                        };
+                        if let Some(value) = range_value {
+                            headers.push(("x-goog-content-length-range", value));
+                        }
+                        let response = handle(&s, req("PUT", &path, &headers, &body));
+
+                        // The reference: the same rules, written as a decision list.
+                        let label = format!("strict={strict} {url:?} {signed:?} content_type={content_type} range={range}");
+                        let expected: (u16, &str, Option<&str>) = (|| {
+                            if url == Url::Expired {
+                                return (400, "ExpiredToken", None);
+                            }
+                            if matches!(url, Url::Anonymous | Url::PartialNoSignature) && strict {
+                                return (403, "AccessDenied", None);
+                            }
+                            if url == Url::V4NoSignature && strict {
+                                return (400, "MissingSecurityHeader", None);
+                            }
+                            if signed != Signed::Absent {
+                                if !content_type {
+                                    return (400, "MalformedSecurityHeader", Some("content-type"));
+                                }
+                                if signed == Signed::All && range == "absent" {
+                                    return (
+                                        400,
+                                        "MalformedSecurityHeader",
+                                        Some("x-goog-content-length-range"),
+                                    );
+                                }
+                                if strict && signed == Signed::NoRange && range != "absent" {
+                                    return (
+                                        400,
+                                        "MalformedSecurityHeader",
+                                        Some("x-goog-content-length-range"),
+                                    );
+                                }
+                            }
+                            match range {
+                                "too-large-body" => (400, "EntityTooLarge", None),
+                                "too-small-body" => (400, "EntityTooSmall", None),
+                                "malformed" => (400, "InvalidArgument", None),
+                                _ => (200, "", None),
+                            }
+                        })();
+                        assert_eq!(response.status, expected.0, "{label}");
+                        let text = String::from_utf8_lossy(&response.body).into_owned();
+                        if expected.0 == 200 {
+                            assert!(response.body.is_empty(), "{label}");
+                        } else {
+                            assert!(
+                                text.contains(&format!("<Code>{}</Code>", expected.1)),
+                                "{label}: {text}"
+                            );
+                            match expected.2 {
+                                Some(parameter) => assert!(
+                                    text.contains(&format!(
+                                        "<ParameterName>{parameter}</ParameterName>"
+                                    )),
+                                    "{label}: {text}"
+                                ),
+                                None => {
+                                    assert!(!text.contains("<ParameterName>"), "{label}: {text}");
+                                }
+                            }
+                        }
+                        let stored = handle(
+                            &s,
+                            req(
+                                "GET",
+                                &format!("/{BUCKET}/obj.png"),
+                                &[("authorization", "Bearer owner")],
+                                &[],
+                            ),
+                        );
+                        assert_eq!(
+                            stored.status == 200,
+                            expected.0 == 200,
+                            "{label}: written exactly when accepted"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+    // 12 URL and signed-header combinations, 10 content type and range combinations, 2 profiles.
+    assert_eq!(checked, 240);
+}
+
 #[test]
 fn signed_xml_put_does_not_capture_unknown_api_routes() {
     let s = state(None);

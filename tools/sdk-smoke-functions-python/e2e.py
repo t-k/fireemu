@@ -231,6 +231,56 @@ def secrets_by_function():
     assert wait_for(lambda e: e["function"] == "fs_plain", "fs_plain")["env"] == {"API_KEY": None, "TOKEN": None}
 
 
+APP_ID = "1:1234567890:web:pyapp"
+
+
+def app_check_token():
+    """A token the App Check emulator signs, from a debug token it accepts."""
+    status, body = call(
+        "POST", f"http://{os.environ['FIREEMU_APP_CHECK_EMULATOR_HOST']}/v1/projects/{PROJECT}/apps/{APP_ID}:exchangeDebugToken",
+        {"debug_token": "0f6a8e1c-5b3d-4c7e-9a2f-1d4b6c8e0a3f"},
+    )
+    assert status == 200, (status, body)
+    return json.loads(body)["token"]
+
+
+def callable_with(name, token=None, extra=None):
+    headers = {} if token is None else {"X-Firebase-AppCheck": token}
+    status, body = call("POST", f"{FUNCTIONS}/{name}", {"data": {"a": 1, "b": 2}}, {**headers, **(extra or {})})
+    return status, json.loads(body)
+
+
+def app_check():
+    """SECURITY: an enforcing callable runs only for a token the emulator signed; a forged or foreign one never reaches it."""
+    if "FIREEMU_APP_CHECK_EMULATOR_HOST" not in os.environ:
+        # No App Check emulator in this run (the emulator profile does not start one unless asked): nothing can verify a
+        # token, so the daemon removes the header and no callable ever sees one, whatever it presents.
+        looks_real = b64({"alg": "RS256", "typ": "JWT", "kid": "k"}) + "." + b64({"aud": [f"projects/{PROJECT}"], "sub": APP_ID, "exp": 4102444800}) + "." + base64.urlsafe_b64encode(b"\x05" * 256).decode().rstrip("=")
+        status, body = callable_with("add_enforced", looks_real)
+        assert status == 401 and "result" not in body, (status, body)
+        status, body = callable_with("add_enforced_off", looks_real)
+        assert status == 200 and body["result"]["app"] is None, (status, body)
+        return
+    token = app_check_token()
+    status, body = callable_with("add_enforced", token)
+    assert status == 200 and body["result"] == {"sum": 3, "app": APP_ID}, (status, body)
+    status, body = callable_with("add_enforced_off", token)
+    assert status == 200 and body["result"]["app"] == APP_ID, (status, body)
+    header, payload, signature = token.split(".")
+    forged_claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    forged_claims["sub"] = "1:1:web:forged"
+    forged = f"{header}.{b64(forged_claims)}.{signature}"
+    unsigned = b64({"alg": "none", "typ": "JWT"}) + "." + payload + "."
+    foreign = b64({"alg": "RS256", "typ": "JWT", "kid": json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))["kid"]}) + "." + payload + "." + base64.urlsafe_b64encode(b"\x05" * 256).decode().rstrip("=")
+    for label, bad in (("a tampered payload", forged), ("alg none", unsigned), ("a foreign signature", foreign), ("junk", "not-a-token"), ("a doubled header", token + ", " + foreign)):
+        status, body = callable_with("add_enforced", bad)
+        assert status == 401 and "result" not in body, (label, status, body)
+        status, body = callable_with("add_enforced_off", bad)
+        assert status == 200 and body["result"]["app"] is None, (label, status, body)
+    status, body = callable_with("add_enforced")
+    assert status == 401 and "result" not in body, (status, body)
+
+
 def main():
     status, body = call("GET", f"{FUNCTIONS}/hello/a/b?q=1")
     assert status == 200, (status, body)
@@ -280,6 +330,8 @@ def main():
             status, body = call_with_two_authorizations(first, second)
             assert status == 401 and b"result" not in body, ("two Authorization headers", status, body)
     other_families()
+    # Before the clock moves: Python code runs on real time, and the emulator signs tokens on its own clock.
+    app_check()
     request_families()
     secrets_by_function()
     print(json.dumps({"ok": True, "profile": PROFILE}))

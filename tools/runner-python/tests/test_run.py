@@ -195,9 +195,26 @@ def test_local_secrets_that_are_not_json_stop_the_run_with_one_exact_line(monkey
 
 def test_the_local_secrets_of_the_daemon_reach_the_gate_the_run_serves_with(monkeypatch, codebase):
     seen = {}
-    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate: seen.update(gate=gate) or 0)
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: seen.update(gate=gate) or 0)
     monkeypatch.delenv("API_KEY", raising=False)
     code, _ = run_with(monkeypatch, codebase, b"", env={"FIREEMU_LOCAL_SECRETS_JSON": '{"API_KEY": "from the daemon"}'})
     assert code == 0
     with seen["gate"].hold(["API_KEY"]):
         assert os.environ["API_KEY"] == "from the daemon"
+
+
+def test_the_app_check_hook_is_installed_before_the_codebase_loads_and_its_result_reaches_serve(monkeypatch, codebase):
+    order = []
+    monkeypatch.setattr(main.appcheck, "install_from_environment", lambda environ: order.append("hook") or True)
+    monkeypatch.setattr(main, "load_codebase", lambda source: order.append("load") or {})
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: order.append(("serve", verified)) or 0)
+    code, _ = run_with(monkeypatch, codebase, b"")
+    assert code == 0 and order == ["hook", "load", ("serve", True)]
+
+
+def test_without_an_emulator_jwks_the_run_announces_nothing(monkeypatch, codebase):
+    seen = {}
+    monkeypatch.delenv("FIREEMU_APP_CHECK_JWKS_URL", raising=False)
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: seen.update(verified=verified) or 0)
+    code, _ = run_with(monkeypatch, codebase, b"")
+    assert code == 0 and seen == {"verified": False}

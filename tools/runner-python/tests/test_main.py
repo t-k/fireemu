@@ -202,3 +202,18 @@ def test_the_gate_reaches_both_the_http_server_and_the_dispatcher(discovered, mo
     thread.join(10)
     stdin.close()
     assert result["code"] == 0
+
+
+def test_hello_announces_disabled_consumption_for_callables_only_when_asked(discovered):
+    for verified, expected in ((True, "disabled"), (False, None)):
+        stdin = Pipe()
+        writer = Collected()
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, None, verified)))
+        thread.start()
+        hello = writer.wait_for(lambda f: f["type"] == "hello")
+        (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]
+        assert entry["trigger"].get("consumeAppCheckToken") == expected
+        stdin.send({"type": "shutdown"})
+        thread.join(10)
+        stdin.close()

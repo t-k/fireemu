@@ -300,7 +300,7 @@ def _blocking_trigger(blocking) -> dict:
     }
 
 
-def describe_endpoint(name: str, endpoint) -> dict:
+def describe_endpoint(name: str, endpoint, app_check_verified: bool = False) -> dict:
     """The canonical `functions[]` entry of one endpoint, or `Unserved` when it cannot be served."""
     if endpoint.platform != "gcfv2":
         raise Unserved("unknown", "unsupported", "endpoint platform is not recognised")
@@ -324,6 +324,9 @@ def describe_endpoint(name: str, endpoint) -> dict:
         described["trigger"] = {"type": "http", "callable": False}
     elif endpoint.callableTrigger is not None:
         described["trigger"] = {"type": "http", "callable": True}
+        if app_check_verified:
+            # The SDK verifies the token itself, against the App Check emulator's keys, and never consumes it.
+            described["trigger"]["consumeAppCheckToken"] = "disabled"
     elif endpoint.scheduleTrigger is not None:
         described["trigger"], described["retry"] = _schedule_trigger(endpoint.scheduleTrigger)
     elif endpoint.blockingTrigger is not None:
@@ -339,14 +342,17 @@ def describe_endpoint(name: str, endpoint) -> dict:
     return described
 
 
-def build_manifest(functions: dict) -> dict:
-    """`{"functions": [...], "ignored": [...]}` for the decorated functions of a codebase."""
+def build_manifest(functions: dict, app_check_verified: bool = False) -> dict:
+    """`{"functions": [...], "ignored": [...]}` for the decorated functions of a codebase.
+
+    `app_check_verified` says the Admin SDK verifies App Check tokens against the emulator's keys (`appcheck.py`).
+    """
     served: list[dict] = []
     ignored: list[dict] = []
     for name, function in functions.items():
         endpoint = function.__firebase_endpoint__
         try:
-            served.append(describe_endpoint(name, endpoint))
+            served.append(describe_endpoint(name, endpoint, app_check_verified))
         except Unserved as unserved:
             try:
                 region = _first_region(endpoint) or DEFAULT_REGION

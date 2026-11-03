@@ -379,3 +379,13 @@ def fs_secret(event):
 @firestore_fn.on_document_created(document="plain/{id}")
 def fs_plain(event):
     _record({"function": "fs_plain", "env": _secrets_in_environment()})
+
+
+@https_fn.on_call(enforce_app_check=True)
+def add_enforced(req: https_fn.CallableRequest):
+    return {"sum": req.data["a"] + req.data["b"], "app": req.app.app_id if req.app else None}
+
+
+@https_fn.on_call(enforce_app_check=False)
+def add_enforced_off(req: https_fn.CallableRequest):
+    return {"sum": req.data["a"] + req.data["b"], "app": req.app.app_id if req.app else None}

@@ -1209,6 +1209,53 @@ struct ReloadResources {
     node_probe_cache: Arc<NodeProbeCache>,
 }
 
+/// The inspector flags a runner command gets, and whether the request for them is ignored.
+struct InspectorArguments {
+    /// Inserted after the program, in order.
+    arguments: Vec<String>,
+    /// `--inspect-functions` was asked for and the runner cannot honour it (a Python codebase).
+    ignored: bool,
+}
+
+/// What `--inspect-functions` does to a runner command: a Node runner gets the flags (dynamic port
+/// first), a Python one gets none and the request is reported as ignored, as firebase-tools does.
+fn inspector_arguments(python: bool, dynamic: bool, port: Option<u16>) -> InspectorArguments {
+    if !(dynamic || port.is_some()) {
+        return InspectorArguments {
+            arguments: Vec::new(),
+            ignored: false,
+        };
+    }
+    if python {
+        return InspectorArguments {
+            arguments: Vec::new(),
+            ignored: true,
+        };
+    }
+    let address = if dynamic {
+        "--inspect=127.0.0.1:0".to_owned()
+    } else {
+        format!("--inspect=127.0.0.1:{}", port.unwrap_or_default())
+    };
+    InspectorArguments {
+        arguments: vec![address, "--inspect-publish-uid=http".to_owned()],
+        ignored: false,
+    }
+}
+
+/// Whether the daemon offers a runner the Admin SDK App Check channel: it exists for the Node
+/// runner's instrumentation of `firebase-admin` and only when App Check answers it.
+fn admin_app_check_offered(answers: bool, python: bool) -> bool {
+    answers && !python
+}
+
+/// Splits the codebases into those whose source changes are reloaded and those that are not.
+fn split_reload(
+    codebases: Vec<FunctionsCodebase>,
+) -> (Vec<FunctionsCodebase>, Vec<FunctionsCodebase>) {
+    codebases.into_iter().partition(reload_supervised)
+}
+
 /// Whether source changes of the codebase are watched and reloaded. The reload snapshot links
 /// `node_modules` only, so it would lack the interpreter of a Python codebase's `venv`: Python reload
 /// is a later slice.
@@ -1228,14 +1275,14 @@ fn start_reload_supervisors(
         scan_budget: Arc::new(FunctionsSourceScanBudget::new()),
         node_probe_cache: node_probe_cache.clone(),
     };
-    for codebase in cfg.functions_to_load() {
-        if !reload_supervised(&codebase) {
-            eprintln!(
-                "note: functions[{}]: source changes are not reloaded for Python codebases; restart fireemu to pick them up",
-                codebase.codebase
-            );
-            continue;
-        }
+    let (supervised, unsupervised) = split_reload(cfg.functions_to_load());
+    for codebase in unsupervised {
+        eprintln!(
+            "note: functions[{}]: source changes are not reloaded for Python codebases; restart fireemu to pick them up",
+            codebase.codebase
+        );
+    }
+    for codebase in supervised {
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
             cfg.clone(),
@@ -3545,17 +3592,19 @@ async fn start_codebase(
         .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
     };
     let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
-    if python && inspecting {
+    let inspector = inspector_arguments(
+        python,
+        cfg.functions_inspect_dynamic,
+        cfg.functions_inspect_port,
+    );
+    if inspector.ignored {
         // firebase-tools says the same and goes on (`functionsEmulator.ts:1736-1738`).
         eprintln!(
             "warning: functions[{label}]: --inspect-functions is not supported for Python functions; ignored"
         );
-    } else if cfg.functions_inspect_dynamic {
-        command.insert(1, "--inspect-publish-uid=http".to_owned());
-        command.insert(1, "--inspect=127.0.0.1:0".to_owned());
-    } else if let Some(port) = cfg.functions_inspect_port {
-        command.insert(1, "--inspect-publish-uid=http".to_owned());
-        command.insert(1, format!("--inspect=127.0.0.1:{port}"));
+    }
+    for (offset, argument) in inspector.arguments.into_iter().enumerate() {
+        command.insert(1 + offset, argument);
     }
     command.push("--source".to_owned());
     command.push(source.clone());
@@ -3598,7 +3647,7 @@ async fn start_codebase(
         )
     };
     env.retain(|(name, _)| !is_app_check_route(name));
-    if hosts.admin_app_check.is_some() && !python {
+    if admin_app_check_offered(hosts.admin_app_check.is_some(), python) {
         // The daemon owns the question and the answer; the runner only asks (see
         // `tools/runner-node/admin-app-check.mjs`).
         env.push(("FIREEMU_APP_CHECK_ADMIN".to_owned(), "1".to_owned()));
@@ -3723,7 +3772,7 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
-    if hosts.admin_app_check.is_some() && !python {
+    if admin_app_check_offered(hosts.admin_app_check.is_some(), python) {
         if let Some(note) = admin_app_check_note(label, runner.hello().admin_app_check.as_ref()) {
             eprintln!("note: {note}");
         }
@@ -10494,6 +10543,63 @@ exports.add = onCall({{}}, observe("add"));
             hub: None,
             admin_app_check: None,
         }
+    }
+
+    #[test]
+    fn the_inspector_flags_go_to_a_node_runner_in_order_and_never_to_a_python_one() {
+        let flags = |python, dynamic, port| {
+            let result = super::inspector_arguments(python, dynamic, port);
+            (result.arguments, result.ignored)
+        };
+        assert_eq!(flags(false, false, None), (vec![], false));
+        assert_eq!(flags(true, false, None), (vec![], false));
+        assert_eq!(
+            flags(false, true, None),
+            (
+                vec![
+                    "--inspect=127.0.0.1:0".to_owned(),
+                    "--inspect-publish-uid=http".to_owned()
+                ],
+                false
+            )
+        );
+        assert_eq!(
+            flags(false, false, Some(9229)),
+            (
+                vec![
+                    "--inspect=127.0.0.1:9229".to_owned(),
+                    "--inspect-publish-uid=http".to_owned()
+                ],
+                false
+            )
+        );
+        // A dynamic port wins over a fixed one, as before.
+        assert_eq!(flags(false, true, Some(9229)).0[0], "--inspect=127.0.0.1:0");
+        assert_eq!(flags(true, true, None), (vec![], true));
+        assert_eq!(flags(true, false, Some(9229)), (vec![], true));
+    }
+
+    #[test]
+    fn the_admin_app_check_channel_needs_an_answering_verifier_and_a_node_runner() {
+        assert!(super::admin_app_check_offered(true, false));
+        assert!(!super::admin_app_check_offered(true, true));
+        assert!(!super::admin_app_check_offered(false, false));
+        assert!(!super::admin_app_check_offered(false, true));
+    }
+
+    #[test]
+    fn the_codebases_are_split_into_reloaded_and_not_reloaded() {
+        let (dir, python) = python_codebase("split");
+        let node = crate::config::FunctionsCodebase {
+            codebase: "node".to_owned(),
+            runtime: Some("nodejs20".to_owned()),
+            ..python.clone()
+        };
+        let (supervised, unsupervised) =
+            super::split_reload(vec![python.clone(), node.clone(), python.clone()]);
+        assert_eq!(supervised, vec![node]);
+        assert_eq!(unsupervised, vec![python.clone(), python]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

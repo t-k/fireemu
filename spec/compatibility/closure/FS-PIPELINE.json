@@ -3183,7 +3183,7 @@
     ],
     "productionRequests": 0,
     "result": "COMPARED_PER_CASE_ON_RELEASE_BINARY",
-    "releaseBindingNote": "The comparison is check and export-comparison of the fs-ent-pipeline lane against the release binary named above (RUSTC_WRAPPER empty, --locked) built from integrationCommit; the release job reruns it (R21, check exits 1 because the raw MISMATCH and UNKNOWN rows the owner decisions preserve are still reported) and compares the export row by row.",
+    "releaseBindingNote": "The comparison is check and export-comparison of the fs-ent-pipeline lane against the release binary named above (RUSTC_WRAPPER empty, --locked) built from integrationCommit; the release job reruns it (R21): the check exits 0 only when every row that is not a MATCH is named by a recorded decision (2114, 2211 or the nesting observation) and stays inside that decision's allowance, and the export, which keeps every raw status, is compared row by row.",
     "clockControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock.json",
     "clockControlSha256": "bf333ba5606f3b20960e2d5330b606642aa913d83e3deed0e15d57a2f9b78e9f",
     "clockDiffControlPath": "spec/compatibility/closure/evidence/FS-PIPELINE-current-clock-diff.json",

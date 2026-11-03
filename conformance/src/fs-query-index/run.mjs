@@ -1045,6 +1045,13 @@ async function check() {
     LANE.id === "fs-ent-pipeline" && LANE.localConfig === "fs-ent-pipeline.fireemu.json"
       ? await import("../fs-ent-pipeline/sample-contract.mjs")
       : undefined;
+  // The strict pipeline lane may exit 0 with raw MISMATCH and UNKNOWN rows that a recorded decision
+  // covers, each within its allowance (coverage.mjs). The export keeps every raw status.
+  const coverageTools =
+    LANE.id === "fs-ent-pipeline" && LANE.localConfig === "fs-ent-pipeline.fireemu.json"
+      ? await import("../fs-ent-pipeline/coverage.mjs")
+      : undefined;
+  const rowContext = new Map();
   const sampleContext =
     sampleTools &&
     createContext({
@@ -1064,6 +1071,7 @@ async function check() {
       const alternative = saved?.second?.[step.id];
       const fireemu = local.results[program.id]?.steps?.[step.id];
       const row = `${program.id}#${step.id}`;
+      rowContext.set(row, { program, saved, localSteps: local.results[program.id]?.steps });
       // Only the two recorded pipeline framing programs use compact response comparisons.
       const framingProgram = LANE.id === "fs-ent-pipeline" && FRAMING_PROGRAMS.has(program.id);
       const framing = framingProgram && saved?.compactFramingVersion === 1;
@@ -1137,13 +1145,28 @@ async function check() {
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, rangeTotals, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DIVERGENCE_APPROVED"]);
-  for (const row of rows.filter((r) => !passing.has(r.status))) {
+  const coverage = coverageTools?.judgeCoverage(rows, passing, (item) =>
+    coverageTools.coveredBy({ row: item.row, status: item.status, ...rowContext.get(item.row) }),
+  );
+  const coveredRows = new Set(coverage?.covered.map((item) => item.row));
+  for (const row of rows.filter((r) => !passing.has(r.status) && !coveredRows.has(r.row))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 600)}`);
     console.log(`  fireemu    ${String(JSON.stringify(row.fireemu)).slice(0, 600)}`);
   }
+  if (coverage) {
+    for (const item of coverage.uncovered) console.log(`NOT COVERED ${item.row}: ${item.reason}`);
+    for (const row of coverage.missing) console.log(`COVERED ROW MISSING ${row}`);
+    const byDecision = {};
+    for (const item of coverage.covered)
+      byDecision[item.decision] = (byDecision[item.decision] ?? 0) + 1;
+    console.log(`covered by a recorded decision: ${JSON.stringify(byDecision)}`);
+  }
   console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
-  if (!rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length) {
+  const rowsFail = coverage
+    ? coverage.uncovered.length > 0 || coverage.missing.length > 0
+    : !rows.every((r) => passing.has(r.status));
+  if (rowsFail || orphans.length || local.failures.length) {
     process.exitCode = 1;
   }
 }

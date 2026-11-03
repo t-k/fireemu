@@ -243,12 +243,12 @@ test("the comparison covers the committed corpus and the lane's rows add up", ()
   assert.equal(status.get("fs-ent-pipeline/o8a/nesting-main#chain-100-grpc"), "UNKNOWN");
 });
 
-test("the release job reruns the comparison: one run of this kind, check exits 1", () => {
+test("the release job reruns the comparison: one run of this kind, check exits 0 by coverage", () => {
   const runs = RUNS.filter((run) => run.kind === comparison.kind);
   assert.equal(runs.length, 1);
   const [run] = runs;
   assert.deepEqual(run.clear, ["fs-ent-pipeline"]);
-  assert.deepEqual(run.commands[0].expectedExitCodes, [1]);
+  assert.deepEqual(run.commands[0].expectedExitCodes, [0]);
   assert.equal(run.commands[0].env.FIREEMU_SANDBOX_LANE, "fs-ent-pipeline");
   // The parent is promoted only with every condition VERIFIED and an approved closure review.
   assert.equal(

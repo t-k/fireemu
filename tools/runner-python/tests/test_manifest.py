@@ -701,3 +701,49 @@ def test_a_blocking_event_fireemu_does_not_know_is_reported_never_dropped():
     )
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "providers/ailogic/x"}))[:2] == ("ai", "notPlanned")
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={}))[:2] == ("blocking", "unsupported")
+
+
+# --- survivors of the first mutation run on slice 2b --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "endpoint_value, expected",
+    [
+        (sdk_manifest.ManifestEndpoint(entryPoint="f", scheduleTrigger=3), ("schedule", "unsupported", "scheduleTrigger must be an object")),
+        (sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger=[1]), ("tasks", "unsupported", "taskQueueTrigger must be an object")),
+        (sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger="x"), ("blocking", "unsupported", "blockingTrigger must be an object")),
+    ],
+)
+def test_a_trigger_record_that_is_not_an_object_names_itself_and_its_family(endpoint_value, expected):
+    assert _unserved(endpoint_value) == expected
+
+
+def test_an_unresolvable_expression_in_a_retry_record_names_its_field():
+    assert _unserved(_schedule(schedule="every 1 minutes", retryConfig={"retryCount": _Unresolved()})) == (
+        "unknown", "unsupported", "scheduleTrigger.retryConfig.retryCount expression did not resolve to a value"
+    )
+
+
+@pytest.mark.parametrize("seconds", [1, 0.5, 30])
+def test_any_positive_retry_window_makes_a_schedule_retry(seconds):
+    assert describe_endpoint("f", _schedule(schedule="every 5 minutes", retryConfig={"maxRetrySeconds": seconds}))["retry"] is True
+
+
+def test_a_blocking_trigger_without_an_event_type_says_so_with_an_empty_name():
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"options": {}})) == (
+        "blocking", "unsupported", "blocking identity event  is not served"
+    )
+
+
+def test_an_unserved_blocking_product_carries_its_exact_reason():
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "providers/ailogic/x"})) == (
+        "ai", "notPlanned", "not planned: Firebase AI Logic blocking triggers have no local emulator"
+    )
+
+
+def test_each_blocking_token_flag_is_read_from_its_own_option():
+    for flag in ("accessToken", "idToken", "refreshToken"):
+        described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": BLOCK + "beforeSignIn", "options": {flag: True}}))
+        assert {name: described["trigger"][name] for name in ("accessToken", "idToken", "refreshToken")} == {
+            "accessToken": flag == "accessToken", "idToken": flag == "idToken", "refreshToken": flag == "refreshToken"
+        }

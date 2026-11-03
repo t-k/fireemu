@@ -18,18 +18,10 @@ from werkzeug.test import EnvironBuilder
 _INSTANT = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?Z$")
 _LOS_ANGELES = ZoneInfo("America/Los_Angeles")
 _MAX_ANSWER_CHARS = 256
-_app = None
 
 
 class SchedulerFailure(Exception):
     """A scheduled attempt that failed: the run was malformed or the function answered 400 or more."""
-
-
-def _flask_app() -> flask.Flask:
-    global _app
-    if _app is None:
-        _app = flask.Flask("fireemu-scheduler")
-    return _app
 
 
 def _schedule_time(instant) -> str:
@@ -68,7 +60,7 @@ def scheduler_headers(data) -> dict:
 def deliver_schedule(function, data) -> None:
     """Calls the SDK wrapper with the scheduler's request. Returns when it answers below 400; raises otherwise."""
     environ = EnvironBuilder(method="POST", path="/", headers=scheduler_headers(data)).get_environ()
-    with _flask_app().request_context(environ):
+    with flask.Flask("fireemu-scheduler").request_context(environ):
         response = function(flask.request)
     if response.status_code >= 400:
         body = response.get_data(as_text=True)[:_MAX_ANSWER_CHARS]

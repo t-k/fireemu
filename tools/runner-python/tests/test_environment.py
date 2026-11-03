@@ -50,8 +50,9 @@ def test_a_member_that_is_not_a_string_is_dropped():
 @pytest.mark.parametrize("text", ["not json", "[1]", '"text"', "3", "null"])
 def test_secrets_that_are_not_a_json_object_stop_the_runner(text):
     environ = {"FIREEMU_LOCAL_SECRETS_JSON": text}
-    with pytest.raises(ValueError, match="local secrets"):
+    with pytest.raises(ValueError) as error:
         load_local_secrets(environ)
+    assert str(error.value) in ("the local secrets are not valid JSON", "the local secrets are not a JSON object")
     assert "FIREEMU_LOCAL_SECRETS_JSON" not in environ
 
 
@@ -241,3 +242,19 @@ def test_a_random_mix_never_breaks_the_isolation_rules():
             assert not thread.is_alive()
         assert failures == []
         assert visible() == {}
+
+
+def test_the_exact_messages_for_secrets_that_cannot_be_used():
+    with pytest.raises(ValueError) as error:
+        load_local_secrets({"FIREEMU_LOCAL_SECRETS_JSON": "{"})
+    assert str(error.value) == "the local secrets are not valid JSON"
+    with pytest.raises(ValueError) as error:
+        load_local_secrets({"FIREEMU_LOCAL_SECRETS_JSON": "[]"})
+    assert str(error.value) == "the local secrets are not a JSON object"
+
+
+def test_a_secret_the_function_removed_itself_does_not_break_the_exit():
+    gate = EnvironmentGate(SECRETS)
+    with gate.hold(["API_KEY"]):
+        del os.environ["API_KEY"]
+    assert "API_KEY" not in os.environ

@@ -184,3 +184,20 @@ def test_the_usage_line_names_the_script(capsys):
     with pytest.raises(SystemExit):
         main._parse(["--help"])
     assert capsys.readouterr().out.startswith("usage: runner.py ")
+
+
+def test_local_secrets_that_are_not_json_stop_the_run_with_one_exact_line(monkeypatch, codebase, capsys):
+    code, wiring = run_with(monkeypatch, codebase, b"", env={"FIREEMU_LOCAL_SECRETS_JSON": "{"})
+    assert code == 1
+    assert capsys.readouterr().err == "[functions] the local secrets are not valid JSON\n"
+    assert "FIREEMU_LOCAL_SECRETS_JSON" not in os.environ
+
+
+def test_the_local_secrets_of_the_daemon_reach_the_gate_the_run_serves_with(monkeypatch, codebase):
+    seen = {}
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate: seen.update(gate=gate) or 0)
+    monkeypatch.delenv("API_KEY", raising=False)
+    code, _ = run_with(monkeypatch, codebase, b"", env={"FIREEMU_LOCAL_SECRETS_JSON": '{"API_KEY": "from the daemon"}'})
+    assert code == 0
+    with seen["gate"].hold(["API_KEY"]):
+        assert os.environ["API_KEY"] == "from the daemon"

@@ -76,14 +76,16 @@ def test_a_job_name_without_a_resource_path_is_its_own_id(job, id_):
 )
 def test_a_run_without_a_job_or_a_valid_utc_time_is_refused(monkeypatch, bad):
     monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
-    with pytest.raises(SchedulerFailure):
+    with pytest.raises(SchedulerFailure) as error:
         scheduler_headers(bad)
+    assert str(error.value) in ("the scheduled run names no job name", f"the scheduled time is not an RFC 3339 UTC instant: {bad.get('scheduleTime')!r}")
 
 
 def test_data_that_is_not_an_object_is_refused():
     for bad in (None, "x", [1]):
-        with pytest.raises(SchedulerFailure, match="no job"):
+        with pytest.raises(SchedulerFailure) as error:
             scheduler_headers(bad)
+        assert str(error.value) == "the scheduled run names no job name"
 
 
 # --- delivery through the real SDK wrapper --------------------------------------------------------
@@ -148,3 +150,30 @@ def test_a_long_answer_is_cut_in_the_message():
     with pytest.raises(SchedulerFailure) as error:
         deliver_schedule(lambda request: Answer(), data())
     assert len(str(error.value)) < 600
+
+
+def test_the_request_is_a_post_to_the_root_with_an_empty_body():
+    seen = {}
+
+    def function(request):
+        seen.update(method=request.method, path=request.path, body=request.get_data())
+
+        class Answer:
+            status_code = 200
+
+        return Answer()
+
+    deliver_schedule(function, data())
+    assert seen == {"method": "POST", "path": "/", "body": b""}
+
+
+def test_an_answer_without_a_body_is_just_its_status():
+    class Answer:
+        status_code = 503
+
+        def get_data(self, as_text=False):
+            return ""
+
+    with pytest.raises(SchedulerFailure) as error:
+        deliver_schedule(lambda request: Answer(), data())
+    assert str(error.value) == "the scheduled function answered 503"

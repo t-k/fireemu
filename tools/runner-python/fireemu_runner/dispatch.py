@@ -19,21 +19,25 @@ MAX_ACTIVE_INVOCATIONS = 4096
 _MAX_ERROR_CHARS = 4096
 _MAX_DIAGNOSTIC_CHARS = 256 * 1024
 
-def _cloud_event(adapter):
-    """A delivery that hands the handler the CloudEvent the adapter builds."""
-    return lambda function, event: function(adapter(event))
-
-
-# Trigger types that arrive as an `invoke` frame, and how each is delivered to the function.
-_DELIVERIES = {
-    "firestore": _cloud_event(firestore_cloud_event),
-    "pubsub": _cloud_event(pubsub_cloud_event),
-    "storage": _cloud_event(storage_cloud_event),
-    "eventarc": _cloud_event(eventarc_cloud_event),
-    "database": _cloud_event(database_cloud_event),
-    # A Gen2 scheduled function is an HTTP function: the SDK wrapper takes the scheduler's request.
-    "schedule": lambda function, event: deliver_schedule(function, event.get("data") if isinstance(event, dict) else None),
+# Trigger types that arrive as an `invoke` frame whose function takes a CloudEvent, and the adapter that builds it.
+_CLOUD_EVENTS = {
+    "firestore": firestore_cloud_event,
+    "pubsub": pubsub_cloud_event,
+    "storage": storage_cloud_event,
+    "eventarc": eventarc_cloud_event,
+    "database": database_cloud_event,
 }
+# A Gen2 scheduled function is an HTTP function: the SDK wrapper takes the scheduler's request.
+_TRIGGERS = frozenset((*_CLOUD_EVENTS, "schedule"))
+
+
+def _deliver(trigger: str, function, event) -> None:
+    if trigger == "schedule":
+        deliver_schedule(function, event.get("data") if isinstance(event, dict) else None)
+    else:
+        function(_CLOUD_EVENTS[trigger](event))
+
+
 # What `FUNCTION_SIGNATURE_TYPE` says for each (the Node runner's `signatureType`).
 _SIGNATURE_TYPES = {"schedule": "http"}
 
@@ -60,7 +64,7 @@ class Dispatcher:
         if "entryPoint" in message and message["entryPoint"] != spec["entryPoint"]:
             raise LookupError("entry point does not match the function manifest")
         trigger = spec["trigger"]["type"]
-        if message["trigger"] != trigger or trigger not in _DELIVERIES:
+        if message["trigger"] != trigger or trigger not in _TRIGGERS:
             raise LookupError("trigger does not match the function manifest")
         function = self._functions.get(spec["entryPoint"])
         if not callable(function):
@@ -89,7 +93,7 @@ class Dispatcher:
                     os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
                     os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
                     os.environ["K_SERVICE"] = spec["name"]
-                    _DELIVERIES[message["trigger"]](function, message["event"])
+                    _deliver(message["trigger"], function, message["event"])
                 result = {"type": "result", "invocationId": invocation, "ok": True}
             except BaseException as error:  # a SystemExit in user code must still answer the daemon
                 # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.

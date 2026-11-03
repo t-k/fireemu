@@ -11395,7 +11395,7 @@ mod compatibility_routing_tests {
         let tenants = registry
             .tenants
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(!tenants.keys().any(|(project, _)| project == "worker-alpha"));
         drop(tenants);
         assert_eq!(

@@ -34,7 +34,7 @@ test('the exec plan starts only the database on free ports and runs the observer
   assert.deepEqual(daemon, ['exec', '--no-config-discovery', '--config', '/out/config.json', '--only', 'database', '--database-port', '0', '--hub-port', '0', '--logging-port', '0', '--log-verbosity', 'quiet']);
   assert.deepEqual(command.slice(0, 3), [process.execPath, '--max-old-space-size=1024', path.join(here, 'sdk-observer', 'observer.mjs')]);
   const arg = n => command[command.indexOf(n) + 1];
-  assert.deepEqual([arg('--target'), arg('--suite'), arg('--run-id'), arg('--out'), arg('--direct-cap')], ['emulator', 'admin', 'LOCAL-SDK-EVENTS-1', '/out/observer', '250']);
+  assert.deepEqual([arg('--target'), arg('--suite'), arg('--run-id'), arg('--out'), arg('--direct-cap')], ['emulator', 'admin', 'LOCAL-SDK-EVENTS-1', '/out/observer', '200']);
   assert.match(arg('--prefix'), /^\/[A-Za-z0-9_-]+$/); assert.ok(command.includes('--continue-on-failure')); assert.equal(command.includes('--production-config'), false);
 });
 

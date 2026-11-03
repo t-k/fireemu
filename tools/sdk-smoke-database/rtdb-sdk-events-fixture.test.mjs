@@ -61,3 +61,13 @@ test('reduce: a single suite run has only its own profiles', () => {
   assert.deepEqual(r.profiles.map(p => p.name), ['r1-admin', 'r2-admin']);
   assert.throws(() => reduceEventsJournal(journal(), { ...RESULT, suite: 'admin' }), /profile/);
 });
+
+test('reduce: an unknown SDK mutation outcome of a case row (or of the seed) is kept in the reduction', () => {
+  const rows = journal();
+  const c = rows.find(r => r.kind === 'case' && r.id === 'get_exists'); c.unknown = ['get_exists/get'];
+  const seed = rows.find(r => r.kind === 'case' && r.id === 'seed'); seed.ok = false; seed.error = 'Timeout: seed timed out after 10000 ms'; seed.unknown = ['seed'];
+  const r = reduceEventsJournal(rows, RESULT);
+  assert.deepEqual(r.profiles[0].rows.find(x => x.id === 'get_exists').unknown, ['get_exists/get']);
+  assert.deepEqual(r.profiles[0].rows.find(x => x.id === 'seed').unknown, ['seed']);
+  assert.equal(Object.hasOwn(r.profiles[1].rows[0], 'unknown'), false);
+});

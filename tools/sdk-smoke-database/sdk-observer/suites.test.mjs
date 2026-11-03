@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import tls from 'node:tls';
 import net from 'node:net';
@@ -177,4 +177,93 @@ test('the quiescence window of a step is at least 800 ms: a production round tri
   const { QUIET_MS, SETTLE_MAX_MS } = await import('./events-sequence.mjs');
   assert.ok(QUIET_MS >= 800, `QUIET_MS is ${QUIET_MS}`);
   assert.ok(SETTLE_MAX_MS >= 4 * QUIET_MS, `SETTLE_MAX_MS ${SETTLE_MAX_MS} must leave room for several quiet windows`);
+});
+
+// ---- Codex presend review of packet 1 v1, Must 1: browser traffic is admitted before it is dispatched ----
+async function admissionWorld({ cap }) {
+  const { chromium } = await import('playwright'), { admitBrowserTraffic } = await import('./observer.mjs');
+  const hits = { http: 0, upgrades: 0 };
+  const server = createServer((req, res) => { if (req.url.startsWith('/hit')) { hits.http += 1; setTimeout(() => res.writeHead(200).end('ok'), 50); } else res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>x</title>'); });
+  server.on('upgrade', (req, socket) => { hits.upgrades += 1; socket.destroy(); });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const host = `127.0.0.1:${server.address().port}`, counter = createCounter({ direct: cap }), aborts = [], rows = [];
+  const browser = await chromium.launch({ headless: true }), close = async () => { await browser.close(); server.closeAllConnections(); server.close(); };
+  try {
+    const page = await browser.newPage(), ctx = { profile: 'r1-lp', counter, abort: m => aborts.push(m), journal: { write: row => rows.push(row) } };
+    await admitBrowserTraffic(page, ctx, url => { try { const u = new URL(url); return u.host === host && (u.pathname === '/hit' || u.pathname === '/.ws'); } catch { return false; } });   // the page itself is served from the same host
+    await page.goto(`http://${host}/`);
+    return { page, host, hits, counter, aborts, rows, close };
+  } catch (error) { await close(); throw error; }
+}
+test('browser admission: with the cap reached in the middle of a burst of long-polling requests none leaves past the cap', async () => {
+  const w = await admissionWorld({ cap: 5 });
+  try {
+    await w.page.evaluate(async () => { await Promise.allSettled(Array.from({ length: 20 }, (_, i) => fetch(`/hit?i=${i}`))); });
+    assert.equal(w.hits.http, 5, 'the server saw exactly the admitted requests');
+    assert.deepEqual(w.counter.used(), { direct: 5, reserve: 0, adc: 0 });
+    assert.equal(w.counter.used().overflow, undefined, 'nothing is counted after it left');
+    assert.equal(w.aborts.length >= 1, true); assert.match(w.aborts[0], /direct cap 5/);
+    assert.equal(w.rows.filter(r => r.kind === 'raw-lp-request').length, 5);
+  } finally { await w.close(); }
+});
+test('browser admission: a burst of WebSocket connections from the page is cut at the cap before any upgrade reaches the server', async () => {
+  const w = await admissionWorld({ cap: 3 });
+  try {
+    await w.page.evaluate(async host => { await Promise.allSettled(Array.from({ length: 12 }, () => new Promise(resolve => { const s = new WebSocket(`ws://${host}/.ws`); s.onerror = s.onclose = () => resolve(); }))); }, w.host);
+    assert.equal(w.hits.upgrades, 3, 'the server saw exactly the admitted upgrades');
+    assert.deepEqual(w.counter.used(), { direct: 3, reserve: 0, adc: 0 }); assert.equal(w.counter.used().overflow, undefined);
+    assert.match(w.aborts[0], /direct cap 3/); assert.equal(w.rows.filter(r => r.kind === 'raw-page-ws').length, 3);
+  } finally { await w.close(); }
+});
+test('browser admission: requests to other hosts are neither counted nor delayed', async () => {
+  const w = await admissionWorld({ cap: 1 });
+  try {
+    await w.page.evaluate(async () => { await fetch('/other.html'); });
+    assert.deepEqual(w.counter.used(), { direct: 0, reserve: 0, adc: 0 }); assert.deepEqual(w.aborts, []);
+  } finally { await w.close(); }
+});
+
+// ---- Codex presend review of packet 1 v1, Must 2 (observer side) ----
+async function harnessWith(suite, suiteProfiles, opts = {}) {
+  const server = await fakeServer(), out = mkdtempSync(path.join(tmpdir(), 'events-observer-'));
+  const target = { kind: 'emulator', host: server.host, namespace: 'ns', projectId: 'demo-x' };
+  const outcome = await run({ target, runId: 'TEST-EVENTS-02', prefix: PREFIX, directCap: 40, outDir: path.join(out, 'run'), suite, ...opts }, { suiteProfiles, profiles: { ws: () => { throw new Error('small profile used'); }, lp: () => { throw new Error('small profile used'); } } });
+  server.close(); rmSync(out, { recursive: true, force: true });
+  return { ...outcome, server };
+}
+test('an SDK mutation that timed out is carried into the result: unverified, exit 3, the case stays observed', async () => {
+  const withUnknown = suite => async ctx => caseRows(suite, null).map(r => (r.id === 'fanout' || r.id === 'push' ? { ...r, unknown: [`${r.id}/hang`] } : r));
+  const h = await harnessWith('events+admin', { events: { ws: withUnknown('events'), lp: withUnknown('events') }, admin: { admin: withUnknown('admin') } });
+  assert.equal(h.exit, 3); assert.equal(h.result.status, 'unverified');
+  assert.ok(h.result.unverified.includes('unknown SDK mutation outcome: r1-ws/fanout/hang'), JSON.stringify(h.result.unverified));
+  assert.ok(h.result.unverified.includes('unknown SDK mutation outcome: r2-admin/push/hang'));
+  assert.equal(h.result.unverified.filter(u => u.startsWith('unknown SDK mutation outcome')).length, 4 + 2, 'one per profile: fanout in the four events profiles, push in the two admin profiles');
+  assert.equal(h.result.observed, 52); assert.deepEqual(h.result.cleanup, { prefix: 'verified', rules: 'verified' });
+});
+test('an events or admin profile that is abandoned at its deadline may have mutations in flight: unverified, exit 3', async () => {
+  const ok = suite => async ctx => caseRows(suite, null);
+  const h = await harnessWith('events+admin', { events: { ws: ok('events'), lp: async () => new Promise(() => {}) }, admin: { admin: ok('admin') } }, { profileMs: 150, closeMs: 100, continueOnFailure: true });
+  assert.equal(h.exit, 3); assert.ok(h.result.unverified.some(u => /^SDK mutations possibly in flight: profile r1-lp aborted/.test(u)), JSON.stringify(h.result.unverified));
+});
+test('a clean run has no unverified entry and keeps exit 0', async () => {
+  const h = await harness('events+admin'); assert.equal(h.exit, 0); assert.deepEqual(h.result.unverified, []);
+});
+
+// ---- Codex presend review of packet 1 v1, Should: the Admin SDK version is pinned at startup ----
+test('SDK pins: the installed versions are the pinned ones; the Admin SDK is checked only for suites that use it; the small result keeps its recorded sdk members', async () => {
+  const { checkSdkPins, adminVersion, sdkVersions } = await import('./observer.mjs');
+  const fake = versions => { const dir = mkdtempSync(path.join(tmpdir(), 'pins-')); for (const [pkg, version] of Object.entries(versions)) { const d = path.join(dir, pkg); mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'package.json'), JSON.stringify({ version })); } return dir; };
+  const good = { firebase: '12.18.0', '@firebase/database': '1.1.5', playwright: '1.62.1' }, dirs = [fake(good), fake({ ...good, 'firebase-admin': '14.3.0' }), fake({ ...good, 'firebase-admin': '14.2.0' }), fake({ ...good, playwright: '1.0.0', 'firebase-admin': '14.3.0' })];
+  try {
+    checkSdkPins('small', dirs[0]); checkSdkPins('events', dirs[0]); checkSdkPins('admin', dirs[1]); checkSdkPins('events+admin', dirs[1]);
+    assert.throws(() => checkSdkPins('admin', dirs[0]), /ENOENT/); assert.throws(() => checkSdkPins('events+admin', dirs[2]), /firebase-admin is not 14.3.0/);
+    assert.throws(() => checkSdkPins('small', dirs[3]), /playwright is not 1.62.1/); checkSdkPins('small', dirs[2]);
+    assert.equal(adminVersion(dirs[1]), '14.3.0');
+  } finally { for (const d of dirs) rmSync(d, { recursive: true, force: true }); }
+  assert.deepEqual(Object.keys(sdkVersions()), ['firebase', 'database', 'playwright']);
+  checkSdkPins('events+admin');   // the installed tree is the pinned one
+});
+test('the Admin SDK version is part of the result of the admin suites only', async () => {
+  const a = await harness('admin'), s = await harness('events');
+  assert.equal(a.result.sdk.firebaseAdmin, '14.3.0'); assert.equal(Object.hasOwn(s.result.sdk, 'firebaseAdmin'), false);
 });

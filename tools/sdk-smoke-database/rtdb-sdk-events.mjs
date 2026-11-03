@@ -50,7 +50,7 @@ export function daemonConfig(profile) {
 export function execPlan(binary, config, observerOut, runId, suite) {
   const prefix = `/sdkevents${randomBytes(5).toString('hex')}`;
   return [binary, 'exec', '--no-config-discovery', '--config', config, '--only', 'database', '--database-port', '0', '--hub-port', '0', '--logging-port', '0', '--log-verbosity', 'quiet', '--',
-    process.execPath, '--max-old-space-size=1024', OBSERVER, '--target', 'emulator', '--suite', suite, '--run-id', runId, '--prefix', prefix, '--direct-cap', '250', '--out', observerOut, '--continue-on-failure'];
+    process.execPath, '--max-old-space-size=1024', OBSERVER, '--target', 'emulator', '--suite', suite, '--run-id', runId, '--prefix', prefix, '--direct-cap', '200', '--out', observerOut, '--continue-on-failure'];
 }
 
 /** Reduces the observer run in <out>/observer to journal.json; with a recorded reduction also writes comparison.json and returns it. */

@@ -43,6 +43,7 @@ export function reduceEventsJournal(rows, result) {
       const kept = { id: row.id, ok: row.ok };
       if (!row.ok) kept.error = String(row.error).slice(0, 200);
       if (!setup) kept.steps = row.steps;
+      if (Array.isArray(row.unknown) && row.unknown.length) kept.unknown = row.unknown.map(String);   // a mutation that timed out: its outcome is unknown, the comparison must not call the case clean
       p.rows.push(kept);
     } else if (FAULTS.includes(row.kind)) faults.push({ kind: row.kind, profile: named(row.profile) ? row.profile : null });
     else if (!IGNORED.includes(row.kind)) throw Error(`unknown journal row kind ${row.kind}`);

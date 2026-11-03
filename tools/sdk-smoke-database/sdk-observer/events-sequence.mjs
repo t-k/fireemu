@@ -64,11 +64,16 @@ function validate(cfg) {
     || typeof cfg.scope !== 'string' || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(cfg.scope) || !['ws', 'lp'].includes(cfg.transport) || typeof cfg.name !== 'string' || !/^r[12]-(ws|lp)$/.test(cfg.name)) throw Error('Invalid events binding');
 }
 
-/** One case: returns {id, ok, steps} (ok false with `error` when an action threw outside a recorded step outcome). */
+/**
+ * One case: returns {id, ok, steps} (ok false with `error` when an action threw outside a recorded step outcome). A write, push
+ * call or transaction that hits its deadline has an UNKNOWN outcome (the SDK may still send or have applied it): its label
+ * `<case>/<step>` is listed in `unknown` (only present when not empty) so the observer keeps its claims for recovery.
+ */
 export async function runCase(spec, { D, at, timing }) {
   const { now, sleep, stepMs = STEP_MS, quietMs = QUIET_MS, maxMs = SETTLE_MAX_MS } = timing;
-  const log = createLog(now), steps = [], offs = [];
+  const log = createLog(now), steps = [], offs = [], unknown = [];
   let current = null;
+  const unknownIf = (step, error) => { if (errorCode(error) === 'timeout') unknown.push(`${spec.id}/${step.label}`); return { error: errorCode(error) }; };
   const record = (role, event) => { if (current) current[role].push(event); log.touch(); };
   const listener = (role, label, kind, firsts) => (snap, prev) => {
     let event;   // never throw into the SDK: a recorder fault is itself recorded
@@ -89,18 +94,18 @@ export async function runCase(spec, { D, at, timing }) {
         }
         current.ready = await waitUntil(() => wanted.every(label => firsts.has(label)), stepMs, { now, sleep });
       } else if (step.kind === 'write') {
-        current.ack = await withTimeout(stepMs, step.label, step.run(at.w)).then(() => 'ok', error => ({ error: errorCode(error) }));
+        current.ack = await withTimeout(stepMs, step.label, step.run(at.w)).then(() => 'ok', error => unknownIf(step, error));
       } else if (step.kind === 'get') {
         current.result = await withTimeout(stepMs, step.label, step.run(at.o)).then(snap => ({ exists: snap.exists(), v: shapeOf(snap) }), error => ({ error: errorCode(error) }));
       } else if (step.kind === 'call') {
-        current.result = await withTimeout(stepMs, step.label, step.run(at.w)).then(value => value, error => ({ error: errorCode(error) }));
+        current.result = await withTimeout(stepMs, step.label, step.run(at.w)).then(value => value, error => unknownIf(step, error));
       } else if (step.kind === 'transaction') {
         const firsts = new Set(), ref = at.t(step.path), inputs = [];
         const off = D.onValue(ref, listener('writer', 'W', 'value', firsts), cancel('writer', 'W', firsts));
         try {
           current.ready = await waitUntil(() => firsts.has('W'), stepMs, { now, sleep });
           const outcome = await withTimeout(stepMs, step.label, D.runTransaction(ref, value => { inputs.push(plain(value)); return step.update(value); }))
-            .then(r => { record('writer', { l: 'txn', e: 'resolved' }); return { committed: r.committed, snapshot: shapeOf(r.snapshot) }; }, error => { record('writer', { l: 'txn', e: 'rejected' }); return { error: errorCode(error) }; });
+            .then(r => { record('writer', { l: 'txn', e: 'resolved' }); return { committed: r.committed, snapshot: shapeOf(r.snapshot) }; }, error => { record('writer', { l: 'txn', e: 'rejected' }); return unknownIf(step, error); });
           current.result = { inputs, ...outcome };
           current.quiet = await settle();
         } finally { off(); }
@@ -108,9 +113,9 @@ export async function runCase(spec, { D, at, timing }) {
       } else throw Error(`unknown step kind ${step.kind}`);
       current.quiet = await settle();
     }
-    return { id: spec.id, ok: true, steps };
+    return { id: spec.id, ok: true, steps, ...(unknown.length ? { unknown } : {}) };
   } catch (error) {
-    return { id: spec.id, ok: false, error: `${error?.name}: ${String(error?.message).slice(0, 200)}`, steps };
+    return { id: spec.id, ok: false, error: `${error?.name}: ${String(error?.message).slice(0, 200)}`, steps, ...(unknown.length ? { unknown } : {}) };
   } finally {
     current = null;
     for (const off of offs) off();
@@ -140,7 +145,7 @@ export async function runEventsProfile({ D, A, cfg, emit = () => {}, onApp = () 
     if (!done(await empty('startup-observer', refs.observer('')))) return rows;
     const at = { w: refs.writer, o: refs.observer, t: refs.txn };
     const seed = await withTimeout(timing.stepMs, 'seed', (async () => { await D.set(at.w(''), SEED); for (const [key, value, priority] of PRIORITY_SEED) await D.setWithPriority(at.w(`pw/${key}`), value, priority); })())
-      .then(() => ({ id: 'seed', ok: true }), error => ({ id: 'seed', ok: false, error: `${error?.name}: ${error?.message}` }));
+      .then(() => ({ id: 'seed', ok: true }), error => ({ id: 'seed', ok: false, error: `${error?.name}: ${error?.message}`, ...(errorCode(error) === 'timeout' ? { unknown: ['seed'] } : {}) }));
     if (!done(seed)) return rows;
     const specs = eventCases(D);
     for (const id of cases) done(await runCase(specs.find(s => s.id === id), { D, at, timing }));

@@ -183,9 +183,12 @@ test('r1.3 every WebSocket the SDK creates is counted when it is created; over t
   const { default: Ws } = await import('faye-websocket'), dial = () => { const c = new Ws.Client('ws://127.0.0.1:1/.ws'); c.on('error', () => {}); return c; };
   dial().close(); dial().close(); assert.throws(() => dial(), /direct cap 2/); assert.equal(aborts.length, 1); assert.deepEqual(counter.used(), { direct: 2, reserve: 0, adc: 0 });
 });
-test('r1.3 LP: when the budget is exhausted the abort is raised', async () => {
+test('r1.3 LP: when the budget is exhausted the abort is raised and nothing is dispatched past the cap', async () => {
   const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
-  await assert.rejects(withTimeout(30000, 'lp cap', lpProfile(ctx))); assert.match(aborts[0], /direct cap 2 reached at lp-request/); for (const close of ctx.closers.splice(0).reverse()) await close(); server.close();
+  const profile = lpProfile(ctx).catch(() => {});   // the abort stops the run from outside (run() rejects the profile); here the page is left alone until the checks are done
+  for (let i = 0; i < 200 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 500));
+  assert.match(aborts[0], /direct cap 2 reached at lp-request/); for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await profile; server.close();
 });
 test('r1.5 the cleanup does not depend on the journal: with every journal write failing the restoration still happens', async () => {
   let down = false;
@@ -220,12 +223,14 @@ test('r2.2 a profile that never finishes starting keeps the claims', async () =>
   const r = await production({ profiles: { ws: () => new Promise(() => {}), lp: goodProfiles.lp }, opts: { profileMs: 100, closeMs: 100 } });
   assert.equal(r.outcome.exit, 3); assert.ok(r.outcome.result.unverified.includes('profile r1-ws did not settle')); assert.equal(r.leaseLeft, true);
 });
-test('r2.3 LP: every request the page dispatched is counted, also the ones over the cap; the total equals what the server received', async () => {
+test('r2.3 LP: a request is charged before it is dispatched: the server receives exactly the admitted requests and none is counted after it left', async () => {
   const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
-  await assert.rejects(withTimeout(30000, 'lp cap', lpProfile(ctx)));
-  for (const close of ctx.closers.splice(0).reverse()) await close(); await new Promise(resolve => setTimeout(resolve, 300));
-  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used(), counted = used.direct + (used.overflow ?? 0);
-  assert.ok(received >= 1); assert.equal(used.direct, 2); assert.ok((used.overflow ?? 0) >= 0); assert.equal(counted, received, JSON.stringify({ used, received })); server.close();
+  const profile = lpProfile(ctx).catch(() => {});
+  for (let i = 0; i < 200 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 500));
+  for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await profile; await new Promise(resolve => setTimeout(resolve, 300));
+  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used();
+  assert.ok(received >= 1); assert.equal(used.direct, 2); assert.equal(used.overflow, undefined); assert.equal(received, used.direct, JSON.stringify({ used, received })); server.close();
 });
 
 // ---- repository copy (2026-11-03): private production inputs come from --production-config, output from --out ----

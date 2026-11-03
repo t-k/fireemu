@@ -119,13 +119,13 @@ test('runCase: a recorder fault inside a callback is recorded, not thrown into t
 });
 
 // ---- the profile --------------------------------------------------------------------------------------------------------------------
-function fakeApp({ rootValue = null, failSeed = false } = {}) {
+function fakeApp({ rootValue = null, failSeed = false, hangSeed = false } = {}) {
   const D = fakeD(), log = [];
   Object.assign(D, {
     forceWebSockets: () => log.push('forceWebSockets'), forceLongPolling: () => log.push('forceLongPolling'),
     getDatabase: app => ({ app }), ref: (db, p) => ({ path: p, app: db.app }), child: (r, p) => ({ path: `${r.path}/${p}`, app: r.app }),
     get: r => { log.push(`get ${r.app}`); return Promise.resolve(snap('x', rootValue)); },
-    set: r => { log.push(`set ${r.path}`); return failSeed ? Promise.reject(new Error('denied')) : Promise.resolve(); },
+    set: r => { log.push(`set ${r.path}`); return hangSeed ? new Promise(() => {}) : failSeed ? Promise.reject(new Error('denied')) : Promise.resolve(); },
     setWithPriority: r => { log.push(`setWithPriority ${r.path}`); return Promise.resolve(); },
   });
   const A = { initializeApp: (opts, name) => { log.push(`init ${name} ${opts.databaseURL}`); return name; }, deleteApp: name => { log.push(`delete ${name}`); return Promise.resolve(); } };
@@ -260,4 +260,42 @@ test('admin profile: after a failed startup read the cases still run; a transact
   const rows = await runAdminProfile({ db: { ref: node }, cfg: { scope: 'pre/sdk-admin/r1-admin', name: 'r1-admin', quietMs: 20 }, cases: ['set', 'transaction_absent'] });
   assert.deepEqual(rows.map(r => [r.id, r.ok]), [['startup', false], ['set', true], ['transaction_absent', true]]);
   assert.deepEqual(calls, ['set pre/sdk-admin/r1-admin/a', 'on value pre/sdk-admin/r1-admin/ta', 'transaction pre/sdk-admin/r1-admin/ta']);
+});
+
+// ---- Codex presend review of packet 1 v1, Must 2: a timed-out SDK mutation is an unknown outcome ----
+test('runCase: a write, a push call and a transaction that time out are unknown mutations; a rejected write, a hanging get and a clean case are not', async () => {
+  const D = fakeD();
+  const hang = () => new Promise(() => {});
+  const spec = { id: 'x', listeners: [], steps: [
+    { kind: 'write', label: 'denied', run: () => Promise.reject(Object.assign(new Error('x'), { code: 'PERMISSION_DENIED' })) },
+    { kind: 'get', label: 'slow-get', run: hang },
+    { kind: 'write', label: 'hang-write', run: hang },
+    { kind: 'call', label: 'hang-push', run: hang },
+    { kind: 'transaction', label: 'hang-txn', path: 't', update: () => 1 },
+    { kind: 'write', label: 'fine', run: () => Promise.resolve() },
+  ] };
+  D.runTransaction = hang; later(5, () => D.fire('t', 'value', snap('t', null)));
+  const row = await runCase(spec, { D, at, timing: { ...timing(), stepMs: 60 } });
+  assert.equal(row.ok, true);
+  assert.deepEqual(row.unknown, ['x/hang-write', 'x/hang-push', 'x/hang-txn']);
+  const clean = await runCase({ id: 'y', listeners: [], steps: [{ kind: 'write', label: 'w', run: () => Promise.resolve() }, { kind: 'get', label: 'g', run: () => Promise.resolve(snap('g', 1)) }] }, { D: fakeD(), at, timing: timing() });
+  assert.equal(Object.hasOwn(clean, 'unknown'), false, 'a case without an unknown mutation keeps its recorded shape');
+});
+test('runCase: the unknown mutations found before an unknown step kind aborts the case are still reported', async () => {
+  const row = await runCase({ id: 'z', listeners: [], steps: [{ kind: 'write', label: 'hang', run: () => new Promise(() => {}) }, { kind: 'nope', label: 'n' }] }, { D: fakeD(), at, timing: { ...timing(), stepMs: 50 } });
+  assert.equal(row.ok, false); assert.deepEqual(row.unknown, ['z/hang']);
+});
+test('events profile: a seed that times out is an unknown mutation of the profile', async () => {
+  const f = fakeApp({ hangSeed: true }), rows = await runEventsProfile({ D: f.D, A: f.A, cfg: cfg({ stepMs: 80 }), cases: [] });
+  const seed = rows.find(r => r.id === 'seed');
+  assert.equal(seed.ok, false); assert.deepEqual(seed.unknown, ['seed']);
+  const refused = fakeApp({ failSeed: true }), r2 = await runEventsProfile({ D: refused.D, A: refused.A, cfg: cfg() });
+  assert.equal(Object.hasOwn(r2.find(r => r.id === 'seed'), 'unknown'), false, 'a refused seed is an answer, not an unknown');
+});
+test('admin profile: a timed-out Admin SDK write, push and transaction are reported as unknown mutations', async () => {
+  const hang = () => new Promise(() => {});
+  const node = p => ({ path: p, get: () => Promise.resolve(snap(p, null)), child: c => node(`${p}/${c}`), set: hang, update: hang, remove: hang, push: () => ({ key: '-OabcdefghijklmnopqR', set: hang, get: hang }), on: (e, f) => f, off: () => {}, transaction: hang });
+  const rows = await runAdminProfile({ db: { ref: node }, cfg: { scope: 'pre/sdk-admin/r1-admin', name: 'r1-admin', stepMs: 60, quietMs: 20, maxMs: 100 }, cases: ['set', 'push', 'transaction_absent', 'get'] });
+  const unknown = rows.flatMap(r => r.unknown ?? []);
+  assert.deepEqual(unknown, ['set/set', 'push/push', 'transaction_absent/absent']);
 });

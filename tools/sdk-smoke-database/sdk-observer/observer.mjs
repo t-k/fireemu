@@ -49,6 +49,14 @@ export function productionConfig(doc) {
   return { ...PRODUCTION, principalSha256: doc.principalSha256, legacyPacket: doc.legacyPacket, runtimeProposal: doc.runtimeProposal, paths: { ...paths } };
 }
 const writeNew = (file, text) => { const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); try { writeSync(fd, text); } finally { closeSync(fd); } };
+const ADMIN_PIN = ['firebase-admin', '14.3.0'];
+/** The installed Admin SDK version (only the admin suites use it; the small result keeps its recorded `sdk` members). */
+export const adminVersion = (modules = MODULES) => JSON.parse(readFileSync(path.join(modules, ADMIN_PIN[0], 'package.json'), 'utf8')).version;
+/** Refuses a run whose installed SDKs are not the pinned ones; the Admin SDK only when the suite uses it. */
+export function checkSdkPins(suite, modules = MODULES) {
+  for (const [, [pkg, version]] of Object.entries(PINS)) if (JSON.parse(readFileSync(path.join(modules, pkg, 'package.json'), 'utf8')).version !== version) throw new Error(`${pkg} is not ${version}`);
+  if (SUITES[suite].parts.includes('admin') && adminVersion(modules) !== ADMIN_PIN[1]) throw new Error(`${ADMIN_PIN[0]} is not ${ADMIN_PIN[1]}`);
+}
 export const sdkVersions = () => Object.fromEntries(Object.entries(PINS).map(([k, [pkg]]) => [k, JSON.parse(readFileSync(path.join(MODULES, pkg, 'package.json'), 'utf8')).version]));
 
 // ---- profiles --------------------------------------------------------------------------------------------------------------------------------
@@ -81,6 +89,25 @@ async function wsProfile(ctx) {
   }
   return runCases(actors, { caseMs: ctx.caseMs, onCase: row => ctx.journal.write({ kind: 'case', profile: ctx.profile, ...row }) });
 }
+/**
+ * Admission control for the browser transports (Codex presend review of packet 1 v1, Must 1). A long-polling request or a
+ * WebSocket the page opens is charged to the counter in a route handler, before it is dispatched; over the cap it is
+ * aborted (or closed) without reaching the network and the run is aborted. Requests to other hosts pass untouched.
+ */
+export async function admitBrowserTraffic(page, ctx, isDb) {
+  const note = row => { try { ctx.journal.write({ ...row, profile: ctx.profile }, { optional: true }); } catch { /* journal full: admission goes on */ } };
+  await page.route(url => isDb(url.toString()), async route => {
+    const request = route.request();
+    try { ctx.counter.take('lp-request'); } catch (error) { ctx.abort(error.message); await route.abort('blockedbyclient').catch(() => {}); return; }
+    note({ kind: 'raw-lp-request', method: request.method(), url: request.url(), body: request.postData() ? clip(request.postData()) : null });
+    await route.continue().catch(() => {});
+  });
+  await page.routeWebSocket(url => isDb(url.toString()), ws => {
+    try { ctx.counter.take('page-ws'); } catch (error) { ctx.abort(error.message); ws.close(); return; }
+    note({ kind: 'raw-page-ws', url: ws.url() });
+    ws.connectToServer();
+  });
+}
 const SERVED = { '/page.mjs': 'page.mjs', '/sequence.mjs': 'sequence.mjs', '/actor.mjs': 'actor.mjs' };
 const EVENTS_PAGE = { html: 'events-page.html', served: { '/events-page.mjs': 'events-page.mjs', '/events-sequence.mjs': 'events-sequence.mjs', '/events-actor.mjs': 'events-actor.mjs', '/sequence.mjs': 'sequence.mjs' } };
 export async function lpProfile(ctx, pageFiles = { html: 'page.html', served: SERVED }, invoke = (page, cfg) => page.evaluate(c => window.__run(c), cfg)) {
@@ -101,16 +128,7 @@ export async function lpProfile(ctx, pageFiles = { html: 'page.html', served: SE
     const page = await browser.newPage(); alive();
     await page.exposeFunction('__emit', row => { try { ctx.journal.write({ ...row, profile: ctx.profile }); } catch { /* journal full: the result still comes back */ } });
     page.on('pageerror', error => ctx.journal.write({ kind: 'page-error', profile: ctx.profile, error: clip(String(error), 2000) }));
-    page.on('request', request => {   // passive: counts and records, never routes
-      if (!isDb(request.url())) return;
-      try { ctx.counter.take('lp-request'); } catch (error) { ctx.counter.overflow(); ctx.abort(error.message); void page.close().catch(() => {}); }   // the request is already out: count it anyway and stop the page now
-      ctx.journal.write({ kind: 'raw-lp-request', profile: ctx.profile, method: request.method(), url: request.url(), body: request.postData() ? clip(request.postData()) : null }, { optional: true });
-    });
-    page.on('websocket', socket => {   // the events suite's writer connects over WebSocket from the page: counted when the page opens it, like an LP request
-      if (!isDb(socket.url())) return;
-      try { ctx.counter.take('page-ws'); } catch (error) { ctx.counter.overflow(); ctx.abort(error.message); void page.close().catch(() => {}); }
-      ctx.journal.write({ kind: 'raw-page-ws', profile: ctx.profile, url: socket.url() }, { optional: true });
-    });
+    await admitBrowserTraffic(page, ctx, isDb); alive();   // every database request and WebSocket of the page is charged BEFORE it is dispatched
     page.on('response', async response => {
       if (!isDb(response.url())) return;
       const body = await withTimeout(3000, 'lp-body', response.text()).catch(() => null);
@@ -171,7 +189,7 @@ export async function run(opts, deps = {}) {
   const T = o.target, urls = targetUrls(T), production = T.kind === 'production', scriptSha = scriptManifest(HERE).sha256, nonce = randomBytes(16).toString('hex');
   mkdirSync(path.dirname(o.outDir), { recursive: true, mode: 0o700 }); mkdirSync(o.outDir, { mode: 0o700 });
   const journal = d.createJournal(path.join(o.outDir, 'journal.jsonl')), counter = createCounter({ direct: o.directCap, reserve: 12 });
-  const result = { runId: o.runId, ...(suite === 'small' ? {} : { suite }), target: T.kind, scriptSha256: scriptSha, sdk: sdkVersions(), startedAt: new Date().toISOString(), status: 'started', cases: [], unverified: [], cleanup: { prefix: 'not-needed', rules: 'not-needed' } };
+  const result = { runId: o.runId, ...(suite === 'small' ? {} : { suite }), target: T.kind, scriptSha256: scriptSha, sdk: { ...sdkVersions(), ...(S.parts.includes('admin') ? { firebaseAdmin: adminVersion() } : {}) }, startedAt: new Date().toISOString(), status: 'started', cases: [], unverified: [], cleanup: { prefix: 'not-needed', rules: 'not-needed' } };
   const releases = [], pending = new Set(), state = { touched: false, baselineText: null };
   const jw = row => { try { journal.write(row); } catch { /* the journal must not stop the restoration */ } };
   let abortReason = null, abortFn; const aborted = new Promise(r => { abortFn = reason => { if (abortReason) return; abortReason = reason; jw({ kind: 'abort', reason }); r(); }; });
@@ -220,9 +238,10 @@ export async function run(opts, deps = {}) {
       let rows;
       const profilePromise = (async () => (part === 'small' ? d.profiles[transport](ctx) : d.suiteProfiles[part][transport](ctx)))(), drain = async () => { for (const close of ctx.closers.splice(0).reverse()) await withTimeout(o.closeMs, `close ${profile}`, close()).catch(() => result.unverified.push(`close ${profile}`)); };
       try { rows = await guard(o.profileMs, `profile ${profile}`, profilePromise); }
-      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); }
+      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); if (part !== 'small') result.unverified.push(`SDK mutations possibly in flight: profile ${profile} aborted`); }   // an abandoned SDK profile may have sent writes whose outcome is unknown
       await drain();   // actors, page, browser stopped and awaited before anything else
       if (ctx.cancelled) { await withTimeout(o.closeMs, `settle ${profile}`, profilePromise.catch(() => {})).catch(() => result.unverified.push(`profile ${profile} did not settle`)); await drain(); }   // a profile still starting up registers more closers when it finishes
+      for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown SDK mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
       result.cases.push(...rows.map(({ value, steps, ...row }) => ({ profile, ...row })));
       if (rows.some(row => !row.ok) && !o.continueOnFailure) break;
     }
@@ -271,7 +290,7 @@ async function main(argv) {
   const capMax = SUITES[suite].capMax;
   if (!['production', 'emulator'].includes(kind) || !/^[A-Za-z0-9-]{4,64}$/.test(runId ?? '') || !Number.isSafeInteger(directCap) || directCap < 20 || directCap > capMax) throw new Error(`usage: --target production|emulator --run-id ID --prefix /p --direct-cap 20..${capMax}`);
   packetRules(prefix);
-  for (const [k, [pkg, version]] of Object.entries(PINS)) if (sdkVersions()[k] !== version) throw new Error(`${pkg} is not ${version}`);
+  checkSdkPins(suite);
   let target;
   const outDir = arg('--out');
   if (!outDir) throw new Error('usage: --out <new dir>');

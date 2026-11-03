@@ -984,3 +984,138 @@ fn multiple_ttl_policies_preserve_frozen_membership_and_finish_finite_backlogs()
     assert!(exists(&backend, "omega/after-completion"));
     assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 1);
 }
+
+/// A document the first batch selected is extended and the one entry past the batch is rewritten
+/// (still expired) after the scan: the resumed batch skips the rewritten document and finds nothing
+/// else, so the chain is at its end. The sweep must stop there, incomplete, instead of resuming an
+/// exhausted chain forever while holding its sweep claim.
+#[test]
+fn a_chain_that_skips_its_last_entry_ends_incomplete_instead_of_spinning() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    write_sessions(&backend, (0..=budget).map(|i| format!("s{i:05}")), 1_100);
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let sweeper = Arc::clone(&backend);
+    std::thread::spawn(move || {
+        let writer = Arc::clone(&sweeper);
+        let deleted = sweeper.sweep_expired_documents_now_with_hook(&everything(), due, &|| {
+            // The first batch holds s00000..s01023 and the cursor stands past s01023.
+            write_document(&writer, "sessions/s00000", Some(timestamp(200_000)));
+            write_document(
+                &writer,
+                &format!("sessions/s{budget:05}"),
+                Some(timestamp(1_200)),
+            );
+        });
+        let _ = done_tx.send(deleted);
+    });
+    let deleted = done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the sweep ended instead of resuming an exhausted chain forever");
+    assert_eq!(deleted, budget - 1);
+    assert!(exists(&backend, "sessions/s00000"));
+    assert!(exists(&backend, &format!("sessions/s{budget:05}")));
+    // The rewritten document belongs to a later chain: the sweep ended incomplete, so the database
+    // is due at once and the next sweep deletes it.
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 1);
+    assert!(!exists(&backend, &format!("sessions/s{budget:05}")));
+    assert!(exists(&backend, "sessions/s00000"));
+}
+
+/// Writes `ids` under `sessions` with `expires_at`, 500 writes per commit.
+fn write_sessions(backend: &LocalBackend, ids: impl Iterator<Item = String>, expires_at: i64) {
+    let ids: Vec<_> = ids.collect();
+    for chunk in ids.chunks(500) {
+        backend
+            .commit(&pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: chunk
+                    .iter()
+                    .map(|id| pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: format!("{DB}/documents/sessions/{id}"),
+                            fields: [("expiresAt".to_owned(), timestamp(expires_at))]
+                                .into_iter()
+                                .collect(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .expect("commit");
+    }
+}
+
+#[test]
+fn a_large_backlog_drains_in_budgeted_sweeps_with_one_deletion_event_per_document() {
+    let total: usize = 100_000;
+    let budget = fireemu_adapter_grpc::local::MAX_SWEEP_DELETES_PER_RUN;
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_sessions(&backend, (0..total).map(|i| format!("s{i:06}")), 1_100);
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    // The synchronous change sink sees every commit, unlike the bounded broadcast.
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    backend.set_change_sink(Arc::new(
+        move |event: &fireemu_adapter_grpc::local::CommitEvent| {
+            let mut events = sink.lock().unwrap();
+            for change in event.changes.iter() {
+                assert!(change.before.is_some() && change.after.is_none());
+                events.push(change.path.relative());
+            }
+        },
+    ));
+    let mut sweeps = 0;
+    let mut deleted = 0;
+    loop {
+        let swept = backend.sweep_expired_documents(&everything(), due);
+        if swept == 0 {
+            break;
+        }
+        sweeps += 1;
+        deleted += swept;
+        assert!(swept <= budget);
+    }
+    let events = std::mem::take(&mut *events.lock().unwrap());
+    eprintln!(
+        "TTL backlog drain: {total} documents, {sweeps} sweeps, {} deletion events",
+        events.len()
+    );
+    // The last productive sweep reached the end, so the schedule recorded it as run and the
+    // next call above was turned away by the interval rather than finding nothing to do.
+    assert!(sweeps <= total.div_ceil(budget) + 1, "{sweeps} sweeps");
+    assert_eq!(deleted, total);
+    // With one expiry instant, index order is path order: the events match the old order.
+    let expected: Vec<_> = (0..total).map(|i| format!("sessions/s{i:06}")).collect();
+    assert_eq!(events, expected);
+    assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 0);
+}
+
+#[test]
+fn a_few_expired_documents_among_many_future_ones_finish_in_one_sweep() {
+    let (backend, _) = backend(LogicalInstant::from_unix_seconds(1_000));
+    write_sessions(&backend, (0..100_000).map(|i| format!("f{i:06}")), 200_000);
+    write_sessions(&backend, (0..3).map(|i| format!("e{i}")), 1_100);
+    backend
+        .enable_ttl(PROJECT, DATABASE, group("sessions"), field("expiresAt"))
+        .unwrap();
+    let due = LogicalInstant::from_unix_seconds(100_000);
+    assert_eq!(backend.sweep_expired_documents_now(&everything(), due), 3);
+    for i in 0..3 {
+        assert!(!exists(&backend, &format!("sessions/e{i}")));
+    }
+    assert!(exists(&backend, "sessions/f000000"));
+    assert!(exists(&backend, "sessions/f099999"));
+    // That sweep was complete, so the interval holds the next unforced one back.
+    write_sessions(&backend, std::iter::once("late".to_owned()), 1_100);
+    assert_eq!(backend.sweep_expired_documents(&everything(), due), 0);
+}

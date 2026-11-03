@@ -802,3 +802,61 @@ proptest::proptest! {
         }
     }
 }
+
+/// Pins the observable result of per-commit compaction while the retention floor moves with
+/// every commit: logical usage, the floor, the retained versions, the forecast and the
+/// snapshot reads. The expected values were recorded on main before compaction switched to
+/// prefix accounting, so a cheaper accounting cannot change what the store reports.
+#[test]
+fn floor_moving_every_commit_keeps_usage_floor_and_reads_unchanged() {
+    let mut s = FirestoreState::new().with_retained_version_limit(5_000);
+    let corpus = |value: &str| {
+        (0..50)
+            .map(|i| {
+                set(
+                    &format!("items/d{i:02}"),
+                    &[("v", Value::String(value.into()))],
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    s.commit(&corpus("a"), None, t(0)).unwrap();
+    s.commit(&corpus("b"), None, t(1)).unwrap();
+    s.commit(&[delete("items/d00"), delete("items/d01")], None, t(1))
+        .unwrap();
+    let mut observed = Vec::new();
+    for second in 2..=READ_TIME_RETENTION_SECONDS + 120 {
+        write_value(&mut s, "docs/hot", &format!("v{second}"), t(second));
+        if second % 40 == 0 || second > READ_TIME_RETENTION_SECONDS + 110 {
+            let usage = s.history_usage();
+            let floor = s.compaction_floor();
+            observed.push((
+                second,
+                usage.total_bytes,
+                usage.versions,
+                usage.tombstones,
+                usage.paths,
+                usage.commit_times,
+                floor.value(),
+                s.retained_versions(),
+                s.reclaimable_history_usage(t(second + 30)).total_bytes,
+                value_of(&s, "docs/hot", floor),
+                value_of(&s, "items/d02", floor),
+            ));
+        }
+    }
+    let digest = format!("{observed:?}");
+    eprintln!("{digest}");
+    // FNV-1a over the debug rendering keeps the recorded expectation short.
+    let fnv = digest.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    eprintln!("observed={} fnv={fnv:#018x}", observed.len());
+    assert_eq!(format!("{:?}", observed.last().unwrap()), EXPECTED_LAST);
+    assert_eq!((observed.len(), fnv), (EXPECTED_LEN, EXPECTED_FNV));
+}
+
+const EXPECTED_LAST: &str =
+    "(3720, 390817, 3649, 0, 49, 3601, 122, 3649, 2400, Some(\"v120\"), Some(\"b\"))";
+const EXPECTED_LEN: usize = 102;
+const EXPECTED_FNV: u64 = 0xf935_f14a_d15b_f409;

@@ -1218,12 +1218,27 @@ struct TtlExpiryIndex {
     entries: BTreeSet<(Timestamp, Arc<DocumentPath>)>,
 }
 
-/// Frozen expired-path membership in resource-name order.
+/// A bounded batch of expired paths, taken from the expiry index in expiration order.
 ///
-/// Selection retains O(E) path handles; pages bound transfer size, not total memory.
+/// One selection holds at most the `limit` it was taken with, sorted into resource-name
+/// order, so its allocation is bounded by the caller's budget rather than by the number of
+/// expired documents. [`Self::has_more`] reports whether expired entries remain past the
+/// batch; [`FirestoreState::select_ttl_expiry`] with this selection as `resume` takes the
+/// next batch after it, in index order, admitting only documents last written no later than
+/// the first batch of the chain was taken.
 #[derive(Debug)]
 pub struct TtlExpirySelection {
     paths: std::vec::IntoIter<Arc<DocumentPath>>,
+    /// The last index entry this chain of batches passed; the next batch starts after it.
+    /// An owned copy, so a consumed selection pins no shared path handle.
+    cursor: Option<(Timestamp, DocumentPath)>,
+    /// The commit version the first batch of the chain was taken at.
+    captured_at: CommitVersion,
+    /// Whether this chain passed an expired document written after `captured_at`: it is left
+    /// for a later chain and is never visited again by this one.
+    skipped: bool,
+    /// Whether expired index entries remain past this batch that this chain can still visit.
+    more: bool,
     #[cfg(test)]
     inspected: usize,
     #[cfg(test)]
@@ -1240,6 +1255,22 @@ impl TtlExpirySelection {
     #[must_use]
     pub fn is_exhausted(&self) -> bool {
         self.paths.len() == 0
+    }
+
+    /// Whether expired entries remain past this batch, for a resumed selection to take. A
+    /// skipped document does not count: the chain has passed it, so a resumed selection would
+    /// not return it, and counting it would keep an exhausted chain resuming forever.
+    #[must_use]
+    pub const fn has_more(&self) -> bool {
+        self.more
+    }
+
+    /// Whether this chain passed an expired document written after its first batch was taken.
+    /// That document is left for a later chain, so a caller that reaches the end of this one
+    /// reports its work incomplete rather than waiting another interval.
+    #[must_use]
+    pub const fn has_deferred(&self) -> bool {
+        self.skipped
     }
 }
 
@@ -1887,15 +1918,29 @@ impl FirestoreState {
         retained.map_or_else(|| Arc::new(path.clone()), Arc::clone)
     }
 
-    /// Captures expired membership for one policy in the supplied catalog.
+    /// Captures at most `limit` expired paths for one policy in the supplied catalog.
+    ///
+    /// Entries are taken from the expiry index in expiration order, so the walk stops at
+    /// the first unexpired entry or one entry past `limit`, and only the taken batch is
+    /// sorted into resource-name order. With `resume`, the walk starts after the last entry
+    /// that selection passed and skips documents written after the chain's first batch was
+    /// taken; such a skipped document makes [`TtlExpirySelection::has_deferred`] true (and not
+    /// [`TtlExpirySelection::has_more`], which counts only what the chain can still visit), so
+    /// the caller leaves its work incomplete instead of waiting another interval.
     pub fn select_ttl_expiry(
         &mut self,
         catalog: &crate::ttl::TtlCatalog,
         group: &CollectionId,
         now: Timestamp,
+        limit: usize,
+        resume: Option<&TtlExpirySelection>,
     ) -> Result<TtlExpirySelection, FirestoreError> {
         self.sync_ttl_expiry_indexes(catalog);
+        let captured_at = resume.map_or(self.version, |previous| previous.captured_at);
+        let mut cursor = resume.and_then(|previous| previous.cursor.clone());
+        let mut skipped = resume.is_some_and(|previous| previous.skipped);
         let mut paths = Vec::new();
+        let mut more = false;
         #[cfg(test)]
         let mut inspected = 0;
         if let Some(index) = self.ttl_expiry_indexes.get(group) {
@@ -1904,7 +1949,17 @@ impl FirestoreState {
                 .find(|(key, _)| *key == group)
                 .map(|(_, policy)| policy)
                 .expect("registered TTL groups belong to the captured catalog");
-            for (at, path) in &index.entries {
+            let after = cursor
+                .as_ref()
+                .map(|(at, path)| (*at, Arc::new(path.clone())));
+            let entries = match &after {
+                Some(after) => index
+                    .entries
+                    .range((std::ops::Bound::Excluded(after), std::ops::Bound::Unbounded)),
+                None => index.entries.range::<(Timestamp, Arc<DocumentPath>), _>(..),
+            };
+            let mut passed = None;
+            for (at, path) in entries {
                 #[cfg(test)]
                 {
                     inspected += 1;
@@ -1921,7 +1976,26 @@ impl FirestoreState {
                 {
                     break;
                 }
-                paths.push(Arc::clone(path));
+                if paths.len() == limit {
+                    // The first expired entry past the batch: it stays for the next batch.
+                    more = true;
+                    break;
+                }
+                let written_after_capture = self
+                    .history
+                    .get(path.as_ref())
+                    .and_then(|history| history.last())
+                    .is_some_and(|(version, _)| *version > captured_at);
+                if written_after_capture {
+                    // Left for a later chain, which captures it as ordinary membership.
+                    skipped = true;
+                } else {
+                    paths.push(Arc::clone(path));
+                }
+                passed = Some((at, path));
+            }
+            if let Some((at, path)) = passed {
+                cursor = Some((*at, DocumentPath::clone(path)));
             }
         }
         paths.sort_unstable();
@@ -1929,6 +2003,10 @@ impl FirestoreState {
         let retained_capacity = paths.capacity();
         Ok(TtlExpirySelection {
             paths: paths.into_iter(),
+            cursor,
+            captured_at,
+            skipped,
+            more,
             #[cfg(test)]
             inspected,
             #[cfg(test)]
@@ -2876,7 +2954,11 @@ impl FirestoreState {
                 continue;
             }
             transaction.state = TransactionState::Finished;
-            self.active_read_write_transactions.remove(&id);
+            // A read-write holder that runs out of time frees its locks here, so it is a release like any other: a writer waiting on
+            // the release marker is woken by it.
+            if self.active_read_write_transactions.remove(&id) {
+                self.transaction_releases = self.transaction_releases.wrapping_add(1);
+            }
             transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
@@ -2898,6 +2980,23 @@ impl FirestoreState {
         }
         changed |= self.forget_elapsed_finished_transactions(now);
         changed
+    }
+
+    /// Whether an active read-write transaction has reached its idle or total-lifetime deadline at `now`, so that the next
+    /// operation that prunes at `now` frees its locks. A writer waiting on contention looks at this while it waits: the clock that
+    /// ends the holder can move (the control API, a fault delay) without any operation running to prune it.
+    #[must_use]
+    pub fn read_write_holder_expired(&self, now: LogicalInstant) -> bool {
+        self.active_transaction_deadlines
+            .iter()
+            .take_while(|(deadline, _)| *deadline <= now)
+            .any(|(deadline, id)| {
+                self.active_read_write_transactions.contains(id)
+                    && self.transactions.get(id).is_some_and(|transaction| {
+                        transaction.state == TransactionState::Active
+                            && transaction_deadline(transaction, self.limit_scope) == *deadline
+                    })
+            })
     }
 
     /// Forgets the finished transactions whose retention has ended at `now`. Returns whether it changed anything.
@@ -3370,13 +3469,17 @@ impl FirestoreState {
                 .get(path)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            reclaimed = add_history_usage(
-                reclaimed,
+            // Exact accounting certifies every path's usage below saturation, so the reclaim
+            // is summed from the versions the floor drops instead of from the whole path.
+            let path_reclaim = if self.history_accounting_exact {
+                history_path_reclaim_unsaturated(path, versions, floor)
+            } else {
                 subtract_history_usage(
                     history_path_usage(path, versions),
                     history_path_usage_after_floor(path, versions, floor),
-                ),
-            );
+                )
+            };
+            reclaimed = add_history_usage(reclaimed, path_reclaim);
         }
         let removed_commit_times = u64::try_from(
             self.commit_times
@@ -3644,6 +3747,7 @@ impl FirestoreState {
     /// stay exact) and everything after the floor. A path whose only remaining version is a
     /// tombstone at or below the floor is dropped entirely: at every version the store can
     /// still be asked about, it is indistinguishable from a path that never existed.
+    #[allow(clippy::too_many_lines)]
     pub fn compact(&mut self, now: LogicalInstant) -> CommitVersion {
         self.prune_transactions(now);
         let floor = self.retention_floor(now);
@@ -3674,7 +3778,16 @@ impl FirestoreState {
             &mut self.history_accounting_exact,
         );
         self.history_usage = finish_history_usage(self.history_usage);
-        let candidates = if self.history_accounting_exact {
+        // Exact accounting selects only the paths the floor can reclaim from (the threshold
+        // index) and certifies every path's usage below saturation. Each candidate is then
+        // charged by `history_path_reclaim_unsaturated`, which visits only the versions at or
+        // before the floor, so the work of one compaction is proportional to the versions it
+        // drops. Under exact accounting `before - after == reclaimed` for every path, so the
+        // running usage and its exactness end up identical to the whole-path recount below.
+        // Legacy (inexact) accounting keeps the whole-path before/after recount: its
+        // saturating arithmetic is order and value sensitive, and it must stay unchanged.
+        let prefix_accounting = self.history_accounting_exact;
+        let candidates = if prefix_accounting {
             self.reclaim_candidates(floor)
         } else {
             self.compactable.keys().cloned().collect()
@@ -3689,10 +3802,32 @@ impl FirestoreState {
                 self.refresh_reclaim_threshold(path);
                 continue;
             };
-            let before_usage = history_path_usage(path, h);
             // Keep the newest version at or before the floor plus everything after it; drop
             // the prefix nothing can observe.
             let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
+            if prefix_accounting {
+                let emptied = match &h[cut..] {
+                    [] => true,
+                    [(v, None)] => *v <= floor,
+                    _ => false,
+                };
+                if cut == 0 && !emptied {
+                    // Nothing to drop: no accounting, only a stale threshold to repair.
+                    self.refresh_reclaim_threshold(path);
+                    continue;
+                }
+                let reclaimed = history_path_reclaim_unsaturated(path, h, floor);
+                usage_changes.push((reclaimed, HistoryUsage::default()));
+                if emptied {
+                    self.history.remove(path);
+                    removed_paths.push(path.clone());
+                } else {
+                    h.drain(..cut);
+                }
+                self.refresh_reclaim_threshold(path);
+                continue;
+            }
+            let before_usage = history_path_usage(path, h);
             if cut > 0 {
                 h.drain(..cut);
             }

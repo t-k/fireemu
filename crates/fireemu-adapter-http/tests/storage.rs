@@ -9842,6 +9842,297 @@ fn signed_xml_put_pict_cases() {
     }
 }
 
+/// A V4 signed URL as the SDK writes it (production answers recorded 2026-11-03, signed XML PUT
+/// observation, 16 cases twice): every signing parameter, the signed header names, a signature the
+/// emulator cannot check.
+fn v4_url(name: &str, date: &str, expires: u32, signed: &str, signature: bool) -> String {
+    let signature = if signature {
+        "&X-Goog-Signature=0123abcd0123abcd"
+    } else {
+        ""
+    };
+    format!(
+        "/{BUCKET}/{name}?X-Goog-Algorithm=GOOG4-RSA-SHA256\
+         &X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F{day}%2Fauto%2Fstorage%2Fgoog4_request\
+         &X-Goog-Date={date}&X-Goog-Expires={expires}&X-Goog-SignedHeaders={signed}{signature}",
+        day = &date[..8]
+    )
+}
+
+const SIGNED_ALL: &str = "content-type%3Bhost%3Bx-goog-content-length-range";
+const SIGNED_NO_RANGE: &str = "content-type%3Bhost";
+const FRESH: &str = "20260829T120000Z";
+
+fn xml_body(code: &str, message: &str, details: &str, parameter: Option<&str>) -> String {
+    let parameter = parameter.map_or_else(String::new, |p| {
+        format!("<ParameterName>{p}</ParameterName>")
+    });
+    format!(
+        "<?xml version='1.0' encoding='UTF-8'?><Error><Code>{code}</Code><Message>{message}</Message><Details>{details}</Details>{parameter}</Error>"
+    )
+}
+
+const MALFORMED_HEADER: &str = "Your request has a malformed header.";
+
+type Case<'a> = (&'a str, String, Vec<(&'a str, &'a str)>, Vec<u8>, String);
+
+/// The answers production gave to the signed XML PUT cases that need no signature check, byte for
+/// byte (conformance/storage-signed-put-production.json). Both profiles refuse these, so both
+/// answer in production's shape.
+#[test]
+fn signed_xml_put_refusals_have_the_production_body_in_both_profiles() {
+    let png = [137u8, 80, 78, 71];
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        let s = state_with(None, acceptance);
+        let narrow = [
+            ("content-type", "image/png"),
+            ("x-goog-content-length-range", "5,8"),
+        ];
+        let cases: Vec<Case> = vec![
+            (
+                "missing content-type",
+                v4_url("a.png", FRESH, 300, SIGNED_ALL, true),
+                vec![("x-goog-content-length-range", "0,10485760")],
+                png.to_vec(),
+                xml_body(
+                    "MalformedSecurityHeader",
+                    "Invalid argument.",
+                    &format!("{MALFORMED_HEADER} Header was included in signedheaders, but not in the request."),
+                    Some("content-type"),
+                ),
+            ),
+            (
+                "range header missing",
+                v4_url("b.png", FRESH, 300, SIGNED_ALL, true),
+                vec![("content-type", "image/png")],
+                png.to_vec(),
+                xml_body(
+                    "MalformedSecurityHeader",
+                    "Invalid argument.",
+                    &format!("{MALFORMED_HEADER} Header was included in signedheaders, but not in the request."),
+                    Some("x-goog-content-length-range"),
+                ),
+            ),
+            (
+                "over range",
+                v4_url("c.png", FRESH, 300, SIGNED_ALL, true),
+                narrow.to_vec(),
+                vec![b'A'; 9],
+                xml_body(
+                    "EntityTooLarge",
+                    "Your proposed upload is larger than the maximum object size specified in your Policy Document.",
+                    "Content-length exceeds upper bound on range",
+                    None,
+                ),
+            ),
+            (
+                "under range",
+                v4_url("d.png", FRESH, 300, SIGNED_ALL, true),
+                narrow.to_vec(),
+                vec![b'A'; 4],
+                xml_body(
+                    "EntityTooSmall",
+                    "Your proposed upload is smaller than the minimum object size specified in your Policy Document.",
+                    "Content-length smaller than lower bound on range",
+                    None,
+                ),
+            ),
+            (
+                "expired",
+                // Signed at 11:00:00 for one second: production names the end of the lifetime.
+                v4_url("e.png", "20260829T110000Z", 1, SIGNED_ALL, true),
+                vec![("content-type", "image/png"), ("x-goog-content-length-range", "0,10485760")],
+                png.to_vec(),
+                xml_body(
+                    "ExpiredToken",
+                    "Invalid argument.",
+                    "The provided token has expired. Request signature expired at: 2026-08-29T11:00:01+00:00",
+                    None,
+                ),
+            ),
+        ];
+        for (label, path, headers, body, expected) in cases {
+            let response = handle(&s, req("PUT", &path, &headers, &body));
+            assert_eq!(response.status, 400, "{label}");
+            assert_eq!(
+                String::from_utf8_lossy(&response.body),
+                expected,
+                "{label} ({acceptance:?})"
+            );
+            assert_eq!(
+                header(&response, "content-type"),
+                Some("application/xml; charset=UTF-8"),
+                "{label}"
+            );
+            let object = path.split('?').next().unwrap();
+            assert_eq!(
+                handle(
+                    &s,
+                    req("GET", object, &[("authorization", "Bearer owner")], &[])
+                )
+                .status,
+                404,
+                "{label}: nothing was written"
+            );
+        }
+    }
+}
+
+/// Production refuses a request that sends the range header without signing it, and a V4 URL
+/// that names every signing parameter except the signature. Strict follows production; the
+/// emulator profile keeps accepting both, as it accepted them before.
+#[test]
+fn signed_xml_put_unsigned_range_and_missing_signature_follow_the_profile() {
+    let png = [137u8, 80, 78, 71];
+    let range = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,10"),
+    ];
+    let unsigned = v4_url("u.png", FRESH, 300, SIGNED_NO_RANGE, true);
+    let no_signature = v4_url("n.png", FRESH, 300, SIGNED_ALL, false);
+    let all = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,10485760"),
+    ];
+
+    let strict = state(None);
+    let refused = handle(&strict, req("PUT", &unsigned, &range, &png));
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        xml_body(
+            "MalformedSecurityHeader",
+            "Invalid argument.",
+            &format!("{MALFORMED_HEADER} Header must be signed."),
+            Some("x-goog-content-length-range"),
+        )
+    );
+    let refused = handle(&strict, req("PUT", &no_signature, &all, &png));
+    assert_eq!(refused.status, 400);
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        xml_body(
+            "MissingSecurityHeader",
+            "Invalid argument.",
+            "Your request was missing a required header. Missing headers: x-goog-signature",
+            None,
+        )
+    );
+    let owner = [("authorization", "Bearer owner")];
+    for object in ["u.png", "n.png"] {
+        let path = format!("/{BUCKET}/{object}");
+        assert_eq!(
+            handle(&strict, req("GET", &path, &owner, &[])).status,
+            404,
+            "{object}"
+        );
+    }
+
+    let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    assert_eq!(
+        handle(&emulator, req("PUT", &unsigned, &range, &png)).status,
+        200
+    );
+    assert_eq!(
+        handle(&emulator, req("PUT", &no_signature, &all, &png)).status,
+        200
+    );
+}
+
+/// Only the recorded shapes are refused: the range header unsigned on a URL that names no signed
+/// headers, one signing parameter missing besides the signature, and a signed header other than
+/// the range header sent unsigned stay as they were.
+#[test]
+fn signed_xml_put_refuses_only_the_recorded_unsigned_and_missing_shapes() {
+    let s = state(None);
+    let png = [137u8, 80, 78, 71];
+    let range = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,10"),
+    ];
+    // No X-Goog-SignedHeaders at all: nothing says the header must be signed.
+    let bare =
+        format!("/{BUCKET}/p.png?X-Goog-Signature=test&X-Goog-Date={FRESH}&X-Goog-Expires=3600");
+    assert_eq!(handle(&s, req("PUT", &bare, &range, &png)).status, 200);
+    // A V4 URL without the signature and without the credential is not the recorded shape.
+    let partial = format!(
+        "/{BUCKET}/q.png?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Date={FRESH}&X-Goog-Expires=300&X-Goog-SignedHeaders={SIGNED_ALL}"
+    );
+    assert_eq!(handle(&s, req("PUT", &partial, &range, &png)).status, 403);
+    // Another x-goog-* header sent unsigned is not refused.
+    let other = v4_url("r.png", FRESH, 300, SIGNED_NO_RANGE, true);
+    let with_meta = [("content-type", "image/png"), ("x-goog-meta-a", "b")];
+    assert_eq!(handle(&s, req("PUT", &other, &with_meta, &png)).status, 200);
+}
+
+/// What the signed PUT cannot check, kept as a documented divergence from production: the
+/// signature and the values of the signed headers. Production answered 403 `SignatureDoesNotMatch`
+/// to each of these (recorded); the emulator has no key to verify against and accepts them.
+#[test]
+fn signed_xml_put_does_not_verify_the_signature_a_documented_divergence() {
+    let s = state(None);
+    let png = [137u8, 80, 78, 71];
+    let url = v4_url("v.png", FRESH, 300, SIGNED_ALL, true);
+    // Another content type than the one signed, a range value that is not the signed one.
+    let different = [
+        ("content-type", "text/plain"),
+        ("x-goog-content-length-range", "0,10"),
+    ];
+    assert_eq!(handle(&s, req("PUT", &url, &different, &png)).status, 200);
+    // A tampered signature, and an object name other than the signed one.
+    let tampered = url.replace("0123abcd0123abcd", "0123abcd0123abce");
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,10"),
+    ];
+    assert_eq!(
+        handle(&s, req("PUT", &tampered, &headers, &png)).status,
+        200
+    );
+}
+
+/// The headers production sent with a successful signed PUT (recorded): the stored object's
+/// generation, metageneration, checksums, length and encoding, and the MD5 as the quoted `ETag`.
+#[test]
+fn signed_xml_put_success_carries_the_production_headers() {
+    let s = state(None);
+    let url = v4_url("ok.png", FRESH, 300, SIGNED_ALL, true);
+    let headers = [
+        ("content-type", "image/png"),
+        ("x-goog-content-length-range", "0,10485760"),
+    ];
+    let response = handle(&s, req("PUT", &url, &headers, &[137, 80, 78, 71]));
+    assert_eq!(response.status, 200);
+    assert!(response.body.is_empty());
+    assert_eq!(
+        header(&response, "content-type"),
+        Some("text/html; charset=UTF-8")
+    );
+    assert_eq!(
+        header(&response, "etag"),
+        Some("\"3bdaf5969285188ac756c339f69f5c79\"")
+    );
+    assert_eq!(
+        header(&response, "x-goog-hash"),
+        Some("crc32c=GHybLA==, md5=O9r1lpKFGIrHVsM59p9ceQ==")
+    );
+    assert_eq!(header(&response, "x-goog-metageneration"), Some("1"));
+    assert_eq!(
+        header(&response, "x-goog-stored-content-encoding"),
+        Some("identity")
+    );
+    assert_eq!(header(&response, "x-goog-stored-content-length"), Some("4"));
+    let generation = header(&response, "x-goog-generation").expect("generation");
+    assert!(generation.chars().all(|c| c.is_ascii_digit()) && !generation.is_empty());
+    // The same bytes again: a new generation, the same checksums.
+    let again = handle(&s, req("PUT", &url, &headers, &[137, 80, 78, 71]));
+    assert_ne!(header(&again, "x-goog-generation"), Some(generation));
+    assert_eq!(
+        header(&again, "x-goog-hash"),
+        header(&response, "x-goog-hash")
+    );
+}
+
 #[test]
 fn signed_xml_put_does_not_capture_unknown_api_routes() {
     let s = state(None);

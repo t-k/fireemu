@@ -86,8 +86,13 @@ export function normalizeHeaders(headers) {
 export function normalizeBody(text, masks) {
   let out = redactSignedUrl(text);
   for (const [value, token] of masks) out = out.split(value).join(token);
-  // Timestamps inside error details differ per request.
-  return out.replace(/\d{8}T\d{6}Z/g, "<date>");
+  // Values a production error derives from the request time differ per request: the compact
+  // date stamps, the digest on the last line of StringToSign (a hash of the canonical request,
+  // which holds the date) and the expiry time an ExpiredToken names.
+  return out
+    .replace(/\d{8}T\d{6}Z/g, "<date>")
+    .replace(/\n[0-9a-f]{64}<\/StringToSign>/g, "\n<string-to-sign-digest></StringToSign>")
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00/g, "<time>");
 }
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");

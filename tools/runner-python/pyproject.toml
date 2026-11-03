@@ -1,0 +1,7 @@
+# Mutation testing of the runner with mutmut (see README.md). The tests spawn the real runner from the
+# copy mutmut makes (`mutants/`), so runner.py is copied too, and the harness passes MUTANT_UNDER_TEST
+# through to the process.
+[tool.mutmut]
+source_paths = ["fireemu_runner/"]
+also_copy = ["runner.py"]
+pytest_add_cli_args_test_selection = ["tests/"]

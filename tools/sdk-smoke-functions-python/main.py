@@ -45,6 +45,7 @@ def _firestore_entry(name, event):
 def hello(request):
     return jsonify(
         path=request.path,
+        script_root=request.script_root,
         method=request.method,
         args=request.args.to_dict(),
         body=request.get_data(as_text=True),

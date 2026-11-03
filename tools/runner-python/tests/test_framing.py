@@ -40,6 +40,8 @@ def test_frames_follow_each_other_and_a_clean_end_is_none():
     [
         (b"\n{}", "empty length"),
         (b"0\n", "decimal length"),
+        (b":\n{}", "decimal length"),
+        (b"/\n{}", "decimal length"),
         (b"01\n{}", "decimal length"),
         (b"-1\n", "decimal length"),
         (b"1x\n", "decimal length"),
@@ -56,7 +58,7 @@ def test_frames_follow_each_other_and_a_clean_end_is_none():
 def test_malformed_frames_are_refused_with_a_fixed_reason(raw, reason):
     with pytest.raises(ProtocolError) as error:
         read_frame(io.BytesIO(raw))
-    assert reason in str(error.value)
+    assert str(error.value) == f"invalid runner frame ({reason})"
 
 
 @pytest.mark.parametrize(
@@ -77,8 +79,9 @@ def test_malformed_frames_are_refused_with_a_fixed_reason(raw, reason):
     ],
 )
 def test_messages_that_are_not_shutdown_or_a_complete_invoke_are_refused(message):
-    with pytest.raises(ProtocolError, match="message fields"):
+    with pytest.raises(ProtocolError) as error:
         read_frame(io.BytesIO(encode_frame(message)))
+    assert str(error.value) == "invalid runner frame (message fields)"
 
 
 def test_an_invoke_without_an_entry_point_is_valid():
@@ -92,8 +95,9 @@ def test_the_largest_frame_is_accepted_and_one_more_byte_is_not():
     payload = ('{"type":"shutdown","p":"%s"}' % padding).encode()
     assert len(payload) == MAX_FRAME_BYTES
     assert read_frame(io.BytesIO(frame(payload)))["type"] == "shutdown"
-    with pytest.raises(ProtocolError, match="frame too large"):
+    with pytest.raises(ProtocolError) as error:
         read_frame(io.BytesIO(frame(payload + b" ")))
+    assert str(error.value) == "invalid runner frame (frame too large)"
 
 
 def test_random_messages_round_trip():
@@ -128,3 +132,66 @@ def test_the_writer_serialises_concurrent_frames():
         assert message["type"] == "invoke"
         count += 1
     assert count == 400
+
+
+def test_a_frame_the_writer_cannot_fit_is_refused_and_the_largest_fits():
+    from fireemu_runner.framing import MAX_FRAME_BYTES as cap
+
+    base = len(encode_frame({"p": ""}).split(b"\n", 1)[1])
+    fits = encode_frame({"p": "x" * (cap - base)})
+    assert fits.split(b"\n", 1)[0] == str(cap).encode()
+    with pytest.raises(ProtocolError) as error:
+        encode_frame({"p": "x" * (cap - base + 1)})
+    assert str(error.value) == "invalid runner frame (frame too large)"
+
+
+def test_non_ascii_text_is_written_as_utf8_not_escaped():
+    frame_bytes = encode_frame({"type": "log", "message": "日本語"})
+    assert "日本語".encode("utf-8") in frame_bytes
+    assert b"\\u" not in frame_bytes
+    header, body = frame_bytes.split(b"\n", 1)
+    assert int(header) == len(body)
+
+
+def test_the_entry_point_must_be_a_non_empty_string_when_present():
+    for value in ("", None, 7, [], {}):
+        with pytest.raises(ProtocolError):
+            read_frame(io.BytesIO(encode_frame(invoke(entryPoint=value))))
+    assert read_frame(io.BytesIO(encode_frame(invoke(entryPoint="ok"))))["entryPoint"] == "ok"
+
+
+def test_a_reader_stops_at_the_end_of_one_frame_and_leaves_the_next_unread():
+    stream = io.BytesIO(encode_frame({"type": "shutdown"}) + b"trailing")
+    read_frame(stream)
+    assert stream.read() == b"trailing"
+
+
+def test_digits_are_counted_across_the_whole_header():
+    # A 3-digit length must be read as 3 digits, not as 1: the body below is exactly 100 bytes.
+    payload = ('{"type":"shutdown","pad":"%s"}' % ("x" * 72)).encode()
+    assert len(payload) == 100
+    assert read_frame(io.BytesIO(frame(payload)))["pad"] == "x" * 72
+
+
+def test_the_writer_flushes_each_frame_and_copes_with_a_stream_that_cannot():
+    class Counting(io.BytesIO):
+        flushes = 0
+
+        def flush(self):
+            Counting.flushes += 1
+
+    writer = FrameWriter(Counting())
+    writer.write({"a": 1})
+    writer.write({"a": 2})
+    assert Counting.flushes == 2
+
+    class NoFlush:
+        def __init__(self):
+            self.data = b""
+
+        def write(self, data):
+            self.data += data
+
+    out = NoFlush()
+    FrameWriter(out).write({"a": 1})
+    assert out.data == encode_frame({"a": 1})

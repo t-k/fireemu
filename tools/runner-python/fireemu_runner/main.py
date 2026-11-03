@@ -19,26 +19,16 @@ def _parse(argv):
     return parser.parse_args(argv)
 
 
-def run(argv) -> int:
-    args = _parse(argv)
-    # The protocol owns the original stdout. Everything that writes to file descriptor 1 afterwards
-    # (print, C extensions, child processes, the SDK logger) goes to stderr instead.
-    protocol = os.fdopen(os.dup(1), "wb", buffering=0)
-    os.dup2(2, 1)
-    writer = FrameWriter(protocol)
-    secret = os.environ.get("FIREEMU_RUNNER_SECRET", "")
-    # The daemon's local secrets are for the SDK's parameter lookup; user code does not see the channel
-    # that carried them, nor the key to this runner's HTTP port.
-    os.environ.pop("FIREEMU_LOCAL_SECRETS_JSON", None)
-    os.environ.pop("FIREEMU_RUNNER_SECRET", None)
-    os.chdir(args.source)
-    try:
-        from firebase_functions.private import serving
+def load_codebase(source: str) -> dict:
+    """Imports the codebase's `main.py` the way the SDK's own admin server does and returns its functions."""
+    os.chdir(source)
+    from firebase_functions.private import serving
 
-        functions = serving.get_functions()
-    except BaseException:  # a failing import in user code is reported with its traceback
-        traceback.print_exc()
-        return 1
+    return serving.get_functions()
+
+
+def serve(functions: dict, codebase: str, secret: str, stdin, writer: FrameWriter) -> int:
+    """Says hello, then serves frames from `stdin` until `shutdown` or the end of the stream."""
     manifest = build_manifest(functions)
     server = None
     port = None
@@ -48,7 +38,7 @@ def run(argv) -> int:
         {
             "type": "hello",
             "runner": "python",
-            "codebase": args.codebase,
+            "codebase": codebase,
             "version": platform.python_version(),
             "httpPort": port,
             "manifest": manifest,
@@ -57,7 +47,7 @@ def run(argv) -> int:
     dispatcher = Dispatcher(functions, manifest, writer)
     try:
         while True:
-            message = read_frame(sys.stdin.buffer)
+            message = read_frame(stdin)
             if message is None or message["type"] == "shutdown":
                 return 0
             if not dispatcher.reserve():
@@ -70,3 +60,23 @@ def run(argv) -> int:
     finally:
         if server is not None:
             server.shutdown()
+
+
+def run(argv) -> int:
+    args = _parse(argv)
+    # The protocol owns the original stdout. Everything that writes to file descriptor 1 afterwards
+    # (print, C extensions, child processes, the SDK logger) goes to stderr instead.
+    protocol = os.fdopen(os.dup(1), "wb", buffering=0)
+    os.dup2(2, 1)
+    writer = FrameWriter(protocol)
+    secret = os.environ.get("FIREEMU_RUNNER_SECRET", "")
+    # The daemon's local secrets are for the SDK's parameter lookup; user code does not see the channel
+    # that carried them, nor the key to this runner's HTTP port.
+    os.environ.pop("FIREEMU_LOCAL_SECRETS_JSON", None)
+    os.environ.pop("FIREEMU_RUNNER_SECRET", None)
+    try:
+        functions = load_codebase(args.source)
+    except BaseException:  # a failing import in user code is reported with its traceback
+        traceback.print_exc()
+        return 1
+    return serve(functions, args.codebase, secret, sys.stdin.buffer, writer)

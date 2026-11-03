@@ -17,6 +17,9 @@ _NOT_AN_ATTRIBUTE = frozenset({"data", "datacontenttype"})
 
 def firestore_cloud_event(event: dict):
     """The `CloudEvent` for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
+    if not isinstance(event.get("specversion"), str):
+        # Without it `from_http` would read the body as a structured JSON event and fail on protobuf bytes.
+        raise ValueError("the event has no specversion")
     data = event.get("data")
     message = firestore_events.DocumentEventData.from_json(json.dumps(data if isinstance(data, dict) else {}))
     headers = {

@@ -1,11 +1,8 @@
 """Endpoint-to-canonical-manifest mapping, driven by the real SDK's own discovery."""
 
-import os
-
 import pytest
 from firebase_functions import params
 from firebase_functions.private import manifest as sdk_manifest
-from firebase_functions.private import serving
 from firebase_functions.private.util import Sentinel
 
 from conftest import FIXTURE
@@ -14,18 +11,7 @@ from fireemu_runner.manifest import build_manifest, describe_endpoint
 FS = "google.cloud.firestore.document.v1."
 
 
-@pytest.fixture(scope="module")
-def discovered():
-    """The fixture codebase discovered by `serving.get_functions()`, once (it runs `initialize_app`)."""
-    previous = os.getcwd()
-    os.chdir(FIXTURE)
-    try:
-        yield serving.get_functions()
-    finally:
-        os.chdir(previous)
-
-
-@pytest.fixture(scope="module")
+@pytest.fixture
 def manifest(discovered):
     return build_manifest(discovered)
 
@@ -109,6 +95,8 @@ def test_none_and_the_reset_sentinel_both_mean_unset():
 
 
 def test_a_parameter_expression_is_resolved_to_its_value(monkeypatch):
+    # A fresh registry: declaring the same parameter twice (the suite may run twice in a process) is an error.
+    monkeypatch.setattr(params, "_params", {})
     monkeypatch.setenv("RUNNER_TEST_MEMORY", "256")
     parameter = params.IntParam("RUNNER_TEST_MEMORY")
     described = describe_endpoint("f", endpoint(availableMemoryMb=parameter, timeoutSeconds=parameter, concurrency=parameter))
@@ -213,3 +201,198 @@ def _wrapped(endpoint_value):
 
     handler.__firebase_endpoint__ = endpoint_value
     return handler
+
+
+# --- exact answers for everything the runner refuses to serve --------------------------------------
+
+
+class _Unresolved(params.Expression):
+    """An expression that has no value."""
+
+    @property
+    def value(self):
+        return None
+
+
+def _unserved(endpoint_value):
+    from fireemu_runner.manifest import Unserved
+
+    with pytest.raises(Unserved) as error:
+        describe_endpoint("f", endpoint_value)
+    return (error.value.trigger_type, error.value.scope, error.value.reason)
+
+
+def _event(event_type, **fields):
+    return sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=sdk_manifest.EventTrigger(eventType=event_type, retry=False, **fields))
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("timeoutSeconds", -1), ("timeoutSeconds", True), ("timeoutSeconds", "9"), ("timeoutSeconds", 1.5),
+     ("concurrency", -2), ("availableMemoryMb", "512"), ("minInstances", -1), ("maxInstances", 2.0)],
+)
+def test_an_option_that_is_not_a_non_negative_integer_names_itself(field, value):
+    assert _unserved(endpoint(**{field: value})) == ("unknown", "unsupported", f"{field} did not resolve to a non-negative integer")
+
+
+def test_an_expression_without_a_value_names_the_field():
+    assert _unserved(endpoint(timeoutSeconds=_Unresolved())) == ("unknown", "unsupported", "timeoutSeconds expression did not resolve to a value")
+
+
+@pytest.mark.parametrize("region", [[""], [3], [None, "x"][:0] + [7], ""])
+def test_a_region_that_is_not_a_non_empty_string_is_unsupported(region):
+    assert _unserved(endpoint(region=region)) == ("unknown", "unsupported", "region did not resolve to a non-empty string")
+
+
+def test_the_exact_reasons_of_the_families_not_served_yet():
+    planned = "Python {} triggers are planned for a later slice and are not served yet"
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger={})) == ("tasks", "planned", planned.format("task queue"))
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", scheduleTrigger={"schedule": "x"})) == ("schedule", "planned", planned.format("schedule"))
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "x"})) == ("blockingAuth", "planned", planned.format("Auth blocking"))
+    for event_type, family in (
+        ("google.cloud.pubsub.topic.v1.messagePublished", "pubsub"),
+        ("google.cloud.storage.object.v1.finalized", "storage"),
+        ("google.firebase.database.ref.v1.written", "database"),
+        ("anything.else", "eventarc"),
+    ):
+        assert _unserved(_event(event_type)) == (family, "planned", planned.format(family))
+
+
+def test_the_other_unsupported_shapes_have_exact_reasons():
+    assert _unserved(endpoint(platform="gcfv1")) == ("unknown", "unsupported", "endpoint platform is not recognised")
+    assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f")) == ("unknown", "unsupported", "the endpoint declares no trigger")
+    assert _unserved(_event(FS + "created", eventFilters={"database": "(default)"})) == (
+        "firestore", "unsupported", "the Firestore trigger names no document (eventFilters.document)"
+    )
+    assert _unserved(_event(FS + "created", eventFilters={"database": 5, "document": "a/b"})) == (
+        "firestore", "unsupported", "eventFilters.database did not resolve to a string"
+    )
+    bad_retry = sdk_manifest.ManifestEndpoint(
+        entryPoint="f",
+        eventTrigger=sdk_manifest.EventTrigger(eventType=FS + "created", retry="yes", eventFilters={"document": "a/b"}),
+    )
+    assert _unserved(bad_retry) == ("firestore", "unsupported", "eventTrigger.retry did not resolve to a boolean")
+
+
+def test_a_retrying_firestore_trigger_says_so():
+    trigger = sdk_manifest.EventTrigger(eventType=FS + "written", retry=True, eventFilters={"document": "a/b"})
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))
+    assert described["retry"] is True
+    assert described["trigger"] == {"type": "firestore", "eventType": FS + "written", "database": "(default)", "document": "a/b"}
+
+
+def test_the_ignored_entry_takes_the_declared_region_or_the_default():
+    unserved = sdk_manifest.ManifestEndpoint(entryPoint="f", region=["europe-west1"], scheduleTrigger={"schedule": "x"})
+    entry = build_manifest({"f": _wrapped(unserved)})["ignored"][0]
+    assert entry == {
+        "name": "f",
+        "region": "europe-west1",
+        "triggerType": "schedule",
+        "scope": "planned",
+        "reason": "Python schedule triggers are planned for a later slice and are not served yet",
+    }
+    broken = sdk_manifest.ManifestEndpoint(entryPoint="f", region=[3], scheduleTrigger={"schedule": "x"})
+    assert build_manifest({"f": _wrapped(broken)})["ignored"][0]["region"] == "us-central1"
+
+
+def test_an_enum_option_resolves_to_its_value_and_the_invoker_is_kept():
+    import enum
+
+    class Ingress(enum.Enum):
+        INTERNAL = "ALLOW_INTERNAL_ONLY"
+
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", httpsTrigger={"invoker": ["private"]}, ingressSettings=Ingress.INTERNAL))
+    assert described["platformOptions"] == {"ingressSettings": "ALLOW_INTERNAL_ONLY", "invoker": ["private"]}
+
+
+def test_vpc_network_interfaces_and_an_unset_connector_are_handled():
+    described = describe_endpoint("f", endpoint(vpc={"connector": Sentinel("r"), "networkInterfaces": [{"network": "n"}]}))
+    assert described["platformOptions"] == {"networkInterfaces": [{"network": "n"}]}
+
+
+def test_a_zero_timeout_is_not_reported_but_a_zero_concurrency_is():
+    described = describe_endpoint("f", endpoint(timeoutSeconds=0, concurrency=0))
+    assert "timeoutSeconds" not in described and described["concurrency"] == 0
+
+
+def test_a_secret_without_a_key_is_left_out_and_no_secrets_means_no_option():
+    described = describe_endpoint("f", endpoint(secretEnvironmentVariables=[{"key": "A"}, {"key": ""}, {}]))
+    assert described["platformOptions"] == {"secrets": ["A"]}
+    assert "platformOptions" not in describe_endpoint("f", endpoint(secretEnvironmentVariables=[]))
+    assert "platformOptions" not in describe_endpoint("f", endpoint(labels={}))
+
+
+# --- field names in the messages, and shapes that are not what the SDK normally gives ---------------
+
+
+@pytest.mark.parametrize(
+    "build, field",
+    [
+        (lambda: endpoint(region=_Unresolved()), "region"),
+        (lambda: endpoint(region=[_Unresolved()]), "region"),
+        (lambda: endpoint(cpu=_Unresolved()), "cpu"),
+        (lambda: endpoint(vpc={"egressSettings": _Unresolved()}), "vpc.egressSettings"),
+        (lambda: endpoint(availableMemoryMb=_Unresolved()), "availableMemoryMb"),
+        (lambda: endpoint(minInstances=_Unresolved()), "minInstances"),
+        (lambda: endpoint(maxInstances=_Unresolved()), "maxInstances"),
+        (lambda: endpoint(concurrency=_Unresolved()), "concurrency"),
+        (lambda: endpoint(serviceAccountEmail=_Unresolved()), "serviceAccountEmail"),
+        (lambda: endpoint(ingressSettings=_Unresolved()), "ingressSettings"),
+    ],
+)
+def test_an_expression_without_a_value_is_reported_under_the_name_of_its_field(build, field):
+    assert _unserved(build()) == ("unknown", "unsupported", f"{field} expression did not resolve to a value")
+
+
+def test_firestore_filter_expressions_without_a_value_are_reported_under_their_filter_names():
+    assert _unserved(_event(FS + "created", eventFilters={"document": _Unresolved()})) == (
+        "unknown", "unsupported", "eventFilters.document expression did not resolve to a value"
+    )
+    assert _unserved(_event(FS + "created", eventFilterPathPatterns={"document": _Unresolved()})) == (
+        "unknown", "unsupported", "eventFilterPathPatterns.document expression did not resolve to a value"
+    )
+    assert _unserved(_event(FS + "created", eventFilters={"document": "a/b", "database": _Unresolved()})) == (
+        "unknown", "unsupported", "eventFilters.database expression did not resolve to a value"
+    )
+    broken_type = sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger={"eventType": _Unresolved(), "retry": False})
+    assert _unserved(broken_type) == ("unknown", "unsupported", "eventType expression did not resolve to a value")
+    broken_retry = sdk_manifest.ManifestEndpoint(
+        entryPoint="f", eventTrigger={"eventType": FS + "created", "retry": _Unresolved(), "eventFilters": {"document": "a/b"}}
+    )
+    assert _unserved(broken_retry) == ("unknown", "unsupported", "eventTrigger.retry expression did not resolve to a value")
+
+
+def test_an_unserved_error_carries_its_reason_as_its_message():
+    from fireemu_runner.manifest import Unserved
+
+    assert str(Unserved("pubsub", "planned", "because")) == "because"
+
+
+def test_filters_that_are_not_objects_are_treated_as_empty():
+    trigger = sdk_manifest.EventTrigger(eventType=FS + "created", retry=False, eventFilters=None, eventFilterPathPatterns={"document": "a/{id}"})
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))
+    assert described["trigger"]["database"] == "(default)" and described["trigger"]["document"] == "a/{id}"
+    trigger = sdk_manifest.EventTrigger(eventType=FS + "created", retry=False, eventFilters={"document": "a/b"}, eventFilterPathPatterns="x")
+    assert describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))["trigger"]["document"] == "a/b"
+
+
+def test_a_path_pattern_wins_over_a_literal_document_when_both_are_given():
+    trigger = sdk_manifest.EventTrigger(
+        eventType=FS + "created", retry=False, eventFilters={"document": "literal/doc"}, eventFilterPathPatterns={"document": "items/{id}"}
+    )
+    assert describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))["trigger"]["document"] == "items/{id}"
+
+
+def test_vpc_and_https_trigger_shapes_that_are_not_objects_are_ignored():
+    described = describe_endpoint("f", endpoint(vpc="not-an-object"))
+    assert "platformOptions" not in described
+    odd = sdk_manifest.ManifestEndpoint(entryPoint="f", httpsTrigger=["x"])
+    assert "platformOptions" not in describe_endpoint("f", odd)
+    assert describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", httpsTrigger={"invoker": []}).__class__(entryPoint="f", httpsTrigger={"invoker": []})).get("platformOptions") is None
+
+
+def test_the_http_types_of_a_plain_and_a_callable_function_are_exact():
+    plain = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", httpsTrigger={}))
+    callable_ = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", callableTrigger={}))
+    assert plain["trigger"] == {"type": "http", "callable": False}
+    assert callable_["trigger"] == {"type": "http", "callable": True}

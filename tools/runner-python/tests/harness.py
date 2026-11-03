@@ -47,6 +47,12 @@ class Runner:
             "METADATA_SERVER_DETECTION": "none",
             "PYTHONUNBUFFERED": "1",
         }
+        # mutmut selects the mutant under test through the environment, and the runner is a subprocess.
+        # While mutmut collects statistics the subprocess runs the original code; a forced failure and a
+        # mutant name are passed on as they are.
+        mutant = os.environ.get("MUTANT_UNDER_TEST")
+        if mutant is not None:
+            env["MUTANT_UNDER_TEST"] = "" if mutant == "stats" else mutant
         env.update(extra_env or {})
         self.process = subprocess.Popen(
             [sys.executable, str(SCRIPT), "--source", str(source), "--codebase", name],

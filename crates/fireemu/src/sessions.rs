@@ -451,7 +451,15 @@ pub(crate) mod tests {
                         7,
                     ),
                 ),
-                tenancy: None,
+                // The second project is registered, so its conventional bucket is its own: a
+                // reset or deletion of that project addresses it and not the default project's.
+                tenancy: Some(Arc::new(RwLock::new({
+                    let mut tenancy = fireemu_core_session::tenancy::Tenancy::new("demo-app");
+                    tenancy
+                        .register(SECOND_PROJECT, &[], &[])
+                        .expect("the second project registers");
+                    tenancy
+                }))),
                 rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
                 project: "demo-app".to_owned(),
                 events: None,
@@ -1831,8 +1839,17 @@ pub(crate) mod tests {
 
     /// Writes one object to the fixture's storage bucket (owned by `demo-app`).
     fn put_storage_sentinel(projects: &Projects) -> fireemu_core_storage::name::BucketName {
-        let bucket = fireemu_core_storage::name::BucketName::try_new("demo-app.appspot.com")
-            .expect("the bucket name is valid");
+        put_storage_sentinel_for(projects, "demo-app")
+    }
+
+    /// Writes one object to the default bucket of `project`.
+    fn put_storage_sentinel_for(
+        projects: &Projects,
+        project: &str,
+    ) -> fireemu_core_storage::name::BucketName {
+        let bucket =
+            fireemu_core_storage::name::BucketName::try_new(format!("{project}.appspot.com"))
+                .expect("the bucket name is valid");
         projects
             .storage
             .store
@@ -1907,7 +1924,17 @@ pub(crate) mod tests {
             .reset_scope(&Scope::Project(SECOND_PROJECT.to_owned()))
             .unwrap();
         let (topic, snapshot) = populate_pubsub(&hooks, SECOND_PROJECT);
-        let bucket = put_storage_sentinel(&hooks);
+        // Storage and Auth of the project the reset and the deletion address, so that a wipe
+        // that ran before the probe's refusal would lose them.
+        let bucket = put_storage_sentinel_for(&hooks, SECOND_PROJECT);
+        hooks
+            .registry
+            .store_for(SECOND_PROJECT)
+            .expect("the project has an auth store")
+            .lock()
+            .unwrap()
+            .create_user_with_id(NewUser::anonymous(), Some("sentinel"), AT)
+            .unwrap();
         let parent = poison_firestore_database(&hooks, SECOND_PROJECT);
         let generation = hooks.backend.database_generation(&parent);
 
@@ -1925,8 +1952,21 @@ pub(crate) mod tests {
             assert!(pubsub.topic_exists(&topic));
             assert!(pubsub.get_snapshot(&snapshot, AT).is_ok());
         }
-        assert!(hooks.storage.store.lock().unwrap().bucket_known(&bucket));
-        assert!(hooks.registry.store_for(SECOND_PROJECT).is_some());
+        {
+            let storage = hooks.storage.store.lock().unwrap();
+            assert!(storage.bucket_known(&bucket));
+            assert!(storage
+                .get(
+                    &bucket,
+                    &fireemu_core_storage::name::ObjectName::try_new("sentinel").unwrap()
+                )
+                .is_some());
+        }
+        let auth = hooks
+            .registry
+            .store_for(SECOND_PROJECT)
+            .expect("the project survives the refused reset and deletion");
+        assert_eq!(auth.lock().unwrap().user_count(), 1);
         assert_poisoned_database_kept(&hooks, &parent, generation);
     }
 

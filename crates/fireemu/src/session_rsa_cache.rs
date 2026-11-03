@@ -325,10 +325,33 @@ enum Publication {
     Replace(RejectedEntry),
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has read the contents of a cache entry.
+    static CONTENT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The one place the contents of a cache entry are read, after every security check. The whole
+/// entry must be read and match the size its metadata gave.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_entry_contents(file: std::fs::File, size: u64) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read as _;
+
+    #[cfg(test)]
+    CONTENT_READS.with(|reads| reads.set(reads.get() + 1));
+    let capacity = usize::try_from(size).unwrap_or(0);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+    file.take(CACHE_MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 == size {
+        Ok(bytes)
+    } else {
+        Err(std::io::ErrorKind::InvalidData.into())
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn load_entry(directory: &std::fs::File, name: &str, seed: u64) -> EntryLoad {
     use rustix::fs::{Mode, OFlags};
-    use std::io::Read as _;
     use std::os::unix::fs::MetadataExt as _;
 
     let descriptor = match rustix::fs::openat(
@@ -365,16 +388,9 @@ fn load_entry(directory: &std::fs::File, name: &str, seed: u64) -> EntryLoad {
         device: metadata.dev(),
         inode: metadata.ino(),
     };
-    let capacity = usize::try_from(actual.size).unwrap_or(0);
-    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-    if file
-        .take(CACHE_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() as u64 != actual.size
-    {
+    let Ok(bytes) = read_entry_contents(file, actual.size) else {
         return EntryLoad::Invalid(rejected);
-    }
+    };
     decode_envelope(seed, &bytes)
         .map(EntryLoad::Hit)
         .unwrap_or(EntryLoad::Invalid(rejected))
@@ -840,34 +856,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn content_reads() -> usize {
+        super::CONTENT_READS.with(std::cell::Cell::get)
+    }
+
+    fn reset_content_reads() {
+        super::CONTENT_READS.with(|reads| reads.set(0));
+    }
+
     #[cfg(unix)]
     #[test]
-    fn a_hard_linked_entry_is_neither_read_nor_replaced() {
+    fn an_owner_only_entry_is_read_once_which_is_what_the_read_counter_counts() {
+        let root = scratch("read-counter");
+        let _ = load_or_generate_at(&root, 12).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(12), 12),
+            EntryLoad::Hit(_)
+        ));
+        assert_eq!(content_reads(), 1);
+        overwrite_owner_only_entry(&root, 12, b"corrupt cache entry");
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(12), 12),
+            EntryLoad::Invalid(_)
+        ));
+        assert_eq!(content_reads(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hard_linked_entry_is_not_read_and_not_replaced() {
         use std::os::unix::fs::MetadataExt as _;
 
         let root = scratch("hard-link");
         let first = load_or_generate_at(&root, 12).unwrap();
         let entry = cache_entry_path(&root, 12);
-        // A corrupt body: if the entry were read and judged invalid, it would be replaced.
+        // A corrupt body. A repair rejects a hard-linked entry on its own, so the unchanged
+        // inode, link count and bytes below pin the replacement; the zero content reads pin
+        // that the security checks run before the first read.
         overwrite_owner_only_entry(&root, 12, b"corrupt cache entry");
         let alias = root.join("hard-link-alias");
         std::fs::hard_link(&entry, &alias).unwrap();
         let inode = std::fs::symlink_metadata(&entry).unwrap().ino();
 
         let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
         assert!(matches!(
             load_entry(&directory, &entry_name(12), 12),
             EntryLoad::Unsafe(_)
         ));
+        // The security checks fail before the first read of the contents.
+        assert_eq!(content_reads(), 0);
         let uncached = load_or_generate_at(&root, 12).unwrap();
         assert!(!uncached.hit);
         assert_eq!(first.signer.kid(), uncached.signer.kid());
+        // Neither the load nor the generation that followed it read the entry.
+        assert_eq!(content_reads(), 0);
         let metadata = std::fs::symlink_metadata(&entry).unwrap();
         assert_eq!(metadata.ino(), inode);
         assert_eq!(metadata.nlink(), 2);
         assert_eq!(std::fs::read(&entry).unwrap(), b"corrupt cache entry");
         assert_eq!(std::fs::read(&alias).unwrap(), b"corrupt cache entry");
         assert!(!load_or_generate_at(&root, 12).unwrap().hit);
+        assert_eq!(content_reads(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_fails_a_security_check_is_never_read() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = scratch("unread");
+        let _ = load_or_generate_at(&root, 13).unwrap();
+        let entry = cache_entry_path(&root, 13);
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let directory = open_cache_directory(&root).unwrap();
+        reset_content_reads();
+        assert!(matches!(
+            load_entry(&directory, &entry_name(13), 13),
+            EntryLoad::Unsafe(_)
+        ));
+        assert_eq!(content_reads(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 

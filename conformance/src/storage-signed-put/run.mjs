@@ -10,7 +10,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -244,8 +244,17 @@ function productionAccess() {
 async function readback() {
   const { dir, header, target, out, deps } = productionAccess();
   const report = await readbackAbsent({ target, runId: header.runId, deps, out });
-  const preflight = JSON.parse(readFileSync(join(dir, "iam-preflight.json"), "utf8"));
-  const iam = await readbackIam({ target, runId: header.runId, deps, out, preflight });
+  // A run that stopped before the signer's policy was read has nothing to compare with.
+  const file = join(dir, "iam-preflight.json");
+  const iam = existsSync(file)
+    ? await readbackIam({
+        target,
+        runId: header.runId,
+        deps,
+        out,
+        preflight: JSON.parse(readFileSync(file, "utf8")),
+      })
+    : null;
   console.log(JSON.stringify({ objects: report, iam }));
   return { report, iam };
 }

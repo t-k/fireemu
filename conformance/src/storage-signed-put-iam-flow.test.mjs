@@ -21,7 +21,15 @@ const ROLE_KEY = `projects/${PRODUCTION_LIKE.project}/roles/${ROLE_ID}`;
 const SA = `/v1/projects/${PRODUCTION_LIKE.project}/serviceAccounts/${PRODUCTION_LIKE.signer}`;
 const OTHER = { role: "roles/viewer", members: ["user:viewer@example.com"] };
 
-async function go({ faults = {}, intercept, iam, mutateDeps, setup, iamInput = IAM_CONFIG } = {}) {
+async function go({
+  faults = {},
+  intercept,
+  iam,
+  mutateDeps,
+  setup,
+  caps,
+  iamInput = IAM_CONFIG,
+} = {}) {
   const clock = createVirtualClock();
   const world = createFakeWorld({
     target: PRODUCTION_LIKE,
@@ -38,6 +46,7 @@ async function go({ faults = {}, intercept, iam, mutateDeps, setup, iamInput = I
     runId: RUN,
     deps,
     out,
+    caps,
     iam: iamInput,
   });
   return { ...result, world, out, clock };
@@ -178,6 +187,10 @@ describe("signer access: the preflight stops before any change", () => {
     assert.equal(rows.length, 0);
     assert.equal(report.cleanupVerified, verified, JSON.stringify(report.unresolved));
     assert.equal(report.closureReady, false);
+    assert.equal(report.iam.signProbes, 0);
+    assert.equal(report.iam.granted, false);
+    assert.equal(report.iam.roleDeleted, null);
+    assert.equal(report.iam.windowEnd, null);
     return world;
   };
   const bound = (role, extra = {}) => ({
@@ -783,5 +796,238 @@ describe("signer access: bounds", () => {
       13,
     );
     assert.equal(CASES.length, 16);
+  });
+});
+describe("signer access: more paths", () => {
+  const cleanTotal = async () => (await go()).report.requests;
+
+  it("asks for policy version 3 on every policy read and write", async () => {
+    const bodies = [];
+    await go({
+      intercept: (request) => {
+        const path = urlOf(request);
+        if (path.endsWith(":getIamPolicy"))
+          bodies.push(["get", JSON.parse(Buffer.from(request.body).toString())]);
+        if (path.endsWith(":setIamPolicy"))
+          bodies.push(["set", JSON.parse(Buffer.from(request.body).toString()).policy.version]);
+        return undefined;
+      },
+    });
+    const gets = bodies.filter(([kind]) => kind === "get").map(([, body]) => body);
+    assert.equal(gets.length, 5, "signer, project, read-back, removal read, final read");
+    assert.ok(gets.every((body) => body.options.requestedPolicyVersion === 3));
+    assert.deepEqual(
+      bodies.filter(([kind]) => kind === "set").map(([, version]) => version),
+      [3, 3],
+    );
+  });
+
+  it("accepts exactly eight roles and reads each", async () => {
+    const roles = Array.from({ length: 8 }, (_, i) => `roles/r${i}`);
+    const predefinedRoles = Object.fromEntries(
+      roles.map((r, i) => [
+        r.slice(6),
+        i === 0 ? ["storage.objects.create", "storage.objects.get", "storage.objects.delete"] : [],
+      ]),
+    );
+    const { report } = await go({
+      iam: {
+        projectBindings: roles.map((role) => ({
+          role,
+          members: [`serviceAccount:${PRODUCTION_LIKE.signer}`],
+        })),
+        predefinedRoles,
+      },
+    });
+    assert.equal(report.finished, true, report.stopped);
+    assert.equal(report.iam.roleReads, 8);
+  });
+
+  it("stops when the grant cannot be read back or the policy cannot be read for the removal", async () => {
+    let afterGrant = false;
+    const { report, world } = await go({
+      intercept: (request) => {
+        const path = urlOf(request);
+        if (path.endsWith(":setIamPolicy")) afterGrant = true;
+        else if (afterGrant && path.endsWith(":getIamPolicy")) {
+          afterGrant = false;
+          return respond(403);
+        }
+        return undefined;
+      },
+    });
+    assert.match(report.stopped, /signer policy read-back answered 403/);
+    assert.equal(unchanged(world), true);
+    let reads = 0;
+    const second = await go({
+      intercept: (request) =>
+        urlOf(request).endsWith(":getIamPolicy") && (reads += 1) === 4 ? respond(403) : undefined,
+    });
+    assert.ok(
+      second.report.unresolved.some((u) =>
+        /removal failed: signer-policy-before-removal answered 403/.test(u.reason),
+      ),
+    );
+    assert.equal(
+      second.world.signerEnabled(),
+      true,
+      "the removal did not happen; the window bounds it",
+    );
+    assert.equal(second.report.closureReady, false);
+  });
+
+  it("reads nothing more about the signer's policy when no grant was attempted", async () => {
+    const { world } = await go({
+      intercept: (r) =>
+        r.method === "POST" && urlOf(r).endsWith("/roles") ? respond(403) : undefined,
+    });
+    assert.equal(
+      world.log.filter(
+        (e) => urlOf(e).endsWith(":getIamPolicy") && !e.url.includes("cloudresourcemanager"),
+      ).length,
+      1,
+    );
+  });
+
+  it("reports a request the guard refuses as a refusal, never as an unknown answer", async () => {
+    const total = await cleanTotal();
+    // The preflight reads 8 requests, so the 9th is the role create and the 10th the grant.
+    for (const [main, pattern] of [
+      [8, /role create/],
+      [9, /signer grant/],
+    ]) {
+      const { report } = await go({ caps: { main, total: 220 } });
+      assert.match(report.stopped, /budget exhausted/);
+      assert.deepEqual(
+        report.unresolved.filter((u) => /unknown/.test(u.reason)),
+        [],
+        pattern.source,
+      );
+    }
+    // The removal: its policy write is the fourth request from the end, the role delete the second.
+    for (const [cap, label] of [
+      [total - 4, "signer-removal"],
+      [total - 2, "role-delete"],
+    ]) {
+      const { report, out } = await go({ caps: { main: 150, total: cap } });
+      assert.ok(
+        report.unresolved.some((u) => /removal failed: request budget exhausted/.test(u.reason)),
+        label,
+      );
+      assert.deepEqual(
+        report.unresolved.filter((u) => /unknown/.test(u.reason)),
+        [],
+        label,
+      );
+      assert.ok(out.saved.has("iam-failure.json"));
+    }
+  });
+
+  it("reports granted only for a 2xx grant, and null role state when the role was kept", async () => {
+    const stale = await go({
+      intercept: (r, log, w) => {
+        if (urlOf(r).endsWith(":setIamPolicy") && setNumber(r, log) === 1) w.iam.policy.etag = "x";
+        return undefined;
+      },
+    });
+    assert.equal(stale.report.iam.granted, false);
+    const unknown = await go({ faults: { signBlob: 503 } });
+    assert.equal(unknown.report.iam.granted, true);
+    const kept = await go({
+      intercept: (request, log, w) => {
+        if (urlOf(request).endsWith(":setIamPolicy") && setNumber(request, log) >= 2)
+          w.iam.policy.etag = `b${setNumber(request, log)}`;
+        return undefined;
+      },
+    });
+    assert.equal(kept.report.iam.roleDeleted, null);
+    assert.equal(kept.report.iam.policyEqualsPreflight, false);
+  });
+});
+
+describe("signer access: A2 and standalone removal, more paths", () => {
+  const unknownRemoval = (w) => async (request, deps) =>
+    urlOf(request).endsWith(":setIamPolicy") &&
+    w.log.filter((e) => urlOf(e).endsWith(":setIamPolicy")).length === 1
+      ? respond(503)
+      : deps.net(request);
+  const stuck = async () =>
+    go({
+      mutateDeps: (deps, w) => ({ ...deps, net: (request) => unknownRemoval(w)(request, deps) }),
+    });
+
+  it("reads the signer role as absent, saves its report and asks for policy version 3", async () => {
+    const world = createFakeWorld({ target: PRODUCTION_LIKE, clock: createVirtualClock() });
+    const out = memoryOut();
+    const bodies = [];
+    const deps = {
+      ...world.deps,
+      net: async (r) => {
+        if (r.body) bodies.push(JSON.parse(Buffer.from(r.body).toString()));
+        return world.deps.net(r);
+      },
+    };
+    const report = await readbackIam({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps,
+      out,
+      preflight: { policy: { etag: "etag-0" } },
+    });
+    assert.deepEqual([report.roleState, report.clean, report.requests], ["absent", true, 2]);
+    assert.deepEqual(out.saved.get("a2-iam.json"), report);
+    assert.deepEqual(bodies, [{ options: { requestedPolicyVersion: 3 } }]);
+  });
+
+  it("reports the standalone removal's state, saves it, and is not clean while the binding or an extra binding remains", async () => {
+    const run = await stuck();
+    const preflight = run.out.saved.get("iam-preflight.json");
+    const plan = run.out.saved.get("iam-grant-plan.json");
+    const out = memoryOut();
+    const report = await removeSignerAccess({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: run.world.deps,
+      out,
+      preflight,
+      plan,
+    });
+    assert.deepEqual(out.saved.get("iam-remove.json"), report);
+    assert.equal(report.clean, true);
+    assert.equal(report.requests, 5);
+    // An extra binding added by someone else keeps the policy different from the preflight one.
+    const other = await stuck();
+    other.world.iam.policy.bindings = [...other.world.iam.policy.bindings, OTHER];
+    const extra = await removeSignerAccess({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: other.world.deps,
+      out: memoryOut(),
+      preflight: other.out.saved.get("iam-preflight.json"),
+      plan: other.out.saved.get("iam-grant-plan.json"),
+    });
+    assert.deepEqual(
+      [extra.policyEqualsPreflight, extra.bindingPresent, extra.roleDeleted, extra.clean],
+      [false, false, true, false],
+    );
+    // Three etag conflicts in a row leave the binding and keep the role.
+    const third = await stuck();
+    const conflicting = {
+      ...third.world.deps,
+      net: async (request) => {
+        if (urlOf(request).endsWith(":setIamPolicy"))
+          third.world.iam.policy.etag = `c${Math.random()}`;
+        return third.world.deps.net(request);
+      },
+    };
+    const kept = await removeSignerAccess({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: conflicting,
+      out: memoryOut(),
+      preflight: third.out.saved.get("iam-preflight.json"),
+      plan: third.out.saved.get("iam-grant-plan.json"),
+    });
+    assert.deepEqual([kept.bindingPresent, kept.roleDeleted, kept.clean], [true, null, false]);
   });
 });

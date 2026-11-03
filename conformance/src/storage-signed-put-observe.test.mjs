@@ -37,7 +37,15 @@ async function run({
   const world = createFakeWorld({ target, clock, faults, intercept, iam });
   const out = memoryOut();
   const deps = mutateDeps ? mutateDeps(world.deps) : world.deps;
-  const result = await observe({ target, runId: RUN, deps, out, caps, cases, iam: IAM_CONFIG });
+  const result = await observe({
+    target,
+    runId: RUN,
+    deps,
+    out,
+    caps,
+    cases,
+    iam: target.name === "production" ? IAM_CONFIG : undefined,
+  });
   return { ...result, world, out };
 }
 

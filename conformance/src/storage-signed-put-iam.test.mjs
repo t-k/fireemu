@@ -90,6 +90,7 @@ function randomPolicy(rnd) {
 describe("signer role inputs", () => {
   it("accepts only user:<email> as the member", () => {
     assert.equal(validateMember(MEMBER), MEMBER);
+    assert.equal(validateMember("user:a@example.co"), "user:a@example.co");
     for (const bad of [
       undefined,
       "",
@@ -509,6 +510,56 @@ describe("settlement of the IAM changes", () => {
       reasons([ev("role", "create", { status: 409 })]),
       [],
       "a refused create made nothing",
+    );
+  });
+
+  it("settles only what was touched, and reads a refused or absent grant as nothing to remove", () => {
+    const events = [ev("binding", "grant", { status: 200 }), ev("role", "create", { status: 200 })];
+    assert.deepEqual(settleIam(events, { touched: false }), []);
+    assert.equal(settleIam(events, { touched: true }).length, 2);
+    for (const status of [400, 404, 409, 412]) {
+      assert.deepEqual(reasons([ev("binding", "grant", { status })]), [], String(status));
+    }
+    assert.deepEqual(reasons([ev("binding", "grant", { status: 200 })]), [
+      "signer binding: granted, not read back after removal",
+    ]);
+    assert.deepEqual(reasons([ev("binding", "grant", { status: 299 })]), [
+      "signer binding: granted, not read back after removal",
+    ]);
+    assert.deepEqual(
+      reasons([
+        ev("binding", "grant", { status: 503 }),
+        ev("binding", "read", { status: 200, present: false }),
+      ]),
+      ["signer binding: unknown grant, no positive read"],
+    );
+    assert.deepEqual(
+      reasons([
+        ev("binding", "grant", { status: 503 }),
+        ev("binding", "read", { status: 200, present: true }),
+      ]),
+      ["signer binding: granted, not read back after removal"],
+    );
+    assert.deepEqual(
+      reasons([ev("role", "delete", { status: 200 })]),
+      [],
+      "a delete without a create is nothing",
+    );
+    assert.deepEqual(
+      reasons([
+        ev("role", "create", { status: 503 }),
+        ev("role", "delete", { status: 300 }),
+        ev("role", "final-read", { status: 200, deleted: true }),
+      ]),
+      ["signer role: unknown create, no positive read and delete"],
+    );
+    assert.deepEqual(
+      reasons([
+        ev("role", "create", { status: 503 }),
+        ev("role", "delete", { status: 302 }),
+        ev("role", "final-read", { status: 200, deleted: true }),
+      ]),
+      ["signer role: unknown create, no positive read and delete"],
     );
   });
 });

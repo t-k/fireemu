@@ -357,6 +357,8 @@ describe("signed PUT request guard", () => {
         ["DELETE", iam(`${roles}/${ROLE_ID}`), "role-delete"],
         ["DELETE", iam(`${roles}/${ROLE_ID}?etag=abc`), "role-delete"],
         ["GET", iam(`${roles}/customRole_1`), "role-read"],
+        ["GET", iam(`${roles}/x`), "role-read"],
+        ["GET", iam("roles/x"), "role-read"],
         ["GET", iam("roles/firebase.sdkAdminServiceAgent"), "role-read"],
         ["GET", iam("roles/storage.objectAdmin"), "role-read"],
         [

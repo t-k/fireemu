@@ -4,6 +4,15 @@ import { describe, it } from "node:test";
 import {
   ASSIGNED_RANGE,
   CASES,
+  DEFAULT_WINDOW_MINUTES,
+  MAX_REMOVE_ATTEMPTS,
+  MAX_ROLE_READS,
+  MAX_SIGN_PROBES,
+  MAX_WINDOW_MINUTES,
+  ROLE_ID,
+  SIGNER_PERMISSION,
+  SIGN_PROBE_WAIT_MS,
+  STORAGE_PERMISSIONS,
   ESTIMATED_USD,
   EXPIRY_MARGIN_MS,
   MAIN_CAP,
@@ -167,5 +176,26 @@ describe("signed PUT plan", () => {
       signed: "other-object.png",
       sent: "other-sent.png",
     });
+  });
+
+  it("pins the signer role constants the packet states", () => {
+    assert.deepEqual(
+      [
+        ROLE_ID,
+        SIGNER_PERMISSION,
+        MAX_ROLE_READS,
+        MAX_SIGN_PROBES,
+        SIGN_PROBE_WAIT_MS,
+        DEFAULT_WINDOW_MINUTES,
+        MAX_WINDOW_MINUTES,
+        MAX_REMOVE_ATTEMPTS,
+      ],
+      ["fireemuAdminSdkSigner", "iam.serviceAccounts.signBlob", 8, 12, 20_000, 60, 180, 3],
+    );
+    assert.deepEqual(STORAGE_PERMISSIONS, [
+      "storage.objects.create",
+      "storage.objects.get",
+      "storage.objects.delete",
+    ]);
   });
 });

@@ -71,13 +71,16 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
 }
 
 // `- <date> | RTDB-SMALL-OBSERVER <runId> | decision=APPROVE; scriptSha256=..; directCap=..; adc=1; prefix=..; basis=2196 | coordinator | <source>`: exactly one such line, every field equal.
+// The events and admin suites (packet 1 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin>` and carry basis=2217.
 export function checkApproval(ledgerText, want) {
   const lines = ledgerText.split('\n').filter(l => l.includes(`| RTDB-SMALL-OBSERVER ${want.runId} |`));
   if (lines.length !== 1) throw new Error(`approval lines for ${want.runId}: ${lines.length}`);
   const parts = lines[0].split(' | ');
   if (parts.length !== 5 || parts[1] !== `RTDB-SMALL-OBSERVER ${want.runId}` || parts[3] !== 'coordinator') throw new Error('approval line shape');
   const fields = Object.fromEntries(parts[2].split('; ').map(f => { const i = f.indexOf('='); return [f.slice(0, i), f.slice(i + 1)]; }));
-  const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, basis: '2196' };
+  const suite = want.suite ?? 'small';
+  if (!['small', 'events', 'admin', 'events+admin'].includes(suite)) throw new Error('approval suite');
+  const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: '2217' }) };
   if (Object.keys(fields).sort().join() !== Object.keys(expected).sort().join() || Object.entries(expected).some(([k, v]) => fields[k] !== v)) throw new Error('approval fields differ');
 }
 

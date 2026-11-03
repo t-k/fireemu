@@ -99,7 +99,7 @@ test('the entry refuses an existing --out and fails with the observer status whe
     const existing = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir), '--out', dir], { encoding: 'utf8' });
     assert.equal(existing.status, 2); assert.equal(existsSync(path.join(dir, 'config.json')), false);
     assert.equal(spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { exitCode: 3 }), '--out', path.join(dir, 'f')], { encoding: 'utf8' }).status, 3);
-    const h = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { hang: true }), '--out', path.join(dir, 'h'), '--exec-timeout-ms', '1500'], { encoding: 'utf8', timeout: 60000 });
+    const h = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { hang: true }), '--out', path.join(dir, 'h'), '--exec-timeout-ms', '6000'], { encoding: 'utf8', timeout: 60000 });   // above the fake producer's start-up under load (1.5 s once failed during a mutation run)
     assert.equal(h.status, 3, h.stderr); assert.match(h.stderr, /timed out/);
     for (const pid of JSON.parse(readFileSync(path.join(dir, 'pids'), 'utf8'))) assert.equal(alive(pid), false, String(pid));
   } finally { rmSync(dir, { recursive: true, force: true }); }

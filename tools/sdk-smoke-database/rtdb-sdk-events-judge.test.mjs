@@ -186,3 +186,10 @@ test('a record that throws while it is read answers no match with the reason', (
   d.profiles[0] = new Proxy(p, { get: (t, k) => { if (k === 'rows') throw new Error('poisoned'); return t[k]; } });
   const s = summarize(FIXTURE, d); assert.equal(s.match, false); assert.match(s.problems[0], /unreadable: poisoned/);
 });
+
+// ---- mutation run 2 (2026-11-04) ----
+test('step: writer callbacks belong to transaction steps only, also in the case that has transactions', () => {
+  const A = { step: 'attach', observer: [{ l: 'TA', e: 'value', k: 'ta', v: { leaf: null } }], writer: [{ l: 'W', e: 'value', k: 'ta', v: { leaf: null } }], ready: true, quiet: true };
+  assert.equal(judgeStep(A, copy(A), { kind: 'attach', label: 'attach' }, { observer: ['TA'], writer: ['W', 'txn'] }).verdict, 'NEEDS_REVIEW');
+  assert.equal(judgeStep({ ...A, writer: [] }, { ...A, writer: [] }, { kind: 'attach', label: 'attach' }, { observer: ['TA'], writer: ['W', 'txn'] }).verdict, 'MATCH');
+});

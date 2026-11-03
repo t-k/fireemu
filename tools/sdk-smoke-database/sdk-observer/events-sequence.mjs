@@ -13,7 +13,7 @@
 import { withTimeout } from './sequence.mjs';
 import { CHILD_KINDS, EVENT_CASES, PRIORITY_SEED, SEED, eventCases } from './events-actor.mjs';
 
-export const QUIET_MS = 400, SETTLE_MAX_MS = 5000, STEP_MS = 10000;
+export const QUIET_MS = 800, SETTLE_MAX_MS = 5000, STEP_MS = 10000;
 const ON = { value: 'onValue', child_added: 'onChildAdded', child_changed: 'onChildChanged', child_moved: 'onChildMoved', child_removed: 'onChildRemoved' };
 const WITH_PREV = new Set(['child_added', 'child_changed', 'child_moved']);
 

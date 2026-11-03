@@ -172,3 +172,9 @@ test('LP events page: the WebSocket the page opens for the writer is counted whe
   const sockets = rows.filter(r => r.kind === 'raw-page-ws');
   assert.ok(sockets.length >= 1, JSON.stringify(rows.map(r => r.kind))); assert.ok(counter.used().direct >= sockets.length);
 });
+
+test('the quiescence window of a step is at least 800 ms: a production round trip (about 150 to 300 ms, more over long polling) must not move an event into the next step', async () => {
+  const { QUIET_MS, SETTLE_MAX_MS } = await import('./events-sequence.mjs');
+  assert.ok(QUIET_MS >= 800, `QUIET_MS is ${QUIET_MS}`);
+  assert.ok(SETTLE_MAX_MS >= 4 * QUIET_MS, `SETTLE_MAX_MS ${SETTLE_MAX_MS} must leave room for several quiet windows`);
+});

@@ -633,3 +633,14 @@ def test_a_sub_claim_passes_the_sdk_and_the_runner_adds_nothing_to_the_payload(c
 def test_the_sdk_itself_refuses_an_oversized_claims_payload(client, emulated_auth):
     response = blocking(client, "bc_user", "beforeCreate", "oversized@example.com")
     assert response.status_code == 400 and json.loads(response.get_data())["error"]["status"] == "INVALID_ARGUMENT"
+
+
+def test_an_async_http_function_answers_500_with_a_clear_reason_and_never_runs(discovered, capsys):
+    gate = EnvironmentGate(LOCAL)
+    client = Client(RunnerRouter(discovered, build_manifest(discovered), "demo-proj", SECRET, gate))
+    response = get(client, "/demo-proj/us-central1/async_http")
+    assert response.status_code == 500
+    assert "async" in response.get_data(as_text=True)
+    assert "[functions] async_http:" in capsys.readouterr().err
+    with gate.hold(["API_KEY"]):
+        assert os.environ["API_KEY"] == "key-value"

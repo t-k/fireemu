@@ -81,7 +81,7 @@ class JwksServer:
         self.server.server_close()
 
 
-def token(key=EMULATOR_KEY, kid=KID, audience=None, expires_in=3600, algorithm="RS256", extra_headers=None, claims=None):
+def token(key=EMULATOR_KEY, kid=KID, audience=None, expires_in=3600, algorithm="RS256", extra_headers=None, claims=None, drop=()):
     now = int(time.time())
     payload = {
         "iss": "https://firebaseappcheck.googleapis.com/1234567890",
@@ -91,6 +91,8 @@ def token(key=EMULATOR_KEY, kid=KID, audience=None, expires_in=3600, algorithm="
         "exp": now + expires_in,
         **(claims or {}),
     }
+    for name in drop:
+        payload.pop(name, None)
     headers = {"kid": kid, "typ": "JWT", **(extra_headers or {})}
     return jwt.encode(payload, key, algorithm=algorithm, headers=headers)
 
@@ -543,9 +545,10 @@ def test_the_service_keeps_the_stock_key_client_settings_and_has_no_way_to_reach
     from firebase_admin import app_check
 
     service = app_check._get_app_check_service(firebase_admin.get_app())
-    assert service._jwks_client.jwk_set_cache.lifespan == 21600
-    assert service._jwks_client.headers == app_check._AppCheckService._APP_CHECK_HEADERS
-    assert service._jwks_client.headers.get("x-goog-api-client")
+    assert isinstance(service._jwks_client, appcheck.LoopbackKeyClient)
+    assert service._jwks_client._lifespan == 21600
+    assert service._jwks_client._headers == app_check._AppCheckService._APP_CHECK_HEADERS
+    assert service._jwks_client._headers.get("x-goog-api-client")
     assert service._http_client is None
     assert service._scoped_project_id == "projects/" + service._project_id and service._project_id == PROJECT
 

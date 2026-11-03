@@ -236,6 +236,9 @@ def negative_ingress():
     ran = lambda: len([e for e in seen() if e["function"] == "tk_echo"])  # noqa: E731
     before = ran()
     body = {"data": {"n": 9}}
+    # NOTE: the bearer has an EMPTY signature. Strict Tasks admission only checks that a Google-issuer token has three
+    # non-empty segments, so a token with a made-up signature segment passes it (the documented Node-path limitation,
+    # which this test does not cover and does not claim to).
     unsigned = b64({"alg": "none", "typ": "JWT"}) + "." + b64({"iss": "https://accounts.google.com", "aud": "x", "exp": 4102444800}) + "."
     attempts = [("no credentials", {}), ("a forged bearer", {"Authorization": f"Bearer {unsigned}"}), ("the queue header alone", {"x-cloudtasks-queuename": "tk_echo"})]
     for label, headers in attempts:
@@ -245,6 +248,9 @@ def negative_ingress():
         else:
             assert status == 200, (label, status, response)  # the official emulator serves a task function to anyone
     assert ran() == before + (0 if PROFILE == "strict" else len(attempts)), (before, ran())
+    # An async handler is not run: the Python SDK never awaits one (production skips it silently).
+    status, response = call("GET", f"{FUNCTIONS}/async_http")
+    assert status == 500, (status, response)
     # A blocking function has no public URL, whoever asks.
     for headers in ({}, OWNER):
         status, response = call("POST", f"{FUNCTIONS}/bc_user", {"data": {"jwt": unsigned}}, headers)

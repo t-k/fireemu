@@ -394,3 +394,68 @@ def test_a_schedule_frame_whose_event_is_not_an_object_is_a_failed_result():
     writer = run_schedule(ran.append, message)
     assert writer.result("s-1") == {"type": "result", "invocationId": "s-1", "ok": False, "error": "the scheduled run names no job name"}
     assert ran == []
+
+
+# --- async handlers (Codex r2 on slice 2b) ------------------------------------------------------------------------
+#
+# The Python SDK and functions-framework never await a handler: an `async def` returns a coroutine that is dropped, so
+# in production an event or scheduled run "succeeds" without its body running (and an HTTP request answers 500). The
+# runner reports a clear failure instead of a silent success.
+
+
+def test_an_async_event_handler_is_a_failed_result_that_says_why_and_closes_the_coroutine():
+    import warnings
+
+    async def handler(event):
+        raise AssertionError("the body must not run")
+
+    dispatcher, writer = build({"f": handler}, [spec()])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # "coroutine ... was never awaited" would be raised as an error
+        invoke(dispatcher)
+        result = writer.result("i-1")
+    assert result["ok"] is False and "async" in result["error"] and "never awaits" in result["error"]
+    log = writer.wait_for(lambda f: f["type"] == "log" and f["invocationId"] == "i-1")
+    assert "async" in log["message"] and log["level"] == "error"
+
+
+def test_an_async_handler_under_the_sdks_decorator_is_found_through_the_wrapper():
+    import functools
+
+    async def user(event):
+        raise AssertionError("the body must not run")
+
+    @functools.wraps(user)
+    def wrapper(event):
+        return user(event)
+
+    dispatcher, writer = build({"f": wrapper}, [spec()])
+    invoke(dispatcher)
+    assert writer.result("i-1")["ok"] is False
+
+
+def test_an_async_scheduled_handler_is_a_failed_attempt():
+    import functools
+
+    async def user(event):
+        raise AssertionError("the body must not run")
+
+    @functools.wraps(user)
+    def wrapper(request):
+        return user(request)
+
+    writer = run_schedule(wrapper)
+    result = writer.result("s-1")
+    assert result["ok"] is False and "async" in result["error"]
+
+
+def test_a_handler_that_merely_returns_a_coroutine_is_a_plain_event_handler():
+    # Only a coroutine function is refused: what a handler returns is its own business, as in production.
+    ran = []
+
+    def handler(event):
+        ran.append(1)
+
+    dispatcher, writer = build({"f": handler}, [spec()])
+    invoke(dispatcher)
+    assert writer.result("i-1")["ok"] is True and ran == [1]

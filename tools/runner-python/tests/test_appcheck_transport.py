@@ -1,0 +1,326 @@
+"""SECURITY-SENSITIVE: how the runner fetches the App Check emulator's keys, and which claims it requires (Codex r2 on
+slice 2b). The runner fetches the keys itself, so no dependency default (redirects, proxies, name resolution) decides
+where a request goes; the claim checks add what the stock SDK leaves optional (`exp`, the exact issuer).
+
+Every transport test proves the negative the same way: a second local server stands in for "the outside", and the
+test asserts it was never contacted. Name lookups and connections are recorded as well, so a request that would have
+left the machine fails the test even though no network is available to it.
+"""
+
+import json
+import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler
+
+import jwt
+import pytest
+from jwt.algorithms import RSAAlgorithm
+
+from fireemu_runner import appcheck
+from test_appcheck import EMULATOR_KEY, KID, OTHER_KEY, PROJECT, JwksServer, LoopbackServer, token
+
+KEYS_BODY = json.dumps({"keys": [{**json.loads(RSAAlgorithm.to_jwk(EMULATOR_KEY.public_key())), "kid": KID, "alg": "RS256", "use": "sig"}]}).encode()
+ATTACKER_BODY = json.dumps({"keys": [{**json.loads(RSAAlgorithm.to_jwk(OTHER_KEY.public_key())), "kid": KID, "alg": "RS256", "use": "sig"}]}).encode()
+
+
+class Scripted:
+    """A loopback server that answers every GET with `reply(handler)` and counts them."""
+
+    def __init__(self, reply):
+        self.requests = 0
+        self.paths = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.requests += 1
+                outer.paths.append(self.path)
+                reply(self)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = LoopbackServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.port = self.server.server_port
+        self.url = f"http://127.0.0.1:{self.port}/v1/jwks"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def answer(handler, status=200, body=b"", headers=()):
+    handler.send_response(status)
+    for name, value in headers:
+        handler.send_header(name, value)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+@pytest.fixture
+def client_for():
+    """A key client for a URL, plus a way to close what the test opened."""
+    opened = []
+
+    def make(url, **options):
+        client = appcheck.LoopbackKeyClient(url, **options)
+        opened.append(client)
+        return client
+
+    yield make
+
+
+def verifies(client, value):
+    """Whether the client yields a key under which `value` verifies."""
+    try:
+        key = client.get_signing_key_from_jwt(value).key
+        jwt.decode(value, key, algorithms=["RS256"], audience=f"projects/{PROJECT}")
+        return True
+    except Exception:
+        return False
+
+
+@pytest.fixture
+def traffic(monkeypatch):
+    """Records every name lookup and connection attempt the process makes."""
+    seen = {"lookups": [], "connects": []}
+    real_getaddrinfo = socket.getaddrinfo
+    real_create = socket.create_connection
+
+    def getaddrinfo(host, *args, **kwargs):
+        seen["lookups"].append(host)
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def create_connection(address, *args, **kwargs):
+        seen["connects"].append(address)
+        return real_create(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    return seen
+
+
+# --- the happy path and its bounds -------------------------------------------------------------------------
+
+
+def test_the_client_fetches_the_key_set_once_and_serves_later_tokens_from_its_cache(client_for):
+    server = JwksServer({KID: EMULATOR_KEY})
+    try:
+        client = client_for(server.url)
+        assert verifies(client, token()) and verifies(client, token()) and verifies(client, token())
+        assert server.requests == 1
+    finally:
+        server.close()
+
+
+def test_the_request_says_where_it_goes_and_carries_the_sdks_metrics_header(client_for):
+    seen = {}
+
+    def reply(handler):
+        seen.update(host=handler.headers["Host"], metrics=handler.headers.get("x-goog-api-client"), connection=handler.headers.get("Connection"))
+        answer(handler, body=KEYS_BODY)
+
+    server = Scripted(reply)
+    try:
+        assert verifies(client_for(server.url, headers={"x-goog-api-client": "gl-python/test"}), token())
+        assert seen["host"] == f"127.0.0.1:{server.port}" and seen["metrics"]
+    finally:
+        server.close()
+
+
+def test_an_unknown_kid_refetches_once_per_interval_and_never_in_a_flood(client_for):
+    server = JwksServer({KID: EMULATOR_KEY})
+    try:
+        client = client_for(server.url, refresh_interval=0.3)
+        assert verifies(client, token())
+        assert server.requests == 1
+        for _ in range(5):
+            assert not verifies(client, token(kid="who-is-this"))
+        assert server.requests == 1, "inside the interval a flood of unknown kids fetches nothing"
+        time.sleep(0.35)
+        for _ in range(5):
+            assert not verifies(client, token(kid="who-is-this"))
+        assert server.requests == 2, "one fetch per interval, not one per token"
+    finally:
+        server.close()
+
+
+def test_a_key_that_appears_after_the_first_fetch_is_picked_up_after_the_interval(client_for):
+    keys = {"empty": True}
+
+    def reply(handler):
+        answer(handler, body=json.dumps({"keys": []}).encode() if keys["empty"] else KEYS_BODY)
+
+    server = Scripted(reply)
+    try:
+        client = client_for(server.url, refresh_interval=0.2)
+        assert not verifies(client, token())
+        keys["empty"] = False
+        assert not verifies(client, token()), "inside the interval nothing is fetched"
+        time.sleep(0.25)
+        assert verifies(client, token())
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("a server error", lambda h: answer(h, 500, b"{}")),
+        ("not found", lambda h: answer(h, 404, b"{}")),
+        ("not json", lambda h: answer(h, body=b"<html>")),
+        ("a json array", lambda h: answer(h, body=b"[]")),
+        ("keys that are not a list", lambda h: answer(h, body=json.dumps({"keys": {}}).encode())),
+        ("a key without material", lambda h: answer(h, body=json.dumps({"keys": [{"kid": KID, "kty": "RSA"}]}).encode())),
+        ("an empty key set", lambda h: answer(h, body=json.dumps({"keys": []}).encode())),
+        ("no body at all", lambda h: answer(h, 200, b"")),
+    ],
+)
+def test_every_bad_answer_leaves_a_valid_looking_token_unverified(client_for, label, reply):
+    server = Scripted(reply)
+    try:
+        assert not verifies(client_for(server.url), token()), label
+    finally:
+        server.close()
+
+
+def test_an_answer_over_the_size_bound_is_refused_without_reading_it_all(client_for):
+    server = Scripted(lambda h: answer(h, body=b" " * (300 * 1024) + KEYS_BODY))
+    try:
+        assert not verifies(client_for(server.url), token())
+        small = Scripted(lambda h: answer(h, body=KEYS_BODY))
+        try:
+            assert verifies(client_for(small.url, max_bytes=len(KEYS_BODY)), token())
+            assert not verifies(client_for(small.url, max_bytes=len(KEYS_BODY) - 1), token())
+        finally:
+            small.close()
+    finally:
+        server.close()
+
+
+def test_a_server_that_never_answers_is_given_up_on_within_the_timeout(client_for):
+    release = threading.Event()
+    server = Scripted(lambda h: release.wait(5))
+    try:
+        started = time.monotonic()
+        assert not verifies(client_for(server.url, timeout=0.3), token())
+        assert time.monotonic() - started < 3
+    finally:
+        release.set()
+        server.close()
+
+
+def test_a_closed_port_is_a_failure_not_a_hang(client_for):
+    started = time.monotonic()
+    assert not verifies(client_for("http://127.0.0.1:1/v1/jwks", timeout=1), token())
+    assert time.monotonic() - started < 3
+
+
+# --- redirects, proxies and name resolution never take a request off the machine ------------------------------
+
+
+def test_a_redirect_to_another_loopback_server_is_not_followed(client_for):
+    elsewhere = Scripted(lambda h: answer(h, body=ATTACKER_BODY))
+    redirecting = Scripted(lambda h: answer(h, 302, b"", [("Location", elsewhere.url)]))
+    try:
+        client = client_for(redirecting.url)
+        # The attacker's key set would verify a token the attacker signed, if the redirect were followed.
+        assert not verifies(client, token(key=OTHER_KEY))
+        assert not verifies(client, token())
+        assert redirecting.requests >= 1 and elsewhere.requests == 0
+    finally:
+        redirecting.close()
+        elsewhere.close()
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_every_redirect_status_is_a_failure(client_for, status):
+    elsewhere = Scripted(lambda h: answer(h, body=KEYS_BODY))
+    redirecting = Scripted(lambda h: answer(h, status, KEYS_BODY, [("Location", elsewhere.url)]))
+    try:
+        assert not verifies(client_for(redirecting.url), token())
+        assert elsewhere.requests == 0
+    finally:
+        redirecting.close()
+        elsewhere.close()
+
+
+def test_a_redirect_to_an_outside_host_triggers_no_lookup_and_no_connection(client_for, traffic):
+    redirecting = Scripted(lambda h: answer(h, 302, b"", [("Location", "http://attacker.invalid/keys")]))
+    try:
+        assert not verifies(client_for(redirecting.url), token(key=OTHER_KEY))
+        assert "attacker.invalid" not in traffic["lookups"]
+        assert all(address[0] in ("127.0.0.1", "::1") for address in traffic["connects"])
+    finally:
+        redirecting.close()
+
+
+@pytest.mark.parametrize("variable", ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"])
+def test_a_proxy_in_the_environment_is_never_used(client_for, monkeypatch, variable):
+    proxy = Scripted(lambda h: answer(h, body=ATTACKER_BODY))
+    keys = JwksServer({KID: EMULATOR_KEY})
+    try:
+        monkeypatch.setenv(variable, f"http://127.0.0.1:{proxy.port}")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = client_for(keys.url)
+        assert verifies(client, token())
+        assert not verifies(client_for(keys.url), token(key=OTHER_KEY))
+        assert proxy.requests == 0 and keys.requests == 2
+    finally:
+        proxy.close()
+        keys.close()
+
+
+def test_a_name_that_resolves_off_the_machine_is_refused_before_any_connection(client_for, monkeypatch):
+    connects = []
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))])
+    monkeypatch.setattr(socket, "create_connection", lambda address, *a, **k: connects.append(address) or (_ for _ in ()).throw(AssertionError("connected")))
+    client = client_for("http://localhost:9/v1/jwks")
+    assert not verifies(client, token())
+    assert connects == []
+
+
+def test_one_off_machine_address_among_loopback_ones_refuses_the_whole_name(client_for, monkeypatch):
+    connects = []
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda host, port, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)), (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))],
+    )
+    monkeypatch.setattr(socket, "create_connection", lambda address, *a, **k: connects.append(address) or (_ for _ in ()).throw(AssertionError("connected")))
+    assert not verifies(client_for("http://localhost:9/v1/jwks"), token())
+    assert connects == []
+
+
+def test_localhost_resolving_to_loopback_is_connected_to_by_address_not_by_name(client_for, monkeypatch):
+    server = JwksServer({KID: EMULATOR_KEY})
+    connects = []
+    real = socket.create_connection
+    monkeypatch.setattr(socket, "create_connection", lambda address, *a, **k: connects.append(address) or real(address, *a, **k))
+    try:
+        port = server.server.server_port
+        assert verifies(client_for(f"http://localhost:{port}/v1/jwks"), token())
+        assert connects and all(address[0] in ("127.0.0.1", "::1") for address in connects)
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("url", ["http://10.1.2.3:9/v1/jwks", "http://example.invalid/v1/jwks", "https://127.0.0.1:9/v1/jwks", "http://[2001:db8::1]:9/v1/jwks"])
+def test_the_client_itself_refuses_a_url_that_is_not_loopback_http(client_for, traffic, url):
+    assert not verifies(client_for(url), token())
+    assert traffic["connects"] == []
+
+
+# --- the dependency this relies on --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("version, expected", [("2.15.1", True), ("2.16.0", True), ("3.0.0", True), ("2.10.1", True), ("2.9.0", False), ("1.7.1", False), ("2.10", False), ("junk", False), ("", False)])
+def test_the_hook_is_installed_only_with_a_pyjwt_at_or_above_the_tested_floor(monkeypatch, version, expected):
+    from firebase_admin import app_check
+
+    monkeypatch.setattr(app_check, "_AppCheckService", app_check._AppCheckService)
+    monkeypatch.setattr(jwt, "__version__", version)
+    assert appcheck.install_jwks_hook("http://127.0.0.1:1/v1/jwks") is expected

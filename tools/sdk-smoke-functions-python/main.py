@@ -410,3 +410,19 @@ def add_enforced(req: https_fn.CallableRequest):
 @https_fn.on_call(enforce_app_check=False)
 def add_enforced_off(req: https_fn.CallableRequest):
     return {"sum": req.data["a"] + req.data["b"], "app": req.app.app_id if req.app else None}
+
+
+# The Python SDK never awaits a handler: these bodies would not run in production either.
+@firestore_fn.on_document_created(document="async/{id}")
+async def async_fs(event):
+    _record({"function": "async_fs"})
+
+
+@scheduler_fn.on_schedule(schedule="every 7 minutes")
+async def async_sch(event):
+    _record({"function": "async_sch"})
+
+
+@https_fn.on_request()
+async def async_http(request):
+    return "never"

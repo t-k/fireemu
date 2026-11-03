@@ -15,7 +15,7 @@ import flask
 from functions_framework import crash_handler, read_request
 from werkzeug.serving import WSGIRequestHandler, make_server
 
-from .diagnostics import describe
+from .diagnostics import ASYNC_HANDLER, describe, is_async_handler
 from .environment import EnvironmentGate
 from .manifest import DEFAULT_REGION
 
@@ -128,6 +128,10 @@ class RunnerRouter:
         environ["SCRIPT_NAME"] = environ.get("SCRIPT_NAME", "") + "/".join(parts[:4])
         environ["PATH_INFO"] = "/" + "/".join(parts[4:])
         environ["fireemu.function"] = route[1]
+        if is_async_handler(route[1]):
+            # Production answers 500 as well (the coroutine is not a response); this says why.
+            sys.stderr.write(f"[functions] {name}: {ASYNC_HANDLER}\n")
+            return self._plain(start_response, "500 Internal Server Error", ASYNC_HANDLER)
         # The environment this function is entitled to is held until its response is finished, a streamed body
         # included: the secrets it declares are in the process environment for exactly that long.
         held = contextlib.ExitStack()

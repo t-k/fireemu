@@ -10,7 +10,7 @@ from .events import (
     pubsub_cloud_event,
     storage_cloud_event,
 )
-from .diagnostics import describe
+from .diagnostics import ASYNC_HANDLER, describe, is_async_handler
 from .environment import EnvironmentGate
 from .framing import FrameWriter
 from .scheduler import SchedulerFailure, deliver_schedule
@@ -92,6 +92,8 @@ class Dispatcher:
             spec, function = self._check(message)
         except BaseException as error:  # not user code, but a malformed frame: still answered, never raised
             return describe(error)
+        if is_async_handler(function):
+            return ASYNC_HANDLER, ASYNC_HANDLER
         with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
             try:
                 # One process serves the whole codebase, so these name the invocation that started most

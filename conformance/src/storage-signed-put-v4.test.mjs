@@ -6,7 +6,7 @@ import "./storage-signed-put/test-preload.mjs";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { roleCreateOutcome } from "./storage-signed-put/iam.mjs";
+import { parseJournal, roleCreateOutcome } from "./storage-signed-put/iam.mjs";
 import { observe, removeSignerAccess } from "./storage-signed-put/observe.mjs";
 import { ROLE_ID } from "./storage-signed-put/plan.mjs";
 import {
@@ -98,6 +98,7 @@ describe("the role is kept while the final policy references it", () => {
         out: memoryOut(),
         preflight: out.saved.get("iam-preflight.json"),
         plan: out.saved.get("iam-grant-plan.json"),
+        roleCreate: "created",
       });
       assert.equal(roleDeletes(world).length, 0, "the role must not be deleted");
       assert.equal(report.bindingPresent, true);
@@ -156,7 +157,7 @@ describe("the standalone removal deletes only a role this run made (Opus S1)", (
     assert.equal(await outcome((request, net) => net(request).then(() => respond(503))), "unknown");
     assert.equal(await outcome(() => "transport"), "unknown");
     assert.equal(roleCreateOutcome([]), "none");
-    assert.equal(roleCreateOutcome([{ phase: "before", label: "role-create" }]), "unknown");
+    assert.equal(roleCreateOutcome([{ phase: "before", label: "role-create" }]), "incomplete");
     assert.equal(roleCreateOutcome([{ phase: "before", label: "bucket" }]), "none");
   });
 
@@ -211,5 +212,88 @@ describe("the standalone removal deletes only a role this run made (Opus S1)", (
     });
     assert.equal(roleDeletes(world).length, 0);
     assert.equal(report.roleKept, true);
+  });
+});
+
+describe("backlog from the v4 review: the role create outcome from a damaged journal", () => {
+  const line = (entry) => JSON.stringify(entry);
+  const before = { phase: "before", label: "role-create", n: 9 };
+  const after = (status) => ({ phase: "after", label: "role-create", n: 9, status });
+
+  it("a role create sent with no terminal line is incomplete, and the role is kept", () => {
+    assert.equal(roleCreateOutcome([before]), "incomplete");
+    assert.equal(roleCreateOutcome([{ phase: "before", label: "bucket" }, before]), "incomplete");
+    assert.equal(
+      roleCreateOutcome([before, { phase: "unknown", label: "role-create" }]),
+      "unknown",
+    );
+    assert.equal(roleCreateOutcome([before, after(200)]), "created");
+    assert.equal(roleCreateOutcome([before, after(409)]), "refused");
+    assert.equal(roleCreateOutcome([before, after(503)]), "unknown");
+  });
+
+  it("parses a journal and counts the lines that are not JSON", () => {
+    const text = [line(before), "{not json", line(after(200)), ""].join("\n");
+    const parsed = parseJournal(text);
+    assert.deepEqual(parsed.entries, [before, after(200)]);
+    assert.equal(parsed.malformed, 1);
+    assert.deepEqual(parseJournal(""), { entries: [], malformed: 0 });
+    assert.deepEqual(parseJournal("\n\n"), { entries: [], malformed: 0 });
+    assert.equal(parseJournal(`${line(before)}\n{"phase":"after","label":"role-cre`).malformed, 1);
+    for (const notObject of ["null", "7", '"x"', "[1]"]) {
+      assert.equal(parseJournal(notObject).malformed, 1, notObject);
+    }
+  });
+
+  it("a journal cut after a complete line keeps the role unless the terminal line is there", () => {
+    const full = [line(before), line(after(200))];
+    const outcome = (lines) => {
+      const { entries, malformed } = parseJournal(lines.join("\n"));
+      return roleCreateOutcome(entries, { malformed });
+    };
+    assert.equal(outcome(full), "created");
+    assert.equal(outcome(full.slice(0, 1)), "incomplete", "cut between the request and its answer");
+    assert.equal(
+      outcome([]),
+      "none",
+      "cut before the request: never sent as far as the journal shows",
+    );
+  });
+
+  it("a malformed line hides a role create that may have been sent: the role is kept", () => {
+    const outcome = (lines) => {
+      const { entries, malformed } = parseJournal(lines.join("\n"));
+      return roleCreateOutcome(entries, { malformed });
+    };
+    assert.equal(outcome(["{not json"]), "incomplete");
+    assert.equal(outcome([line({ phase: "before", label: "bucket" }), "{not json"]), "incomplete");
+    assert.equal(
+      outcome([line(before), "{not json", line(after(200))]),
+      "created",
+      "an explicit answer wins",
+    );
+    assert.equal(outcome([line(before), "{not json", line(after(409))]), "refused");
+    assert.equal(
+      outcome([line(before), line({ phase: "unknown", label: "role-create" }), "{"]),
+      "unknown",
+    );
+    assert.equal(outcome([line(before), "{"]), "incomplete");
+  });
+});
+
+describe("the standalone removal deletes the role in a clean final read (control)", () => {
+  it("with roleCreate created and no foreign binding the role is deleted", async () => {
+    const { world, out } = await stuckRun();
+    const report = await removeSignerAccess({
+      target: PRODUCTION_LIKE,
+      runId: RUN,
+      deps: world.deps,
+      out: memoryOut(),
+      preflight: out.saved.get("iam-preflight.json"),
+      plan: out.saved.get("iam-grant-plan.json"),
+      roleCreate: "created",
+    });
+    assert.equal(roleDeletes(world).length, 1);
+    assert.equal(report.clean, true);
   });
 });

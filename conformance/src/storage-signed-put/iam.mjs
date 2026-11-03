@@ -403,18 +403,41 @@ export async function iamRemove({ io, target, ctx, ours }) {
 }
 
 /**
- * What the run's journal says about its role create: `created` (answered 200), `refused` (a
- * definitive non-200), `unknown` (sent, answer unknown or not recorded) or `none` (never sent).
- * The standalone removal deletes the role only for `created` and `unknown`.
+ * Reads a JSON lines journal. A line that is not a JSON object is counted, never guessed at.
  */
-export function roleCreateOutcome(entries) {
+export function parseJournal(text) {
+  const entries = [];
+  let malformed = 0;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      const value = JSON.parse(line);
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) entries.push(value);
+      else malformed += 1;
+    } catch {
+      malformed += 1;
+    }
+  }
+  return { entries, malformed };
+}
+
+/**
+ * What the run's journal says about its role create: `created` (answered 200), `refused` (a
+ * definitive non-200), `unknown` (sent, the answer unknown), `incomplete` (sent, or possibly sent
+ * because a journal line is unreadable, with no answer on record) or `none` (the journal shows it
+ * was never sent). The standalone removal deletes the role only for `created` and `unknown`; every
+ * other value keeps it, because the role may not be the run's.
+ */
+export function roleCreateOutcome(entries, { malformed = 0 } = {}) {
   const mine = entries.filter((e) => e.label === "role-create");
-  if (!mine.some((e) => e.phase === "before")) return "none";
   if (mine.some((e) => e.phase === "unknown")) return "unknown";
   const after = mine.find((e) => e.phase === "after");
-  if (!after) return "unknown";
-  if (after.status === 200) return "created";
-  return isUnknownStatus(after.status) ? "unknown" : "refused";
+  if (after) {
+    if (after.status === 200) return "created";
+    return isUnknownStatus(after.status) ? "unknown" : "refused";
+  }
+  if (mine.some((e) => e.phase === "before")) return "incomplete";
+  return malformed > 0 ? "incomplete" : "none";
 }
 
 /**

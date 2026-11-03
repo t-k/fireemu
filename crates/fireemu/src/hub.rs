@@ -466,8 +466,17 @@ fn bearer(req: &Request<Incoming>) -> Option<&str> {
     value.strip_prefix("Bearer ")
 }
 
-fn is_mutation(method: &Method, path: &str) -> bool {
+/// Whether `method path` is a Hub mutation, and so needs the control token.
+///
+/// The background-trigger switches are exempt for a request that carries no browser metadata
+/// (`browser` is false: no `Origin` and no `Sec-Fetch-Site`). That is the request
+/// `withFunctionTriggersDisabled` from `@firebase/rules-unit-testing` sends without
+/// credentials, and the official Hub accepts it. A browser always sends at least one of the
+/// two headers on a cross-origin or local-network request, so a page still needs the token.
+/// The export route is never exempt: it writes the whole suite's state to disk.
+fn is_mutation(method: &Method, path: &str, browser: bool) -> bool {
     (method == Method::PUT
+        && browser
         && matches!(
             path,
             "/functions/disableBackgroundTriggers" | "/functions/enableBackgroundTriggers"
@@ -599,7 +608,8 @@ async fn respond(
         }
         return Ok(json_response(StatusCode::NOT_FOUND, &json!({}), None));
     }
-    if is_mutation(&method, &path)
+    let browser = has_origin || req.headers().contains_key("sec-fetch-site");
+    if is_mutation(&method, &path, browser)
         && (!fireemu_adapter_http::control::token_matches(bearer(&req), &state.control_token)
             || (has_origin && (origin.is_none() || !fetch_metadata_allows(&req))))
     {

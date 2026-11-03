@@ -188,18 +188,31 @@ impl DatabaseHandle {
     }
 
     /// [`Self::wait_for_release`] for a contention deadline: blocks until a transaction
-    /// finishes after `marker` was read (`true`) or the deadline passed (`false`). A deadline
-    /// that follows the virtual clock wakes every poll to look at it, and a poll is not an
-    /// answer, so the caller does not run its attempt again for it.
+    /// finishes after `marker` was read, or a read-write holder reaches its own deadline
+    /// (`true`), or the deadline passed (`false`). The wait wakes every poll to look at the
+    /// clocks, and a poll is not an answer, so the caller does not run its attempt again for
+    /// it. A holder past its idle or lifetime limit is: the attempt prunes it and proceeds.
     fn wait_for_release_until(&self, marker: u64, deadline: &ContentionDeadline) -> bool {
         loop {
-            if self.wait_for_release(marker, deadline.wake_at()) {
+            if self.wait_for_release(marker, deadline.poll_at()) {
                 return true;
             }
             if deadline.expired() {
                 return false;
             }
+            if self.holder_expired(deadline) {
+                return true;
+            }
         }
+    }
+
+    /// Whether a read-write transaction of this database has reached its idle or lifetime
+    /// deadline on the transaction clock: nothing prunes it until an operation runs, and the
+    /// clock can move without one (the control API), so a waiting writer looks for itself.
+    fn holder_expired(&self, deadline: &ContentionDeadline) -> bool {
+        let now = deadline.transaction_now();
+        self.read(|db| db.read_write_holder_expired(now))
+            .unwrap_or(false)
     }
 
     /// Waits for this database's release publications without occupying a worker thread.
@@ -208,11 +221,15 @@ impl DatabaseHandle {
             let notified = self.0.releases.async_changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.release_marker() != marker || self.is_detached() || deadline.expired() {
+            if self.release_marker() != marker
+                || self.is_detached()
+                || deadline.expired()
+                || self.holder_expired(deadline)
+            {
                 return;
             }
             let _ = tokio::time::timeout_at(
-                tokio::time::Instant::from_std(deadline.wake_at()),
+                tokio::time::Instant::from_std(deadline.poll_at()),
                 notified,
             )
             .await;
@@ -775,6 +792,18 @@ pub fn contention_expired(
     wall_elapsed >= wait || virtual_elapsed.is_some_and(|elapsed| elapsed >= wait)
 }
 
+/// The host wall time as a logical instant (the write time of `with_wall_clock_write_time`).
+fn host_wall_time() -> fireemu_core_types::time::LogicalInstant {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i128::try_from(duration.as_nanos()).ok())
+        .map_or(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            fireemu_core_types::time::LogicalInstant::from_nanos,
+        )
+}
+
 /// The end of one contended writer's wait. It always runs on the wall clock; under the strict
 /// profile it also runs on the virtual clock, so a recording replayed by moving the clock
 /// reaches the production bound without sleeping through it.
@@ -786,6 +815,11 @@ pub struct ContentionDeadline {
         Arc<Mutex<VirtualClock>>,
         fireemu_core_types::time::LogicalInstant,
     )>,
+    /// The clock the database's transactions run on (the backend's write time), which ends a
+    /// holder by its idle or lifetime limit in both profiles.
+    transaction_clock: Arc<Mutex<VirtualClock>>,
+    /// Whether transactions run on host wall time instead (`with_wall_clock_write_time`).
+    wall_clock_write_time: bool,
 }
 
 impl ContentionDeadline {
@@ -810,6 +844,25 @@ impl ContentionDeadline {
         } else {
             end
         }
+    }
+
+    /// The instant a wait that also watches for a holder's expiry stops at: [`Self::wake_at`],
+    /// or a short poll from now, whichever comes first. A holder's limit runs on the
+    /// transaction clock in both profiles, and a move of that clock wakes nobody.
+    fn poll_at(&self) -> std::time::Instant {
+        self.wake_at()
+            .min(std::time::Instant::now() + VIRTUAL_CLOCK_POLL)
+    }
+
+    /// The current reading of the clock the database's transactions run on.
+    fn transaction_now(&self) -> fireemu_core_types::time::LogicalInstant {
+        if self.wall_clock_write_time {
+            return host_wall_time();
+        }
+        self.transaction_clock.lock().map_or(
+            fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            |clock| clock.now(),
+        )
     }
 }
 
@@ -2826,6 +2879,8 @@ impl LocalBackend {
                 );
                 (Arc::clone(&self.clock), start)
             }),
+            transaction_clock: Arc::clone(&self.clock),
+            wall_clock_write_time: self.wall_clock_write_time,
         }
     }
 
@@ -5352,14 +5407,7 @@ impl LocalBackend {
         if !self.wall_clock_write_time {
             return self.now();
         }
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .and_then(|duration| i128::try_from(duration.as_nanos()).ok())
-            .map_or(
-                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
-                fireemu_core_types::time::LogicalInstant::from_nanos,
-            )
+        host_wall_time()
     }
 
     /// Reads a database without taking a session admission: for callers that already
@@ -9058,7 +9106,17 @@ mod lock_tests {
     fn hold_and_write(
         backend: &Arc<LocalBackend>,
     ) -> (Vec<u8>, std::sync::mpsc::Receiver<Result<(), Status>>) {
-        let document = format!("{CONTENTION_DATABASE}/documents/contended/doc");
+        let transaction = hold_contended_document(backend);
+        (transaction, write_contended_document(backend))
+    }
+
+    fn contended_document() -> String {
+        format!("{CONTENTION_DATABASE}/documents/contended/doc")
+    }
+
+    /// A transaction that holds the read lock on `contended/doc`.
+    fn hold_contended_document(backend: &Arc<LocalBackend>) -> Vec<u8> {
+        let document = contended_document();
         let transaction = backend
             .begin_transaction(&pb::BeginTransactionRequest {
                 database: CONTENTION_DATABASE.to_owned(),
@@ -9079,6 +9137,14 @@ mod lock_tests {
                 &crate::rules::allow_all_reads,
             )
             .unwrap_err();
+        transaction
+    }
+
+    /// A thread that writes `contended/doc` and reports how its commit ended.
+    fn write_contended_document(
+        backend: &Arc<LocalBackend>,
+    ) -> std::sync::mpsc::Receiver<Result<(), Status>> {
+        let document = contended_document();
         let (sender, receiver) = std::sync::mpsc::channel();
         let writer = Arc::clone(backend);
         std::thread::spawn(move || {
@@ -9097,7 +9163,147 @@ mod lock_tests {
                 .map(|_| ());
             let _ = sender.send(result);
         });
-        (transaction, receiver)
+        receiver
+    }
+
+    /// The idle limit of a contention backend's transactions, in seconds: production's
+    /// limit includes its allowance past the nominal quota.
+    fn holder_idle_limit(backend: &LocalBackend) -> i64 {
+        if backend.gateway.production_scope() {
+            120
+        } else {
+            60
+        }
+    }
+
+    /// The commit of the contended document as the gRPC service runs it: on the async wait.
+    fn write_contended_document_async(
+        backend: &Arc<LocalBackend>,
+    ) -> tokio::task::JoinHandle<Result<pb::CommitResponse, Status>> {
+        let backend = Arc::clone(backend);
+        tokio::spawn(async move {
+            let request = pb::CommitRequest {
+                database: CONTENTION_DATABASE.to_owned(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: contended_document(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let (parent, writes) = LocalBackend::plan_commit(&request).unwrap();
+            backend
+                .retry_on_contention_async(&parent, None, &writes, || {
+                    backend.commit_once(&request, &allow_all)
+                })
+                .await
+        })
+    }
+
+    #[test]
+    fn a_held_writer_commits_once_the_holder_expires_by_the_transaction_clock() {
+        for strict in [true, false] {
+            let clock = pinned_clock();
+            let backend = contention_backend(&clock, strict);
+            let limit = holder_idle_limit(&backend);
+            let _holder = hold_contended_document(&backend);
+            // The holder has been idle for all but 10 s of its limit when the writer arrives.
+            move_clock(&clock, limit - 10);
+            let writer = write_contended_document(&backend);
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                writer.recv_timeout(Duration::from_millis(200)).is_err(),
+                "held while the holder is live (strict: {strict})"
+            );
+            // 15 s later the holder is past its limit, and the writer is 5 s short of its bound.
+            move_clock(&clock, 15);
+            writer
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the writer answers at the holder's expiry")
+                .unwrap_or_else(|status| panic!("committed (strict: {strict}): {status:?}"));
+        }
+    }
+
+    #[test]
+    fn a_held_writer_stays_held_while_the_holder_has_not_expired() {
+        for strict in [true, false] {
+            let clock = pinned_clock();
+            let backend = contention_backend(&clock, strict);
+            let limit = holder_idle_limit(&backend);
+            let holder = hold_contended_document(&backend);
+            move_clock(&clock, limit - 10);
+            let writer = write_contended_document(&backend);
+            std::thread::sleep(Duration::from_millis(100));
+            // 5 s short of the holder's limit, and of the strict writer's bound.
+            move_clock(&clock, 5);
+            assert!(
+                writer.recv_timeout(Duration::from_millis(400)).is_err(),
+                "still held (strict: {strict})"
+            );
+            backend
+                .rollback(&pb::RollbackRequest {
+                    database: CONTENTION_DATABASE.to_owned(),
+                    transaction: holder,
+                    ..Default::default()
+                })
+                .unwrap();
+            writer
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the writer answers")
+                .expect("the release lets it commit");
+        }
+    }
+
+    #[test]
+    fn a_held_writer_is_woken_when_another_operation_prunes_the_expired_holder() {
+        for strict in [true, false] {
+            let clock = pinned_clock();
+            let backend = contention_backend(&clock, strict);
+            let limit = holder_idle_limit(&backend);
+            let _holder = hold_contended_document(&backend);
+            move_clock(&clock, limit - 10);
+            let writer = write_contended_document(&backend);
+            std::thread::sleep(Duration::from_millis(100));
+            // The clock moves and an operation prunes the holder under one database lock, so the
+            // writer never sees the holder expired: only the release that pruning publishes wakes it.
+            let handle = backend.database_handle(&contention_parent()).unwrap();
+            handle
+                .with(|db| {
+                    move_clock(&clock, 15);
+                    db.compact(backend.now());
+                    Ok(())
+                })
+                .unwrap();
+            writer
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the writer answers at the release")
+                .unwrap_or_else(|status| panic!("committed (strict: {strict}): {status:?}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn an_async_held_writer_commits_once_the_holder_expires_by_the_transaction_clock() {
+        for strict in [true, false] {
+            let clock = pinned_clock();
+            let backend = contention_backend(&clock, strict);
+            let limit = holder_idle_limit(&backend);
+            let _holder = hold_contended_document(&backend);
+            move_clock(&clock, limit - 10);
+            let writer = write_contended_document_async(&backend);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(
+                !writer.is_finished(),
+                "held while the holder is live (strict: {strict})"
+            );
+            move_clock(&clock, 15);
+            tokio::time::timeout(Duration::from_secs(5), writer)
+                .await
+                .expect("the writer answers at the holder's expiry")
+                .unwrap()
+                .unwrap_or_else(|status| panic!("committed (strict: {strict}): {status:?}"));
+        }
     }
 
     #[test]

@@ -2876,7 +2876,11 @@ impl FirestoreState {
                 continue;
             }
             transaction.state = TransactionState::Finished;
-            self.active_read_write_transactions.remove(&id);
+            // A read-write holder that runs out of time frees its locks here, so it is a release like any other: a writer waiting on
+            // the release marker is woken by it.
+            if self.active_read_write_transactions.remove(&id) {
+                self.transaction_releases = self.transaction_releases.wrapping_add(1);
+            }
             transaction.lifetime_expired = deadline == transaction_lineage_deadline(transaction);
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
@@ -2898,6 +2902,23 @@ impl FirestoreState {
         }
         changed |= self.forget_elapsed_finished_transactions(now);
         changed
+    }
+
+    /// Whether an active read-write transaction has reached its idle or total-lifetime deadline at `now`, so that the next
+    /// operation that prunes at `now` frees its locks. A writer waiting on contention looks at this while it waits: the clock that
+    /// ends the holder can move (the control API, a fault delay) without any operation running to prune it.
+    #[must_use]
+    pub fn read_write_holder_expired(&self, now: LogicalInstant) -> bool {
+        self.active_transaction_deadlines
+            .iter()
+            .take_while(|(deadline, _)| *deadline <= now)
+            .any(|(deadline, id)| {
+                self.active_read_write_transactions.contains(id)
+                    && self.transactions.get(id).is_some_and(|transaction| {
+                        transaction.state == TransactionState::Active
+                            && transaction_deadline(transaction, self.limit_scope) == *deadline
+                    })
+            })
     }
 
     /// Forgets the finished transactions whose retention has ended at `now`. Returns whether it changed anything.

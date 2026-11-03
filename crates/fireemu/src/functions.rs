@@ -23,7 +23,7 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::ids::SessionId;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig};
+use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig, RuntimeLanguage};
 
 /// One Pub/Sub topic and emulator subscription required by a loaded function manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1222,6 +1222,15 @@ fn start_reload_supervisors(
         node_probe_cache: node_probe_cache.clone(),
     };
     for codebase in cfg.functions_to_load() {
+        if crate::python_functions::codebase_language(&codebase) == RuntimeLanguage::Python {
+            // The reload snapshot links `node_modules` only, so it would lack the interpreter of the
+            // codebase's `venv`; Python reload is a later slice.
+            eprintln!(
+                "note: functions[{}]: source changes are not reloaded for Python codebases; restart fireemu to pick them up",
+                codebase.codebase
+            );
+            continue;
+        }
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
             cfg.clone(),
@@ -2022,28 +2031,36 @@ pub struct RunnerScript {
 /// to the executable or one level up in a package root.
 #[must_use]
 pub fn runner_candidates() -> Vec<(RunnerSource, PathBuf)> {
+    runner_candidates_for("FIREEMU_RUNNER_NODE", "runner-node", "index.mjs")
+}
+
+/// [`runner_candidates`] for any bundled runner: the override variable `env`, the directory `dir`
+/// beside the binary, and the script `file` in it.
+#[must_use]
+pub fn runner_candidates_for(
+    env: &str,
+    runner_dir: &str,
+    file: &str,
+) -> Vec<(RunnerSource, PathBuf)> {
     let mut out = Vec::new();
-    if let Some(script) = std::env::var_os("FIREEMU_RUNNER_NODE") {
+    if let Some(script) = std::env::var_os(env) {
         out.push((RunnerSource::Environment, PathBuf::from(script)));
     }
     if let Ok(exe) = std::env::current_exe() {
         // The executable may be reached through a symlink (npm's `node_modules/.bin`), and the
         // runner lives beside the real file, not beside the link.
         let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-        if let Some(dir) = exe.parent() {
+        if let Some(beside) = exe.parent() {
             out.push((
                 RunnerSource::BesideBinary,
-                dir.join("runner-node").join("index.mjs"),
+                beside.join(runner_dir).join(file),
             ));
-            if let Some(up) = dir.parent() {
-                out.push((
-                    RunnerSource::BesideBinary,
-                    up.join("runner-node").join("index.mjs"),
-                ));
+            if let Some(up) = beside.parent() {
+                out.push((RunnerSource::BesideBinary, up.join(runner_dir).join(file)));
             }
         }
     }
-    if let Some(script) = workspace_runner() {
+    if let Some(script) = workspace_runner_for(runner_dir, file) {
         out.push((RunnerSource::WorkspaceSource, script));
     }
     out
@@ -2068,20 +2085,25 @@ const WORKSPACE_RUNNER_SEARCH_DEPTH: usize = 8;
 /// `target/agent/<session>/<mode>/<profile>/`, and gives up after
 /// [`WORKSPACE_RUNNER_SEARCH_DEPTH`] directories or at the filesystem root, whichever comes
 /// first.
-fn workspace_runner() -> Option<PathBuf> {
+fn workspace_runner_for(runner_dir: &str, file: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
-    workspace_runner_from(&exe)
+    workspace_runner_from_for(&exe, runner_dir, file)
 }
 
 /// [`workspace_runner`] for a given executable path, so the search depth can be exercised
 /// against a synthetic tree without building a binary at that depth.
+#[cfg(test)]
 fn workspace_runner_from(exe: &Path) -> Option<PathBuf> {
+    workspace_runner_from_for(exe, "runner-node", "index.mjs")
+}
+
+fn workspace_runner_from_for(exe: &Path, runner_dir: &str, file: &str) -> Option<PathBuf> {
     exe.ancestors()
         .skip(1)
         .take(WORKSPACE_RUNNER_SEARCH_DEPTH)
         .find_map(|root| {
-            let script = root.join("tools").join("runner-node").join("index.mjs");
+            let script = root.join("tools").join(runner_dir).join(file);
             (root.join("Cargo.toml").is_file() && script.is_file()).then_some(script)
         })
 }
@@ -2092,11 +2114,26 @@ fn workspace_runner_from(exe: &Path) -> Option<PathBuf> {
 /// that named a runner meant that one, and falling back to another would run different code
 /// than it asked for.
 pub fn locate_runner() -> Result<RunnerScript, String> {
-    let candidates = runner_candidates();
+    locate_runner_for(
+        "FIREEMU_RUNNER_NODE",
+        "runner-node",
+        "index.mjs",
+        "the bundled Node runner",
+    )
+}
+
+/// [`locate_runner`] for any bundled runner (`what` names it in the error).
+pub fn locate_runner_for(
+    env: &str,
+    runner_dir: &str,
+    file: &str,
+    what: &str,
+) -> Result<RunnerScript, String> {
+    let candidates = runner_candidates_for(env, runner_dir, file);
     if let Some((source, path)) = candidates.first() {
         if *source == RunnerSource::Environment && !path.is_file() {
             return Err(format!(
-                "FIREEMU_RUNNER_NODE names {}, which is not a readable file",
+                "{env} names {}, which is not a readable file",
                 path.display()
             ));
         }
@@ -2110,9 +2147,14 @@ pub fn locate_runner() -> Result<RunnerScript, String> {
             });
         }
     }
+    let article = if file.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
     Err(format!(
-        "the bundled Node runner (runner-node/index.mjs) was not found; tried {}. Set \
-         FIREEMU_RUNNER_NODE to an index.mjs, or reinstall the platform package that ships it",
+        "{what} ({runner_dir}/{file}) was not found; tried {}. Set \
+         {env} to {article} {file}, or reinstall the platform package that ships it",
         candidates
             .iter()
             .map(|(_, p)| p.display().to_string())
@@ -3448,8 +3490,31 @@ async fn start_codebase(
         .into_owned();
     #[cfg(windows)]
     let source = fireemu_adapter_functions::runner::node_path(&source).into_owned();
+    let python = crate::python_functions::codebase_language(codebase) == RuntimeLanguage::Python;
+    if python && callable_trusted_protocol {
+        return Err(format!(
+            "the Functions codebase {label:?}: App Check for Python callables is not available yet, \
+             and this run enables it; load the Python codebase on its own (--only \
+             functions:{label}) or remove the App Check configuration"
+        ));
+    }
+    // The venv is checked before anything is spawned, with firebase-tools' wording; a
+    // `functions.runner` override replaces the whole launch and is its own responsibility.
+    let python_environment = if python && cfg.functions_runner.is_none() {
+        Some(
+            crate::python_functions::preflight(Path::new(&source), codebase.runtime.as_deref())
+                .await
+                .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
+        )
+    } else {
+        None
+    };
     let mut command = if let Some(command) = cfg.functions_runner.clone() {
         command
+    } else if let Some(environment) = &python_environment {
+        let script = crate::python_functions::locate_runner()
+            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?;
+        crate::python_functions::runner_command(environment, &script)
     } else {
         let codebase = codebase.clone();
         let node_probe_cache = node_probe_cache.clone();
@@ -3460,7 +3525,13 @@ async fn start_codebase(
         .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
         .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
     };
-    if cfg.functions_inspect_dynamic {
+    let inspecting = cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some();
+    if python && inspecting {
+        // firebase-tools says the same and goes on (`functionsEmulator.ts:1736-1738`).
+        eprintln!(
+            "warning: functions[{label}]: --inspect-functions is not supported for Python functions; ignored"
+        );
+    } else if cfg.functions_inspect_dynamic {
         command.insert(1, "--inspect-publish-uid=http".to_owned());
         command.insert(1, "--inspect=127.0.0.1:0".to_owned());
     } else if let Some(port) = cfg.functions_inspect_port {
@@ -3508,7 +3579,7 @@ async fn start_codebase(
         )
     };
     env.retain(|(name, _)| !is_app_check_route(name));
-    if hosts.admin_app_check.is_some() {
+    if hosts.admin_app_check.is_some() && !python {
         // The daemon owns the question and the answer; the runner only asks (see
         // `tools/runner-node/admin-app-check.mjs`).
         env.push(("FIREEMU_APP_CHECK_ADMIN".to_owned(), "1".to_owned()));
@@ -3615,6 +3686,13 @@ async fn start_codebase(
             .runner_options(clock_snapshot)
             .to_string(),
     ));
+    if let Some(environment) = &python_environment {
+        // What `activate` gives firebase-tools' Python commands: the environment first in PATH.
+        env.extend(crate::python_functions::launch_environment(
+            environment,
+            std::env::var_os("PATH").as_deref(),
+        ));
+    }
     let spec = SpawnSpec {
         command,
         cwd: Some(source.clone()),
@@ -3626,7 +3704,7 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
-    if hosts.admin_app_check.is_some() {
+    if hosts.admin_app_check.is_some() && !python {
         if let Some(note) = admin_app_check_note(label, runner.hello().admin_app_check.as_ref()) {
             eprintln!("note: {note}");
         }
@@ -3647,7 +3725,7 @@ async fn start_codebase(
             return Err(error);
         }
     }
-    if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
+    if inspecting && !python {
         let actual = runner.hello().inspector_port;
         let port_matches = cfg
             .functions_inspect_port

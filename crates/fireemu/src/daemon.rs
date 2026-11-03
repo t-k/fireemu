@@ -2367,6 +2367,13 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             && functions_listener.is_some()
             && (!cfg.app_check.implicit()
                 || cfg.functions_to_load().iter().all(|codebase| {
+                    // Callable trust is a Node SDK mechanism: a Python codebase neither supports
+                    // nor needs it, and must not switch it off for the Node ones.
+                    if crate::python_functions::codebase_language(codebase)
+                        == crate::config::RuntimeLanguage::Python
+                    {
+                        return true;
+                    }
                     match functions::callable_trust_supported(std::path::Path::new(
                         &codebase.source,
                     )) {

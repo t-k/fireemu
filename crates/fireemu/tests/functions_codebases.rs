@@ -184,12 +184,12 @@ fn a_function_name_two_codebases_export_is_refused_naming_both() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A codebase whose declared runtime is not Node is refused by name. fireemu ships one
-/// loader; handing a Python codebase to `node` would fail later, from a file the project never
-/// meant Node to read.
+/// A codebase whose declared runtime fireemu has no loader for is refused by name. Handing a
+/// Dart codebase, or a Python version firebase-tools does not know, to `node` would fail later,
+/// from a file the project never meant Node to read.
 #[test]
-fn a_python_or_dart_codebase_is_refused_with_the_language_named() {
-    for (runtime, language) in [("python312", "Python"), ("dart3", "Dart")] {
+fn a_dart_or_unknown_python_codebase_is_refused_with_the_language_named() {
+    for (runtime, language) in [("python39", "Python"), ("dart3", "Dart")] {
         let dir = scratch("runtime");
         let path = dir.join("firebase.json");
         std::fs::write(

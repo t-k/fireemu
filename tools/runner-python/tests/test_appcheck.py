@@ -488,3 +488,74 @@ def test_each_row_authenticates_the_app_only_for_the_emulators_own_token(discove
         assert status == 401 and "result" not in body
     else:
         assert status == 200 and body["result"]["app"] is None
+
+
+# --- survivors of the mutation run on the App Check module ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        5,
+        True,
+        ["http://127.0.0.1:9/v1/jwks"],
+        "https://127.0.0.1:9/v1/jwks",  # a loopback host over TLS is still not what the daemon names
+        "http://user@127.0.0.1:9/v1/jwks",
+        "http://:password@127.0.0.1:9/v1/jwks",
+        "http://user:password@127.0.0.1:9/v1/jwks",
+        "http:///v1/jwks",
+        "http://127.0.0.1:9/v1/jwks#fragment",
+        "http://127.0.0.1:9/",
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:9?x=/v1/jwks",
+        "http://127.0.0.1/v1/jwks",
+        "http://localhost/v1/jwks",
+    ],
+)
+def test_each_condition_of_the_url_check_refuses_on_its_own(value):
+    assert appcheck.jwks_url({"FIREEMU_APP_CHECK_JWKS_URL": value}) is None
+
+
+@pytest.mark.parametrize("value", ["http://127.0.0.1:9/a", "http://127.0.0.1:9/v1/jwks?x=1", "http://127.0.0.1:65535/k"])
+def test_the_shortest_path_and_a_query_are_fine(value):
+    assert appcheck.jwks_url({"FIREEMU_APP_CHECK_JWKS_URL": value}) == value
+
+
+def test_an_sdk_without_the_service_at_all_gets_no_hook(monkeypatch):
+    from firebase_admin import app_check
+
+    monkeypatch.delattr(app_check, "_AppCheckService")
+    assert appcheck.install_jwks_hook("http://127.0.0.1:1/v1/jwks") is False
+
+
+def test_the_service_keeps_the_stock_key_client_settings_and_has_no_way_to_reach_google(hooked):
+    import firebase_admin
+    from firebase_admin import app_check
+
+    service = app_check._get_app_check_service(firebase_admin.get_app())
+    assert service._jwks_client.jwk_set_cache.lifespan == 21600
+    assert service._jwks_client.headers == app_check._AppCheckService._APP_CHECK_HEADERS
+    assert service._jwks_client.headers.get("x-goog-api-client")
+    assert service._http_client is None
+    assert service._scoped_project_id == "projects/" + service._project_id and service._project_id == PROJECT
+
+
+def test_the_exact_messages_of_the_replacement_service(hooked, monkeypatch):
+    import firebase_admin
+    from firebase_admin import app_check, exceptions
+
+    with pytest.raises(exceptions.FailedPreconditionError) as error:
+        app_check.verify_token(token(), consume=True)
+    assert str(error.value) == "limited-use App Check token consumption is not available in fireemu (APP_CHECK_REPLAY_UNSUPPORTED)"
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GCLOUD_PROJECT", raising=False)
+    app = firebase_admin.initialize_app(name="no-project-2", options={})
+    try:
+        with pytest.raises(ValueError) as error:
+            app_check.verify_token(token(), app=app)
+        assert str(error.value) == (
+            "A project ID must be specified to access the App Check service. Either set the projectId option, "
+            "use service account credentials, or set the GOOGLE_CLOUD_PROJECT environment variable."
+        )
+    finally:
+        firebase_admin.delete_app(app)

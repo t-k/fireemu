@@ -217,3 +217,17 @@ def test_hello_announces_disabled_consumption_for_callables_only_when_asked(disc
         stdin.send({"type": "shutdown"})
         thread.join(10)
         stdin.close()
+
+
+def test_serve_announces_nothing_about_app_check_unless_told_to(discovered):
+    stdin = Pipe()
+    writer = Collected()
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer)))
+    thread.start()
+    hello = writer.wait_for(lambda f: f["type"] == "hello")
+    (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]
+    assert "consumeAppCheckToken" not in entry["trigger"]
+    stdin.send({"type": "shutdown"})
+    thread.join(10)
+    stdin.close()

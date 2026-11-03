@@ -1123,9 +1123,15 @@ fn strict_callable_bearer_refusal(
     })
 }
 
-/// Whether the credential a strict callable request presents is a Bearer the daemon cannot
-/// verify as one of the project's users. Anything else (no credential, two of them, another
-/// scheme, an empty token) is left to the handler.
+/// Whether the credential a strict callable request presents is one the daemon cannot verify as
+/// a Bearer of one of the project's users. No credential, a single credential of another scheme
+/// and an empty token are left to the handler (the wrapper refuses them itself).
+///
+/// More than one `Authorization` header is refused outright. The daemon can verify only the
+/// credential it sees, while a runner's HTTP server decides which one the wrapper gets (Werkzeug
+/// joins the values with a comma, Node keeps the first), and the wrapper accepts any structurally
+/// valid ID token under the Auth emulator: `Bearer <forged token>` next to `AAAA` would have
+/// skipped this check and reached the wrapper as a forged identity.
 ///
 /// A task delivered to a callable that a configured manifest serves as a queue passes the same
 /// check ([`crate::runtime`]), because the Admin SDK's own verification under the Auth
@@ -1134,8 +1140,10 @@ pub(crate) fn strict_callable_bearer_unverified(
     runtime: &FunctionsRuntime,
     presented: &[String],
 ) -> bool {
-    let [authorization] = presented else {
-        return false;
+    let authorization = match presented {
+        [] => return false,
+        [single] => single,
+        _ => return true,
     };
     let Some((scheme, token)) = authorization.split_once(' ') else {
         return false;

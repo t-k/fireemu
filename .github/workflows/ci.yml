@@ -317,6 +317,38 @@ jobs:
           target/debug/fireemu exec --config tools/sdk-smoke-python/fireemu.strict.json --project demo-app --hub-port 0 -- \
             "$RUNNER_TEMP/sdk-smoke-python/bin/python" -m pytest -p no:cacheprovider tools/sdk-smoke-python
 
+  # tools/runner-python and tools/sdk-smoke-functions-python: the Python Functions runner with the real
+  # firebase-functions SDK (hash-locked in the fixture) under a fireemu built from this commit. The
+  # runner's own tests, the daemon's tests that start the real runner (they need the fixture's venv and
+  # are `#[ignore]`d without it), and the end-to-end checks under `fireemu exec` in both profiles.
+  # ubuntu-24.04's system python3 is 3.12, so no setup action is needed.
+  functions-python:
+    # Bound cache tokens even when Python code under `fireemu exec` calls the cache API.
+    cache-mode: read
+    name: Python Functions runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # Keep the action-level save guard too, as sdk-latest.yml does.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: functions-python
+          save-if: "false"
+      - name: the pinned Python SDK in the fixture's virtual environment
+        run: |
+          set -eu
+          python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+          python3 -m venv tools/sdk-smoke-functions-python/venv
+          tools/sdk-smoke-functions-python/venv/bin/pip install --require-hashes -r tools/sdk-smoke-functions-python/requirements.txt
+      - name: the runner's tests with the real SDK
+        run: tools/sdk-smoke-functions-python/venv/bin/python -m pytest -p no:cacheprovider tools/runner-python/tests
+      - name: the daemon with the real Python runner
+        run: cargo test --locked -p fireemu --test functions_python -- --include-ignored
+
   # tools/sdk-smoke-go: the Go Admin SDK (firebase.google.com/go/v4 with cloud.google.com/go/firestore
   # and cloud.google.com/go/storage, versions locked in go.mod/go.sum) against a fireemu built from this
   # commit, under `fireemu exec` with the defaults and with the strict exact configuration. The smoke's

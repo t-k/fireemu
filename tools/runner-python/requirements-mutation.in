@@ -1,0 +1,3 @@
+# The runner's tests need the SDK of the fixture; the mutation run adds mutmut.
+-r ../sdk-smoke-functions-python/requirements.in
+mutmut==3.8.1

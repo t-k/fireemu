@@ -55,6 +55,7 @@ mod hub;
 mod import_export;
 mod init;
 mod managed_storage;
+mod python_functions;
 mod readiness;
 mod resources;
 mod session_rsa_cache;

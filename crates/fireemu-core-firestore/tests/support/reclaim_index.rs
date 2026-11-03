@@ -891,3 +891,413 @@ fn uncertain_all_ineligible_compaction_keeps_legacy_path_steps() {
     assert_eq!(history_view(&state), before);
     assert!(!state.history_accounting_exact);
 }
+
+// --- Per-commit compaction work once the retention floor moves with every commit. ---
+
+fn at_seconds(seconds: i64) -> LogicalInstant {
+    LogicalInstant::from_unix_seconds(1_788_000_000 + seconds)
+}
+
+fn set_path(path: DocumentPath, value: i64) -> Write {
+    Write {
+        op: WriteOp::Set {
+            path,
+            fields: BTreeMap::from([("score".into(), Value::Integer(value))]),
+            update_mask: None,
+        },
+        precondition: None,
+        transforms: Vec::new(),
+    }
+}
+
+fn hot_path() -> DocumentPath {
+    DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        "other/hot",
+    )
+    .unwrap()
+}
+
+/// 10,000 documents with two versions each, written between logical time 0 and 1 s.
+fn two_version_corpus() -> FirestoreState {
+    let mut state = FirestoreState::default();
+    state
+        .import_documents((0..10_000).map(|i| imported(i, 0)).collect(), at_seconds(0))
+        .unwrap();
+    state
+        .import_documents((0..10_000).map(|i| imported(i, 1)).collect(), at_seconds(1))
+        .unwrap();
+    state
+}
+
+/// Versions each path lost between two snapshots of the history. Compaction only drains a
+/// prefix, so a path lost every retained version older than its new first one (or all of them
+/// when it was removed).
+fn versions_lost(
+    before: &BTreeMap<DocumentPath, Vec<CommitVersion>>,
+    state: &FirestoreState,
+) -> (usize, usize) {
+    let mut paths = 0;
+    let mut versions = 0;
+    for (path, retained) in before {
+        let lost = state.history.get(path).map_or(retained.len(), |now| {
+            let first = now.first().map(|(version, _)| *version);
+            retained
+                .iter()
+                .filter(|version| first.is_none_or(|first| **version < first))
+                .count()
+        });
+        if lost > 0 {
+            paths += 1;
+            versions += lost;
+        }
+    }
+    (paths, versions)
+}
+
+fn version_counts(state: &FirestoreState) -> BTreeMap<DocumentPath, Vec<CommitVersion>> {
+    state
+        .history
+        .iter()
+        .map(|(path, versions)| {
+            (
+                path.clone(),
+                versions.iter().map(|(version, _)| *version).collect(),
+            )
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommitWork {
+    lost_paths: usize,
+    lost_versions: usize,
+    compact_paths: usize,
+    forecast_paths: usize,
+    size_visits: usize,
+}
+
+fn measured_commit(state: &mut FirestoreState, write: Write, now: LogicalInstant) -> CommitWork {
+    let before = version_counts(state);
+    COMPACTION_PATH_VISITS.with(|count| count.set(0));
+    FORECAST_PATH_VISITS.with(|count| count.set(0));
+    HISTORY_SIZE_VISITS.with(|count| count.set(0));
+    state.commit(&[write], None, now).unwrap();
+    let compact_paths = COMPACTION_PATH_VISITS.with(std::cell::Cell::get);
+    let forecast_paths = FORECAST_PATH_VISITS.with(std::cell::Cell::get);
+    let size_visits = HISTORY_SIZE_VISITS.with(std::cell::Cell::get);
+    let (lost_paths, lost_versions) = versions_lost(&before, state);
+    assert!(state.history_accounting_exact);
+    assert_eq!(state.history_usage, state.recount_history_usage());
+    CommitWork {
+        lost_paths,
+        lost_versions,
+        compact_paths,
+        forecast_paths,
+        size_visits,
+    }
+}
+
+fn assert_bounded_by_reclaim(scenario: &str, work: &[CommitWork]) {
+    // Small per-commit constant: the written path itself (projection and staging).
+    const SLACK: usize = 4;
+    let total = |f: fn(&CommitWork) -> usize| work.iter().map(f).sum::<usize>();
+    eprintln!(
+        "{scenario}: commits={} lost_paths={} lost_versions={} compact_paths={} forecast_paths={} size_visits={} max_size_visits_per_commit={}",
+        work.len(),
+        total(|w| w.lost_paths),
+        total(|w| w.lost_versions),
+        total(|w| w.compact_paths),
+        total(|w| w.forecast_paths),
+        total(|w| w.size_visits),
+        work.iter().map(|w| w.size_visits).max().unwrap_or(0),
+    );
+    for (index, w) in work.iter().enumerate() {
+        assert!(
+            w.compact_paths <= w.lost_paths + SLACK && w.forecast_paths <= w.lost_paths + SLACK,
+            "{scenario} commit {index}: {w:?}"
+        );
+        // Each reclaimed version is accounted once by the forecast and once by the compaction;
+        // the written path adds a constant for its projection.
+        assert!(
+            w.size_visits <= 2 * w.lost_versions + SLACK,
+            "{scenario} commit {index}: {w:?}"
+        );
+    }
+}
+
+#[test]
+fn per_commit_compaction_work_is_bounded_by_what_the_commit_reclaims() {
+    let mut state = two_version_corpus();
+    let work = (0..100)
+        .map(|second| {
+            measured_commit(
+                &mut state,
+                set_path(hot_path(), second),
+                at_seconds(READ_TIME_RETENTION_SECONDS + 1 + second),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(work[0].lost_paths, 10_000);
+    assert_bounded_by_reclaim("aged corpus", &work);
+}
+
+#[test]
+fn steady_state_floor_movement_accounts_only_the_reclaimed_versions() {
+    // A session that has written one hot document every second for more than an hour: the
+    // floor moves by one version per commit and the hot path keeps the default per-path cap
+    // of retained versions, of which each commit drops exactly one.
+    let mut state = two_version_corpus();
+    let window = READ_TIME_RETENTION_SECONDS;
+    for second in 2..=window {
+        state
+            .commit(&[set_path(hot_path(), second)], None, at_seconds(second))
+            .unwrap();
+    }
+    let work = (window + 1..=window + 100)
+        .map(|second| measured_commit(&mut state, set_path(hot_path(), second), at_seconds(second)))
+        .collect::<Vec<_>>();
+    assert!(work.iter().all(|w| w.lost_versions == 1), "{work:?}");
+    assert_eq!(
+        state.history[&hot_path()].len(),
+        DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH
+    );
+    assert_bounded_by_reclaim("hot path", &work);
+}
+
+// --- Equivalence with the whole-path accounting that compaction used before. ---
+
+/// `compact` as it was before prefix accounting (main at 3d8abc109), kept as the reference
+/// the optimized compaction must match exactly.
+fn whole_path_compact(state: &mut FirestoreState, now: LogicalInstant) -> CommitVersion {
+    state.prune_transactions(now);
+    let floor = state.retention_floor(now);
+    if floor <= state.compaction_floor {
+        return state.compaction_floor;
+    }
+    state.compaction_forecast = None;
+    state.compaction_floor = floor;
+    let mut removed_commit_times = 0u64;
+    while state
+        .commit_times
+        .front()
+        .is_some_and(|(version, _)| *version < floor)
+    {
+        state.commit_times.pop_front();
+        removed_commit_times = removed_commit_times.saturating_add(1);
+    }
+    state.history_usage.commit_times = certified_history_sub(
+        state.history_usage.commit_times,
+        removed_commit_times,
+        &mut state.history_accounting_exact,
+    );
+    let removed_bytes = removed_commit_times.checked_mul(HISTORY_COMMIT_TIME_BYTES);
+    state.history_accounting_exact &= removed_bytes.is_some();
+    state.history_usage.commit_time_bytes = certified_history_sub(
+        state.history_usage.commit_time_bytes,
+        removed_bytes.unwrap_or(u64::MAX),
+        &mut state.history_accounting_exact,
+    );
+    state.history_usage = finish_history_usage(state.history_usage);
+    let candidates = if state.history_accounting_exact {
+        state.reclaim_candidates(floor)
+    } else {
+        state.compactable.keys().cloned().collect()
+    };
+    let mut removed_paths = Vec::new();
+    let mut usage_changes = Vec::new();
+    for path in candidates {
+        let path = path.as_ref();
+        let Some(h) = state.history.get_mut(path) else {
+            state.refresh_reclaim_threshold(path);
+            continue;
+        };
+        let before_usage = history_path_usage(path, h);
+        let cut = h.partition_point(|(v, _)| *v <= floor).saturating_sub(1);
+        if cut > 0 {
+            h.drain(..cut);
+        }
+        let emptied = match h.as_slice() {
+            [] => true,
+            [(v, None)] => *v <= floor,
+            _ => false,
+        };
+        if emptied {
+            state.history.remove(path);
+            removed_paths.push(path.clone());
+            usage_changes.push((before_usage, HistoryUsage::default()));
+            state.refresh_reclaim_threshold(path);
+            continue;
+        }
+        let after_usage = state
+            .history
+            .get(path)
+            .map_or_else(HistoryUsage::default, |history| {
+                history_path_usage(path, history)
+            });
+        usage_changes.push((before_usage, after_usage));
+        state.refresh_reclaim_threshold(path);
+    }
+    for (before, after) in usage_changes {
+        state.history_accounting_exact &=
+            checked_history_change(state.history_usage, before, after);
+        state.history_usage =
+            add_history_usage(subtract_history_usage(state.history_usage, before), after);
+    }
+    for path in removed_paths {
+        state.remove_scope_path(&path);
+    }
+    floor
+}
+
+/// The uncached forecast as it was before prefix accounting.
+fn whole_path_forecast(state: &FirestoreState, floor: CommitVersion) -> HistoryUsage {
+    if floor <= state.compaction_floor {
+        return HistoryUsage::default();
+    }
+    let mut reclaimed = HistoryUsage::default();
+    for path in state.reclaim_candidates(floor) {
+        let path = path.as_ref();
+        let versions = state
+            .history
+            .get(path)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        reclaimed = add_history_usage(
+            reclaimed,
+            subtract_history_usage(
+                history_path_usage(path, versions),
+                history_path_usage_after_floor(path, versions, floor),
+            ),
+        );
+    }
+    let removed = u64::try_from(
+        state
+            .commit_times
+            .iter()
+            .take_while(|(version, _)| *version < floor)
+            .count(),
+    )
+    .unwrap();
+    reclaimed.commit_times = removed;
+    reclaimed.commit_time_bytes = removed.saturating_mul(HISTORY_COMMIT_TIME_BYTES);
+    reclaimed
+}
+
+fn delete_path(path: DocumentPath) -> Write {
+    Write {
+        op: WriteOp::Delete { path },
+        precondition: None,
+        transforms: Vec::new(),
+    }
+}
+
+/// Deterministic mixed history over 300 paths: repeated writes, deletes, re-creations and
+/// lone tombstones, one commit per second for ten minutes, plus a long-lived transaction.
+fn mixed_history() -> FirestoreState {
+    let mut state = FirestoreState::default();
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for second in 0..600 {
+        let mut writes = BTreeMap::new();
+        for _ in 0..=next() % 4 {
+            let index = usize::try_from(next() % 300).unwrap();
+            let write = if next() % 5 == 0 {
+                delete_path(path(index))
+            } else {
+                set_path(path(index), i64::try_from(next() % 1000).unwrap())
+            };
+            writes.insert(index, write);
+        }
+        let writes = writes.into_values().collect::<Vec<_>>();
+        state.commit(&writes, None, at_seconds(second)).unwrap();
+        if second == 300 {
+            state.begin_transaction(true, at_seconds(second)).unwrap();
+        }
+    }
+    state
+}
+
+fn assert_compaction_matches_reference(mut state: FirestoreState, exact: bool) {
+    state.history_accounting_exact = exact;
+    let mut floors = Vec::new();
+    for second in (READ_TIME_RETENTION_SECONDS - 1)..(READ_TIME_RETENTION_SECONDS + 610) {
+        let now = at_seconds(second);
+        let floor = state.retention_floor(now);
+        state.compaction_forecast = None;
+        assert_eq!(
+            state.base_compaction_reclaim(floor),
+            whole_path_forecast(&state, floor),
+            "forecast at {second}s exact={exact}"
+        );
+        let mut reference = state.clone();
+        let floor = state.compact(now);
+        assert_eq!(whole_path_compact(&mut reference, now), floor);
+        assert_eq!(
+            format!("{state:?}"),
+            format!("{reference:?}"),
+            "compaction at {second}s exact={exact}"
+        );
+        if exact {
+            assert!(state.history_accounting_exact);
+            assert_eq!(state.history_usage, state.recount_history_usage());
+        }
+        floors.push(floor);
+    }
+    // The floor actually moved through the whole history, one commit at a time.
+    floors.dedup();
+    assert!(floors.len() > 500, "{}", floors.len());
+}
+
+#[test]
+fn prefix_accounted_compaction_matches_whole_path_accounting() {
+    let state = mixed_history();
+    assert!(state.history_accounting_exact);
+    assert!(state.retained_versions() > 1000);
+    assert_compaction_matches_reference(state.clone(), true);
+    // Legacy accounting keeps the whole-path recount; it must be unchanged too.
+    assert_compaction_matches_reference(state, false);
+}
+
+#[test]
+fn a_candidate_the_floor_drops_nothing_from_is_not_accounted() {
+    let a = path(0);
+    let mut state = FirestoreState::default();
+    state.commit(&[set_path(a.clone(), 1)], None, at_seconds(0)).unwrap();
+    state.commit(&[set_path(path(1), 1)], None, at_seconds(1)).unwrap();
+    state.commit(&[set_path(a.clone(), 2)], None, at_seconds(2)).unwrap();
+    assert_eq!(state.compactable[&a], CommitVersion(3));
+    let now = at_seconds(READ_TIME_RETENTION_SECONDS + 1);
+
+    // The floor moves to version 2, which drops nothing from `a` (its threshold is 3).
+    let mut indexed = state.clone();
+    COMPACTION_PATH_VISITS.with(|count| count.set(0));
+    HISTORY_SIZE_VISITS.with(|count| count.set(0));
+    assert_eq!(indexed.compact(now), CommitVersion(2));
+    assert_eq!(COMPACTION_PATH_VISITS.with(std::cell::Cell::get), 0);
+    assert_eq!(HISTORY_SIZE_VISITS.with(std::cell::Cell::get), 0);
+
+    // Force `a` into the candidates with a stale threshold: it is visited, its cut is 0 and
+    // it is not emptied, so no per-path accounting runs and the index is repaired.
+    let shared = state.retained_scope_path(&a);
+    state.reclaim_thresholds.remove(&(CommitVersion(3), Arc::clone(&shared)));
+    state.reclaim_thresholds.insert((CommitVersion(1), Arc::clone(&shared)));
+    state.compactable.insert(shared, CommitVersion(1));
+    let mut reference = state.clone();
+    COMPACTION_PATH_VISITS.with(|count| count.set(0));
+    HISTORY_SIZE_VISITS.with(|count| count.set(0));
+    assert_eq!(state.compact(now), CommitVersion(2));
+    assert_eq!(COMPACTION_PATH_VISITS.with(std::cell::Cell::get), 1);
+    assert_eq!(HISTORY_SIZE_VISITS.with(std::cell::Cell::get), 0);
+    whole_path_compact(&mut reference, now);
+    assert_eq!(format!("{state:?}"), format!("{reference:?}"));
+    assert_eq!(format!("{state:?}"), format!("{indexed:?}"));
+    assert_eq!(state.history[&a].len(), 2);
+    assert_eq!(state.compactable[&a], CommitVersion(3));
+}

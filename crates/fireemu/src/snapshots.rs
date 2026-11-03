@@ -2488,4 +2488,255 @@ mod tests {
         assert!(hook.retained_bytes(&before) > 0);
         assert!(hook.retained_bytes(&after) > hook.retained_bytes(&before));
     }
+
+    /// Asserts that `hook` refuses a part of another shape with the `wrong_shape` failure.
+    fn refuses_a_foreign_part(hook: &dyn SnapshotHook, scope: &Scope) {
+        let foreign: super::SnapshotPart = Arc::new(7u8);
+        let refused = hook.validate(scope, &foreign).unwrap_err();
+        assert_eq!(refused.part, hook.name());
+        assert_eq!(refused.message, "the captured part is not this hook's");
+    }
+
+    /// The status and body of a Firestore REST call, for reads that may be refused.
+    fn firestore_get(
+        state: &fireemu_adapter_grpc::rest::RestState,
+        path: &str,
+    ) -> (u16, serde_json::Value) {
+        let response = state.handle(&fireemu_adapter_grpc::rest::RestRequest {
+            method: "GET".into(),
+            path: path.into(),
+            query: String::new(),
+            authorization: Some("Bearer owner".into()),
+            app_check: Vec::new(),
+            body: serde_json::Value::Null,
+            origin: None,
+            remote_peer: false,
+            browser_metadata: false,
+            batch_field_order: Vec::new(),
+            key_order: fireemu_adapter_grpc::rest::json_syntax::KeyOrder::default(),
+        });
+        (response.status, response.body)
+    }
+
+    /// The Firestore hook captures the databases of its scope, and a restore undoes a later
+    /// write and a later create there while a database of another project stays as it is.
+    #[test]
+    fn the_firestore_hook_restores_the_documents_of_its_scope() {
+        let (state, _, _) = text_fixture(fireemu_core_types::edition::FirestoreEdition::Standard);
+        let hook = super::Firestore(state.local.clone());
+        let scope = Scope::Project("p".to_owned());
+        let doc = |project: &str, id: &str| {
+            format!("/v1/projects/{project}/databases/(default)/documents/items/{id}")
+        };
+        let write = |path: &str, title: &str| {
+            native_call(
+                &state,
+                "PATCH",
+                path,
+                serde_json::json!({"fields":{"title":{"stringValue":title}}}),
+            );
+        };
+        let title = |path: &str| {
+            let (status, body) = firestore_get(&state, path);
+            (status == 200).then(|| body["fields"]["title"]["stringValue"].clone())
+        };
+        write(&doc("p", "kept"), "captured");
+
+        let barrier = state.local.barrier();
+        let part = {
+            let _exclusive = barrier.exclusive();
+            hook.capture(&scope).expect("capture")
+        };
+        hook.validate(&scope, &part).expect("its own part");
+        assert!(hook.retained_bytes(&part) > 0);
+        refuses_a_foreign_part(&hook, &scope);
+
+        write(&doc("p", "kept"), "changed");
+        write(&doc("p", "later"), "later");
+        write(&doc("q", "other"), "other project");
+        {
+            let _exclusive = barrier.exclusive();
+            hook.restore(&scope, &part).expect("restore");
+        }
+
+        assert_eq!(title(&doc("p", "kept")), Some("captured".into()));
+        assert_eq!(title(&doc("p", "later")), None, "a later create is undone");
+        assert_eq!(
+            title(&doc("q", "other")),
+            Some("other project".into()),
+            "a database the scope does not own is left as it is"
+        );
+    }
+
+    /// The text index hook captures the definitions of its scope, and a restore removes an
+    /// index created after the capture.
+    #[test]
+    fn the_text_index_hook_restores_the_definitions_of_its_scope() {
+        let (state, _, catalog) = native_fixture();
+        let scope = Scope::Project("p".to_owned());
+        let hook = super::TextIndexes(catalog.clone(), state.local.clone());
+        native_create(&state);
+        let barrier = state.local.barrier();
+        let (before, part) = {
+            let _exclusive = barrier.exclusive();
+            let before = catalog.lock().unwrap().clone();
+            let part = hook.capture(&scope).expect("capture");
+            hook.validate(&scope, &part).expect("its own part");
+            (before, part)
+        };
+        assert!(hook.retained_bytes(&part) > 0);
+        refuses_a_foreign_part(&hook, &scope);
+
+        native_create_other(&state, "other");
+        assert_ne!(
+            *catalog.lock().unwrap(),
+            before,
+            "the later create is visible"
+        );
+
+        let _exclusive = barrier.exclusive();
+        hook.restore(&scope, &part).expect("restore");
+        // The definitions and builds come back; the catalog-wide build generation counter
+        // is left as it is, because it never rewinds (`TextIndexCatalog::replace` keeps the
+        // larger one) and a later build must not reuse a generation.
+        let restored = catalog.lock().unwrap().clone();
+        let definitions = |catalog: &fireemu_core_firestore::text_index::TextIndexCatalog| {
+            catalog
+                .entries()
+                .map(|(project, database, definition)| {
+                    let build = catalog.build(project, database, &definition.id).cloned();
+                    (project.to_owned(), definition.clone(), build)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(definitions(&restored), definitions(&before));
+    }
+
+    /// The clock hook is shared: it captures the instant whatever the scope, and a restore
+    /// puts it back even when that moves the clock backwards.
+    #[test]
+    fn the_clock_hook_restores_the_captured_instant() {
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::Clock;
+        use fireemu_core_types::time::LogicalDuration;
+
+        let clock = Arc::new(std::sync::Mutex::new(VirtualClock::new(AT)));
+        let hook = super::SessionClock(clock.clone());
+        assert!(hook.shared());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&scope).expect("capture");
+        hook.validate(&scope, &part).expect("its own part");
+        // The clock part is an instant: the trait's default estimate of zero applies.
+        assert_eq!(hook.retained_bytes(&part), 0);
+        refuses_a_foreign_part(&hook, &scope);
+
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(60))
+            .unwrap();
+        assert_ne!(clock.lock().unwrap().now(), AT);
+        hook.restore(&scope, &part).expect("restore");
+        assert_eq!(clock.lock().unwrap().now(), AT);
+    }
+
+    /// The Storage Rules hook is shared and restores the whole registry: a target-based
+    /// configuration replaced by global rules after the capture comes back with each
+    /// bucket's own generation.
+    #[test]
+    fn the_storage_rules_hook_restores_the_whole_registry() {
+        const DENY: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if false; } } }";
+        const ALLOW: &str = "service firebase.storage { match /b/{bucket}/o { match /{p=**} { allow read: if true; } } }";
+
+        let first = Arc::new(RulesetSlot::new(LoadedRules::from_source(DENY).unwrap()));
+        let second = Arc::new(RulesetSlot::new(LoadedRules::from_source(ALLOW).unwrap()));
+        let registry = Arc::new(
+            fireemu_adapter_http::storage::StorageRulesRegistry::per_bucket(
+                [
+                    ("first".to_owned(), first.clone()),
+                    ("second".to_owned(), second.clone()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        // What a read of each bucket answers through the registry: its own rules decide it, so
+        // a restore that swapped the buckets' mappings would flip both answers.
+        let storage = fireemu_adapter_http::storage::StorageState {
+            store: std::sync::Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock: Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(AT),
+            )),
+            auth: Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+                "demo-app",
+                Arc::new(std::sync::Mutex::new(
+                    fireemu_core_auth::store::AuthStore::new(
+                        "demo-app",
+                        fireemu_core_types::determinism::SplitMix64::new(3),
+                        fireemu_core_auth::mfa::TotpPolicy::default(),
+                    ),
+                )),
+            )),
+            tenancy: None,
+            rules: registry.clone(),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
+            control_token: None,
+        };
+        let read_status = |bucket: &str| {
+            fireemu_adapter_http::storage::handle(
+                &storage,
+                fireemu_adapter_http::storage::StorageRequest {
+                    method: "GET".to_owned(),
+                    path: format!("/v0/b/{bucket}/o/missing.txt"),
+                    query: String::new(),
+                    host: Some("127.0.0.1:9199".to_owned()),
+                    headers: std::collections::BTreeMap::new(),
+                    app_check: Vec::new(),
+                    body: Vec::new(),
+                    remote_peer: false,
+                },
+            )
+            .status
+        };
+        let (denied, allowed) = (read_status("first"), read_status("second"));
+        assert_eq!(denied, 403, "bucket first denies reads");
+        assert_ne!(allowed, 403, "bucket second allows reads");
+
+        let hook = StorageRules(registry.clone());
+        assert!(hook.shared());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let part = hook.capture(&scope).expect("capture");
+        hook.validate(&scope, &part).expect("its own part");
+        assert!(hook.retained_bytes(&part) > 0);
+        refuses_a_foreign_part(&hook, &scope);
+
+        first
+            .replace_source(ALLOW)
+            .expect("change a bucket's rules");
+        registry
+            .replace_source(DENY)
+            .expect("switch to global rules");
+        assert!(!registry.declares_bucket("first"));
+        assert!(registry.global_snapshot().unwrap().is_some());
+
+        hook.restore(&scope, &part).expect("restore");
+        assert!(registry.global_snapshot().unwrap().is_none());
+        assert!(registry.declares_bucket("first") && registry.declares_bucket("second"));
+        let source = |slot: &RulesetSlot| slot.snapshot().unwrap().source.clone();
+        assert_eq!(source(&first).as_deref(), Some(DENY));
+        assert_eq!(source(&second).as_deref(), Some(ALLOW));
+        // Authorization through the restored registry, bucket by bucket.
+        assert_eq!(read_status("first"), denied);
+        assert_eq!(read_status("second"), allowed);
+    }
 }

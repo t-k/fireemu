@@ -2514,6 +2514,168 @@ mod dispatch_tests {
         assert!(started.elapsed() >= std::time::Duration::from_secs(20));
     }
 
+    /// The empty response arrives at the twenty-second bound: not before it, and no later than
+    /// one 25 ms cadence tick after it plus scheduling slack. The crate's tokio dev-dependency
+    /// has no `test-util`, so this measures real time instead of a paused clock.
+    #[tokio::test]
+    async fn strict_unary_empty_pull_returns_at_its_twenty_second_bound() {
+        let (handle, subscription, _) = unary_pull_fixture(PagingPolicy::Strict);
+        let bound = std::time::Duration::from_secs(20);
+        let started = tokio::time::Instant::now();
+        let mut pull = Box::pin(handle.pull_unary(&subscription, 1, false));
+        assert!(
+            tokio::time::timeout_at(
+                started + bound - std::time::Duration::from_millis(500),
+                &mut pull
+            )
+            .await
+            .is_err(),
+            "an empty strict unary pull returned before its bound"
+        );
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), pull)
+            .await
+            .expect("an empty strict unary pull outlived its bound")
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert!(received.is_empty());
+        assert!(elapsed >= bound, "returned after {elapsed:?}");
+        assert!(
+            elapsed <= bound + std::time::Duration::from_millis(25 + 1_000),
+            "returned after {elapsed:?}"
+        );
+    }
+
+    /// A strict subscription holding one leased message, with the lease's ack id.
+    fn leased_recheck_fixture() -> (PubSubHandle, SubscriptionName, String) {
+        let (handle, subscription, topic) = unary_pull_fixture(PagingPolicy::Strict);
+        let now = handle.now();
+        handle
+            .state()
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"leased".to_vec(),
+                    ..Default::default()
+                }],
+                now,
+            )
+            .unwrap();
+        let received = handle.pull(&subscription, 1).unwrap();
+        assert_eq!(received.len(), 1);
+        let ack_id = received[0].ack_id.clone();
+        (handle, subscription, ack_id)
+    }
+
+    fn next_recheck_deadline(
+        handle: &PubSubHandle,
+        subscription: &SubscriptionName,
+    ) -> LogicalInstant {
+        handle
+            .state()
+            .next_pull_deadline(subscription, handle.now())
+            .unwrap()
+            .expect("a leased message has a pending deadline")
+    }
+
+    /// Moves the logical clock to `before` ahead of `deadline`.
+    fn advance_logical_until(
+        handle: &PubSubHandle,
+        deadline: LogicalInstant,
+        before: LogicalDuration,
+    ) {
+        handle
+            .clock
+            .lock()
+            .unwrap()
+            .advance_to(LogicalInstant::from_nanos(
+                deadline.as_nanos() - before.as_nanos(),
+            ))
+            .unwrap();
+    }
+
+    /// Asserts a freshly computed wake time: `delay` after a wall reading taken during the call.
+    fn assert_recomputed_wake(
+        wake: tokio::time::Instant,
+        before: tokio::time::Instant,
+        after: tokio::time::Instant,
+        delay: std::time::Duration,
+    ) {
+        assert!(
+            wake >= before + delay && wake <= after + delay,
+            "wake {wake:?} is not {delay:?} after the call window {before:?}..{after:?}"
+        );
+    }
+
+    /// An advanced logical clock with an unchanged pull deadline recomputes the wake time.
+    #[test]
+    fn pull_recheck_recomputes_when_only_the_logical_clock_advances() {
+        let (handle, subscription, _) = leased_recheck_fixture();
+        let deadline = next_recheck_deadline(&handle, &subscription);
+        assert!(deadline.as_nanos() - handle.now().as_nanos() > 1_000_000_000);
+        let mut scheduled = None;
+        let first_wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+
+        advance_logical_until(&handle, deadline, LogicalDuration::from_millis(100));
+        assert_eq!(next_recheck_deadline(&handle, &subscription), deadline);
+        let before = tokio::time::Instant::now();
+        let wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+        let after = tokio::time::Instant::now();
+
+        assert_ne!(wake, first_wake);
+        assert_recomputed_wake(wake, before, after, std::time::Duration::from_millis(100));
+        assert_eq!(scheduled, Some((handle.now(), Some(deadline), wake)));
+    }
+
+    /// A changed pull deadline at an unchanged logical clock recomputes the wake time.
+    #[test]
+    fn pull_recheck_recomputes_when_only_the_deadline_changes() {
+        let (handle, subscription, ack_id) = leased_recheck_fixture();
+        let first_deadline = next_recheck_deadline(&handle, &subscription);
+        advance_logical_until(&handle, first_deadline, LogicalDuration::from_millis(100));
+        let now = handle.now();
+        let mut scheduled = None;
+        let first_wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+
+        handle
+            .state()
+            .modify_ack_deadline(&subscription, &[ack_id], 10, now)
+            .unwrap();
+        let deadline = next_recheck_deadline(&handle, &subscription);
+        assert_ne!(deadline, first_deadline);
+        assert_eq!(handle.now(), now);
+        let before = tokio::time::Instant::now();
+        let wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+        let after = tokio::time::Instant::now();
+
+        assert_ne!(wake, first_wake);
+        assert_recomputed_wake(wake, before, after, std::time::Duration::from_secs(1));
+        assert_eq!(scheduled, Some((now, Some(deadline), wake)));
+    }
+
+    /// With both the logical clock and the deadline unchanged, the cached wake time is reused
+    /// until it passes, and then the one-second safety cadence replaces it.
+    #[tokio::test]
+    async fn pull_recheck_reuses_the_wake_while_clock_and_deadline_are_unchanged() {
+        let (handle, subscription, _) = leased_recheck_fixture();
+        let deadline = next_recheck_deadline(&handle, &subscription);
+        advance_logical_until(&handle, deadline, LogicalDuration::from_millis(100));
+        let now = handle.now();
+        let mut scheduled = None;
+        let first_wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+        assert_eq!(
+            handle.pull_recheck_at(&subscription, &mut scheduled),
+            first_wake
+        );
+        assert_eq!(scheduled, Some((now, Some(deadline), first_wake)));
+
+        tokio::time::sleep_until(first_wake).await;
+        let before = tokio::time::Instant::now();
+        let wake = handle.pull_recheck_at(&subscription, &mut scheduled);
+        let after = tokio::time::Instant::now();
+        assert_recomputed_wake(wake, before, after, std::time::Duration::from_secs(1));
+        assert_eq!(scheduled, Some((now, Some(deadline), wake)));
+    }
+
     #[tokio::test]
     async fn unary_pull_immediate_error_emulator_and_dropped_future_controls() {
         for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {

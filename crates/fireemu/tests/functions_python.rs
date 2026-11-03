@@ -95,6 +95,41 @@ fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
         .unwrap()
 }
 
+/// The structured event the daemon sends for a created Firestore document.
+fn created_event() -> serde_json::Value {
+    serde_json::json!({
+        "specversion": "1.0",
+        "id": "0a1b2c3d-0000-4000-8000-000000000001",
+        "source": "//firestore.googleapis.com/projects/demo-py/databases/(default)",
+        "subject": "documents/items/a",
+        "type": "google.cloud.firestore.document.v1.created",
+        "time": "2026-01-01T00:00:02.25Z",
+        "datacontenttype": "application/json",
+        "data": {"value": {
+            "name": "projects/demo-py/databases/(default)/documents/items/a",
+            "fields": {"n": {"integerValue": "1"}},
+            "createTime": "2026-01-01T00:00:00Z",
+            "updateTime": "2026-01-01T00:00:00Z"
+        }},
+        "location": "nam5", "project": "demo-py", "namespace": "(default)",
+        "document": "items/a", "database": "(default)"
+    })
+}
+
+/// The structured event the daemon sends for a Pub/Sub message with an ordering key.
+fn published_event() -> serde_json::Value {
+    serde_json::json!({
+        "specversion": "1.0", "id": "m-1",
+        "source": "//pubsub.googleapis.com/projects/demo-py/topics/orders",
+        "type": "google.cloud.pubsub.topic.v1.messagePublished",
+        "time": "2026-01-01T00:00:02.250Z",
+        "data": {
+            "message": {"messageId": "m-1", "data": "aGk=", "attributes": {}, "publishTime": "2026-01-01T00:00:02.250Z", "orderingKey": "k"},
+            "subscription": "projects/demo-py/subscriptions/s"
+        }
+    })
+}
+
 #[tokio::test]
 #[ignore = "requires the fixture virtual environment; CI creates it"]
 async fn the_daemons_runner_class_drives_the_real_python_runner() {
@@ -155,23 +190,7 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
     }
     assert!(manifest.ignored.is_empty(), "{:?}", manifest.ignored);
 
-    let event = serde_json::json!({
-        "specversion": "1.0",
-        "id": "0a1b2c3d-0000-4000-8000-000000000001",
-        "source": "//firestore.googleapis.com/projects/demo-py/databases/(default)",
-        "subject": "documents/items/a",
-        "type": "google.cloud.firestore.document.v1.created",
-        "time": "2026-01-01T00:00:02.25Z",
-        "datacontenttype": "application/json",
-        "data": {"value": {
-            "name": "projects/demo-py/databases/(default)/documents/items/a",
-            "fields": {"n": {"integerValue": "1"}},
-            "createTime": "2026-01-01T00:00:00Z",
-            "updateTime": "2026-01-01T00:00:00Z"
-        }},
-        "location": "nam5", "project": "demo-py", "namespace": "(default)",
-        "document": "items/a", "database": "(default)"
-    });
+    let event = created_event();
     let request = |function: &str, trigger: &str, id: &str| {
         serde_json::json!({
             "type": "invoke", "invocationId": id, "function": function,
@@ -186,21 +205,11 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
         .await;
     assert_eq!(ok.outcome, InvokeOutcome::Ok);
     // A Pub/Sub frame the runner turns into the SDK's event (the message ids are the SDK's snake_case keys).
-    let published = serde_json::json!({
-        "specversion": "1.0", "id": "m-1",
-        "source": "//pubsub.googleapis.com/projects/demo-py/topics/orders",
-        "type": "google.cloud.pubsub.topic.v1.messagePublished",
-        "time": "2026-01-01T00:00:02.250Z",
-        "data": {
-            "message": {"messageId": "m-1", "data": "aGk=", "attributes": {}, "publishTime": "2026-01-01T00:00:02.250Z", "orderingKey": "k"},
-            "subscription": "projects/demo-py/subscriptions/s"
-        }
-    });
     let pubsub = runner
         .invoke(
             serde_json::json!({
                 "type": "invoke", "invocationId": "ps-1", "function": "ps_orders",
-                "entryPoint": "ps_orders", "trigger": "pubsub", "event": published,
+                "entryPoint": "ps_orders", "trigger": "pubsub", "event": published_event(),
             }),
             Duration::from_secs(20),
         )
@@ -224,7 +233,10 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
 #[ignore = "requires the fixture virtual environment; CI creates it"]
 fn a_python_codebase_serves_http_callables_and_event_triggers_in_both_profiles() {
     for (profile, config) in [
-        ("emulator", Some(r#"{"schemaVersion":1,"profile":"emulator"}"#)),
+        (
+            "emulator",
+            Some(r#"{"schemaVersion":1,"profile":"emulator"}"#),
+        ),
         ("strict", None),
     ] {
         let dir = scratch(profile);

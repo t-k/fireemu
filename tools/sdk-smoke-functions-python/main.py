@@ -4,6 +4,9 @@ Every handler records what it was given in SEEN; the `seen` HTTP function return
 a test can see what an event handler received through the same process that ran it.
 """
 
+import base64
+import datetime
+import json
 import os
 import subprocess
 import sys
@@ -12,7 +15,7 @@ import time
 
 from firebase_admin import initialize_app
 from firebase_functions import firestore_fn, https_fn, logger, pubsub_fn, scheduler_fn
-from flask import jsonify
+from flask import Response, jsonify
 
 initialize_app()
 
@@ -55,10 +58,24 @@ def boom(request):
     raise RuntimeError("kaboom")
 
 
+def _jsonable(value):
+    """What a Firestore value turns into when a test reads it back over HTTP."""
+    if isinstance(value, datetime.datetime):
+        return {"timestamp": value.isoformat(), "nanosecond": getattr(value, "nanosecond", None)}
+    if isinstance(value, bytes):
+        return {"bytes": base64.b64encode(value).decode()}
+    if hasattr(value, "latitude") and hasattr(value, "longitude"):
+        return {"geopoint": [value.latitude, value.longitude]}
+    if hasattr(value, "path") and hasattr(value, "id"):
+        return {"reference": value.path}
+    return repr(value)
+
+
 @https_fn.on_request()
 def seen(request):
     with _LOCK:
-        return jsonify(list(SEEN))
+        body = json.dumps(SEEN, default=_jsonable)
+    return Response(body, mimetype="application/json")
 
 
 @https_fn.on_request()

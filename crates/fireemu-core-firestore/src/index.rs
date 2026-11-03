@@ -386,6 +386,10 @@ impl IndexSet {
             .get(collection_group)
             .map_or(&[][..], Vec::as_slice)
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                COMPOSITES_EXAMINED.with(|examined| examined.set(examined.get() + 1));
+            })
             .map(|&position| &self.composites[position])
     }
 
@@ -400,6 +404,12 @@ impl IndexSet {
             .iter()
             .any(|(scope, _)| (*scope == IndexQueryScope::CollectionGroup) == group)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Composite definitions the grouped selection examined, whoever asked for them.
+    pub(crate) static COMPOSITES_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Index validation policy.

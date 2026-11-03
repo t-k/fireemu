@@ -219,8 +219,6 @@ impl IndexSet {
         // Only this document's collection group can hold entries for it, so only its own
         // definitions are visited, in the order `composites()` lists them.
         for index in self.composites_for(document.collection_id()) {
-            #[cfg(test)]
-            GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(visits.get() + 1));
             composite_usage(
                 index,
                 document,
@@ -410,8 +408,6 @@ fn composite_usage(
 thread_local! {
     /// Composite definitions the reference (main's) selection scanned.
     static COMPOSITE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Composite definitions the grouped selection visited.
-    static GROUPED_COMPOSITE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn entry_size(
@@ -593,8 +589,9 @@ mod tests {
 
 #[cfg(test)]
 mod composite_grouping_tests {
-    use super::{COMPOSITE_VISITS, GROUPED_COMPOSITE_VISITS};
+    use super::COMPOSITE_VISITS;
     use crate::field_path::FieldPath;
+    use crate::index::COMPOSITES_EXAMINED;
     use crate::index::{IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, IndexSet};
     use crate::path::DocumentPath;
     use crate::value::Value;
@@ -842,9 +839,9 @@ mod composite_grouping_tests {
             COMPOSITE_VISITS.with(|visits| visits.set(0));
             let before = indexes.index_usage_of_reference(&document, &fields, true);
             let before_visits = COMPOSITE_VISITS.with(std::cell::Cell::get);
-            GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(0));
+            COMPOSITES_EXAMINED.with(|visits| visits.set(0));
             let after = indexes.index_usage_of(&document, &fields, true);
-            let after_visits = GROUPED_COMPOSITE_VISITS.with(std::cell::Cell::get);
+            let after_visits = COMPOSITES_EXAMINED.with(std::cell::Cell::get);
             println!(
                 "g{group}: composite definitions visited per document: before (main) \
                  {before_visits}, after {after_visits}"
@@ -854,11 +851,11 @@ mod composite_grouping_tests {
             assert_eq!(after_visits, 10);
         }
         // A group without composites visits none.
-        GROUPED_COMPOSITE_VISITS.with(|visits| visits.set(0));
+        COMPOSITES_EXAMINED.with(|visits| visits.set(0));
         indexes
             .index_usage_of(&document("none/d"), &fields, true)
             .unwrap();
-        assert_eq!(GROUPED_COMPOSITE_VISITS.with(std::cell::Cell::get), 0);
+        assert_eq!(COMPOSITES_EXAMINED.with(std::cell::Cell::get), 0);
     }
 
     /// Times 10,000 accounting calls against 1,000 composites, before and after. Run with

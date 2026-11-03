@@ -29,13 +29,14 @@ npx fireemu up
 
 Before anything starts, fireemu checks the environment and stops with the Firebase CLI's message when `venv` is missing or `firebase_functions` cannot be imported, and with a message naming both versions when the interpreter's Python differs from the declared `runtime`. The tested SDK is `firebase-functions` 0.6.0. Linux and macOS only.
 
-This release serves HTTP (`https_fn.on_request`), callable (`https_fn.on_call`) and Firestore document triggers (`on_document_created`, `updated`, `deleted`, `written` and the `_with_auth_context` variants). A callable sees the user of the Auth emulator. Any other trigger family is reported when the codebase loads and never runs; discovery refuses such a codebase unless `functions.unservedTriggers` is `"report"`, as for the products listed below.
+This release serves HTTP (`https_fn.on_request`), callable (`https_fn.on_call`), Firestore document triggers (`on_document_created`, `updated`, `deleted`, `written` and the `_with_auth_context` variants), Pub/Sub (`pubsub_fn.on_message_published`), Cloud Storage (`storage_fn.on_object_finalized`, `deleted`, `archived`, `metadata_updated`), Eventarc custom events (`eventarc_fn.on_custom_event_published`) and Realtime Database (`db_fn.on_value_created`, `updated`, `deleted`, `written`) triggers. A callable sees the user of the Auth emulator. A schedule, a task queue or an Auth blocking function is reported when the codebase loads and never runs; discovery refuses such a codebase unless `functions.unservedTriggers` is `"report"`, as for the products listed below.
 
 Where it differs from production and from the Firebase CLI:
 
 - One Python process serves the whole codebase, where production gives each function its own instance and the CLI its own process. Module-level state is shared between functions, the `@init` callback runs once per process, on the first call of any function, and `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the function that started most recently when calls overlap.
 - Time is real time. Python code is not moved onto the virtual clock, so `datetime.now()` ignores `daemon.clock` settings; a configuration that asks for a virtual date for the Functions runner is refused for a Python codebase.
 - Source changes are not reloaded; restart fireemu.
+- Python Storage and Eventarc handlers parse the event `time` with a fractional-second pattern, so production's SDK fails on a whole-second time. The strict profile delivers the time as production does; the emulator profile adds `.000` to a whole-second time, as the official emulator's events always carry milliseconds.
 - `--inspect-functions` is ignored with a warning, as the Firebase CLI does.
 - App Check is not available for Python callables. A callable that enforces it keeps the SDK's own check, which cannot see a Fireemu token, and a configuration that turns App Check on explicitly refuses to start with a Python codebase.
 
@@ -132,6 +133,8 @@ A schedule runs on Fireemu's virtual clock. Unless you pin a start time with `da
 ## App Check in callables
 
 `enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. `consumeAppCheckToken` is honored when App Check is enabled. See [App Check](../app-check/).
+
+Under the `strict` profile the daemon also verifies a callable's `Authorization` bearer before it forwards the call, for Node and Python codebases alike. A request that carries more than one `Authorization` header is refused with 401 before anything is forwarded.
 
 ## Runner output
 

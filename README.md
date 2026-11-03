@@ -16,7 +16,7 @@ Fireemu is still in development and does not yet reproduce every feature and beh
 
 ## Quick start
 
-Node.js 20 or newer is required. Fireemu runs on macOS 13 or newer (Apple silicon, Intel), Linux (x86-64, arm64) and Windows 10 or newer (x86-64). Running Functions requires `firebase-functions` v6 or v7 in the codebase.
+Node.js 20 or newer is required. Fireemu runs on macOS 13 or newer (Apple silicon, Intel), Linux (x86-64, arm64) and Windows 10 or newer (x86-64). Running Node Functions requires `firebase-functions` v6 or v7 in the codebase; a Python codebase needs Python 3.10 to 3.14, its own `venv` with `firebase-functions`, and macOS or Linux.
 
 ```sh
 npm install --save-dev fireemu
@@ -65,7 +65,7 @@ See [Time and scheduled functions](https://t-k.github.io/fireemu/guides/time/) a
 | Cloud Firestore | Standard and Enterprise editions, composite index validation, Security Rules; the Enterprise Pipeline API supports a subset of read operations including bounded `union` and `sample` shapes, and text search is a local lexical engine | [Cloud Firestore](https://t-k.github.io/fireemu/products/firestore/) |
 | Firebase Authentication (Identity Platform) | Sign-in methods, TOTP and SMS multi-factor authentication, multi-tenancy, OIDC and SAML providers, blocking functions; flows that talk to external identity providers are outside the scope | [Authentication](https://t-k.github.io/fireemu/products/auth/) |
 | Cloud Storage for Firebase | Firebase and JSON APIs, Security Rules; signed-URL signatures, IAM, `compose` and notification configuration are outside the scope | [Cloud Storage](https://t-k.github.io/fireemu/products/storage/) |
-| Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock | [Cloud Functions](https://t-k.github.io/fireemu/products/functions/) |
+| Cloud Functions for Firebase | HTTP, callable, event, task-queue, blocking and scheduled functions on a virtual clock; Python codebases serve HTTP, callable, Firestore, Pub/Sub, Storage, Eventarc and database triggers in real time | [Cloud Functions](https://t-k.github.io/fireemu/products/functions/) |
 | Cloud Pub/Sub and Eventarc | Topics, subscriptions, push and pull delivery, dead-letter topics and StreamingPull; Eventarc custom events for Functions | [Pub/Sub and Eventarc](https://t-k.github.io/fireemu/products/pubsub-eventarc/) |
 | Firebase Realtime Database (an open gap: no parity claim against the official emulator) | REST, realtime protocol, Security Rules, export and import; production parity is verified for the recorded cases only | [Realtime Database (open gap)](https://t-k.github.io/fireemu/products/realtime-database/) |
 | Firebase App Check | Local testing with debug tokens; no real attestation providers or replay protection | [App Check](https://t-k.github.io/fireemu/products/app-check/) |

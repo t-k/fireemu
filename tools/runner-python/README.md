@@ -3,7 +3,7 @@
 `runner.py` is the process the daemon starts for a Python Functions codebase, with the interpreter of
 the codebase's `venv`. It speaks the same length-prefixed JSON frames on stdin and stdout as the Node
 runner (`tools/runner-node`), serves `onRequest` and `onCall` functions on a loopback HTTP server, and
-turns a Firestore event into the CloudEvent the Python SDK expects. The package is `fireemu_runner/`;
+turns the daemon's Firestore, Pub/Sub, Storage, Eventarc and Realtime Database events into the CloudEvents the Python SDK expects. The package is `fireemu_runner/`;
 the design memo is the reference for why (one process per codebase, protobuf for Firestore events).
 
 ## Tests

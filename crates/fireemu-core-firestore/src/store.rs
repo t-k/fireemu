@@ -908,6 +908,10 @@ struct Transaction {
     /// (production, P01 REST read-write and P02 both transports); one that has not read answers none
     /// in production. Only the first read is recorded; a later read's time is unobserved.
     first_read_time: Option<LogicalInstant>,
+    /// Whether a retry named this transaction while it was still active (its state then becomes
+    /// [`TransactionState::Retried`]). The official emulator (v1.22.0, native gRPC) still serves a
+    /// read of such a token; one a retry named after it had been rolled back answers the expired text.
+    retried_while_live: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2825,7 +2829,8 @@ impl FirestoreState {
         // A client retrying an attempt that is still active (its commit was held back by
         // another transaction's locks and the client gave up waiting) abandons that attempt:
         // it is rolled back, and its locks released, before the retry begins.
-        if previous_attempt.state == TransactionState::Active {
+        let retried_while_live = previous_attempt.state == TransactionState::Active;
+        if retried_while_live {
             self.finish_transaction(previous, TransactionState::RolledBack);
         }
         // Finishing the attempt may have evicted it from the bounded finished lineage.
@@ -2856,6 +2861,7 @@ impl FirestoreState {
         if !expired {
             if let Some(previous_attempt) = self.transactions.get_mut(previous) {
                 previous_attempt.state = TransactionState::Retried;
+                previous_attempt.retried_while_live = retried_while_live;
             }
         }
         // An expired token that was retried keeps answering as an expired one (production P13b: the chain-end Rollback of it answered 0 for an idle-expired
@@ -2917,6 +2923,7 @@ impl FirestoreState {
             snapshot_pending: false,
             lifetime_expired: false,
             first_read_time: None,
+            retried_while_live: false,
         };
         self.active_transaction_deadlines.insert((
             transaction_deadline(&transaction, self.limit_scope),
@@ -3228,6 +3235,10 @@ impl FirestoreState {
         path: &DocumentPath,
         observed: Option<&Document>,
     ) -> Result<(), FirestoreError> {
+        // A served read of a retried token is not recorded: the token is finished and holds no locks.
+        if self.serves_retried_read(id) {
+            return Ok(());
+        }
         let transaction = self.transaction(id)?;
         if transaction.read_only {
             return Ok(());
@@ -3277,6 +3288,20 @@ impl FirestoreState {
         // ended. The emulator profile keeps its own flow below, unchanged.
         if self.limit_scope == LimitScope::Production && self.prune_transactions(now) {
             self.compact(now);
+        }
+        if self.serves_retried_read(id) {
+            // The token is finished: it has no deadline or activity to refresh. A token retried before
+            // its first read takes its snapshot here, as an active one would; being finished, it holds
+            // no retained version, so a later compaction past it refuses the read again.
+            let (version, time) = (self.version, self.read_time(now));
+            if let Some(transaction) = self.transactions.get_mut(id) {
+                if transaction.snapshot_pending {
+                    transaction.snapshot_pending = false;
+                    transaction.read_version = version;
+                    transaction.read_time = time;
+                }
+            }
+            return Ok(());
         }
         if let Err(error) = self.transaction(id) {
             // The emulator profile answers a read after the total lifetime `INVALID_ARGUMENT`.
@@ -3911,12 +3936,29 @@ impl FirestoreState {
     /// [`Self::transaction`] for a read: a pending snapshot must have been pinned (by
     /// [`Self::touch_transaction`]) before the transaction is read at its version or time.
     fn reading_transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {
-        let transaction = self.transaction(id)?;
+        let transaction = match self.transactions.get(id) {
+            Some(transaction) if self.serves_retried_read(id) => transaction,
+            _ => self.transaction(id)?,
+        };
         debug_assert!(
             !transaction.snapshot_pending,
             "a read path must touch the transaction (pinning its snapshot) before it reads"
         );
         Ok(transaction)
+    }
+
+    /// Whether a read of `id` is served although a retry named it: the official emulator (firebase-tools 15.28.2, v1.22.0, native gRPC)
+    /// reads the document (`NOT_FOUND` when it does not exist) for a token that a retry named while it was live, and answers the expired text
+    /// for one a retry named after it had been rolled back. Other origins (committed, aborted, expired) are not recorded and keep the expired
+    /// text too. Strict is not recorded for this shape and keeps refusing it.
+    /// Only reads take this exception: a Commit of the token is still refused, and the read joins no read set (the token holds no locks).
+    fn serves_retried_read(&self, id: &TransactionId) -> bool {
+        self.limit_scope == LimitScope::OfficialEmulator
+            && self.transactions.get(id).is_some_and(|transaction| {
+                transaction.state == TransactionState::Retried
+                    && transaction.retried_while_live
+                    && transaction.read_version >= self.compaction_floor
+            })
     }
 
     fn transaction(&self, id: &TransactionId) -> Result<&Transaction, FirestoreError> {

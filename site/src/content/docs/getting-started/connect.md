@@ -66,7 +66,7 @@ connectFunctionsEmulator(getFunctions(app), '127.0.0.1', 5001);
 
 ## Security Rules unit tests
 
-`@firebase/rules-unit-testing` works with Fireemu. Its unsigned mock ID tokens (`authenticatedContext()`) are accepted by default, also under the `strict` profile, and the routes it calls to load Firestore and Storage rules and to clear Firestore (`testEnv.clearFirestore()`) are served. See [Security Rules](../../guides/security-rules/).
+`@firebase/rules-unit-testing` works with Fireemu. Its unsigned mock ID tokens (`authenticatedContext()`) are accepted by default, also under the `strict` profile, and the routes it calls to load Firestore and Storage rules and to clear Firestore (`testEnv.clearFirestore()`) are served. So is `withFunctionTriggersDisabled`: the Hub accepts `PUT /functions/disableBackgroundTriggers` and `enableBackgroundTriggers` without a token from a client that sends no browser metadata (`Origin`, `Sec-Fetch-Site`). See [Security Rules](../../guides/security-rules/).
 
 ## The project ID
 

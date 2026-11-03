@@ -68,6 +68,10 @@ fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
         "0",
         "--tasks-port",
         "0",
+        "--pubsub-port",
+        "0",
+        "--database-port",
+        "0",
         "--logging-port",
         "0",
         "--ui-port",
@@ -91,6 +95,41 @@ fn exec(config: &Path, extra: &[&str], command: &[&str]) -> Output {
         .unwrap()
 }
 
+/// The structured event the daemon sends for a created Firestore document.
+fn created_event() -> serde_json::Value {
+    serde_json::json!({
+        "specversion": "1.0",
+        "id": "0a1b2c3d-0000-4000-8000-000000000001",
+        "source": "//firestore.googleapis.com/projects/demo-py/databases/(default)",
+        "subject": "documents/items/a",
+        "type": "google.cloud.firestore.document.v1.created",
+        "time": "2026-01-01T00:00:02.25Z",
+        "datacontenttype": "application/json",
+        "data": {"value": {
+            "name": "projects/demo-py/databases/(default)/documents/items/a",
+            "fields": {"n": {"integerValue": "1"}},
+            "createTime": "2026-01-01T00:00:00Z",
+            "updateTime": "2026-01-01T00:00:00Z"
+        }},
+        "location": "nam5", "project": "demo-py", "namespace": "(default)",
+        "document": "items/a", "database": "(default)"
+    })
+}
+
+/// The structured event the daemon sends for a Pub/Sub message with an ordering key.
+fn published_event() -> serde_json::Value {
+    serde_json::json!({
+        "specversion": "1.0", "id": "m-1",
+        "source": "//pubsub.googleapis.com/projects/demo-py/topics/orders",
+        "type": "google.cloud.pubsub.topic.v1.messagePublished",
+        "time": "2026-01-01T00:00:02.250Z",
+        "data": {
+            "message": {"messageId": "m-1", "data": "aGk=", "attributes": {}, "publishTime": "2026-01-01T00:00:02.250Z", "orderingKey": "k"},
+            "subscription": "projects/demo-py/subscriptions/s"
+        }
+    })
+}
+
 #[tokio::test]
 #[ignore = "requires the fixture virtual environment; CI creates it"]
 async fn the_daemons_runner_class_drives_the_real_python_runner() {
@@ -107,6 +146,11 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
         cwd: Some(source.display().to_string()),
         env: vec![
             ("GCLOUD_PROJECT".to_owned(), "demo-py".to_owned()),
+            // The daemon exports it; a Storage function with no bucket reads its default from it.
+            (
+                "FIREBASE_CONFIG".to_owned(),
+                r#"{"storageBucket":"demo-py.appspot.com"}"#.to_owned(),
+            ),
             (
                 "FIRESTORE_EMULATOR_HOST".to_owned(),
                 "127.0.0.1:9".to_owned(),
@@ -127,28 +171,26 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
     // The daemon's own parser accepts exactly what the runner announced.
     let manifest = parse_manifest(hello.manifest.as_ref().expect("a manifest")).unwrap();
     let names: Vec<&str> = manifest.functions.iter().map(|f| f.name.as_str()).collect();
-    for expected in ["hello", "add", "fs_created", "fs_literal", "fs_options"] {
+    for expected in [
+        "hello",
+        "add",
+        "fs_created",
+        "fs_literal",
+        "fs_options",
+        "ps_orders",
+        "ps_retried",
+        "st_finalized",
+        "st_default_bucket",
+        "ea_plain",
+        "ea_filtered",
+        "db_created",
+        "db_literal_glob",
+    ] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
     assert!(manifest.ignored.is_empty(), "{:?}", manifest.ignored);
 
-    let event = serde_json::json!({
-        "specversion": "1.0",
-        "id": "0a1b2c3d-0000-4000-8000-000000000001",
-        "source": "//firestore.googleapis.com/projects/demo-py/databases/(default)",
-        "subject": "documents/items/a",
-        "type": "google.cloud.firestore.document.v1.created",
-        "time": "2026-01-01T00:00:02.25Z",
-        "datacontenttype": "application/json",
-        "data": {"value": {
-            "name": "projects/demo-py/databases/(default)/documents/items/a",
-            "fields": {"n": {"integerValue": "1"}},
-            "createTime": "2026-01-01T00:00:00Z",
-            "updateTime": "2026-01-01T00:00:00Z"
-        }},
-        "location": "nam5", "project": "demo-py", "namespace": "(default)",
-        "document": "items/a", "database": "(default)"
-    });
+    let event = created_event();
     let request = |function: &str, trigger: &str, id: &str| {
         serde_json::json!({
             "type": "invoke", "invocationId": id, "function": function,
@@ -162,6 +204,17 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
         )
         .await;
     assert_eq!(ok.outcome, InvokeOutcome::Ok);
+    // A Pub/Sub frame the runner turns into the SDK's event (the message ids are the SDK's snake_case keys).
+    let pubsub = runner
+        .invoke(
+            serde_json::json!({
+                "type": "invoke", "invocationId": "ps-1", "function": "ps_orders",
+                "entryPoint": "ps_orders", "trigger": "pubsub", "event": published_event(),
+            }),
+            Duration::from_secs(20),
+        )
+        .await;
+    assert_eq!(pubsub.outcome, InvokeOutcome::Ok);
     let wrong_trigger = runner
         .invoke(
             request("fs_created", "pubsub", "bad-1"),
@@ -178,10 +231,13 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
 
 #[test]
 #[ignore = "requires the fixture virtual environment; CI creates it"]
-fn a_python_codebase_serves_http_callables_and_firestore_triggers_in_both_profiles() {
+fn a_python_codebase_serves_http_callables_and_event_triggers_in_both_profiles() {
     for (profile, config) in [
-        ("emulator", None),
-        ("strict", Some(r#"{"schemaVersion":1,"profile":"strict"}"#)),
+        (
+            "emulator",
+            Some(r#"{"schemaVersion":1,"profile":"emulator"}"#),
+        ),
+        ("strict", None),
     ] {
         let dir = scratch(profile);
         let firebase = firebase_json(&dir, &fixture(), None);
@@ -270,17 +326,17 @@ fn a_python_trigger_family_that_is_planned_fails_discovery_naming_the_function()
     std::fs::write(
         source.join("main.py"),
         "from firebase_admin import initialize_app\n\
-         from firebase_functions import pubsub_fn\n\
+         from firebase_functions import tasks_fn\n\
          initialize_app()\n\
-         @pubsub_fn.on_message_published(topic='jobs')\n\
-         def later(event):\n    pass\n",
+         @tasks_fn.on_task_dispatched()\n\
+         def later(request):\n    pass\n",
     )
     .unwrap();
     let firebase = firebase_json(&dir, &source, None);
     let out = exec(&firebase, &[], &["true"]);
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(1), "{err}");
-    assert!(err.contains("later (pubsub)"), "{err}");
+    assert!(err.contains("later (tasks)"), "{err}");
     assert!(err.contains("planned"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }

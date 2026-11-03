@@ -19,6 +19,10 @@ PROJECT = os.environ.get("GCLOUD_PROJECT", "demo-py")
 FUNCTIONS = f"http://{os.environ['FIREEMU_FUNCTIONS_HOST']}/{PROJECT}/us-central1"
 FIRESTORE = f"http://{os.environ['FIRESTORE_EMULATOR_HOST']}/v1/projects/{PROJECT}/databases/(default)/documents"
 AUTH = f"http://{os.environ['FIREBASE_AUTH_EMULATOR_HOST']}/identitytoolkit.googleapis.com/v1"
+PUBSUB = f"http://{os.environ['PUBSUB_EMULATOR_HOST']}/v1/projects/{PROJECT}"
+STORAGE = f"http://{os.environ['FIREBASE_STORAGE_EMULATOR_HOST'].removeprefix('http://')}"
+DATABASE = f"http://{os.environ['FIREBASE_DATABASE_EMULATOR_HOST']}"
+EVENTARC = "http://" + os.environ["CLOUD_EVENTARC_EMULATOR_HOST"].removeprefix("http://")
 PROFILE = os.environ.get("E2E_PROFILE", "emulator")
 
 
@@ -72,6 +76,100 @@ def wait_for(predicate, what):
     raise AssertionError(f"timed out waiting for {what}; saw {seen()}")
 
 
+def call_raw(method, url, data, headers):
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def other_families():
+    """Pub/Sub, Storage, Eventarc and Realtime Database events reach their Python handlers."""
+    # Pub/Sub: a plain message, then one with an ordering key.
+    status, body = call("PUT", f"{PUBSUB}/topics/orders", {})
+    assert status in (200, 409), (status, body)
+    message = {"data": base64.b64encode(b"hello").decode(), "attributes": {"k": "v"}}
+    status, body = call("POST", f"{PUBSUB}/topics/orders:publish", {"messages": [message]})
+    assert status == 200, (status, body)
+    plain = wait_for(lambda e: e["function"] == "ps_orders" and e["ordering_key"] is None, "ps_orders")
+    assert plain["text"] == "hello" and plain["attributes"] == {"k": "v"} and plain["message_id"], plain
+    assert plain["publish_time"] and plain["type"] == "google.cloud.pubsub.topic.v1.messagePublished", plain
+    status, body = call("POST", f"{PUBSUB}/topics/orders:publish", {"messages": [{**message, "orderingKey": "customer-7"}]})
+    assert status == 200, (status, body)
+    wait_for(lambda e: e["function"] == "ps_orders" and e["ordering_key"] == "customer-7", "ps_orders with an ordering key")
+
+    # Storage: an upload finalizes, a metadata change updates, a delete deletes.
+    bucket = "demo-bucket"
+    status, body = call_raw(
+        "POST", f"{STORAGE}/upload/storage/v1/b/{bucket}/o?uploadType=media&name=photos%2Fa.txt", b"abc",
+        {"Content-Type": "text/plain", **OWNER},
+    )
+    assert status == 200, (status, body)
+    finalized = wait_for(lambda e: e["function"] == "st_finalized" and e["object"] == "photos/a.txt", "st_finalized")
+    assert (finalized["bucket"], finalized["size"], finalized["content_type"]) == (bucket, "3", "text/plain"), finalized
+    status, body = call("PATCH", f"{STORAGE}/storage/v1/b/{bucket}/o/photos%2Fa.txt", {"metadata": {"colour": "red"}}, OWNER)
+    assert status == 200, (status, body)
+    wait_for(lambda e: e["function"] == "st_metadata" and e["metadata"] == {"colour": "red"}, "st_metadata")
+    status, body = call("DELETE", f"{STORAGE}/storage/v1/b/{bucket}/o/photos%2Fa.txt", None, OWNER)
+    assert status in (200, 204), (status, body)
+    wait_for(lambda e: e["function"] == "st_deleted" and e["object"] == "photos/a.txt", "st_deleted")
+    # A function with no bucket listens to the default bucket.
+    status, body = call_raw(
+        "POST", f"{STORAGE}/upload/storage/v1/b/{PROJECT}.appspot.com/o?uploadType=media&name=default.txt", b"d",
+        {"Content-Type": "text/plain", **OWNER},
+    )
+    assert status == 200, (status, body)
+    wait_for(lambda e: e["function"] == "st_default_bucket" and e["object"] == "default.txt", "st_default_bucket")
+
+    # Eventarc: a custom event, and a filtered one.
+    def publish(event_type, channel, data, attributes=None):
+        proto = {
+            "@type": "type.googleapis.com/io.cloudevents.v1.CloudEvent",
+            "id": "evt-" + event_type,
+            "source": "https://example.com/things",
+            "specVersion": "1.0",
+            "type": event_type,
+            # The emulator profile asks for both, as the official emulator does.
+            "attributes": {
+                "datacontenttype": {"ceString": "application/json"},
+                "time": {"ceTimestamp": "2026-01-01T00:00:02.500Z"},
+                **(attributes or {}),
+            },
+            "textData": json.dumps(data),
+        }
+        return call("POST", f"{EVENTARC}/projects/{PROJECT}/locations/us-central1/channels/{channel}:publishEvents", {"events": [proto]}, OWNER)
+
+    status, body = publish("acme.thing.v1.happened", "firebase", {"thing": 7})
+    assert status == 200, (status, body)
+    custom = wait_for(lambda e: e["function"] == "ea_plain", "ea_plain")
+    assert custom["data"] == {"thing": 7} and custom["type"] == "acme.thing.v1.happened", custom
+    status, body = publish("acme.thing.v1.filtered", "acme", {"thing": 8}, {"colour": {"ceString": "blue"}})
+    assert status == 200, (status, body)
+    status, body = publish("acme.thing.v1.filtered", "acme", {"thing": 9}, {"colour": {"ceString": "red"}})
+    assert status == 200, (status, body)
+    filtered = wait_for(lambda e: e["function"] == "ea_filtered", "ea_filtered")
+    assert filtered["data"] == {"thing": 9}, filtered
+    assert [e["data"] for e in seen() if e["function"] == "ea_filtered"] == [{"thing": 9}], "the filter admitted a blue event"
+
+    # Realtime Database: create, update, delete.
+    namespace = f"{PROJECT}-default-rtdb"
+    path = f"{DATABASE}/messages/r1/m1.json?ns={namespace}"
+    status, body = call("PUT", path, {"text": "hi", "n": 1}, OWNER)
+    assert status == 200, (status, body)
+    created = wait_for(lambda e: e["function"] == "db_created" and e["reference"] == "messages/r1/m1", "db_created")
+    assert created["value"] == {"text": "hi", "n": 1} and created["params"] == {"room": "r1", "id": "m1"}, created
+    status, body = call("PATCH", path, {"n": 2}, OWNER)
+    assert status == 200, (status, body)
+    updated = wait_for(lambda e: e["function"] == "db_updated" and e["reference"] == "messages/r1/m1", "db_updated")
+    assert updated["before"] == {"text": "hi", "n": 1} and updated["after"] == {"text": "hi", "n": 2}, updated
+    status, body = call("DELETE", path, None, OWNER)
+    assert status == 200, (status, body)
+    deleted = wait_for(lambda e: e["function"] == "db_deleted" and e["reference"] == "messages/r1/m1", "db_deleted")
+    assert deleted["value"] == {"text": "hi", "n": 2}, deleted
+
+
 def main():
     status, body = call("GET", f"{FUNCTIONS}/hello/a/b?q=1")
     assert status == 200, (status, body)
@@ -120,6 +218,7 @@ def main():
         for first, second in ((f"Bearer {unsigned_forged}", "AAAA"), (f"Bearer {user['idToken']}", "AAAA"), ("AAAA", f"Bearer {unsigned_forged}")):
             status, body = call_with_two_authorizations(first, second)
             assert status == 401 and b"result" not in body, ("two Authorization headers", status, body)
+    other_families()
     print(json.dumps({"ok": True, "profile": PROFILE}))
 
 

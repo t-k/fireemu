@@ -232,3 +232,100 @@ def test_a_body_that_raises_while_it_is_read_is_reported_without_running_its_tex
     assert Leaky.seen is None, "the exception text was made inside the function's environment (TOKEN is not declared)"
     assert free(gate)
     assert "token-value" not in capsys.readouterr().err
+
+
+# --- survivors of the scoped mutation run on the failure paths ---------------------------------------------------
+
+
+def test_the_fallback_diagnostic_names_the_class_when_the_traceback_cannot_be_made(monkeypatch):
+    import traceback
+
+    monkeypatch.setattr(traceback, "format_exception", lambda error: (_ for _ in ()).throw(RuntimeError("no traceback")))
+    assert describe(KeyError("k")) == ("KeyError: (the error could not be formatted)\n", "'k'")
+
+
+def test_a_long_diagnostic_is_cut_in_the_runner_log(capsys):
+    from fireemu_runner.serve import _log_failure
+
+    _log_failure("fn", ValueError("z" * 20000))
+    written = capsys.readouterr().err
+    assert written.startswith("[functions] fn: ValueError: zzz") and len(written) == len("[functions] fn: ") + 8192 + 1
+
+
+def manifest_for(name, secrets=("API_KEY",)):
+    return {"functions": [{"name": name, "entryPoint": name, "region": "us-central1", "trigger": {"type": "http"}, "platformOptions": {"secrets": list(secrets)}}]}
+
+
+def test_a_body_failure_is_logged_under_the_functions_name_and_raised_as_its_class_name(capsys):
+    import flask
+
+    def view(request):
+        def generator():
+            yield b"a"
+            raise KeyError("inside")
+
+        return flask.Response(generator())
+
+    router = RunnerRouter({"g": view}, manifest_for("g"), "demo-proj", SECRET, EnvironmentGate(SECRETS))
+    outcome = post(router, "g")
+    assert [(type(item).__name__, str(item)) for item in outcome if isinstance(item, BaseException)] == [("ResponseBodyFailed", "KeyError")]
+    assert "[functions] g: Traceback" in capsys.readouterr().err
+
+
+def test_a_close_failure_is_logged_under_the_functions_name_and_not_raised(capsys):
+    import flask
+
+    def view(request):
+        response = flask.Response("ok")
+        response.call_on_close(lambda: [][1])
+        return response
+
+    router = RunnerRouter({"g": view}, manifest_for("g"), "demo-proj", SECRET, EnvironmentGate(SECRETS))
+    outcome = post(router, "g")
+    assert not [item for item in outcome if isinstance(item, BaseException)]
+    err = capsys.readouterr().err
+    assert "[functions] g: Traceback" in err and "IndexError" in err
+
+
+def test_a_body_with_no_close_method_is_released_all_the_same():
+    gate = EnvironmentGate(SECRETS)
+
+    class Bare:
+        def __iter__(self):
+            return iter([b"x"])
+
+    from fireemu_runner.serve import _HeldBody
+    import contextlib
+
+    held = contextlib.ExitStack()
+    held.enter_context(gate.hold(["API_KEY"]))
+    body = _HeldBody(Bare(), held, "bare")
+    assert list(body) == [b"x"]
+    body.close()
+    assert free(gate)
+
+
+def test_an_exit_from_the_view_is_logged_released_and_raised_as_a_plain_failure(capsys):
+    def view(request):
+        raise SystemExit(3)
+
+    gate = EnvironmentGate(SECRETS)
+    router = RunnerRouter({"g": view}, manifest_for("g"), "demo-proj", SECRET, gate)
+    from werkzeug.test import EnvironBuilder
+
+    environ = EnvironBuilder("/demo-proj/us-central1/g", headers={"x-fireemu-runner-secret": SECRET}).get_environ()
+    with pytest.raises(Exception) as error:
+        router(environ, lambda *args: None)
+    assert type(error.value).__name__ == "ResponseBodyFailed" and str(error.value) == "SystemExit"
+    assert "[functions] g: Traceback" in capsys.readouterr().err
+    assert free(gate) and "API_KEY" not in os.environ
+
+
+def test_the_no_secret_refusal_is_a_500_with_the_standard_reason(discovered):
+    from werkzeug.test import EnvironBuilder
+
+    seen = {}
+    router = RunnerRouter(discovered, build_manifest(discovered), "demo-proj", "")
+    environ = EnvironBuilder("/demo-proj/us-central1/hello").get_environ()
+    body = router(environ, lambda status, headers: seen.update(status=status))
+    assert seen["status"] == "500 Internal Server Error" and b"".join(body) == b"FIREEMU_RUNNER_SECRET is required"

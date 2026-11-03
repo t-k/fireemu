@@ -10133,13 +10133,412 @@ fn signed_xml_put_success_carries_the_production_headers() {
     );
 }
 
-/// The full cross of the decision factors of a signed XML PUT (two profiles, five URL states,
-/// three signed-header states, content type present or not, five range cases: 240 requests after
-/// the meaningless combinations are dropped) against an independent reference of the rules the
-/// recorded production answers fix. The PICT model of the coverage ledger is a subset of it.
+/// The header names a request's `X-Goog-SignedHeaders` parameters sign, spelled as the URL spells
+/// the parameter names (decoded values). The spelling matters: the strict profile reads every
+/// spelling of the name and the emulator profile only the canonical one, as before the 2026-11-04
+/// review (Codex r1 M1 and M2).
+const CANONICAL: &str = "X-Goog-SignedHeaders";
+const LOWER: &str = "x-goog-signedheaders";
+const MIXED: &str = "X-Goog-SIGNEDHEADERS";
+const NAMES: &str = "content-type;host";
+
+fn spelled(spelling: &str) -> Vec<(&'static str, &'static str)> {
+    match spelling {
+        "canonical-names" => vec![(CANONICAL, NAMES)],
+        "lower-names" => vec![(LOWER, NAMES)],
+        "mixed-names" => vec![(MIXED, NAMES)],
+        "canonical-names+mixed-host" => vec![(CANONICAL, NAMES), (MIXED, "host")],
+        "canonical-host+lower-names" => vec![(CANONICAL, "host"), (LOWER, NAMES)],
+        "lower-empty" => vec![(LOWER, "")],
+        "canonical-empty" => vec![(CANONICAL, "")],
+        "canonical-host+lower-empty" => vec![(CANONICAL, "host"), (LOWER, "")],
+        "mixed-empty" => vec![(MIXED, "")],
+        other => panic!("unknown spelling {other}"),
+    }
+}
+
+type Refusal = (u16, &'static str, Option<&'static str>);
+
+/// What the signed-header lists of a request decide, written as a rule list: the strict profile
+/// holds the request to every spelling's list, the emulator profile to the canonical spelling's
+/// only (what it did before); an empty name is an `InvalidArgument`, a named header missing from
+/// the request a `MalformedSecurityHeader`, and the strict profile refuses a range header that a
+/// list does not sign. Lists are read in the byte order of their parameter names, as the query
+/// map orders them.
+fn signed_header_verdict(
+    strict: bool,
+    spelling: &[(&str, &str)],
+    content_type: bool,
+    range_sent: bool,
+) -> Option<Refusal> {
+    let mut lists: Vec<(&str, &str)> = spelling.to_vec();
+    lists.sort_by(|a, b| a.0.cmp(b.0));
+    let considered: Vec<&str> = lists
+        .iter()
+        .filter(|(key, _)| strict || *key == CANONICAL)
+        .map(|(_, value)| *value)
+        .collect();
+    for list in &considered {
+        for name in list.split(';') {
+            if name.is_empty() {
+                return Some((400, "InvalidArgument", None));
+            }
+            if name == "content-type" && !content_type {
+                return Some((400, "MalformedSecurityHeader", Some("content-type")));
+            }
+            if name == "x-goog-content-length-range" && !range_sent {
+                return Some((
+                    400,
+                    "MalformedSecurityHeader",
+                    Some("x-goog-content-length-range"),
+                ));
+            }
+        }
+    }
+    if strict
+        && range_sent
+        && considered
+            .iter()
+            .any(|list| !list.split(';').any(|n| n == "x-goog-content-length-range"))
+    {
+        return Some((
+            400,
+            "MalformedSecurityHeader",
+            Some("x-goog-content-length-range"),
+        ));
+    }
+    None
+}
+
+fn spelled_query(url: &str, spelling: &[(&str, &str)]) -> String {
+    let (date, lifetime) = if url == "expired" {
+        ("20260829T110000Z", "1")
+    } else {
+        (FRESH, "3600")
+    };
+    let mut query = format!(
+        "X-Goog-Algorithm=GOOG4-RSA-SHA256\
+         &X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request\
+         &X-Goog-Date={date}&X-Goog-Expires={lifetime}"
+    );
+    for (key, value) in spelling {
+        query.push('&');
+        query.push_str(key);
+        query.push('=');
+        query.push_str(&value.replace(';', "%3B"));
+    }
+    if url != "no-signature" {
+        query.push_str("&X-Goog-Signature=0123abcd0123abcd");
+    }
+    query
+}
+
+fn assert_refusal_matches(
+    label: &str,
+    response: &fireemu_adapter_http::storage::StorageResponse,
+    expected: Refusal,
+) {
+    assert_eq!(response.status, expected.0, "{label}");
+    let text = String::from_utf8_lossy(&response.body).into_owned();
+    if expected.0 == 200 {
+        assert!(response.body.is_empty(), "{label}");
+        return;
+    }
+    assert!(
+        text.contains(&format!("<Code>{}</Code>", expected.1)),
+        "{label}: {text}"
+    );
+    match expected.2 {
+        Some(parameter) => assert!(
+            text.contains(&format!("<ParameterName>{parameter}</ParameterName>")),
+            "{label}: {text}"
+        ),
+        None => assert!(!text.contains("<ParameterName>"), "{label}: {text}"),
+    }
+}
+
+/// Puts `old` under `obj.png` with a plain valid URL, sends the case's request over it, and checks
+/// the verdict and that the object holds the old bytes exactly when the request was refused.
+fn spelled_put_case(
+    label: &str,
+    strict: bool,
+    url: &str,
+    spelling: &[(&str, &str)],
+    content_type: bool,
+    range_sent: bool,
+    expected: Refusal,
+) {
+    let s = state_with(
+        None,
+        if strict {
+            TokenAcceptance::Verified
+        } else {
+            TokenAcceptance::EmulatorMock
+        },
+    );
+    let seed = format!(
+        "/{BUCKET}/obj.png?{}",
+        spelled_query("valid", &spelled("canonical-names"))
+    );
+    assert_eq!(
+        handle(
+            &s,
+            req("PUT", &seed, &[("content-type", "image/png")], b"old")
+        )
+        .status,
+        200,
+        "{label}: seeding the existing object"
+    );
+    let mut headers = Vec::new();
+    if content_type {
+        headers.push(("content-type", "image/png"));
+    }
+    if range_sent {
+        headers.push(("x-goog-content-length-range", "0,10"));
+    }
+    let path = format!("/{BUCKET}/obj.png?{}", spelled_query(url, spelling));
+    let response = handle(&s, req("PUT", &path, &headers, b"new!"));
+    assert_refusal_matches(label, &response, expected);
+    let stored = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/{BUCKET}/obj.png"),
+            &[("authorization", "Bearer owner")],
+            &[],
+        ),
+    );
+    assert_eq!(
+        stored.body.as_ref(),
+        if expected.0 == 200 {
+            b"new!".as_slice()
+        } else {
+            b"old"
+        },
+        "{label}: the object holds the new bytes exactly when the request was accepted"
+    );
+}
+
+fn url_verdict(strict: bool, url: &str) -> Option<Refusal> {
+    match url {
+        "expired" => Some((400, "ExpiredToken", None)),
+        "no-signature" if strict => Some((400, "MissingSecurityHeader", None)),
+        _ => None,
+    }
+}
+
+/// The two blocking findings of the Codex review of 2026-11-04, by name. Strict refuses a request
+/// when any spelling of the signed-header parameter names a header the request lacks (M1: a
+/// second, laxer spelling must not hide a requirement); the emulator profile keeps reading the
+/// canonical spelling only (M2: a lowercase spelling, even an empty one, was ignored there and
+/// stays ignored).
+#[test]
+fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator() {
+    let refused_malformed: Refusal = (400, "MalformedSecurityHeader", Some("content-type"));
+    let empty: Refusal = (400, "InvalidArgument", None);
+    let cases: [(&str, bool, &str, bool, Option<Refusal>); 10] = [
+        // M1: the canonical list needs content-type, a second spelling signs only host.
+        (
+            "canonical-names+mixed-host",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        // The emulator profile reads the canonical list only, which also needs content-type.
+        (
+            "canonical-names+mixed-host",
+            false,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        // The reverse conflict: the laxer list is the canonical one.
+        (
+            "canonical-host+lower-names",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        // M2: the emulator profile ignores a lowercase spelling, as it did before.
+        ("canonical-host+lower-names", false, "valid", false, None),
+        ("lower-names", false, "valid", false, None),
+        ("mixed-names", false, "valid", false, None),
+        ("lower-empty", false, "valid", true, None),
+        ("canonical-host+lower-empty", false, "valid", true, None),
+        // Strict reads the empty lowercase list; the canonical empty list refuses in both.
+        ("lower-empty", true, "valid", true, Some(empty)),
+        ("canonical-empty", false, "valid", true, Some(empty)),
+    ];
+    for (spelling, strict, url, content_type, expected) in cases {
+        spelled_put_case(
+            &format!("{spelling} strict={strict}"),
+            strict,
+            url,
+            &spelled(spelling),
+            content_type,
+            false,
+            expected.unwrap_or((200, "", None)),
+        );
+    }
+}
+
+/// The PICT model `header-spelling.pict` (five factors: profile, URL state, spelling of the
+/// signed-header parameter, content type, range header) generated these rows, the required seeds
+/// of `header-spelling.seed.tsv` among them (the two blocking regressions, the canonical rows and
+/// the conflicts in both directions).
 #[test]
 #[allow(clippy::too_many_lines)]
-fn signed_xml_put_decision_table_matches_the_reference_model() {
+fn signed_xml_put_header_spelling_pict_cases() {
+    let cases = [
+        (
+            "strict",
+            "valid",
+            "canonical-names+mixed-host",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "valid", "lower-names", "absent", "absent"),
+        ("emulator", "valid", "lower-empty", "present", "absent"),
+        ("strict", "valid", "lower-empty", "present", "absent"),
+        ("strict", "valid", "canonical-names", "present", "sent"),
+        ("emulator", "valid", "canonical-names", "present", "sent"),
+        ("emulator", "valid", "canonical-names", "absent", "absent"),
+        (
+            "emulator",
+            "valid",
+            "canonical-host+lower-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "canonical-host+lower-names",
+            "absent",
+            "absent",
+        ),
+        ("strict", "no-signature", "lower-names", "present", "absent"),
+        (
+            "strict",
+            "expired",
+            "canonical-names+mixed-host",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "valid", "canonical-empty", "present", "absent"),
+        ("emulator", "valid", "mixed-names", "absent", "absent"),
+        (
+            "emulator",
+            "expired",
+            "canonical-host+lower-empty",
+            "present",
+            "sent",
+        ),
+        (
+            "emulator",
+            "no-signature",
+            "canonical-names+mixed-host",
+            "absent",
+            "sent",
+        ),
+        ("emulator", "no-signature", "lower-empty", "absent", "sent"),
+        ("strict", "valid", "mixed-empty", "present", "sent"),
+        (
+            "strict",
+            "no-signature",
+            "canonical-host+lower-empty",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "expired",
+            "canonical-host+lower-names",
+            "present",
+            "sent",
+        ),
+        (
+            "emulator",
+            "valid",
+            "canonical-host+lower-empty",
+            "present",
+            "sent",
+        ),
+        ("strict", "expired", "canonical-names", "present", "absent"),
+        ("strict", "expired", "mixed-names", "present", "sent"),
+        ("strict", "no-signature", "mixed-names", "absent", "sent"),
+        ("strict", "expired", "canonical-empty", "absent", "sent"),
+        (
+            "strict",
+            "no-signature",
+            "canonical-host+lower-names",
+            "absent",
+            "sent",
+        ),
+        (
+            "emulator",
+            "no-signature",
+            "mixed-empty",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "no-signature",
+            "canonical-empty",
+            "present",
+            "sent",
+        ),
+        ("strict", "expired", "mixed-empty", "present", "absent"),
+        ("emulator", "expired", "lower-empty", "present", "absent"),
+        ("strict", "expired", "lower-names", "absent", "sent"),
+        (
+            "emulator",
+            "no-signature",
+            "canonical-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "canonical-names+mixed-host",
+            "present",
+            "sent",
+        ),
+    ];
+    assert_eq!(cases.len(), 32);
+    for (profile, url, spelling, content_type, range) in cases {
+        let strict = profile == "strict";
+        let pairs = spelled(spelling);
+        let content_type = content_type == "present";
+        let range_sent = range == "sent";
+        let expected = url_verdict(strict, url)
+            .or_else(|| signed_header_verdict(strict, &pairs, content_type, range_sent))
+            .unwrap_or((200, "", None));
+        spelled_put_case(
+            &format!("{profile} {url} {spelling} content-type={content_type} range={range_sent}"),
+            strict,
+            url,
+            &pairs,
+            content_type,
+            range_sent,
+            expected,
+        );
+    }
+}
+
+/// The full cross of the decision factors of a signed XML PUT (two profiles, five URL states,
+/// three signed-header states with their spellings, content type present or not, five range
+/// cases) against a REGRESSION table: a decision list that restates the rules the recorded
+/// production answers fix and the admission the emulator profile always had. It is a second
+/// statement of the implementation's branch order, not an independent oracle: the recorded
+/// fixtures support single outcomes, not the precedence of combined failures.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn signed_xml_put_decision_table_is_a_regression_table_over_every_factor() {
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum Url {
         Valid,
@@ -10172,150 +10571,133 @@ fn signed_xml_put_decision_table_matches_the_reference_model() {
                 {
                     continue;
                 }
-                for content_type in [true, false] {
-                    for range in [
-                        "absent",
-                        "ok",
-                        "too-large-body",
-                        "too-small-body",
-                        "malformed",
-                    ] {
-                        let s = state_with(
-                            None,
-                            if strict {
-                                TokenAcceptance::Verified
-                            } else {
-                                TokenAcceptance::EmulatorMock
-                            },
-                        );
-                        let names = match signed {
-                            Signed::All => {
-                                Some("content-type%3Bhost%3Bx-goog-content-length-range")
-                            }
-                            Signed::NoRange => Some("content-type%3Bhost"),
-                            Signed::Absent => None,
-                        };
-                        let date = if url == Url::Expired {
-                            "20260829T110000Z"
-                        } else {
-                            FRESH
-                        };
-                        let lifetime = if url == Url::Expired { "1" } else { "3600" };
-                        let mut query = Vec::new();
-                        if url != Url::Anonymous {
-                            query.push(format!("X-Goog-Date={date}"));
-                            query.push(format!("X-Goog-Expires={lifetime}"));
-                        }
-                        if matches!(url, Url::V4NoSignature | Url::PartialNoSignature) {
-                            query.push("X-Goog-Algorithm=GOOG4-RSA-SHA256".to_owned());
-                        }
-                        if url == Url::V4NoSignature {
-                            query.push("X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request".to_owned());
-                        }
-                        if let Some(names) = names {
-                            query.push(format!("X-Goog-SignedHeaders={names}"));
-                        }
-                        if matches!(url, Url::Valid | Url::Expired) {
-                            query.push("X-Goog-Signature=0123abcd".to_owned());
-                        }
-                        let path = format!("/{BUCKET}/obj.png?{}", query.join("&"));
-                        let mut headers = Vec::new();
-                        if content_type {
-                            headers.push(("content-type", "image/png"));
-                        }
-                        let range_value = match range {
-                            "ok" => Some("0,10"),
-                            "too-large-body" => Some("0,3"),
-                            "too-small-body" => Some("5,8"),
-                            "malformed" => Some("bad"),
-                            _ => None,
-                        };
-                        if let Some(value) = range_value {
-                            headers.push(("x-goog-content-length-range", value));
-                        }
-                        let response = handle(&s, req("PUT", &path, &headers, &body));
-
-                        // The reference: the same rules, written as a decision list.
-                        let label = format!("strict={strict} {url:?} {signed:?} content_type={content_type} range={range}");
-                        let expected: (u16, &str, Option<&str>) = (|| {
-                            if url == Url::Expired {
-                                return (400, "ExpiredToken", None);
-                            }
-                            if matches!(url, Url::Anonymous | Url::PartialNoSignature) && strict {
-                                return (403, "AccessDenied", None);
-                            }
-                            if url == Url::V4NoSignature && strict {
-                                return (400, "MissingSecurityHeader", None);
-                            }
-                            if signed != Signed::Absent {
-                                if !content_type {
-                                    return (400, "MalformedSecurityHeader", Some("content-type"));
-                                }
-                                if signed == Signed::All && range == "absent" {
-                                    return (
-                                        400,
-                                        "MalformedSecurityHeader",
-                                        Some("x-goog-content-length-range"),
-                                    );
-                                }
-                                if strict && signed == Signed::NoRange && range != "absent" {
-                                    return (
-                                        400,
-                                        "MalformedSecurityHeader",
-                                        Some("x-goog-content-length-range"),
-                                    );
-                                }
-                            }
-                            match range {
-                                "too-large-body" => (400, "EntityTooLarge", None),
-                                "too-small-body" => (400, "EntityTooSmall", None),
-                                "malformed" => (400, "InvalidArgument", None),
-                                _ => (200, "", None),
-                            }
-                        })();
-                        assert_eq!(response.status, expected.0, "{label}");
-                        let text = String::from_utf8_lossy(&response.body).into_owned();
-                        if expected.0 == 200 {
-                            assert!(response.body.is_empty(), "{label}");
-                        } else {
-                            assert!(
-                                text.contains(&format!("<Code>{}</Code>", expected.1)),
-                                "{label}: {text}"
+                let names = match signed {
+                    Signed::All => "content-type;host;x-goog-content-length-range",
+                    Signed::NoRange => "content-type;host",
+                    Signed::Absent => "",
+                };
+                // How the parameter is spelled: canonical, lowercase only, a second laxer
+                // spelling next to the canonical one (M1) and the canonical one laxer than a
+                // lowercase one.
+                let spellings: Vec<Vec<(&str, &str)>> = if signed == Signed::Absent {
+                    vec![vec![]]
+                } else {
+                    vec![
+                        vec![(CANONICAL, names)],
+                        vec![(LOWER, names)],
+                        vec![(CANONICAL, names), (MIXED, "host")],
+                        vec![(CANONICAL, "host"), (LOWER, names)],
+                    ]
+                };
+                for spelling in &spellings {
+                    for content_type in [true, false] {
+                        for range in [
+                            "absent",
+                            "ok",
+                            "too-large-body",
+                            "too-small-body",
+                            "malformed",
+                        ] {
+                            let s = state_with(
+                                None,
+                                if strict {
+                                    TokenAcceptance::Verified
+                                } else {
+                                    TokenAcceptance::EmulatorMock
+                                },
                             );
-                            match expected.2 {
-                                Some(parameter) => assert!(
-                                    text.contains(&format!(
-                                        "<ParameterName>{parameter}</ParameterName>"
-                                    )),
-                                    "{label}: {text}"
-                                ),
-                                None => {
-                                    assert!(!text.contains("<ParameterName>"), "{label}: {text}");
-                                }
+                            let date = if url == Url::Expired {
+                                "20260829T110000Z"
+                            } else {
+                                FRESH
+                            };
+                            let lifetime = if url == Url::Expired { "1" } else { "3600" };
+                            let mut query = Vec::new();
+                            if url != Url::Anonymous {
+                                query.push(format!("X-Goog-Date={date}"));
+                                query.push(format!("X-Goog-Expires={lifetime}"));
                             }
+                            if matches!(url, Url::V4NoSignature | Url::PartialNoSignature) {
+                                query.push("X-Goog-Algorithm=GOOG4-RSA-SHA256".to_owned());
+                            }
+                            if url == Url::V4NoSignature {
+                                query.push("X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request".to_owned());
+                            }
+                            for (key, value) in spelling {
+                                query.push(format!("{key}={}", value.replace(';', "%3B")));
+                            }
+                            if matches!(url, Url::Valid | Url::Expired) {
+                                query.push("X-Goog-Signature=0123abcd".to_owned());
+                            }
+                            let path = format!("/{BUCKET}/obj.png?{}", query.join("&"));
+                            let mut headers = Vec::new();
+                            if content_type {
+                                headers.push(("content-type", "image/png"));
+                            }
+                            let range_value = match range {
+                                "ok" => Some("0,10"),
+                                "too-large-body" => Some("0,3"),
+                                "too-small-body" => Some("5,8"),
+                                "malformed" => Some("bad"),
+                                _ => None,
+                            };
+                            if let Some(value) = range_value {
+                                headers.push(("x-goog-content-length-range", value));
+                            }
+                            let response = handle(&s, req("PUT", &path, &headers, &body));
+
+                            let label = format!("strict={strict} {url:?} {signed:?} {spelling:?} content_type={content_type} range={range}");
+                            let expected: Refusal = (|| {
+                                if url == Url::Expired {
+                                    return (400, "ExpiredToken", None);
+                                }
+                                if matches!(url, Url::Anonymous | Url::PartialNoSignature) && strict
+                                {
+                                    return (403, "AccessDenied", None);
+                                }
+                                if url == Url::V4NoSignature && strict {
+                                    return (400, "MissingSecurityHeader", None);
+                                }
+                                if let Some(refusal) = signed_header_verdict(
+                                    strict,
+                                    spelling,
+                                    content_type,
+                                    range != "absent",
+                                ) {
+                                    return refusal;
+                                }
+                                match range {
+                                    "too-large-body" => (400, "EntityTooLarge", None),
+                                    "too-small-body" => (400, "EntityTooSmall", None),
+                                    "malformed" => (400, "InvalidArgument", None),
+                                    _ => (200, "", None),
+                                }
+                            })();
+                            assert_refusal_matches(&label, &response, expected);
+                            let stored = handle(
+                                &s,
+                                req(
+                                    "GET",
+                                    &format!("/{BUCKET}/obj.png"),
+                                    &[("authorization", "Bearer owner")],
+                                    &[],
+                                ),
+                            );
+                            assert_eq!(
+                                stored.status == 200,
+                                expected.0 == 200,
+                                "{label}: written exactly when accepted"
+                            );
+                            checked += 1;
                         }
-                        let stored = handle(
-                            &s,
-                            req(
-                                "GET",
-                                &format!("/{BUCKET}/obj.png"),
-                                &[("authorization", "Bearer owner")],
-                                &[],
-                            ),
-                        );
-                        assert_eq!(
-                            stored.status == 200,
-                            expected.0 == 200,
-                            "{label}: written exactly when accepted"
-                        );
-                        checked += 1;
                     }
                 }
             }
         }
     }
-    // 12 URL and signed-header combinations, 10 content type and range combinations, 2 profiles.
-    assert_eq!(checked, 240);
+    // 36 URL, signed-header and spelling combinations, 10 content type and range combinations,
+    // 2 profiles.
+    assert_eq!(checked, 720);
 }
 
 #[test]

@@ -8,8 +8,10 @@
 //! refused here: an expired URL or policy, a URL signed for a lifetime Cloud Storage does not allow,
 //! a form with no policy, and a form that breaks a condition of its own policy.
 //!
-//! The XML API's answers were not recorded (STORAGE-OBJECT scope decision 3). The refusals follow
-//! Cloud Storage's documented XML error codes and are UNRECORDED.
+//! Production's answers to a signed XML PUT were recorded on 2026-11-03 (run sp-edf103d2, two
+//! recordings of 16 cases): the expired, malformed-header, missing-header and content-length-range
+//! refusals of a V4 URL follow those bodies. The refusals of the other XML routes (the form
+//! policy, a signed GET) follow Cloud Storage's documented XML error codes and are UNRECORDED.
 
 use std::collections::BTreeMap;
 
@@ -95,14 +97,30 @@ pub fn v4_signature_missing(params: &BTreeMap<String, String>) -> bool {
             .all(|needed| lower.iter().any(|k| k == needed))
 }
 
-/// The names in `X-Goog-SignedHeaders`, in the order the URL gives them, when the query has the
-/// parameter (any case).
+/// The names one `X-Goog-SignedHeaders` value lists, in the order the URL gives them.
+fn split_signed_headers(value: &str) -> Vec<String> {
+    value.split(';').map(str::to_owned).collect()
+}
+
+/// Every list the query gives under any spelling of `X-Goog-SignedHeaders`, in the byte order of
+/// the parameter names. The strict profile holds a request to all of them: a second spelling
+/// next to the canonical one must not hide a header the canonical list requires.
 #[must_use]
-pub fn signed_header_names(params: &BTreeMap<String, String>) -> Option<Vec<String>> {
+pub fn signed_header_lists(params: &BTreeMap<String, String>) -> Vec<Vec<String>> {
     params
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-goog-signedheaders"))
-        .map(|(_, v)| v.split(';').map(str::to_owned).collect())
+        .filter(|(k, _)| k.eq_ignore_ascii_case("x-goog-signedheaders"))
+        .map(|(_, v)| split_signed_headers(v))
+        .collect()
+}
+
+/// The list under the canonical spelling `X-Goog-SignedHeaders` only: what the emulator profile
+/// has always read, so a lowercase or mixed-case spelling stays ignored there.
+#[must_use]
+pub fn canonical_signed_header_list(params: &BTreeMap<String, String>) -> Option<Vec<String>> {
+    params
+        .get("X-Goog-SignedHeaders")
+        .map(|v| split_signed_headers(v))
 }
 
 /// The sentence production gives for an expired V4 URL: the end of the signed lifetime in UTC with
@@ -786,27 +804,59 @@ mod tests {
         );
     }
 
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
     #[test]
-    fn signed_header_names_keep_the_url_order_and_empty_segments() {
-        assert_eq!(signed_header_names(&params(&[])), None);
+    fn signed_header_lists_keep_the_url_order_and_empty_segments() {
+        assert!(signed_header_lists(&params(&[])).is_empty());
         assert_eq!(
-            signed_header_names(&params(&[(
+            signed_header_lists(&params(&[(
                 "X-Goog-SignedHeaders",
                 "content-type;host;x-goog-content-length-range"
             )])),
-            Some(vec![
-                "content-type".to_owned(),
-                "host".to_owned(),
-                "x-goog-content-length-range".to_owned()
-            ])
+            vec![names(&[
+                "content-type",
+                "host",
+                "x-goog-content-length-range"
+            ])]
         );
         assert_eq!(
-            signed_header_names(&params(&[("x-goog-signedheaders", "a;;b")])),
-            Some(vec!["a".to_owned(), String::new(), "b".to_owned()])
+            signed_header_lists(&params(&[("x-goog-signedheaders", "a;;b")])),
+            vec![names(&["a", "", "b"])]
         );
         assert_eq!(
-            signed_header_names(&params(&[("X-Goog-SignedHeaders", "")])),
-            Some(vec![String::new()])
+            signed_header_lists(&params(&[("X-Goog-SignedHeaders", "")])),
+            vec![names(&[""])]
         );
+    }
+
+    #[test]
+    fn every_spelling_of_the_parameter_gives_its_own_list_and_the_canonical_one_is_found_apart() {
+        let both = params(&[
+            ("X-Goog-SignedHeaders", "content-type;host"),
+            ("X-Goog-SIGNEDHEADERS", "host"),
+            ("x-goog-signedheaders", ""),
+            ("X-Goog-Date", "20260829T110000Z"),
+        ]);
+        // Byte order of the parameter names: the upper-case spelling, the canonical one, then the
+        // lowercase one.
+        assert_eq!(
+            signed_header_lists(&both),
+            vec![
+                names(&["host"]),
+                names(&["content-type", "host"]),
+                names(&[""])
+            ]
+        );
+        assert_eq!(
+            canonical_signed_header_list(&both),
+            Some(names(&["content-type", "host"]))
+        );
+        let lower = params(&[("x-goog-signedheaders", "host")]);
+        assert_eq!(canonical_signed_header_list(&lower), None);
+        assert_eq!(signed_header_lists(&lower), vec![names(&["host"])]);
+        assert_eq!(canonical_signed_header_list(&params(&[])), None);
     }
 }

@@ -7070,14 +7070,23 @@ fn malformed_header(reason: &str, header: &str) -> StorageResponse {
 
 /// The signed headers a V4 URL names must be in the request, and the range header must be among
 /// them when the URL names its signed headers (strict only for the second: recorded 2026-11-03).
+///
+/// Which lists count differs by profile on purpose. The emulator profile reads the canonical
+/// spelling `X-Goog-SignedHeaders` only, as it always did, so it refuses nothing it admitted
+/// before. The strict profile reads every spelling and holds the request to each list, so a second
+/// spelling cannot hide a requirement (Codex review 2026-11-04, M1 and M2).
 fn check_signed_headers(
     state: &StorageState,
     req: &StorageRequest,
     params: &BTreeMap<String, String>,
 ) -> Result<(), StorageResponse> {
-    use crate::storage_xml::signed_header_names;
-    let signed = signed_header_names(params);
-    for header in signed.iter().flatten() {
+    use crate::storage_xml::{canonical_signed_header_list, signed_header_lists};
+    let lists = if state.is_strict() {
+        signed_header_lists(params)
+    } else {
+        canonical_signed_header_list(params).into_iter().collect()
+    };
+    for header in lists.iter().flatten() {
         if header.is_empty() {
             return Err(xml_error(
                 400,
@@ -7097,7 +7106,7 @@ fn check_signed_headers(
     // emulator profile keeps accepting it: a local run has no signature to protect.
     if state.is_strict()
         && req.header("x-goog-content-length-range").is_some()
-        && signed.as_ref().is_some_and(|names| {
+        && lists.iter().any(|names| {
             !names
                 .iter()
                 .any(|n| n.eq_ignore_ascii_case("x-goog-content-length-range"))

@@ -72,7 +72,7 @@
         "outcome": "Independent CV14 final artifact review: candidate R6 suitable, conditional on mutation, current bindings and final CI."
       }
     ],
-    "note": "The final commit only records this approval and adds judgeCommit to the CV11 comparison evidence; the binary, comparisons and verdicts are those reviewed. S1 and S2 are tracked as issues (sdk-smoke-database-tests-not-in-ci.md, rtdb-cv09-long-polling-replay-test.md). The 2026-10-27 closing commit adds the CV08/CV10 review: R4 is decided, the scope wording of CV10 and the CHANGELOG is narrowed, the long-polling idle-close range is widened, and the pins are re-bound. The residual comparison is bound to its own release binary (7df56bd9..., build path .worktree/rtdb-residual); the older comparisons stay bound to f3cb6d17. S5 and CV14 source and capture reviews are accepted for candidate integration; final mutation, combined-tree CI and current binding gates remain pending before main integration and publication."
+    "note": "The record was refreshed on 2026-11-03 to the committed evidence; the parent remains IMPLEMENTING."
   },
   "scopeDecisions": [
     {
@@ -149,6 +149,16 @@
       "decidedBy": "owner",
       "decidedOn": "2026-10-31",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2076)"
+    },
+    {
+      "id": "R9",
+      "decision": "R2 (as amended by R4 to R7) is amended for the families recorded in production from 2026-10-28 to 2026-10-29 and replayed against fireemu in both profiles, for the recorded shapes only: REST POST of a child with a generated key, DELETE, shallow=true, print=silent on PUT and PATCH and writeSizeLimit=small (NEXT4), orderBy with equalTo/endAt/startAfter/endBefore, and the five REST .sv shapes (RTDB/rest-verbs-and-options); Rules cascade, .validate and data/newData/root snapshots, query-based Rules, the recorded Rules-language, method and operator cases and seven Rules identity cells (RTDB/rules-evaluation-finite); and the healing re-registration, nested-priority and string-priority onDisconnect shapes, which stay under RTDB/ondisconnect-prioritized-split (v035RecordedPriority). Every other shape R2 lists stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
+      "rationale": "These rows have replayed without a mismatch in the v0.34, v0.35 and v0.41 recorded revalidations, but R2, the contract and /outOfScope still called them unverified.",
+      "amends": "R2",
+      "status": "FROZEN",
+      "decidedBy": "project coordinator (delegated by the owner)",
+      "decidedOn": "2026-11-03",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (1915, 1936, 1938, 1948, 1956, 1963, 1988, 2118, 2206, 2217, 2218); docs.local/runs/rtdb-closure-4a/inventory.md (the frozen list of shapes that stay unobserved)"
     }
   ],
   "conditions": [
@@ -846,6 +856,241 @@
           "crates/fireemu-adapter-functions/tests/database_events.rs"
         ]
       }
+    },
+    {
+      "conditionId": "RTDB/rest-verbs-and-options",
+      "coverageLedgerRows": [
+        "RTDB-CV-01",
+        "RTDB-CV-02"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "NEXT4: POST of a child with a generated key and its readback, DELETE of that child and the absent readback, shallow=true GET of an object, print=silent PUT and PATCH (204), writeSizeLimit=small PUT, a PATCH anchor and the orderBy=\"h\"&startAt=2 anchor query, the round wipe and its empty readback; 18 requests x 2 rounds",
+        "query bounds: orderBy=\"h\" with equalTo=2, endAt=2, startAfter=2 and endBefore=2, with their seed, readback and anchor requests; 10 requests x 2 rounds",
+        "REST server values: PUT {\".sv\":\"timestamp\"}; PUT {\".sv\":{\"increment\":5}} on a numeric, an absent and a non-numeric node; one PATCH with two timestamps and one increment (one clock per write); 5 shapes x 2 rounds"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "capture": "NEXT4 production two rounds",
+            "rounds": 2,
+            "provenance": "source.journalSha256 of the fixture"
+          },
+          {
+            "capture": "query bounds",
+            "rounds": 2,
+            "provenance": "source.journalSha256 of the fixture"
+          },
+          {
+            "capture": "REST server values",
+            "rounds": 2,
+            "provenance": "source.rawSha256 of the fixture"
+          }
+        ],
+        "comparisons": [
+          {
+            "family": "next4",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rest-next4.json",
+            "fixtureSha256": "b8338fb535faf92acf60b8a404ca862b45119a039c02dc73de6e508b7471e93d",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-next4-v035-comparison.json",
+            "comparisonSha256": "b5bcee217f826c2af9f8a8b6452fb0f925a6b1d7e46019ff1d3ebb92a1c47db9",
+            "rowsPerProfile": 36,
+            "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+            "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+            "tool": "tools/sdk-smoke-database/rest-next4-replay.mjs"
+          },
+          {
+            "family": "query-bounds",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-query-bounds.json",
+            "fixtureSha256": "b7879a293bb911c0f7cf91f520d8771e0b9e7dd2831d9dbbd28fda020586b666",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-query-bounds-v035-comparison.json",
+            "comparisonSha256": "92916e4bcd6cb486d46656440c09dbacb6bed4581c8167789c9a8111df04e77e",
+            "rowsPerProfile": 20,
+            "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+            "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+            "tool": "tools/sdk-smoke-database/query-bounds-replay.mjs"
+          },
+          {
+            "family": "server-values",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rest-server-values.json",
+            "fixtureSha256": "b6469ac2ed18b478e89cdbe0d4141c494e461e6ebf6bf0aa86f1bf80792c1075",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
+            "comparisonSha256": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
+            "sideCampaign": "server-values",
+            "rowsPerProfile": 10,
+            "verdictSha256": {
+              "strict": "864f44a9b0635a3a98743685fed4bea372353d3fba4bda5815dca6bbf5a48fee",
+              "emulator": "2f8eb097b5b8fae26206114f99b817307bb70c5e86f948184519bbfa62964f8b"
+            },
+            "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+            "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+            "tool": "tools/sdk-smoke-database/rest-server-values-replay.mjs"
+          }
+        ],
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (1915 and 1938: NEXT4 36 and bounds 20 per profile; 1948: five REST server-value shapes; 2118: the v0.41 public replay)",
+        "tests": [
+          "tools/sdk-smoke-database/rest-next4-replay.test.mjs",
+          "tools/sdk-smoke-database/query-bounds-replay.test.mjs",
+          "tools/sdk-smoke-database/rest-server-values-replay.test.mjs",
+          "conformance/src/rtdb-v034-closure.test.mjs",
+          "conformance/src/rtdb-v035-closure.test.mjs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs"
+        ],
+        "scope": "Finite recorded shapes only: 36, 20 and 10 rows per profile, including their seed, readback and anchor requests. Other POST and push-ID forms, other print modes and writeSizeLimit values, timeout, .sv through POST and through .priority, and the other REST options of /outOfScope stay unobserved."
+      }
+    },
+    {
+      "conditionId": "RTDB/rules-evaluation-finite",
+      "coverageLedgerRows": [
+        "RTDB-CV-05"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "cascade: an ancestor .write grant over a child's false and a child's grant under an ancestor's false (both written); .validate of a number (allowed), a negative number (401) and a delete (allowed); a data/newData/root snapshot rule allowed, denied by newData and denied by root (401); each with its seed and readback, plus anchors; 28 requests x 2 rounds",
+        "query-based Rules `query.orderByChild == 'h' && query.limitToFirst <= 2`: orderBy=\"h\"&limitToFirst=2 allowed; limitToFirst=3, no limit and orderBy=\"$key\"&limitToFirst=2 denied (401); with seed, readback and anchors; 10 requests x 2 rounds",
+        "Rules language: 8 cases (timestamp valid and negative, auth.uid allow and deny, contains allow and deny, strict equality allow and deny) x 2 rounds",
+        "Rules methods: 29 cases (parent, exists, hasChild, hasChildren without and with a list, getPriority of a number, a string and null, isString, isBoolean, beginsWith, endsWith, replace, toLowerCase, toUpperCase, matches) x 2 rounds",
+        "Rules operators: 49 cases (!, ||, ?:, + on numbers, on strings and with a null input, -, *, /, %, unary -, <, >, !=, !==, the && and ?: short circuits, and the query.orderByKey, query.orderByValue, query.orderByPriority, query.limitToLast, query.startAt, query.endAt and query.equalTo predicates on REST queries) x 2 rounds",
+        "Rules identity: 7 cells (false and true loads, the load refusals of data == data, query == query and data != root with their texts, auth.uid and auth == auth); runtime results follow the official emulator 4.11.2 where production refuses the load (owner 2206)"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "capture": "Rules cascade, validate and snapshot",
+            "rounds": 2,
+            "provenance": "source.journalSha256 of the fixture"
+          },
+          {
+            "capture": "query Rules",
+            "rounds": 2,
+            "provenance": "source.journalSha256 of the fixture"
+          },
+          {
+            "capture": "Rules language",
+            "rounds": 2,
+            "provenance": "source.rawSha256 of the fixture"
+          },
+          {
+            "capture": "Rules methods",
+            "rounds": 2,
+            "provenance": "source.rawSha256 of the fixture"
+          },
+          {
+            "capture": "Rules operators",
+            "rounds": 2,
+            "provenance": "source.rawSha256 of the fixture"
+          },
+          {
+            "capture": "Rules identity",
+            "cells": 7,
+            "provenance": "provenance.sourceSha256 of the fixture"
+          }
+        ],
+        "comparisons": [
+          {
+            "family": "rules-validation",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rules-next.json",
+            "fixtureSha256": "418e858c681c557eaf9fcc9f4430901277edd537844ad80f6ba7a404ecdde149",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-rules-v035-comparison.json",
+            "comparisonSha256": "73aee352e66e0e02cc6f5bde2c0abdcd6787d8f711f49190724fd52a4981491e",
+            "rowsPerProfile": 56,
+            "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+            "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+            "tool": "tools/sdk-smoke-database/rest-rules-replay.mjs"
+          },
+          {
+            "family": "query-rules",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-query-rules.json",
+            "fixtureSha256": "49303fd8ed06c0cf872020697a9dbaa1aeb4e8f7c91aa80451266e23e6034025",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-query-rules-v035-comparison.json",
+            "comparisonSha256": "ac9c2c651aab691cc2b7fe089a048078991bdc4a2ee266a4d1484edc24490e70",
+            "rowsPerProfile": 20,
+            "sourceCommit": "8220a36ad88c136592551ebb94f358d6abe4d909",
+            "binarySha256": "d511dfc983d32d6e10ef00066c1c906884518c37b3ecd91c958952dda48c1d21",
+            "tool": "tools/sdk-smoke-database/query-rules-replay.mjs"
+          },
+          {
+            "family": "rules-language",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rules-language.json",
+            "fixtureSha256": "97eb20c715b556cdd7afeb017ad88f229be00e403e0b7821af76911365671569",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
+            "comparisonSha256": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
+            "sideCampaign": "rules-language",
+            "rowsPerProfile": 16,
+            "verdictSha256": {
+              "strict": "bea30c102f2284d102a03fd27508643743c58a57a990a5314a67ad9dc87ac97d",
+              "emulator": "18eabde0e202b5ab279466a63ead6e1d6d769560a47e8c536673e3fd7722cb10"
+            },
+            "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+            "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+            "tool": "tools/sdk-smoke-database/rules-language-replay.mjs"
+          },
+          {
+            "family": "rules-methods",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rules-methods.json",
+            "fixtureSha256": "49300dfac3fca6c4aab267f6e9ae5cdbf6038ac9de3eb699241ae5482d1efc45",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
+            "comparisonSha256": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
+            "sideCampaign": "rules-methods",
+            "rowsPerProfile": 58,
+            "verdictSha256": {
+              "strict": "39b2d4d3c736fc44a3cdd22a7a356effd40de1b433e5c1680879a308f734a39c",
+              "emulator": "f571eb5a3d101195a2a7130e6264df042476641f374bd2ee3abe3f2c1bb8c806"
+            },
+            "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+            "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+            "tool": "tools/sdk-smoke-database/rules-methods-replay.mjs"
+          },
+          {
+            "family": "rules-operators",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rules-operators.json",
+            "fixtureSha256": "7bd6558b8d2b7119f6c61cac78f266973c383533860a4405ac3640fadc6459c2",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
+            "comparisonSha256": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
+            "sideCampaign": "rules-operators",
+            "rowsPerProfile": 98,
+            "verdictSha256": {
+              "strict": "809c7e42e4898b77e0492956f7b66a15d46b619fef099da426b86524fafd7251",
+              "emulator": "224fc76a6009f290d9fcb320dcc4e35febcbcf792478acd2043f253af1a60c7c"
+            },
+            "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+            "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+            "tool": "tools/sdk-smoke-database/rules-operators-replay.mjs"
+          },
+          {
+            "family": "identity",
+            "fixturePath": "tools/sdk-smoke-database/fixtures/production-rules-identity.json",
+            "fixtureSha256": "166b52cb7241504a9a298fe6854ea6a9fdcb48b46d1c1a6707e8c6638a194cfb",
+            "comparisonPath": "spec/compatibility/closure/evidence/RTDB-v041-public-replay.json",
+            "comparisonSha256": "9946949597507f3780bdbcd9be1adeb94143a0048702b4469973d5bee707c516",
+            "sideCampaign": "identity",
+            "cellsPerProfile": 7,
+            "verdictSha256": {
+              "strict": "557230842459fe3b6cfec943b7ada525051e1aa3183da16296aeb1023f80544a",
+              "emulator": "557230842459fe3b6cfec943b7ada525051e1aa3183da16296aeb1023f80544a"
+            },
+            "sourceCommit": "264df6146bed33b85c23bb88b7c2de559f9f5f9f",
+            "binarySha256": "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
+            "tool": "tools/sdk-smoke-database/rules-identity-replay.mjs"
+          }
+        ],
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (1915 and 1938: Rules 56 and query Rules 20 per profile; 1956: Rules language; 1963: Rules methods; 1988: Rules operators; 2118: the v0.41 public replay; 2206: identity equality)",
+        "tests": [
+          "tools/sdk-smoke-database/rest-rules-replay.test.mjs",
+          "tools/sdk-smoke-database/query-rules-replay.test.mjs",
+          "tools/sdk-smoke-database/rules-language-replay.test.mjs",
+          "tools/sdk-smoke-database/rules-methods-replay.test.mjs",
+          "tools/sdk-smoke-database/rules-operators-replay.test.mjs",
+          "conformance/src/rtdb-v034-closure.test.mjs",
+          "conformance/src/rtdb-v035-closure.test.mjs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs"
+        ],
+        "scope": "Finite recorded Rules cases only, not complete Rules or query parity: auth.token claims, .indexOn refusal variants, other grammar, load texts and lexing stay unobserved (/outOfScope)."
+      }
     }
   ],
   "integratedRegression": {
@@ -1053,14 +1298,24 @@
     "triggerEventShapeEmulatorProfile": {
       "statement": "The emulator profile delivers an RTDB trigger event in the official emulator's shape, not production's: a UUID event id instead of the base64 of twenty bytes, the full-precision time (nine fraction digits) instead of three, the session's project instead of `_` in a 2nd gen `source`, `datacontenttype: application/json`, and authType admin or unauthenticated (with the matching 2nd gen `context.authType`) where production says unknown; it sends no `traceparent`. The strict profile matches production in all 72 rows. Compared on 28 deliveries of the 8 handlers over 9 writes (recorded 2026-10-27, CV14-RTDB-TRIGGERS-20261027-02).",
       "evidence": "spec/compatibility/closure/evidence/RTDB-functions-trigger-comparison.json"
+    },
+    "rootWriteListenOrder": {
+      "statement": "Official-emulator-only difference with no production answer: a write that covers several of a connection's per-path listens below it (recorded as an onDisconnect value at /k fired when the writer disconnects, with the observer listening at /k/s, /k/t, /k/u, /k/v and /k/s/n and not at /k) reaches the observer in depth order on fireemu (s, t, u, v, s/n) and in path-text order on the official emulator 4.11.2 (s, s/n, t, u, v). Production was not observed for this shape; it is registered as a known difference and not changed.",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2218 D2)",
+      "issue": "docs.local/issues/open/rtdb-root-write-hears-covered-listens-in-a-different-order-than-the-official-emulator.md"
+    },
+    "bodyKey768Bytes": {
+      "statement": "Official-emulator-only difference with no production answer: a key of 768 bytes in a write's JSON body is accepted by fireemu and refused with 400 by the official emulator 4.11.2 (which accepts the same key in the URL path, as fireemu does). Production documents keys of up to 768 bytes but was not observed for this shape; the emulator profile refuses less than the official emulator here, and the difference is registered as a known difference and not changed.",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2218 D2)",
+      "issue": "docs.local/issues/open/rtdb-body-key-768-bytes.md"
     }
   },
   "knownGaps": {
     "cv09LongPollingCells": {
-      "statement": "The committed CV09 test replays the WebSocket rows. The long-polling cells r1_lp and r2_lp carry the same request bodies inside long-polling envelopes; they were matched cell by cell only by the private local CAS harness on source 72f67f1f (binary 8509f53a), which is not rerun on the closure binary."
+      "statement": "The committed CV09 test replays the WebSocket rows. The long-polling cells r1_lp and r2_lp carry the same request bodies inside long-polling envelopes; they were matched cell by cell only by the private local CAS harness on source 72f67f1f (binary 8509f53a), which is not rerun on the closure binary. Owner decision 2218 (D3): the Mac controls CV03, CV09 and CV12 are not re-run for this closure and stay bound to the older binaries named here."
     },
     "browserRunsOnOlderBinaries": {
-      "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit."
+      "statement": "The browser runs of the Rules coverage view (attempt 7 on 51a089e2) and of the UI database view (fb6faccc5, rebound on df744e06) were not rerun on the closure binary; the committed nextest and ui unit tests of both surfaces pass on the closure commit. Owner decision 2218 (D3): the Mac controls CV03, CV09 and CV12 are not re-run for this closure and stay bound to the older binaries named here."
     },
     "prioritizedSplitBeyondTheRecordedShape": {
       "statement": "Beyond the earlier recorded S5 shape and the three named v0.35 recorded priority shapes (heal-reregister, nested-priority and string-priority), onDisconnect priority behavior remains unverified in production."
@@ -1073,12 +1328,14 @@
     }
   },
   "outOfScope": [
-    "UNVERIFIED REST POST/push ids, DELETE, server values, shallow, print=silent, equalTo/endAt/startAfter/endBefore, $priority ordering, timeout, writeSizeLimit",
-    "UNVERIFIED Security Rules .validate, cascading, data/newData/root, query-based rules, auth.token claims, .indexOn enforcement texts beyond the recorded query",
-    "UNVERIFIED SDK child events and queries beyond the two recorded orderByChild windows, update/push and multi-location updates beyond the recorded merge and onDisconnect update, SDK server values beyond the onDisconnect update",
-    "ID token expiry, tampered signatures, revocation, tenants, wrong-project tokens",
-    "latency, throughput, quotas, billing, instance management",
-    "Android, Apple, Unity, Java and Python SDKs",
-    "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (an end user's write context, wildcard and ancestor-write fanout, latency, redelivery): see /knownGaps/triggerUserAuthContext and /knownGaps/triggerBreadth"
+    "UNVERIFIED SDK events and queries (inventory G6): orderByKey and orderByPriority windows with limitToFirst/limitToLast and their child_added/changed/removed/moved events with prevName, setPriority and setWithPriority moving a child across a window edge, orderByValue startAt/endAt range listeners, orderByChild equalTo listeners, compound cursors startAt(value, key) and endAt(value, key) with tied values, the callback order of a parent and a child listener on one multi-path update, transaction variants beyond the recorded CV09 schedule (a transaction on an absent node, an abort, a transaction on an object, the applyLocally event order), and once/get on a window and on a missing path; the one-shot gets of the small SDK observer and the two orderByChild windows of RTDB/sdk-reconnect-and-query-order are the only recorded SDK queries",
+    "UNVERIFIED Node Admin SDK over WebSocket (inventory G13): admin get, set, update, push, transaction, remove and value and child_added listeners under Rules that deny everything; only official-emulator smokes exist (tools/sdk-smoke-database)",
+    "UNVERIFIED REST options (inventory G7): timeout; writeSizeLimit tiny, medium, large, unlimited and numeric or invalid values (only small is recorded); print=pretty and an invalid print value; POST at the root and POST of a scalar, of an object with .priority and of null, and other push-ID forms; .sv through POST and through .priority; orderBy=\"$priority\", \"$key\" and \"$value\" outside the Rules-gated queries of the recorded operators cases, and orderBy=\"$key\" with 32-bit integer keys; limitToFirst/limitToLast alone or with shallow, and orderBy with shallow=true; format=export with a window; if-none-match and the Mixing refusal; X-HTTP-Method-Override; callback= JSONP names; download=; a PATCH of a priority on an emptied node; a malformed % escape; the SSE patch event of an ancestor PATCH; .settings/rules.json GET and PUT",
+    "UNVERIFIED Security Rules beyond the recorded cases (inventory G8): auth.token custom claims and auth.token.firebase.sign_in_provider; .indexOn refusal variants (several keys, .value, .key, orderBy on a non-indexed child with and without limitToFirst, nested paths); cascade grammar beyond the recorded cases ($var wildcards with a parent .validate, .validate on deleted nodes, newData.hasChildren after a multi-path update, root.child cross-path reads, now in .write); query members beyond the recorded query-Rules and operators cases; numeric string concatenation (Java Double.toString); syntax-error and multi-diagnostic load texts beyond the 8 recorded regular expressions and the 3 recorded identity refusals; lexing of U+0085, U+FEFF and other Cf characters, a+? and /a|q/; the read a conditional write needs, a .priority write judged at the node, and a rejected WebSocket auth falling back to anonymous",
+    "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (inventory G9): an end user's write context (1st gen context.auth, 2nd gen authType/authId), wildcard instances, nested wildcard patterns, an ancestor write fanning out to several children, multi-path updates, web SDK writes, redelivery after a failed invocation and its timing, ordering across handlers and delivery latency: see /knownGaps/triggerUserAuthContext and /knownGaps/triggerBreadth",
+    "UNVERIFIED token edge cases (inventory G10): REST auth= with a tampered signature, a wrong-project token, alg:none and an expired token; the REST Bearer/access_token and invalid-auth refusal texts; the WebSocket auth texts \"Could not parse auth token.\" and invalid_token; an unsigned token without aud; revocation and tenants stay with the AUTH parents",
+    "UNVERIFIED official-emulator behaviour copied without a recording (inventory G17, design memo items 33 to 38): the items named above; item 36 (the regular-expression limits) is recorded by the 48 M14 loads, and item 38 is /knownDifferences/bodyKey768Bytes",
+    "by decision: latency, throughput, quotas, billing, multi-region and instance management (not behaviour parity)",
+    "by decision: Android, Apple, Unity, Java and Python SDKs (owner 1471 Q8: a later separate parent)"
   ]
 }

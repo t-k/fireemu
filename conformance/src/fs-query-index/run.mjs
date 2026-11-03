@@ -1163,12 +1163,10 @@ async function check() {
     console.log(`covered by a recorded decision: ${JSON.stringify(byDecision)}`);
   }
   console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
-  const rowsFail = coverage
-    ? coverage.uncovered.length > 0 || coverage.missing.length > 0
-    : !rows.every((r) => passing.has(r.status));
-  if (rowsFail || orphans.length || local.failures.length) {
-    process.exitCode = 1;
-  }
+  const failed = coverageTools
+    ? coverageTools.laneFails({ coverage, rows, passing, orphans, failures: local.failures })
+    : !rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length;
+  if (failed) process.exitCode = 1;
 }
 
 /** The paths where two recordings differ. */

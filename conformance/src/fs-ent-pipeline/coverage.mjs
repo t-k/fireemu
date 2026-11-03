@@ -166,3 +166,15 @@ export function judgeCoverage(rows, passing, cover, table = COVERAGE) {
   const missing = [...table.keys()].filter((row) => !present.has(row));
   return { covered, uncovered, missing };
 }
+
+/**
+ * Whether the lane's check fails: an uncovered row or a table row the corpus lost (with
+ * coverage), any row that is not passing (without it), a fixture program the corpus lost, or a
+ * failure of the local run.
+ */
+export function laneFails({ coverage, rows, passing, orphans, failures }) {
+  const rowsFail = coverage
+    ? coverage.uncovered.length > 0 || coverage.missing.length > 0
+    : !rows.every((row) => passing.has(row.status));
+  return rowsFail || orphans.length > 0 || failures.length > 0;
+}

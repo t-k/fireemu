@@ -5,7 +5,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { COVERAGE, CLOCK_ROW, coveredBy, judgeCoverage } from "./fs-ent-pipeline/coverage.mjs";
+import {
+  COVERAGE,
+  CLOCK_ROW,
+  coveredBy,
+  judgeCoverage,
+  laneFails,
+} from "./fs-ent-pipeline/coverage.mjs";
 import { PROGRAMS } from "./fs-ent-pipeline/corpus.mjs";
 
 const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
@@ -326,4 +332,40 @@ test("the lane judges coverage: an uncovered row, a lost row or a refused answer
     ),
     { covered: [], uncovered: [], missing: [] },
   );
+});
+
+test("the lane fails on an uncovered row, a lost table row, a lost program or a failed run", () => {
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  const rows = [
+    { row: "a", status: "MISMATCH" },
+    { row: "b", status: "MATCH" },
+  ];
+  const clean = { covered: [{ row: "a" }], uncovered: [], missing: [] };
+  const run = (change) =>
+    laneFails({ coverage: clean, rows, passing, orphans: [], failures: [], ...change });
+  assert.equal(run({}), false);
+  assert.equal(run({ coverage: { ...clean, uncovered: [{ row: "x" }] } }), true);
+  assert.equal(run({ coverage: { ...clean, missing: ["y"] } }), true);
+  assert.equal(run({ orphans: ["program"] }), true);
+  assert.equal(run({ failures: ["session"] }), true);
+  // Without coverage (the emulator-profile run) every row that is not passing fails.
+  assert.equal(run({ coverage: undefined }), true);
+  assert.equal(run({ coverage: undefined, rows: [rows[1]] }), false);
+});
+
+test("a recorded failure that is not the recorder's client failure is not covered", () => {
+  for (const row of NESTING) {
+    const [, stepId] = split(row);
+    const probe = input(row, {
+      status: "UNKNOWN",
+      local: (steps) => {
+        steps[stepId] = { ...clone(FIXTURE["fs-ent-pipeline/o8a/nesting-main"].steps[stepId]) };
+        delete steps[stepId].unknown;
+        steps[stepId].code = 3;
+      },
+    });
+    // Both sides report code 3 although the recorded row is the client failure (code 13).
+    probe.saved.steps[stepId].code = 3;
+    rejected(coveredBy(probe));
+  }
 });

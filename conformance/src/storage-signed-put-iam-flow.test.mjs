@@ -739,6 +739,7 @@ describe("signer access: A2 and the standalone removal", () => {
       out,
       preflight,
       plan,
+      roleCreate: "created",
     });
     assert.equal(report.clean, true, JSON.stringify(report));
     assert.equal(unchanged(run.world), true);
@@ -754,6 +755,7 @@ describe("signer access: A2 and the standalone removal", () => {
       out: memoryOut(),
       preflight,
       plan,
+      roleCreate: "created",
     });
     assert.equal(again.clean, true, "removing twice changes nothing more");
     const a2 = await readbackIam({
@@ -783,6 +785,7 @@ describe("signer access: A2 and the standalone removal", () => {
         out: memoryOut(),
         preflight,
         plan,
+        roleCreate: "created",
       });
       assert.equal(report.clean, false, String(status));
       assert.ok(report.error || report.unknownRequests.length, String(status));
@@ -1007,6 +1010,7 @@ describe("signer access: A2 and standalone removal, more paths", () => {
       out,
       preflight,
       plan,
+      roleCreate: "created",
     });
     assert.deepEqual(out.saved.get("iam-remove.json"), report);
     assert.equal(report.clean, true);
@@ -1021,6 +1025,7 @@ describe("signer access: A2 and standalone removal, more paths", () => {
       out: memoryOut(),
       preflight: other.out.saved.get("iam-preflight.json"),
       plan: other.out.saved.get("iam-grant-plan.json"),
+      roleCreate: "created",
     });
     assert.deepEqual(
       [extra.policyEqualsPreflight, extra.bindingPresent, extra.roleDeleted, extra.clean],
@@ -1043,6 +1048,7 @@ describe("signer access: A2 and standalone removal, more paths", () => {
       out: memoryOut(),
       preflight: third.out.saved.get("iam-preflight.json"),
       plan: third.out.saved.get("iam-grant-plan.json"),
+      roleCreate: "created",
     });
     assert.deepEqual([kept.bindingPresent, kept.roleDeleted, kept.clean], [true, null, false]);
   });

@@ -13,6 +13,7 @@ mod trusted_temp;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -84,7 +85,11 @@ fn http(port: u16, method: &str, path: &str, body: &Value) -> (u16, Value) {
 
 struct Daemon {
     child: Child,
+    /// Every line the daemon has written to standard output so far, in order, appended by a
+    /// reader thread as whole lines.
     stdout: Arc<Mutex<String>>,
+    /// Set by the reader thread once standard output reached end of file.
+    stdout_closed: Arc<AtomicBool>,
     hub_port: u16,
     /// The project the daemon's Hub locator is named after.
     project: String,
@@ -140,11 +145,13 @@ impl Daemon {
         let daemon = Self {
             child,
             stdout: Arc::new(Mutex::new(String::new())),
+            stdout_closed: Arc::new(AtomicBool::new(false)),
             hub_port,
             project: format!("demo-{name}"),
             _dir: dir,
         };
         let collected = Arc::clone(&daemon.stdout);
+        let closed = Arc::clone(&daemon.stdout_closed);
         let (tx, rx) = mpsc::channel::<()>();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -152,6 +159,7 @@ impl Daemon {
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    closed.store(true, Ordering::SeqCst);
                     return;
                 }
                 collected.lock().unwrap().push_str(&line);
@@ -182,16 +190,42 @@ impl Daemon {
         u16::try_from(emulators["auth"]["port"].as_u64().unwrap()).unwrap()
     }
 
-    /// Standard output so far, once `needle` has appeared or two seconds passed.
-    fn stdout_after(&self, needle: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(2);
+    /// Standard output so far, once `needle` has appeared in it. Standard output is one
+    /// ordered pipe read line by line, so everything the daemon printed before the line holding
+    /// `needle` is in the returned text too. Fails with the captured output after
+    /// [`OUTPUT_DEADLINE`], so a line that never comes is reported instead of hanging.
+    fn stdout_through(&self, needle: &str) -> String {
+        let deadline = Instant::now() + OUTPUT_DEADLINE;
         loop {
             let text = self.stdout.lock().unwrap().clone();
-            if text.contains(needle) || Instant::now() > deadline {
+            if text.contains(needle) {
                 return text;
             }
+            assert!(
+                Instant::now() < deadline,
+                "the daemon did not print {needle:?} within {OUTPUT_DEADLINE:?}; standard output so far:\n{text}"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Everything the daemon printed to standard output in its whole life: stops it with
+    /// SIGTERM and waits until its standard output reaches end of file. Used where nothing
+    /// may be printed, so there is no line to wait for. Fails with the captured output after
+    /// [`OUTPUT_DEADLINE`].
+    fn stdout_at_exit(&self) -> String {
+        let pid = rustix::process::Pid::from_child(&self.child);
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("SIGTERM is sent");
+        let deadline = Instant::now() + OUTPUT_DEADLINE;
+        while !self.stdout_closed.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "the daemon's standard output did not close within {OUTPUT_DEADLINE:?} of SIGTERM; standard output so far:\n{}",
+                self.stdout.lock().unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.stdout.lock().unwrap().clone()
     }
 }
 
@@ -203,11 +237,25 @@ impl Drop for Daemon {
     }
 }
 
+/// How long a test waits for the daemon's standard output to show what it waits for.
+const OUTPUT_DEADLINE: Duration = Duration::from_secs(30);
+
 const V1: &str = "/identitytoolkit.googleapis.com/v1";
 
+/// Asks the Auth emulator for an SMS sign-in code for `phone_number`.
+fn send_sms_code(port: u16, phone_number: &str) {
+    let (status, sent) = http(
+        port,
+        "POST",
+        &format!("{V1}/accounts:sendVerificationCode?key=fake-api-key"),
+        &json!({"phoneNumber": phone_number, "recaptchaToken": "x"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+}
+
 /// Signs one account up, asks for an email verification link and a phone code, and reports
-/// the daemon's standard output together with the code the inspection routes hold.
-fn issue(daemon: &Daemon, project: &str) -> (String, String, String) {
+/// the codes the inspection routes hold.
+fn issue(daemon: &Daemon, project: &str) -> (String, String) {
     let port = daemon.auth_port();
     let (status, user) = http(
         port,
@@ -223,13 +271,7 @@ fn issue(daemon: &Daemon, project: &str) -> (String, String, String) {
         &json!({"requestType": "VERIFY_EMAIL", "idToken": user["idToken"]}),
     );
     assert_eq!(status, 200, "{sent}");
-    let (status, sent) = http(
-        port,
-        "POST",
-        &format!("{V1}/accounts:sendVerificationCode?key=fake-api-key"),
-        &json!({"phoneNumber": "+15550001", "recaptchaToken": "x"}),
-    );
-    assert_eq!(status, 200, "{sent}");
+    send_sms_code(port, "+15550001");
     let (_, oob) = http(
         port,
         "GET",
@@ -247,15 +289,16 @@ fn issue(daemon: &Daemon, project: &str) -> (String, String, String) {
         .as_str()
         .unwrap()
         .to_owned();
-    let text = daemon.stdout_after(&sms_code);
-    (text, oob_code, sms_code)
+    (oob_code, sms_code)
 }
 
 #[test]
 fn action_links_and_sms_codes_are_printed_once_like_the_official_emulator() {
     let daemon = Daemon::start("default", &json!({}), "info");
     let port = daemon.auth_port();
-    let (text, oob_code, sms_code) = issue(&daemon, "demo-default");
+    let (oob_code, sms_code) = issue(&daemon, "demo-default");
+    let sms = format!("  auth: To verify the phone number +15550001, use the code {sms_code}.\n");
+    let text = daemon.stdout_through(&sms);
     assert!(
         text.contains("  auth codes:       email action links and SMS codes are printed here"),
         "the banner says what is printed:\n{text}"
@@ -264,24 +307,35 @@ fn action_links_and_sms_codes_are_printed_once_like_the_official_emulator() {
         "  auth: To verify the email address codes@example.com, follow this link: http://127.0.0.1:{port}/emulator/action?mode=verifyEmail&lang=en&oobCode={oob_code}&apiKey=fake-api-key\n"
     );
     assert_eq!(text.matches(&link).count(), 1, "{text}");
-    let sms = format!("  auth: To verify the phone number +15550001, use the code {sms_code}.\n");
     assert_eq!(text.matches(&sms).count(), 1, "{text}");
-    // Reading the inspection routes again prints nothing more.
-    let _ = http(
-        port,
-        "GET",
-        "/emulator/v1/projects/demo-default/oobCodes",
-        &Value::Null,
-    );
-    std::thread::sleep(Duration::from_millis(200));
-    let again = daemon.stdout.lock().unwrap().clone();
-    assert_eq!(again.matches("  auth: To ").count(), 2, "{again}");
+    // Reading the inspection routes again prints nothing more. A code for another number is
+    // issued afterwards as a sentinel: once its line is on standard output, anything the
+    // daemon printed for the earlier requests (a repeated link or code included) is there too,
+    // so the counts below see it without depending on how long the daemon takes to write.
+    for kind in ["oobCodes", "verificationCodes"] {
+        let (status, codes) = http(
+            port,
+            "GET",
+            &format!("/emulator/v1/projects/demo-default/{kind}"),
+            &Value::Null,
+        );
+        assert_eq!(status, 200, "{codes}");
+    }
+    send_sms_code(port, "+15550002");
+    let again =
+        daemon.stdout_through("  auth: To verify the phone number +15550002, use the code ");
+    assert_eq!(again.matches(&link).count(), 1, "{again}");
+    assert_eq!(again.matches(&sms).count(), 1, "{again}");
+    assert_eq!(again.matches("  auth: To ").count(), 3, "{again}");
 }
 
 #[test]
 fn action_code_logging_can_be_switched_off_and_is_quiet_under_quiet_verbosity() {
     let off = Daemon::start("off", &json!({"logActionCodes": false}), "info");
-    let (text, oob_code, sms_code) = issue(&off, "demo-off");
+    let (oob_code, sms_code) = issue(&off, "demo-off");
+    // Nothing should be printed, so there is no line to wait for: the whole output is read
+    // once the daemon has exited and its standard output is closed.
+    let text = off.stdout_at_exit();
     assert!(
         text.contains("  auth codes:       not printed (auth.logActionCodes = false)"),
         "{text}"
@@ -292,7 +346,8 @@ fn action_code_logging_can_be_switched_off_and_is_quiet_under_quiet_verbosity() 
     drop(off);
 
     let quiet = Daemon::start("quiet", &json!({}), "quiet");
-    let (text, oob_code, sms_code) = issue(&quiet, "demo-quiet");
+    let (oob_code, sms_code) = issue(&quiet, "demo-quiet");
+    let text = quiet.stdout_at_exit();
     assert!(!text.contains(&oob_code), "{text}");
     assert!(!text.contains(&sms_code), "{text}");
     assert!(!text.contains("auth: To "), "{text}");

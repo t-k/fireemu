@@ -1,0 +1,3255 @@
+{
+  "kind": "fs-ent-pipeline-divergence-content-v1",
+  "artifactSha256": "2600663baf06bf9bb0321ef578ea2517259bf84bf4dd5c0cbeef4872a2b352b3",
+  "fixtureSha256": "8312d30849afcd19f06125ee5fdb2b05afa96a185efbc2982c982b44a663a27b",
+  "runWindow": {
+    "startedMs": 1793682948673,
+    "finishedMs": 1793682950005
+  },
+  "covered": [
+    {
+      "row": "fs-ent-pipeline/o6/sort-kinds-cross#v-desc",
+      "decision": "2114",
+      "rule": "o6-tie",
+      "proof": "ORDERED_TYPED_NULL_ABSENT_TIE_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o6/sort-ties#g-asc-limit2",
+      "decision": "2114",
+      "rule": "o6-tie",
+      "proof": "LEGAL_UNORDERED_SELECTION"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-all",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-count-all",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#grouped-sum",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#doubles-grouped",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-limit",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-none-one-select",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit",
+      "decision": "2214",
+      "rule": "o7-groups",
+      "proof": "LEGAL_UNORDERED_SELECTION"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-one-none",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit",
+      "decision": "2214",
+      "rule": "o7-groups",
+      "proof": "LEGAL_UNORDERED_SELECTION"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset",
+      "decision": "2214",
+      "rule": "o7-groups",
+      "proof": "LEGAL_UNORDERED_SELECTION"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-kinds#group-by-v",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-kinds#group-by-v-over-w",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-count-only",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-h-g",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h-n",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-nested",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-expression",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-document-id",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#by-name",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o7/aggregate-group-keys#alias-is-field",
+      "decision": "2211",
+      "rule": "o7-groups",
+      "proof": "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"
+    },
+    {
+      "row": "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc",
+      "decision": "nesting-observation",
+      "rule": "later-observation",
+      "proof": "RECORDED_CLIENT_FAILURE_WITH_LATER_OBSERVATION"
+    },
+    {
+      "row": "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc",
+      "decision": "nesting-observation",
+      "rule": "later-observation",
+      "proof": "RECORDED_CLIENT_FAILURE_WITH_LATER_OBSERVATION"
+    },
+    {
+      "row": "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now",
+      "decision": "2211",
+      "rule": "clock-value",
+      "proof": "CLOCK_DEPENDENT_VALUE_ONLY"
+    }
+  ],
+  "steps": {
+    "fs-ent-pipeline/o7/aggregate-basic#grouped-all": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 3
+                },
+                "c": {
+                  "integerValue": "2"
+                },
+                "d": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "mn": {
+                  "integerValue": "2"
+                },
+                "mx": {
+                  "integerValue": "4"
+                },
+                "n": {
+                  "integerValue": "2"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 3
+                },
+                "c": {
+                  "integerValue": "3"
+                },
+                "d": {
+                  "integerValue": "3"
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "mn": {
+                  "integerValue": "1"
+                },
+                "mx": {
+                  "integerValue": "5"
+                },
+                "n": {
+                  "integerValue": "3"
+                },
+                "s": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 6
+                },
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "c"
+                },
+                "mn": {
+                  "integerValue": "6"
+                },
+                "mx": {
+                  "integerValue": "6"
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#grouped-count-all": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "b"
+                },
+                "n": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "a"
+                },
+                "n": {
+                  "integerValue": "3"
+                }
+              }
+            },
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "c"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#grouped-sum": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            },
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            {
+              "fields": {
+                "g": {
+                  "stringValue": "c"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#doubles-grouped": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 2.5
+                },
+                "c": {
+                  "integerValue": "2"
+                },
+                "d": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "mn": {
+                  "doubleValue": 1.5
+                },
+                "mx": {
+                  "doubleValue": 3.5
+                },
+                "n": {
+                  "integerValue": "2"
+                },
+                "s": {
+                  "doubleValue": 5
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 2.5
+                },
+                "c": {
+                  "integerValue": "3"
+                },
+                "d": {
+                  "integerValue": "3"
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "mn": {
+                  "doubleValue": 0.5
+                },
+                "mx": {
+                  "doubleValue": 4.5
+                },
+                "n": {
+                  "integerValue": "3"
+                },
+                "s": {
+                  "doubleValue": 7.5
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 5.5
+                },
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "c"
+                },
+                "mn": {
+                  "doubleValue": 5.5
+                },
+                "mx": {
+                  "doubleValue": 5.5
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "doubleValue": 5.5
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-limit-one-limit": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-where-two-sort": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 3.5
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 4.5
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "5"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 2.5
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "3"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 5.5
+                },
+                "g": {
+                  "stringValue": "c"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-none-one-select": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "3"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-where-one-none": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "8"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "c"
+                },
+                "s": {
+                  "integerValue": "6"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-kinds#group-by-v": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "k": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ak/d01"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "stringValue": "a"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "integerValue": "-1"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "timestampValue": "2020-01-01T00:00:00Z"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "doubleValue": "NaN"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "bytesValue": "AQ=="
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "doubleValue": 0.5
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "booleanValue": false
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "geoPointValue": {
+                    "latitude": 1,
+                    "longitude": 2
+                  }
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "booleanValue": true
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "k": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-kinds#group-by-v-over-w": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "a": {
+                  "doubleValue": 1
+                },
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "integerValue": "1"
+                },
+                "k": {
+                  "nullValue": null
+                },
+                "mn": {
+                  "integerValue": "1"
+                },
+                "mx": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "2"
+                },
+                "s": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ak/d01"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "stringValue": "a"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "integerValue": "-1"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "timestampValue": "2020-01-01T00:00:00Z"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "doubleValue": "NaN"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "bytesValue": "AQ=="
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "doubleValue": 0.5
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "booleanValue": false
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "geoPointValue": {
+                    "latitude": 1,
+                    "longitude": 2
+                  }
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "booleanValue": true
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "a": {
+                  "nullValue": null
+                },
+                "c": {
+                  "integerValue": "0"
+                },
+                "d": {
+                  "integerValue": "0"
+                },
+                "k": {
+                  "integerValue": "2"
+                },
+                "mn": {
+                  "nullValue": null
+                },
+                "mx": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "nullValue": null
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-g": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "s": {
+                  "integerValue": "29"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": 0
+                },
+                "s": {
+                  "integerValue": "21"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                },
+                "s": {
+                  "integerValue": "17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "4"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "44"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "s": {
+                  "integerValue": "3"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "booleanValue": true
+                },
+                "s": {
+                  "integerValue": "16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "s": {
+                  "integerValue": "25"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "y"
+                },
+                "s": {
+                  "integerValue": "3"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-g-count-only": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": 0
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "4"
+                },
+                "g": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "x"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "booleanValue": true
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "y"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "29"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": 0
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "21"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "35"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "integerValue": "1"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "2"
+                },
+                "s": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "booleanValue": true
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "25"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "y"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "3"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-h-g": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "29"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": 0
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "21"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "35"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "integerValue": "1"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "2"
+                },
+                "s": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "booleanValue": true
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "25"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "y"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "3"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-g-h-n": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "15"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "doubleValue": 0
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "11"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "9"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "5"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "doubleValue": "NaN"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "8"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "doubleValue": "-0"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "10"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "14"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "18"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "integerValue": "1"
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "6"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "x"
+                },
+                "h": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "booleanValue": true
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "12"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "nullValue": null
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "y"
+                },
+                "h": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "3"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "doubleValue": 1
+                },
+                "h": {
+                  "nullValue": null
+                },
+                "n": {
+                  "integerValue": "7"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-nested": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "16"
+                },
+                "k": {
+                  "nullValue": null
+                },
+                "s": {
+                  "integerValue": "136"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "k": {
+                  "integerValue": "1"
+                },
+                "s": {
+                  "integerValue": "35"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-expression": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "17"
+                },
+                "e": {
+                  "booleanValue": false
+                },
+                "s": {
+                  "integerValue": "169"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "e": {
+                  "booleanValue": true
+                },
+                "s": {
+                  "integerValue": "2"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-document-id": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g15"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g11"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g09"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g05"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g01"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g08"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g04"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g10"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g14"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g18"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g06"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g02"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g12"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g03"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "id": {
+                  "stringValue": "g07"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#by-name": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g15"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g11"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g09"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g05"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g01"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g08"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g04"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g10"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g14"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g18"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g06"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g02"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g16"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g12"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g13"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g17"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g03"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "name": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/ag/g07"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-group-keys#alias-is-field": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "doubleValue": 0
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "doubleValue": "NaN"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "4"
+                },
+                "n": {
+                  "nullValue": null
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "stringValue": "x"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "booleanValue": true
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "stringValue": "y"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "2"
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "8"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#around-where-two-limit": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 3.5
+                },
+                "g": {
+                  "stringValue": "b"
+                },
+                "s": {
+                  "integerValue": "4"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "d": {
+                  "doubleValue": 4.5
+                },
+                "g": {
+                  "stringValue": "a"
+                },
+                "s": {
+                  "integerValue": "5"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o7/aggregate-basic#aggregate-then-offset": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "3"
+                },
+                "g": {
+                  "stringValue": "a"
+                }
+              }
+            },
+            {
+              "fields": {
+                "c": {
+                  "integerValue": "1"
+                },
+                "g": {
+                  "stringValue": "c"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o6/sort-kinds-cross#v-desc": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "mapValue": {
+                    "fields": {
+                      "a": {
+                        "integerValue": "1"
+                      }
+                    }
+                  }
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d14",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t3>",
+              "fields": {
+                "v": {
+                  "mapValue": {
+                    "fields": {
+                      "__type__": {
+                        "stringValue": "__vector__"
+                      },
+                      "value": {
+                        "arrayValue": {
+                          "values": [
+                            {
+                              "doubleValue": 1
+                            },
+                            {
+                              "doubleValue": 2
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d16",
+              "updateTime": "<t3>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "arrayValue": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d13",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "geoPointValue": {
+                    "latitude": 1,
+                    "longitude": 2
+                  }
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d12",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "referenceValue": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d01"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d11",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "bytesValue": "AQ=="
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d10",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "stringValue": "a"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d09",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "timestampValue": "2020-01-01T00:00:00Z"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d08",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "integerValue": "2"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d07",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "doubleValue": 0.5
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d06",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "integerValue": "-1"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d05",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "doubleValue": "NaN"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d04",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "booleanValue": true
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d03",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "booleanValue": false
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d02",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "w": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d15",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "v": {
+                  "nullValue": null
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/sk/d01",
+              "updateTime": "<t2>"
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o6/sort-kinds-cross#seed-vector": {
+      "status": 200,
+      "body": {
+        "commitTime": "<t1>",
+        "writeResults": [
+          {
+            "updateTime": "<t1>"
+          }
+        ]
+      }
+    },
+    "fs-ent-pipeline/o6/sort-ties#g-asc-limit2": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "0"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t1",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "2"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t3",
+              "updateTime": "<t2>"
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o6/sort-ties#g-asc": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "0"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t1",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "2"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t3",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "1"
+                },
+                "n": {
+                  "integerValue": "1"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t6",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "3"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t8",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "4"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t5",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "2"
+                },
+                "n": {
+                  "integerValue": "5"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t2",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "3"
+                },
+                "n": {
+                  "integerValue": "7"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t4",
+              "updateTime": "<t2>"
+            },
+            {
+              "createTime": "<t2>",
+              "fields": {
+                "g": {
+                  "integerValue": "3"
+                },
+                "n": {
+                  "integerValue": "6"
+                }
+              },
+              "name": "projects/demo-fs-query-index/databases/entpipe1/documents/ti/t7",
+              "updateTime": "<t2>"
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now": {
+      "status": 200,
+      "body": [
+        {
+          "executionTime": "<t1>",
+          "results": [
+            {
+              "fields": {
+                "v": {
+                  "integerValue": "1793682949"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc": {
+      "transport": "grpc",
+      "code": 13,
+      "message": "Request message serialization failure: maximum nesting depth exceeded",
+      "messages": []
+    },
+    "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc": {
+      "transport": "grpc",
+      "code": 13,
+      "message": "Request message serialization failure: maximum nesting depth exceeded",
+      "messages": []
+    }
+  }
+}

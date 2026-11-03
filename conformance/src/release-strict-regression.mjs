@@ -492,14 +492,16 @@ export const RUNS = [
       },
     ],
   },
-  // FS-PIPELINE (strict profile): the recorded rows that the closure does not claim mismatch, so
-  // the check exits 1; the export is compared row by row with the committed comparison.
+  // FS-PIPELINE (strict profile): the check exits 0 when every row that is not a MATCH is named by
+  // the table of recorded decisions and its answer stays inside the decision's allowance
+  // (fs-ent-pipeline/coverage.mjs), and 1 otherwise. The export keeps the raw statuses and is
+  // compared row by row with the committed comparison.
   laneRun(
     "R21",
     "fs-ent-pipeline-comparison-v1",
     "conformance/src/fs-query-index/run.mjs",
     "fs-ent-pipeline",
-    1,
+    0,
     { FIREEMU_SANDBOX_LANE: "fs-ent-pipeline" },
   ),
 ];

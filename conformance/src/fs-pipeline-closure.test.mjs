@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { PROGRAMS } from "./fs-ent-pipeline/corpus.mjs";
+import { COVERAGE, allowsClockValue, coveredBy } from "./fs-ent-pipeline/coverage.mjs";
 import { planComparisons, RUNS } from "./release-strict-regression.mjs";
 
 const repo = (path) => new URL(`../../${path}`, import.meta.url);
@@ -20,8 +21,13 @@ const sha256 = (path) =>
 
 const CLOSURE = "spec/compatibility/closure/FS-PIPELINE.json";
 const closure = json(CLOSURE);
-const comparison = json("spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json");
+// The comparison of record is the current one; the v0.35 comparison stays as history.
+const comparison = json(closure.integratedRegression.comparisons[0].path);
 const status = new Map(comparison.rows.map((row) => [row.row, row.status]));
+const V035 = "spec/compatibility/closure/evidence/FS-PIPELINE-comparison.json";
+const v035 = json(V035);
+const v035Status = new Map(v035.rows.map((row) => [row.row, row.status]));
+const V041 = "conformance/fs-ent-pipeline-v041-comparison.json";
 
 /** Every [key, value] of a JSON value, with the path of the key. */
 function* entries(value, path = "") {
@@ -58,7 +64,7 @@ export function placeholders(record) {
 }
 
 // These recorded framing cases have differing production response-unit boundaries.
-const INDETERMINATE_FRAMING = new Set([
+const FRAMING = new Set([
   "fs-ent-pipeline/o8a/framing-small#f500-rest",
   "fs-ent-pipeline/o8a/framing-small#f500-grpc",
   "fs-ent-pipeline/o8a/framing-small#f5000-rest",
@@ -72,41 +78,70 @@ const INDETERMINATE_FRAMING = new Set([
   "fs-ent-pipeline/o8a/framing-large#m30-rest",
   "fs-ent-pipeline/o8a/framing-large#m30-grpc",
 ]);
+const O7_CONTRACT = "conformance/fs-ent-pipeline-o7-adjudication.json";
+const O6_CONTRACT = "conformance/fs-ent-pipeline-o6-adjudication.json";
+const SAMPLE_CONTRACT = "conformance/fs-ent-pipeline-sample-adjudication.json";
+const NESTING_OBSERVATION = "conformance/fs-ent-pipeline-nesting-observation.json";
+// The rows the sample, O-7 and O-6 contracts name by their original raw MISMATCH.
+const SAMPLE_ROWS = new Set(
+  json(SAMPLE_CONTRACT)
+    .proofs.filter((proof) => proof.rawStatus === "MISMATCH")
+    .map((proof) => proof.id),
+);
+const O7_ROWS = new Set(json(O7_CONTRACT).proofs.map((proof) => proof.id));
+const O6_ROWS = new Set(json(O6_CONTRACT).proofs.map((proof) => proof.id));
+const CLOCK_ROW = "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now";
+// The raw MISMATCH rows are owner-decided divergences, listed in the conditions' evidence.
+const DIVERGENCES = closure.conditions.flatMap((condition) =>
+  (condition.evidence.documentedDivergences ?? []).map((divergence) => ({
+    ...divergence,
+    conditionId: condition.conditionId,
+  })),
+);
+const DIVERGENT_ROWS = new Set(DIVERGENCES.map((divergence) => divergence.row));
+const NESTING_ROWS = new Set([
+  "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc",
+  "fs-ent-pipeline/o8a/nesting-main#chain-100-grpc",
+]);
 
+/** A status other than MATCH is allowed only for the exact rows a recorded decision covers. */
 function isUnclaimedStatusAllowed(row, status) {
-  return (
-    status === "MISMATCH" ||
-    status === "UNKNOWN" ||
-    (status === "INDETERMINATE" && INDETERMINATE_FRAMING.has(row))
-  );
+  if (status === "MATCH_NONDETERMINISTIC") return FRAMING.has(row) || SAMPLE_ROWS.has(row);
+  if (status === "MISMATCH") return DIVERGENT_ROWS.has(row);
+  if (status === "UNKNOWN") return NESTING_ROWS.has(row);
+  return false;
 }
 
-test("only recorded framing identities may remain indeterminate", () => {
+test("a status other than MATCH is allowed only for the rows a recorded decision covers", () => {
+  assert.equal(FRAMING.size, 12);
+  assert.equal(SAMPLE_ROWS.size, 5);
+  assert.equal(O7_ROWS.size, 23);
+  assert.equal(O6_ROWS.size, 2);
+  const framing = "fs-ent-pipeline/o8a/framing-small#f500-rest";
+  const sample = "fs-ent-pipeline/o8d/stages-main#sample-documents-2";
+  const o7 = "fs-ent-pipeline/o7/aggregate-basic#grouped-all";
+  const o6 = "fs-ent-pipeline/o6/sort-ties#g-asc-limit2";
+  const other = "fs-ent-pipeline/px1/select#equal-i-d5";
+  const nesting = "fs-ent-pipeline/o8a/nesting-main#chain-48-grpc";
+  assert.equal(isUnclaimedStatusAllowed(framing, "MATCH_NONDETERMINISTIC"), true);
+  assert.equal(isUnclaimedStatusAllowed(sample, "MATCH_NONDETERMINISTIC"), true);
+  assert.equal(isUnclaimedStatusAllowed(other, "MATCH_NONDETERMINISTIC"), false);
   assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "INDETERMINATE"),
-    true,
-  );
-  assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f5000-grpc", "INDETERMINATE"),
-    true,
-  );
-  assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#unobserved-rest", "INDETERMINATE"),
+    isUnclaimedStatusAllowed(
+      "fs-ent-pipeline/o8a/framing-small#unobserved",
+      "MATCH_NONDETERMINISTIC",
+    ),
     false,
   );
-  assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/px1/select#equal-i-d5", "INDETERMINATE"),
-    false,
-  );
-  assert.equal(isUnclaimedStatusAllowed("fs-ent-pipeline/px1/select#equal-i-d5", "MISMATCH"), true);
-  assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/nesting-main#chain-48-grpc", "UNKNOWN"),
-    true,
-  );
-  assert.equal(
-    isUnclaimedStatusAllowed("fs-ent-pipeline/o8a/framing-small#f500-rest", "MATCH"),
-    false,
-  );
+  assert.equal(isUnclaimedStatusAllowed(framing, "INDETERMINATE"), false);
+  assert.equal(isUnclaimedStatusAllowed(framing, "MATCH"), false);
+  for (const row of [o7, o6, CLOCK_ROW])
+    assert.equal(isUnclaimedStatusAllowed(row, "MISMATCH"), true);
+  assert.equal(isUnclaimedStatusAllowed(other, "MISMATCH"), false);
+  assert.equal(isUnclaimedStatusAllowed(sample, "MISMATCH"), false);
+  assert.equal(isUnclaimedStatusAllowed(nesting, "UNKNOWN"), true);
+  assert.equal(isUnclaimedStatusAllowed(other, "UNKNOWN"), false);
+  assert.equal(isUnclaimedStatusAllowed(nesting, "MISMATCH"), false);
 });
 
 test("a digest field that is not 64 hex characters, or a placeholder, is found", () => {
@@ -181,19 +216,11 @@ test("every claimed row is a MATCH row of the comparison, once, and each conditi
   }
   // Every row is claimed, belongs to a not-claimed family, or has no per-row fixture.
   const unclaimed = [...status].filter(([row]) => !claimed.has(row));
-  const notRun = ["o8b/", "o8c/", "o8d/"];
   const nonClaimed = unclaimed.filter(
-    ([row, s]) =>
-      s !== "MISSING_FIXTURE" &&
-      !unclaimedMatches.includes(row) &&
-      !notRun.some((p) => row.includes(`/${p}`)),
+    ([row, s]) => s !== "MISSING_FIXTURE" && !unclaimedMatches.includes(row),
   );
   const mismatching = nonClaimed.filter(([row, s]) => !isUnclaimedStatusAllowed(row, s));
-  assert.deepEqual(
-    mismatching,
-    [],
-    "an unclaimed row is neither a recorded indeterminate framing case nor an allowed status",
-  );
+  assert.deepEqual(mismatching, [], "an unclaimed row is covered by no recorded decision");
   assert.equal(
     [...status.values()].filter((s) => s === "MATCH").length,
     claimed.size + [...status].filter(([row, s]) => s === "MATCH" && !claimed.has(row)).length,
@@ -217,14 +244,19 @@ test("the comparison covers the committed corpus and the lane's rows add up", ()
   assert.equal(status.get("fs-ent-pipeline/o8a/nesting-main#chain-100-grpc"), "UNKNOWN");
 });
 
-test("the release job reruns the comparison: one run of this kind, check exits 1", () => {
+test("the release job reruns the comparison: one run of this kind, check exits 0 with every kept row covered", () => {
   const runs = RUNS.filter((run) => run.kind === comparison.kind);
   assert.equal(runs.length, 1);
   const [run] = runs;
   assert.deepEqual(run.clear, ["fs-ent-pipeline"]);
-  assert.deepEqual(run.commands[0].expectedExitCodes, [1]);
+  assert.deepEqual(run.commands[0].expectedExitCodes, [0]);
   assert.equal(run.commands[0].env.FIREEMU_SANDBOX_LANE, "fs-ent-pipeline");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  // The parent is promoted only with every condition VERIFIED and an approved closure review.
+  assert.equal(
+    closure.parentStatus === "COMPAT_VERIFIED",
+    closure.conditions.every(({ status: value }) => value === "VERIFIED") &&
+      closure.closureReview.decision === "APPROVED",
+  );
   const plan = planComparisons([{ closure, path: CLOSURE }], (path) =>
     path === closure.integratedRegression.comparisons[0].path ? comparison : undefined,
   );
@@ -238,23 +270,365 @@ test("the release job reruns the comparison: one run of this kind, check exits 1
   );
 });
 
-test("v0.35 preserves the complete comparison and keeps the controlled clock separate", () => {
-  assert.deepEqual(comparison.summary, {
+test("v0.35 history is preserved and its controlled clock stays bound to its binary", () => {
+  const history = closure.historicalIntegratedRegression;
+  assert.equal(history.comparisons[0].path, V035);
+  assert.equal(sha256(V035), history.comparisons[0].sha256);
+  assert.deepEqual(v035.summary, {
     MATCH: 1740,
     MISMATCH: 197,
     INDETERMINATE: 12,
     UNKNOWN: 2,
   });
-  assert.equal(status.get("fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now"), "MISMATCH");
-  const clock = json(closure.integratedRegression.clockDiffControlPath);
-  assert.equal(
-    sha256(closure.integratedRegression.clockDiffControlPath),
-    closure.integratedRegression.clockDiffControlSha256,
-  );
-  assert.equal(clock.recipe, "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now");
-  assert.equal(clock.binarySha256, comparison.artifactSha256);
+  assert.equal(v035.artifactSha256, history.releaseBinarySha256);
+  assert.equal(v035Status.get(CLOCK_ROW), "MISMATCH");
+  const clock = json(history.clockDiffControlPath);
+  assert.equal(sha256(history.clockDiffControlPath), history.clockDiffControlSha256);
+  assert.equal(clock.recipe, CLOCK_ROW);
+  assert.equal(clock.binarySha256, v035.artifactSha256);
   assert.equal(clock.derivedSeconds, "1927857906");
   assert.equal(clock.response[0].results[0].fields.v.integerValue, clock.derivedSeconds);
+});
+
+test("the current comparison equals the v0.41 baseline row by row and keeps its raw statuses", () => {
+  const baseline = json(V041);
+  assert.equal(comparison.fixtureSha256, baseline.fixtureSha256);
+  assert.deepEqual(comparison.summary, baseline.summary);
+  assert.deepEqual(comparison.summary, {
+    MATCH: 1906,
+    MISMATCH: 26,
+    MATCH_NONDETERMINISTIC: 17,
+    UNKNOWN: 2,
+  });
+  assert.deepEqual(comparison.rows, baseline.rows);
+  assert.equal(status.get(CLOCK_ROW), "MISMATCH");
+  assert.equal(closure.integratedRegression.productionRequests, 0);
+});
+
+test("the current clock controls are bound to the current binary and the pinned clock", () => {
+  const ir = closure.integratedRegression;
+  for (const [path, digest] of [
+    [ir.clockControlPath, ir.clockControlSha256],
+    [ir.clockDiffControlPath, ir.clockDiffControlSha256],
+  ]) {
+    assert.equal(sha256(path), digest);
+    const control = json(path);
+    assert.equal(control.binarySha256, comparison.artifactSha256);
+    assert.equal(control.sourceCommit, ir.integrationCommit);
+    assert.equal(control.fixtureSha256, comparison.fixtureSha256);
+    assert.equal(control.configuredClock, "2031-02-03T04:05:06.123456789Z");
+    assert.equal(control.productionRequests, 0);
+    assert.equal(control.status, 200);
+  }
+  const instant = json(ir.clockControlPath);
+  assert.equal(instant.recipe, "fs-ent-pipeline/o8c/timestamps-main#current-timestamp-ok");
+  assert.equal(instant.response[0].results[0].fields.v.timestampValue, instant.expectedClock);
+  const diff = json(ir.clockDiffControlPath);
+  assert.equal(diff.recipe, CLOCK_ROW);
+  assert.equal(diff.derivedSeconds, "1927857906");
+  assert.equal(diff.response[0].results[0].fields.v.integerValue, diff.derivedSeconds);
+  const timestamps = closure.conditions.find(
+    (condition) => condition.conditionId === "FS-PIPELINE/recorded-timestamps",
+  );
+  assert.equal(timestamps.evidence.clockControlSha256, ir.clockControlSha256);
+  assert.equal(timestamps.evidence.clockDiffControlSha256, ir.clockDiffControlSha256);
+});
+
+test("the record states the platform of its controls and what the release job reruns", () => {
+  const note = closure.integratedRegression.platformNote;
+  assert.match(note, /Darwin arm64/);
+  assert.match(note, /linux-x64 package/);
+  assert.match(note, /no native Linux arm64 replay is required/);
+  assert.equal(json(closure.integratedRegression.buildReceiptPath).host, "Darwin arm64");
+  const merged = closure.integratedRegression.mergedMainNote;
+  assert.match(merged, /9f1af04e77e3adf719e5b6ff90f0c108ca1dc66357cbe1d4cac03bce61c51c39/);
+  assert.match(merged, /reproduced every row/);
+  assert.match(merged, /not rebound/);
+  assert.match(merged, /each published package/);
+  assert.notEqual(
+    "9f1af04e77e3adf719e5b6ff90f0c108ca1dc66357cbe1d4cac03bce61c51c39",
+    closure.integratedRegression.releaseBinarySha256,
+  );
+});
+
+test("the 166 rows added after v0.35 are the rows that changed from MISMATCH to MATCH", () => {
+  const promotion = closure.recordedLeafReview.currentPromotion;
+  const approved = closure.closureReview.decision === "APPROVED";
+  assert.equal(
+    promotion.decision,
+    approved ? "ACCEPTED_AFTER_INDEPENDENT_REVIEW" : "PROPOSED_PENDING_INDEPENDENT_REVIEW",
+  );
+  assert.equal(sha256(promotion.claimSetPath), promotion.claimSetSha256);
+  assert.equal(promotion.comparisonSha256, closure.integratedRegression.comparisons[0].sha256);
+  const added = json(promotion.claimSetPath);
+  assert.equal(added.decision, promotion.decision);
+  assert.equal(added.binarySha256, comparison.artifactSha256);
+  assert.equal(added.sourceCommit, closure.integratedRegression.integrationCommit);
+  assert.equal(added.previousComparisonSha256, sha256(V035));
+  assert.equal(added.strictRecipeIds.length, 166);
+  assert.equal(promotion.addedRecipeCount, added.strictRecipeIds.length);
+  assert.deepEqual(
+    added.strictRecipeIds.toSorted(),
+    [...status]
+      .filter(([row, value]) => value === "MATCH" && v035Status.get(row) !== "MATCH")
+      .map(([row]) => row)
+      .toSorted(),
+  );
+  for (const row of added.strictRecipeIds) assert.equal(v035Status.get(row), "MISMATCH", row);
+  const claimed = new Set(closure.conditions.flatMap((condition) => condition.recipeIds));
+  for (const row of added.strictRecipeIds) assert.ok(claimed.has(row), row);
+  assert.equal(claimed.size, promotion.previousClaimedRecipeCount + added.strictRecipeIds.length);
+  for (const [row, value] of v035Status) if (value === "MATCH") assert.ok(claimed.has(row), row);
+});
+
+test("every raw MISMATCH row is an owner-decided divergence of the condition that holds it", () => {
+  const mismatching = [...status].filter(([, value]) => value === "MISMATCH").map(([row]) => row);
+  assert.equal(mismatching.length, 26);
+  assert.deepEqual(DIVERGENCES.map(({ row }) => row).toSorted(), mismatching.toSorted());
+  assert.equal(DIVERGENT_ROWS.size, DIVERGENCES.length, "a row is a divergence twice");
+  const decisions = new Map(closure.scopeDecisions.map((decision) => [decision.id, decision]));
+  const ledger = { P4: ["2114", "2117"], P6: ["2211"], P7: ["2214"] };
+  for (const divergence of DIVERGENCES) {
+    const label = `${divergence.conditionId}: ${divergence.row}`;
+    assert.equal(divergence.rawStatus, "MISMATCH", label);
+    assert.equal(divergence.decidedBy, "owner", label);
+    assert.equal(divergence.decidedOn, "2026-11-03", label);
+    assert.ok(divergence.reason.length > 20, label);
+    const decision = decisions.get(divergence.scopeDecision);
+    assert.equal(decision?.decidedBy, "owner", label);
+    for (const id of ledger[divergence.scopeDecision] ?? [])
+      assert.ok(decision.decisionRef.includes(id), label);
+    assert.equal(divergence.contractSha256, sha256(divergence.contractPath), label);
+    const condition = closure.conditions.find((c) => c.conditionId === divergence.conditionId);
+    assert.ok(
+      condition.rowPrefixes.some((prefix) =>
+        divergence.row.replace("fs-ent-pipeline/", "").startsWith(prefix),
+      ),
+      label,
+    );
+    assert.ok(!condition.recipeIds.includes(divergence.row), `${label} is not claimed`);
+  }
+  const rowsOf = (decision, contract) =>
+    DIVERGENCES.filter((d) => d.scopeDecision === decision && d.contractPath === contract)
+      .map(({ row }) => row)
+      .toSorted();
+  const recipes = json("conformance/src/fs-ent-pipeline/o7-order-policy-data.json").recipes;
+  const selection = recipes
+    .filter((recipe) => recipe.mode === "selection")
+    .map((recipe) => recipe.id);
+  assert.equal(selection.length, 3);
+  assert.deepEqual(rowsOf("P7", O7_CONTRACT), selection.toSorted());
+  assert.deepEqual(
+    rowsOf("P6", O7_CONTRACT),
+    [...O7_ROWS].filter((row) => !selection.includes(row)).toSorted(),
+  );
+  for (const divergence of DIVERGENCES.filter((d) => d.scopeDecision === "P7")) {
+    assert.match(divergence.reason, /different legal selection/);
+    assert.equal(divergence.companion, recipes.find((r) => r.id === divergence.row).companion);
+  }
+  for (const divergence of DIVERGENCES.filter(
+    (d) => d.scopeDecision === "P6" && d.row !== CLOCK_ROW,
+  ))
+    assert.doesNotMatch(divergence.reason, /selection/);
+  assert.deepEqual(rowsOf("P4", O6_CONTRACT), [...O6_ROWS].toSorted());
+  assert.deepEqual(
+    DIVERGENCES.filter((d) => d.row === CLOCK_ROW).map((d) => [d.scopeDecision, d.contractPath]),
+    [["P6", closure.integratedRegression.clockDiffControlPath]],
+  );
+  assert.equal(DIVERGENCES.length, O7_ROWS.size + O6_ROWS.size + 1);
+});
+
+test("the closure basis enumerates every unobserved item and names the owner decisions", () => {
+  const basis = closure.closureBasis;
+  assert.equal(basis.productionRequests, 0);
+  assert.ok(basis.ownerDecision.includes("(2212)"));
+  assert.ok(basis.divergenceDecision.includes("(2211)"));
+  const p5 = closure.scopeDecisions.find((decision) => decision.id === "P5");
+  assert.ok(p5.decisionRef.includes("(2212)"));
+  assert.ok(p5.decision.includes("replaces ledger 1866 for FS-PIPELINE only"));
+  const keys = basis.notClaimedItems.map((item) => item.key);
+  assert.equal(new Set(keys).size, keys.length);
+  for (const key of keys) assert.ok(closure.knownDifferences[key]?.statement, key);
+  const kinds = basis.localBehaviourKinds;
+  assert.deepEqual(Object.keys(kinds).toSorted(), [
+    "own-implementation",
+    "own-implementation-or-refusal",
+    "refused-as-unobserved",
+  ]);
+  for (const item of basis.notClaimedItems) {
+    assert.ok(item.localBehaviour in kinds, item.key);
+    assert.ok(item.detail.length > 20, item.key);
+    // Only a refusal is described as UNIMPLEMENTED: an item fireemu answers is not.
+    if (item.localBehaviour === "refused-as-unobserved")
+      assert.match(item.detail, /UNIMPLEMENTED/, item.key);
+    if (item.localBehaviour === "own-implementation")
+      assert.doesNotMatch(item.detail, /UNIMPLEMENTED|refus/i, item.key);
+  }
+  assert.ok(keys.includes("notClaimed_rest_byte_layout"));
+  // The items the owner named in ledger 2212 are all listed.
+  for (const key of [
+    "notClaimed_scan_order_edges",
+    "notClaimed_is_type_vector",
+    "notClaimed_N4_standard_and_non_owner",
+    "notClaimed_N6_other_write_methods",
+    "notClaimed_duplicate_quoted_path",
+    "notClaimed_select_name_forms",
+    "notClaimed_regex_unicode",
+    "notClaimed_argument_shape_space",
+  ])
+    assert.ok(keys.includes(key), key);
+});
+
+const CONTENT = "spec/compatibility/closure/evidence/FS-PIPELINE-current-divergence-content.json";
+const FIXTURE = json("conformance/fs-ent-pipeline-production.json").programs;
+const splitRow = (row) => [row.slice(0, row.lastIndexOf("#")), row.slice(row.lastIndexOf("#") + 1)];
+
+/** The lane's inputs for a covered row, read from the committed local answers. */
+function coverageInput(content, row, replace = {}) {
+  const [programId] = splitRow(row);
+  const answers = {};
+  for (const [key, answer] of Object.entries(content.steps))
+    if (key.startsWith(`${programId}#`))
+      answers[key.slice(programId.length + 1)] = structuredClone(answer);
+  Object.assign(answers, replace);
+  return {
+    row,
+    status: status.get(row),
+    program: PROGRAMS.find((item) => item.id === programId),
+    saved: FIXTURE[programId],
+    localSteps: answers,
+    window: content.runWindow,
+  };
+}
+
+test("the current binary's answers are inside every allowance of the 28 covered rows", () => {
+  const evidence = closure.finiteContractEvidence.find(
+    (entry) => entry.kind === "divergence-content",
+  );
+  assert.equal(evidence.path, CONTENT);
+  assert.equal(sha256(evidence.path), evidence.sha256);
+  assert.equal(closure.integratedRegression.divergenceContentSha256, evidence.sha256);
+  const content = json(evidence.path);
+  assert.equal(content.kind, "fs-ent-pipeline-divergence-content-v1");
+  assert.equal(content.artifactSha256, closure.integratedRegression.releaseBinarySha256);
+  assert.equal(evidence.binarySha256, content.artifactSha256);
+  assert.equal(content.fixtureSha256, comparison.fixtureSha256);
+  assert.ok(content.runWindow.finishedMs >= content.runWindow.startedMs);
+  assert.ok(content.runWindow.finishedMs - content.runWindow.startedMs < 600_000, "a short run");
+  const decisionOf = { P4: "2114", P6: "2211", P7: "2214" };
+  const covered = new Map(content.covered.map((item) => [item.row, item]));
+  assert.deepEqual([...covered.keys()].toSorted(), [...COVERAGE.keys()].toSorted());
+  for (const row of COVERAGE.keys()) {
+    const verdict = coveredBy(coverageInput(content, row));
+    assert.ok(verdict.decision, JSON.stringify(verdict));
+    const recorded = covered.get(row);
+    assert.deepEqual(
+      { decision: verdict.decision, rule: verdict.rule, proof: verdict.proof },
+      { decision: recorded.decision, rule: recorded.rule, proof: recorded.proof },
+      row,
+    );
+    const divergence = DIVERGENCES.find((item) => item.row === row);
+    if (divergence) assert.equal(verdict.decision, decisionOf[divergence.scopeDecision], row);
+  }
+  const count = (decision, proof) =>
+    [...covered.values()].filter((item) => item.decision === decision && item.proof === proof)
+      .length;
+  assert.equal(count("2211", "FULL_TYPED_RESULT_MULTISET_EQUIVALENT"), 20);
+  assert.equal(count("2214", "LEGAL_UNORDERED_SELECTION"), 3);
+  assert.equal(count("2114", "ORDERED_TYPED_NULL_ABSENT_TIE_EQUIVALENT"), 1);
+  assert.equal(count("2114", "LEGAL_UNORDERED_SELECTION"), 1);
+  assert.equal(count("2211", "CLOCK_DEPENDENT_VALUE_ONLY"), 1);
+});
+
+test("the content check rejects an answer beyond an allowance", () => {
+  const content = json(CONTENT);
+  const bad = (row, mutate) => {
+    const answer = structuredClone(content.steps[row]);
+    mutate(answer);
+    return coveredBy(coverageInput(content, row, { [splitRow(row)[1]]: answer }));
+  };
+  const clock = "fs-ent-pipeline/o8c/timestamps-main#timestamp-diff-now";
+  const rows = (answer) => answer.body[0].results;
+  // The extra result and the extra field of the review's counterexample.
+  assert.ok(bad(clock, (a) => rows(a).push(structuredClone(rows(a)[0]))).rejected);
+  assert.ok(bad(clock, (a) => (rows(a)[0].fields.w = { integerValue: "1" })).rejected);
+  // The recorded production value is not the local clock of this run.
+  assert.ok(bad(clock, (a) => (rows(a)[0].fields.v = { integerValue: "1793029330" })).rejected);
+  const group = "fs-ent-pipeline/o7/aggregate-basic#grouped-all";
+  assert.ok(bad(group, (a) => rows(a).pop()).rejected);
+  assert.ok(bad(group, (a) => (rows(a)[0].fields.c = { integerValue: "-1" })).rejected);
+  const limit = "fs-ent-pipeline/o7/aggregate-basic#around-where-one-limit";
+  assert.ok(bad(limit, (a) => rows(a).push(structuredClone(rows(a)[0]))).rejected);
+  assert.ok(bad(limit, (a) => (rows(a)[0].fields.g = { stringValue: "no such group" })).rejected);
+  const ties = "fs-ent-pipeline/o6/sort-ties#g-asc-limit2";
+  assert.ok(bad(ties, (a) => (rows(a)[1] = structuredClone(rows(a)[0]))).rejected);
+});
+
+test("the clock controls have the complete recorded response structure, with only the value free", () => {
+  const ir = closure.integratedRegression;
+  const diff = json(ir.clockDiffControlPath);
+  const recorded = FIXTURE["fs-ent-pipeline/o8c/timestamps-main"].steps["timestamp-diff-now"];
+  const asStep = (control) => ({
+    status: control.status,
+    body: control.response.map((element) => ({
+      ...structuredClone(element),
+      executionTime: "<t1>",
+    })),
+  });
+  // The value is the one the pinned clock gives: whole seconds since the epoch.
+  const seconds = String(Math.floor(Date.parse("2031-02-03T04:05:06.123Z") / 1000));
+  assert.equal(diff.derivedSeconds, seconds);
+  assert.equal(diff.response[0].results[0].fields.v.integerValue, seconds);
+  // The pinned clock stands still, so its run window is the second it names.
+  const pinned = { startedMs: Number(seconds) * 1000, finishedMs: Number(seconds) * 1000 + 999 };
+  assert.equal(allowsClockValue(recorded, asStep(diff), pinned), true);
+  assert.equal(
+    allowsClockValue(recorded, asStep(diff), {
+      startedMs: pinned.startedMs + 60_000,
+      finishedMs: pinned.finishedMs + 60_000,
+    }),
+    false,
+  );
+  const extraResult = structuredClone(diff);
+  extraResult.response[0].results.push(structuredClone(extraResult.response[0].results[0]));
+  assert.equal(allowsClockValue(recorded, asStep(extraResult), pinned), false);
+  const extraField = structuredClone(diff);
+  extraField.response[0].results[0].fields.w = { integerValue: "1" };
+  assert.equal(allowsClockValue(recorded, asStep(extraField), pinned), false);
+  // current_timestamp: one result holding one timestamp, the configured clock to the microsecond.
+  const instant = json(ir.clockControlPath);
+  assert.equal(instant.response.length, 1);
+  assert.deepEqual(Object.keys(instant.response[0]).toSorted(), ["executionTime", "results"]);
+  assert.equal(instant.response[0].results.length, 1);
+  assert.deepEqual(Object.keys(instant.response[0].results[0]), ["fields"]);
+  assert.deepEqual(instant.response[0].results[0].fields, {
+    v: { timestampValue: instant.expectedClock },
+  });
+  assert.equal(instant.expectedClock, "2031-02-03T04:05:06.123456Z");
+});
+
+test("the sources of the coverage rules are pinned in the record", () => {
+  const sources = closure.integratedRegression.coverageSources;
+  const paths = sources.map((source) => source.path);
+  assert.equal(new Set(paths).size, paths.length);
+  for (const source of sources) {
+    assert.equal(sha256(source.path), source.sha256, source.path);
+    assert.match(source.role, /\S/);
+  }
+  // Every local file the coverage module reads is pinned here or elsewhere in the record.
+  const module = "conformance/src/fs-ent-pipeline/coverage.mjs";
+  assert.ok(paths.includes(module));
+  const code = text(module);
+  const read = [...code.matchAll(/(?:from |new URL\()"(\.\.?\/[^"]+\.(?:mjs|json))"/g)].map(
+    (match) =>
+      new URL(match[1], new URL(`../../${module}`, import.meta.url)).pathname.replace(
+        /^.*\/conformance\//,
+        "conformance/",
+      ),
+  );
+  assert.ok(read.length >= 4, "the module reads the policies and the observation");
+  const pinned = new Set([...paths, ...closure.finiteContractEvidence.map((entry) => entry.path)]);
+  for (const path of read) assert.ok(pinned.has(path), `${path} is pinned`);
 });
 
 test("the capability and generated inventory describe recorded unnest and base64 behavior", () => {
@@ -291,25 +665,30 @@ test("v0.35 promotes exactly the accepted 55 strict rows and preserves all other
     closure.recordedLeafReview.v035Promotion.claimSetSha256,
   );
   const before = new Map(previous.rows.map((row) => [row.row, row.status]));
-  assert.deepEqual([...status.keys()].toSorted(), [...before.keys()].toSorted());
-  const changed = [...status].filter(([row, value]) => before.get(row) !== value);
+  assert.deepEqual([...v035Status.keys()].toSorted(), [...before.keys()].toSorted());
+  const changed = [...v035Status].filter(([row, value]) => before.get(row) !== value);
   assert.equal(changed.length, 55);
   assert.deepEqual(changed.map(([row]) => row).toSorted(), accepted.strictRecipeIds.toSorted());
   for (const [row, value] of changed) {
     assert.equal(before.get(row), "MISMATCH", row);
     assert.equal(value, "MATCH", row);
   }
-  assert.equal(accepted.sourceCommit, closure.integratedRegression.integrationCommit);
-  assert.equal(accepted.binarySha256, comparison.artifactSha256);
+  assert.equal(accepted.sourceCommit, closure.historicalIntegratedRegression.integrationCommit);
+  assert.equal(accepted.binarySha256, v035.artifactSha256);
 });
 
 test("finite contract adjudications preserve their declared finite outcomes", () => {
   const contracts = closure.finiteContractEvidence;
   assert.deepEqual(
     contracts.map((item) => item.kind),
-    contracts.some((entry) => entry.kind === "native-positive")
-      ? ["sample", "o7-order", "scalar-subquery", "native-positive"]
-      : ["sample", "o7-order", "scalar-subquery"],
+    [
+      "sample",
+      "o7-order",
+      "scalar-subquery",
+      "native-positive",
+      "nesting-grpc-observation",
+      "divergence-content",
+    ],
   );
   for (const entry of contracts) {
     assert.equal(entry.sha256, sha256(entry.path));
@@ -363,18 +742,71 @@ test("finite contract adjudications preserve their declared finite outcomes", ()
       assert.equal(proof.proofs[1].message, "Subpipeline returned multiple results.");
       continue;
     }
+    if (entry.kind === "divergence-content") {
+      // Re-evaluated against the fixture in the divergence content test.
+      assert.equal(entry.binarySha256, closure.integratedRegression.releaseBinarySha256);
+      continue;
+    }
+    if (entry.kind === "nesting-grpc-observation") {
+      const proof = json(entry.path);
+      assert.equal(entry.path, NESTING_OBSERVATION);
+      assert.equal(proof.kind, "fs-ent-pipeline-nesting-later-observation-v1");
+      assert.equal(proof.productionRequests, 0);
+      assert.equal(
+        closure.knownDifferences.notClaimed_nesting_limits.observationSha256,
+        entry.sha256,
+      );
+      const fixture = json("conformance/fs-ent-pipeline-production.json").programs[
+        "fs-ent-pipeline/o8a/nesting-main"
+      ].steps;
+      const rows = proof.productionObservation.rows;
+      assert.deepEqual(new Set(rows.map((row) => row.row)), NESTING_ROWS);
+      for (const row of rows) {
+        assert.equal(status.get(row.row), "UNKNOWN", row.row);
+        assert.match(row.requestSha256, /^[a-f0-9]{64}$/);
+        assert.equal(row.rounds, 2);
+        assert.equal(row.code, 3);
+        assert.equal(row.frames, 0);
+        // The recorded row of the same transport that production refused the same way.
+        const same = fixture["chain-47-grpc"];
+        assert.equal(row.code, same.code);
+        assert.equal(row.message, same.message);
+        // The unknown row itself keeps the recorder's own client failure.
+        const step = fixture[row.row.split("#")[1]];
+        assert.equal(typeof step.unknown, "string");
+        assert.equal(step.code, 13);
+      }
+      assert.equal(
+        proof.productionObservation.sameAnswerAsRecordedRow,
+        "fs-ent-pipeline/o8a/nesting-main#chain-47-grpc",
+      );
+      assert.deepEqual(proof.localReplay.depths, [47, 48, 100]);
+      assert.equal(proof.localReplay.strict.message, rows[0].message);
+      const replay = proof.localReplay.test.split("#");
+      assert.match(text(replay[0]), new RegExp(`fn ${replay[1]}\\(`));
+      assert.deepEqual(badDigests(proof), []);
+      continue;
+    }
     const proof = json(entry.path);
     assert.equal(proof.decision, "ACCEPTED_FINITE_STRICT_CONTRACT");
     assert.equal(proof.profile, "strict");
-    assert.equal(proof.sourceCommit, closure.integratedRegression.integrationCommit);
-    assert.equal(proof.binarySha256, comparison.artifactSha256);
-    assert.deepEqual(proof.rawSummary, comparison.summary);
+    // The contracts were reviewed against the v0.35 comparison; their rows are checked there.
+    assert.equal(proof.sourceCommit, closure.historicalIntegratedRegression.integrationCommit);
+    assert.equal(proof.binarySha256, v035.artifactSha256);
+    assert.deepEqual(proof.rawSummary, v035.summary);
     assert.equal(new Set(proof.proofs.map((row) => row.id)).size, proof.proofs.length);
-    for (const row of proof.proofs) assert.equal(status.get(row.id), row.rawStatus, row.id);
+    for (const row of proof.proofs) assert.equal(v035Status.get(row.id), row.rawStatus, row.id);
     if (entry.kind === "sample") {
       assert.equal(proof.proofs.length, 8);
       assert.equal(proof.proofs.filter((row) => row.rawStatus === "MISMATCH").length, 5);
       assert.equal(proof.proofs.filter((row) => row.rawStatus === "MATCH").length, 3);
+      // In the current comparison the five random positives are finite-contract matches.
+      for (const row of proof.proofs)
+        assert.equal(
+          status.get(row.id),
+          row.rawStatus === "MISMATCH" ? "MATCH_NONDETERMINISTIC" : "MATCH",
+          row.id,
+        );
     } else {
       assert.equal(proof.proofs.length, 23);
       assert.equal(
@@ -388,6 +820,9 @@ test("finite contract adjudications preserve their declared finite outcomes", ()
           .length,
         3,
       );
+      // The 23 groups-order rows keep their raw MISMATCH; the two argument errors now match.
+      for (const row of proof.proofs) assert.equal(status.get(row.id), "MISMATCH", row.id);
+      for (const row of proof.unresolved) assert.equal(status.get(row.id ?? row), "MATCH");
       assert.equal(proof.unresolved.length, 2);
       assert.equal(proof.ordinaryProfile, "unproved");
     }

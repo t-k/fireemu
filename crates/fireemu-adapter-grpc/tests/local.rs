@@ -13302,6 +13302,33 @@ async fn execute_pipeline_results_carry_document_metadata_without_select() {
     }
 }
 
+/// A documents input whose only path is missing answers one response without results that
+/// still carries the snapshot read time, as production does (O-7 `inputs-documents#missing`; the
+/// REST twin is `rest_documents_missing_preserves_snapshot_time_without_a_row`).
+#[tokio::test]
+async fn execute_pipeline_documents_of_a_missing_path_answers_one_timed_empty_response() {
+    for policy in [
+        IndexValidationPolicy::Production,
+        IndexValidationPolicy::Emulator,
+    ] {
+        let (mut client, _, handle) =
+            start_with_edition_and_policy(FirestoreEdition::Enterprise, policy).await;
+        let mut stream = client
+            .execute_pipeline(pipeline_request(vec![pipeline_stage(
+                "documents",
+                collection_ref("na/missing"),
+            )]))
+            .await
+            .unwrap()
+            .into_inner();
+        let first = stream.message().await.unwrap().unwrap();
+        assert!(first.results.is_empty(), "{policy:?}");
+        assert!(first.execution_time.is_some(), "{policy:?}");
+        assert!(stream.message().await.unwrap().is_none(), "{policy:?}");
+        handle.abort();
+    }
+}
+
 /// The stages and functions O-6 and O-7 recorded run over gRPC under both profiles: a sort, a
 /// grouped aggregate, a distinct, `add_fields` and `remove_fields`, a collection group, a
 /// documents input, a logical condition and a stage order that was fixed before. A small answer

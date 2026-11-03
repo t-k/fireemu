@@ -14,6 +14,7 @@ SDK and a real local JWKS server and show:
 
 import base64
 import json
+import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -30,6 +31,15 @@ from fireemu_runner.serve import RunnerRouter
 
 PROJECT = "demo-proj"
 SECRET = "s3cret"
+
+
+class LoopbackServer(HTTPServer):
+    """`HTTPServer.server_bind` asks DNS for the host's name (`socket.getfqdn`), which takes tens of seconds on some CI
+    runners; these servers only ever listen on the loopback address."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.socket.getsockname()[1]
 
 
 def make_key():
@@ -61,7 +71,7 @@ class JwksServer:
             def log_message(self, *args):
                 pass
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = LoopbackServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}/v1/jwks"
@@ -351,7 +361,7 @@ class BrokenJwks:
             def log_message(self, *args):
                 pass
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = LoopbackServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.server.server_port}/v1/jwks"
 

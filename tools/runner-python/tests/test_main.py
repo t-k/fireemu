@@ -171,11 +171,13 @@ def test_the_gate_reaches_both_the_http_server_and_the_dispatcher(discovered, mo
 
     for name in ("API_KEY", "TOKEN"):
         monkeypatch.delenv(name, raising=False)
+    # A Firestore event builds a client; with the emulator host set it needs no Google credential (the daemon sets it).
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:9")
     gate = EnvironmentGate({"API_KEY": "key-value", "TOKEN": "token-value"})
     stdin = Pipe()
     writer = Collected()
     result = {}
-    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, gate)))
+    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, gate)), daemon=True)
     thread.start()
     hello = writer.wait_for(lambda f: f["type"] == "hello")
 
@@ -209,7 +211,7 @@ def test_hello_announces_disabled_consumption_for_callables_only_when_asked(disc
         stdin = Pipe()
         writer = Collected()
         result = {}
-        thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, None, verified)))
+        thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, None, verified)), daemon=True)
         thread.start()
         hello = writer.wait_for(lambda f: f["type"] == "hello")
         (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]
@@ -223,7 +225,7 @@ def test_serve_announces_nothing_about_app_check_unless_told_to(discovered):
     stdin = Pipe()
     writer = Collected()
     result = {}
-    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer)))
+    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer)), daemon=True)
     thread.start()
     hello = writer.wait_for(lambda f: f["type"] == "hello")
     (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]

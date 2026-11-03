@@ -2660,6 +2660,58 @@ mod tests {
                 .collect(),
             ),
         );
+        // What a read of each bucket answers through the registry: its own rules decide it, so
+        // a restore that swapped the buckets' mappings would flip both answers.
+        let storage = fireemu_adapter_http::storage::StorageState {
+            store: std::sync::Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock: Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(AT),
+            )),
+            auth: Arc::new(fireemu_core_auth::store::AuthRegistry::new(
+                "demo-app",
+                Arc::new(std::sync::Mutex::new(
+                    fireemu_core_auth::store::AuthStore::new(
+                        "demo-app",
+                        fireemu_core_types::determinism::SplitMix64::new(3),
+                        fireemu_core_auth::mfa::TotpPolicy::default(),
+                    ),
+                )),
+            )),
+            tenancy: None,
+            rules: registry.clone(),
+            project: "demo-app".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            server_requests: fireemu_adapter_http::storage::StorageServerRequests::default(),
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
+            control_token: None,
+        };
+        let read_status = |bucket: &str| {
+            fireemu_adapter_http::storage::handle(
+                &storage,
+                fireemu_adapter_http::storage::StorageRequest {
+                    method: "GET".to_owned(),
+                    path: format!("/v0/b/{bucket}/o/missing.txt"),
+                    query: String::new(),
+                    host: Some("127.0.0.1:9199".to_owned()),
+                    headers: std::collections::BTreeMap::new(),
+                    app_check: Vec::new(),
+                    body: Vec::new(),
+                    remote_peer: false,
+                },
+            )
+            .status
+        };
+        let (denied, allowed) = (read_status("first"), read_status("second"));
+        assert_eq!(denied, 403, "bucket first denies reads");
+        assert_ne!(allowed, 403, "bucket second allows reads");
+
         let hook = StorageRules(registry.clone());
         assert!(hook.shared());
         let scope = Scope::AllExcept(BTreeSet::new());
@@ -2683,5 +2735,8 @@ mod tests {
         let source = |slot: &RulesetSlot| slot.snapshot().unwrap().source.clone();
         assert_eq!(source(&first).as_deref(), Some(DENY));
         assert_eq!(source(&second).as_deref(), Some(ALLOW));
+        // Authorization through the restored registry, bucket by bucket.
+        assert_eq!(read_status("first"), denied);
+        assert_eq!(read_status("second"), allowed);
     }
 }

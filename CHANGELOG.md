@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Cloud Storage signed XML `PUT` answers as production did when it was measured (two recordings of 16 cases, 2026-11-03): a signed header missing from the request is `400 MalformedSecurityHeader` naming it; a body above or below `x-goog-content-length-range` is `400 EntityTooLarge` or `400 EntityTooSmall`; an expired URL names the end of its signed lifetime; a successful upload carries the object's `ETag`, `x-goog-generation`, `x-goog-metageneration`, `x-goog-hash` and stored length and encoding. Under `strict`, a V4 URL that names every signing parameter but the signature is `400 MissingSecurityHeader`, and the range header sent unsigned is `400 MalformedSecurityHeader`. The signature is still not verified, so the four cases production refused with `403 SignatureDoesNotMatch` (altered signature, other `Content-Type`, other range value, other object name) are accepted, and a successful `OPTIONS` preflight answers `204` with CORS headers where a bucket without CORS configuration answers `200` without them.
+
 ## [0.43.0] - 2026-11-03
 
 Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against production within the recorded corpus, and Cloud Functions codebases written in Python run.

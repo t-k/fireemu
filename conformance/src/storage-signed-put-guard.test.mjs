@@ -11,6 +11,7 @@ import {
   tamperSignature,
   validateSigner,
 } from "./storage-signed-put/guard.mjs";
+import { ROLE_ID } from "./storage-signed-put/plan.mjs";
 import { LOCAL_LIKE, PRODUCTION_LIKE } from "./storage-signed-put/world.fake.mjs";
 
 const prefix = "storage-signed-put/sp-0123abcd/";
@@ -339,5 +340,114 @@ describe("signed PUT request guard", () => {
     ]) {
       assert.throws(() => validateSigner(bad, project), GuardError, String(bad));
     }
+  });
+
+  describe("IAM request forms", () => {
+    const iam = (path) => `https://iam.googleapis.com/v1/${path}`;
+    const account = `projects/${PRODUCTION_LIKE.project}/serviceAccounts/${PRODUCTION_LIKE.signer}`;
+    const roles = `projects/${PRODUCTION_LIKE.project}/roles`;
+
+    it("accepts exactly the signer, its policy, the signer role and role definitions", () => {
+      const cases = [
+        ["GET", iam(account), "signer-get"],
+        ["POST", iam(`${account}:getIamPolicy`), "signer-get-policy"],
+        ["POST", iam(`${account}:setIamPolicy`), "signer-set-policy"],
+        ["POST", iam(roles), "role-create"],
+        ["GET", iam(`${roles}/${ROLE_ID}`), "role-get"],
+        ["DELETE", iam(`${roles}/${ROLE_ID}`), "role-delete"],
+        ["DELETE", iam(`${roles}/${ROLE_ID}?etag=abc`), "role-delete"],
+        ["GET", iam(`${roles}/customRole_1`), "role-read"],
+        ["GET", iam("roles/firebase.sdkAdminServiceAgent"), "role-read"],
+        ["GET", iam("roles/storage.objectAdmin"), "role-read"],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}:getIamPolicy`,
+          "project-policy",
+        ],
+        ["GET", json("/iam"), "bucket-policy"],
+        ["GET", json("/iam?optionsRequestedPolicyVersion=3"), "bucket-policy"],
+      ];
+      for (const [method, url, expected] of cases)
+        assert.equal(kind({ method, url }), expected, `${method} ${url}`);
+    });
+
+    it("refuses every other IAM form", () => {
+      const other = "other@demo-project.iam.gserviceaccount.com";
+      const bad = [
+        ["PUT", iam(account)],
+        ["DELETE", iam(account)],
+        ["POST", iam(account)],
+        ["GET", iam(`${account}:getIamPolicy`)],
+        ["GET", iam(`${account}:setIamPolicy`)],
+        ["POST", iam(`${account}:testIamPermissions`)],
+        ["POST", iam(`${account}:signBlob`)],
+        ["POST", iam(`${account}:disable`)],
+        ["POST", iam(`${account}/keys`)],
+        ["GET", iam(`${account}?x=1`)],
+        ["POST", iam(`${account}:setIamPolicy?x=1`)],
+        ["POST", iam(`projects/${PRODUCTION_LIKE.project}/serviceAccounts/${other}:setIamPolicy`)],
+        ["GET", iam(`projects/other-project/serviceAccounts/${PRODUCTION_LIKE.signer}`)],
+        ["GET", iam(`projects/${PRODUCTION_LIKE.project}/serviceAccounts`)],
+        ["PATCH", iam(`${roles}/${ROLE_ID}`)],
+        ["POST", iam(`${roles}/${ROLE_ID}`)],
+        ["DELETE", iam(`${roles}/customRole_1`)],
+        ["DELETE", iam(`${roles}/${ROLE_ID}?force=1`)],
+        ["DELETE", iam("roles/viewer")],
+        ["GET", iam(`${roles}/${ROLE_ID}?x=1`)],
+        ["GET", iam(`${roles}/bad%20name`)],
+        ["GET", iam(`${roles}/${"a".repeat(65)}`)],
+        ["GET", iam("roles/bad/name")],
+        ["GET", iam("roles/")],
+        ["GET", iam("organizations/1/roles/x")],
+        ["GET", iam("projects/other-project/roles/x")],
+        ["POST", iam("roles")],
+        ["PUT", iam(roles)],
+        ["GET", iam(roles)],
+        ["GET", "https://iam.googleapis.com/v2/roles/viewer"],
+        ["GET", "https://iam.googleapis.com/"],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/other-project:getIamPolicy`,
+        ],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}:setIamPolicy`,
+        ],
+        [
+          "GET",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}:getIamPolicy`,
+        ],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}:getIamPolicy?x=1`,
+        ],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}`,
+        ],
+        [
+          "POST",
+          `https://cloudresourcemanager.googleapis.com/v3/projects/${PRODUCTION_LIKE.project}:getIamPolicy`,
+        ],
+        ["POST", json("/iam")],
+        ["PUT", json("/iam")],
+        ["GET", json("/iam?alt=json")],
+        ["GET", json("/acl")],
+        ["GET", "https://storage.googleapis.com/storage/v1/b/other-bucket/iam"],
+        ["GET", "https://cloudresourcemanager.googleapis.com:8443/v1/projects/x:getIamPolicy"],
+      ];
+      for (const [method, url] of bad) refused({ method, url });
+    });
+
+    it("keeps IAM requests out of the local target", () => {
+      refused({ method: "GET", url: iam(account) }, LOCAL_LIKE);
+      refused(
+        {
+          method: "POST",
+          url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}:getIamPolicy`,
+        },
+        LOCAL_LIKE,
+      );
+    });
   });
 });

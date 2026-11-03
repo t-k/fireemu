@@ -10,11 +10,11 @@
 import { Buffer } from "node:buffer";
 
 import {
+  GuardError,
   RequestBudget,
+  isUnknownStatus,
   classifyRequest,
   dropSignature,
-  isUnknownStatus,
-  redactSignedUrl,
   tamperSignature,
 } from "./guard.mjs";
 import {
@@ -32,8 +32,11 @@ import {
   CASES,
   EXPIRY_MARGIN_MS,
   MAIN_CAP,
+  MAX_SIGN_PROBES,
   RANGE_HEADER,
   READBACK_CAP,
+  ROLE_ID,
+  SIGN_PROBE_WAIT_MS,
   RECORDINGS,
   REQUEST_TIMEOUT_MS,
   TOTAL_CAP,
@@ -43,14 +46,20 @@ import {
   recordingPrefix,
   runPrefix,
 } from "./plan.mjs";
+import {
+  iamGrant,
+  iamPreflight,
+  iamRemove,
+  ourBinding,
+  roleName,
+  samePolicy,
+  settleIam,
+  validateMember,
+  validateWindow,
+} from "./iam.mjs";
+import { UnknownAnswer, createWire } from "./wire.mjs";
 
-export class UnknownAnswer extends Error {
-  constructor(label, status) {
-    super(`unknown answer: ${label} (${Number.isInteger(status) ? status : "transport"})`);
-    this.label = label;
-    this.status = Number.isInteger(status) ? status : Number.NaN;
-  }
-}
+export { UnknownAnswer };
 
 export class StopRun extends Error {}
 
@@ -79,6 +88,7 @@ const isCreated = (event) =>
  * @param {string} options.runId `sp-xxxxxxxx`
  * @param {object} options.deps `{net, sign, adminHeaders, now, sleep}`
  * @param {object} options.out `{journal(entry), save(name, data)}`
+ * @param {{member: string, windowMinutes: number}} [options.iam] the signer binding (production)
  */
 export async function observe({
   target,
@@ -87,8 +97,14 @@ export async function observe({
   recordings = RECORDINGS,
   deps,
   out,
+  iam = null,
   caps = { main: MAIN_CAP, total: TOTAL_CAP },
 }) {
+  if (target.name === "production") {
+    if (!iam) throw new StopRun("the production run needs the signer IAM settings");
+    validateMember(iam.member);
+    validateWindow(iam.windowMinutes);
+  }
   const prefix = runPrefix(runId);
   const budget = new RequestBudget(caps.main, caps.total);
   const masks = [
@@ -100,7 +116,6 @@ export async function observe({
   const events = [];
   const rows = [];
   const reads = [];
-  const unknownLabels = [];
   const planned = new Set(plannedNames(runId, cases, recordings));
   const jsonBase = target.name === "production" ? "https://storage.googleapis.com" : target.origin;
   const objectUrl = (name, query = "") =>
@@ -109,73 +124,14 @@ export async function observe({
   let stopped = null;
   let finished = false;
 
-  async function wire(label, request, { admin = false, context = {} } = {}) {
-    // The guard sees the headers that will actually be sent, credentials included.
-    const headers = { ...(admin ? deps.adminHeaders() : {}), ...request.headers };
-    const kind = classifyRequest(target, { ...request, headers }, prefix);
-    const n = budget.take();
-    out.journal({
-      phase: "before",
-      n,
-      label,
-      kind,
-      method: request.method,
-      url: redactSignedUrl(request.url),
-      headers: request.headers ?? {},
-      bodyBytes: request.body?.length ?? 0,
-      ...context,
-    });
-    let res;
-    try {
-      res = await deps.net({
-        method: request.method,
-        url: request.url,
-        headers,
-        body: request.body,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      });
-    } catch {
-      out.journal({ phase: "unknown", n, label, reason: "transport" });
-      unknownLabels.push(label);
-      throw new UnknownAnswer(label, Number.NaN);
-    }
-    const body = Buffer.from(res.body ?? []);
-    out.journal({
-      phase: "after",
-      n,
-      label,
-      status: res.status,
-      headers: res.headers,
-      bodyBytes: body.length,
-      bodyBase64: body.toString("base64"),
-    });
-    if (isUnknownStatus(res.status)) {
-      unknownLabels.push(label);
-      throw new UnknownAnswer(label, res.status);
-    }
-    return { status: res.status, headers: res.headers ?? {}, body };
-  }
-
-  // The SDK's own request (signBlob) passes the same guard and budget.
-  const meter = {
-    request(label, request) {
-      classifyRequest(target, request, prefix);
-      const n = budget.take();
-      out.journal({
-        phase: "sdk-before",
-        n,
-        label,
-        method: request.method,
-        url: redactSignedUrl(request.url),
-      });
-    },
-    after(label, status) {
-      out.journal({ phase: "sdk-after", label, status });
-      if (isUnknownStatus(status)) {
-        unknownLabels.push(label);
-        throw new UnknownAnswer(label, status);
-      }
-    },
+  const { wire, meter, unknownLabels } = createWire({ target, prefix, budget, deps, out });
+  const iamEvents = [];
+  const iamCtx = {};
+  let probes = 0;
+  let ours = null;
+  const io = {
+    wire: (label, request, options) => wire(label, request, { admin: true, ...options }),
+    events: iamEvents,
   };
 
   async function preflight() {
@@ -202,16 +158,53 @@ export async function observe({
         },
         { admin: true },
       );
-      if (
-        signer.status !== 200 ||
-        JSON.parse(signer.body.toString("utf8")).email !== target.signer
-      ) {
+      const account = signer.status === 200 ? JSON.parse(signer.body.toString("utf8")) : {};
+      if (account.email !== target.signer || account.disabled === true) {
         throw new StopRun("signer service account not readable");
       }
+      const found = await iamPreflight({ io, target });
+      iamCtx.saPolicy = found.saPolicy;
+      iamCtx.roleReads = found.roleReads;
+      out.save("iam-preflight.json", {
+        runId,
+        signer: target.signer,
+        policy: found.saPolicy,
+        signerRoles: found.roles,
+        conditionalSignerBindings: found.conditional,
+      });
     }
     const list = await wire("prefix-empty", { method: "GET", url: listUrl }, { admin: true });
     if (list.status !== 200 || JSON.parse(list.body.toString("utf8")).items?.length) {
       throw new StopRun("run prefix is not empty");
+    }
+  }
+
+  async function grantAndAwaitSigner() {
+    if (target.name !== "production") return;
+    const endMs = deps.now() + iam.windowMinutes * 60_000;
+    ours = ourBinding({ project: target.project, member: iam.member, runId, endMs });
+    out.save("iam-grant-plan.json", { binding: ours, windowEndMs: endMs });
+    await iamGrant({ io, target, ctx: iamCtx, ours });
+    for (probes = 1; probes <= MAX_SIGN_PROBES; probes += 1) {
+      const before = unknownLabels.length;
+      try {
+        await deps.sign(
+          {
+            name: `${prefix}probe.png`,
+            contentType: "image/png",
+            range: null,
+            expires: deps.now() + 5 * 60_000,
+          },
+          meter,
+        );
+        return;
+      } catch (error) {
+        if (unknownLabels.length > before || error instanceof GuardError) throw error;
+        if (probes === MAX_SIGN_PROBES) {
+          throw new StopRun(`signBlob still refused after ${probes} probes: ${error.message}`);
+        }
+        await deps.sleep(SIGN_PROBE_WAIT_MS);
+      }
     }
   }
 
@@ -398,6 +391,7 @@ export async function observe({
   let cleanupError = null;
   try {
     await preflight();
+    await grantAndAwaitSigner();
     for (let recording = 1; recording <= recordings; recording += 1) {
       for (const testCase of cases) await runCase(recording, testCase);
     }
@@ -418,9 +412,44 @@ export async function observe({
       });
     }
   }
+  let iamError = null;
+  if (target.name === "production" && (iamCtx.grantAttempted || iamCtx.roleCreateAttempted)) {
+    budget.cleanup = true;
+    try {
+      await iamRemove({ io, target, ctx: iamCtx, ours });
+    } catch (error) {
+      iamError = error;
+      out.save("iam-failure.json", {
+        message: normalizeBody(String(error?.message ?? error), masks),
+      });
+    }
+  }
+  const iamTouched = iamEvents.length > 0;
+  const iamUnresolved = [
+    ...settleIam(iamEvents, { touched: iamTouched }),
+    ...(iamError
+      ? [{ name: "signer binding", reason: `removal failed: ${iamError.message}` }]
+      : []),
+  ];
+  function iamReport() {
+    const finalRead = iamEvents.findLast(
+      (e) => e.resource === "binding" && e.event === "final-read",
+    );
+    const roleRead = iamEvents.findLast((e) => e.resource === "role" && e.event === "final-read");
+    return {
+      roleReads: iamCtx.roleReads ?? null,
+      granted: iamEvents.some((e) => e.event === "grant" && e.status >= 200 && e.status < 300),
+      signProbes: probes,
+      policyEqualsPreflight: finalRead ? finalRead.equalsPreflight : null,
+      bindingStillPresent: finalRead ? finalRead.present : null,
+      roleDeleted: roleRead ? roleRead.deleted : null,
+      windowEnd: ours?.condition.expression ?? null,
+    };
+  }
   const settled = settleObjects(events);
   const unresolved = [
     ...settled.unresolved,
+    ...iamUnresolved,
     ...remaining
       .filter((name) => !planned.has(name))
       .map((name) => ({ name, reason: "foreign object under the run prefix" })),
@@ -432,7 +461,11 @@ export async function observe({
     runId,
     target: target.name,
     requests: budget.count,
-    expectedRequests: expectedRequests(cases, recordings, target.name),
+    expectedRequests: expectedRequests(cases, recordings, target.name, {
+      roleReads: iamCtx.roleReads ?? 0,
+      probes,
+    }),
+    iam: target.name === "production" ? iamReport() : null,
     rows: rows.length,
     finished,
     stopped,
@@ -511,5 +544,108 @@ export async function readbackAbsent({
     allAbsent: items !== null && items.length === 0 && results.every((r) => r.status === 404),
   };
   out.save("a2.json", report);
+  return report;
+}
+
+/**
+ * The A2 read-back of the signer access, at least 10 minutes after the run: the signer's policy
+ * equals the preflight policy apart from the etag, no binding of the signer role remains, and the
+ * role reads absent or deleted. Reads only.
+ */
+export async function readbackIam({ target, runId, deps, out, preflight }) {
+  const budget = new RequestBudget(4, 4);
+  const { wire } = createWire({ target, prefix: runPrefix(runId), budget, deps, out });
+  const base = `https://iam.googleapis.com/v1/projects/${target.project}`;
+  const report = { runId, requests: 0, unreadable: false };
+  try {
+    const body = { options: { requestedPolicyVersion: 3 } };
+    const policy = await wire(
+      "a2-signer-policy",
+      {
+        method: "POST",
+        url: `${base}/serviceAccounts/${target.signer}:getIamPolicy`,
+        headers: { "content-type": "application/json" },
+        body: Buffer.from(JSON.stringify(body)),
+      },
+      { admin: true },
+    );
+    const current = policy.status === 200 ? JSON.parse(policy.body.toString("utf8")) : null;
+    const role = await wire(
+      "a2-role",
+      { method: "GET", url: `${base}/roles/${ROLE_ID}` },
+      { admin: true },
+    );
+    report.policyEqualsPreflight = current ? samePolicy(current, preflight.policy) : null;
+    report.bindingPresent = current
+      ? (current.bindings ?? []).some((b) => b.role === roleName(target.project))
+      : null;
+    report.roleState =
+      role.status === 404
+        ? "absent"
+        : role.status === 200
+          ? JSON.parse(role.body.toString("utf8")).deleted === true
+            ? "deleted"
+            : "live"
+          : "unreadable";
+  } catch (error) {
+    if (!(error instanceof UnknownAnswer)) throw error;
+    report.unreadable = true;
+  }
+  report.requests = budget.count;
+  report.clean =
+    !report.unreadable &&
+    report.policyEqualsPreflight === true &&
+    report.bindingPresent === false &&
+    (report.roleState === "absent" || report.roleState === "deleted");
+  out.save("a2-iam.json", report);
+  return report;
+}
+
+/**
+ * The reviewed standalone removal, for a run whose removal was unknown or failed: reads the
+ * signer's policy, removes the run's binding (from `iam-grant-plan.json`) on its etag, deletes the
+ * role this run created, and reads both back. The same code and the same shape checks as the run.
+ */
+export async function removeSignerAccess({ target, runId, deps, out, preflight, plan }) {
+  const budget = new RequestBudget(12, 12);
+  const { wire, unknownLabels } = createWire({
+    target,
+    prefix: runPrefix(runId),
+    budget,
+    deps,
+    out,
+  });
+  const events = [];
+  const io = {
+    wire: (label, request, options) => wire(label, request, { admin: true, ...options }),
+    events,
+  };
+  const ctx = { grantAttempted: true, roleCreateAttempted: true, saPolicy: preflight.policy };
+  let error = null;
+  try {
+    await iamRemove({ io, target, ctx, ours: plan.binding });
+  } catch (caught) {
+    error = caught;
+  }
+  const finalPolicy = events.findLast((e) => e.resource === "binding" && e.event === "final-read");
+  const finalRole = events.findLast((e) => e.resource === "role" && e.event === "final-read");
+  const unknownRemoval = events.some((e) => e.event === "remove" && isUnknownStatus(e.status));
+  const report = {
+    runId,
+    requests: budget.count,
+    unknownRequests: unknownLabels,
+    error: error ? String(error.message) : null,
+    policyEqualsPreflight: finalPolicy ? finalPolicy.equalsPreflight : null,
+    bindingPresent: finalPolicy ? finalPolicy.present : null,
+    roleDeleted: finalRole ? finalRole.deleted : null,
+  };
+  report.clean =
+    !error &&
+    !unknownRemoval &&
+    unknownLabels.length === 0 &&
+    report.policyEqualsPreflight === true &&
+    report.bindingPresent === false &&
+    report.roleDeleted !== false;
+  out.save("iam-remove.json", report);
   return report;
 }

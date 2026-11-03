@@ -7,6 +7,8 @@
 
 import { createHash } from "node:crypto";
 
+import { ROLE_ID } from "./plan.mjs";
+
 const xmlError = (code, message) =>
   Buffer.from(
     `<?xml version='1.0' encoding='UTF-8'?><Error><Code>${code}</Code><Message>${message}</Message></Error>`,
@@ -39,7 +41,36 @@ export function createFakeWorld({
   lenient = false,
   hideFromList = new Set(),
   intercept = () => undefined,
+  iam: iamOptions = {},
 }) {
+  const iamConfig = {
+    member: IAM_CONFIG.member,
+    propagationMs: 0,
+    initialPolicy: { etag: "etag-0" },
+    projectBindings: [
+      {
+        role: "roles/firebase.sdkAdminServiceAgent",
+        members: [`serviceAccount:${target.signer}`],
+      },
+    ],
+    bucketBindings: [],
+    predefinedRoles: {
+      "firebase.sdkAdminServiceAgent": [
+        "storage.objects.create",
+        "storage.objects.get",
+        "storage.objects.delete",
+        "storage.objects.list",
+      ],
+    },
+    ...iamOptions,
+  };
+  const iamState = {
+    policy: structuredClone(iamConfig.initialPolicy),
+    roles: new Map(),
+    appliedAt: 0,
+    etagCounter: 0,
+  };
+  const roleKey = `projects/${target.project}/roles/${ROLE_ID}`;
   const objects = new Map();
   const log = [];
   let generation = 1000;
@@ -158,9 +189,17 @@ export function createFakeWorld({
     if (!isSigned && target.name === "production" && headersIn.authorization === undefined) {
       return json(401, { error: { code: 401, message: "Invalid Credentials" } });
     }
-    if (url.hostname === "iam.googleapis.com") return json(200, { email: target.signer });
+    const iamAnswer = iamRequest(url, request, segments);
+    if (iamAnswer) return iamAnswer;
     if (segments[0] === "storage") {
       if (segments.length === 4) return json(200, { name: target.bucket });
+      if (segments.length === 5 && segments[4] === "iam") {
+        return json(200, {
+          kind: "storage#policy",
+          etag: "b-etag",
+          bindings: iamConfig.bucketBindings,
+        });
+      }
       if (segments.length === 5) {
         const prefix = url.searchParams.get("prefix") ?? "";
         const items = [...objects.values()]
@@ -199,6 +238,90 @@ export function createFakeWorld({
     return { status: 405, headers: {}, body: Buffer.alloc(0) };
   }
 
+  function conditionEnd(condition) {
+    const m = /timestamp\("([^"]+)"\)/.exec(condition?.expression ?? "");
+    return m ? Date.parse(m[1]) : Number.NaN;
+  }
+
+  /** Whether signBlob would succeed now: the run's binding is applied, unexpired and the role exists. */
+  function signerEnabled() {
+    const role = iamState.roles.get(roleKey);
+    if (!role || role.deleted) return false;
+    if (clock.now() < iamState.appliedAt + iamConfig.propagationMs) return false;
+    return (iamState.policy.bindings ?? []).some(
+      (b) =>
+        b.role === roleKey &&
+        (b.members ?? []).includes(iamConfig.member) &&
+        conditionEnd(b.condition) > clock.now(),
+    );
+  }
+
+  const bodyOf = (request) => JSON.parse(Buffer.from(request.body ?? "{}").toString("utf8"));
+
+  function policyView() {
+    const bindings = iamState.policy.bindings ?? [];
+    const view = { version: bindings.some((b) => b.condition) ? 3 : 1, etag: iamState.policy.etag };
+    if (bindings.length) view.bindings = structuredClone(bindings);
+    return view;
+  }
+
+  function iamRequest(url, request, segments) {
+    const email = target.signer;
+    if (url.hostname === "cloudresourcemanager.googleapis.com") {
+      return json(200, { version: 1, etag: "p-etag", bindings: iamConfig.projectBindings });
+    }
+    if (url.hostname !== "iam.googleapis.com") return undefined;
+    const path = decodeURIComponent(url.pathname);
+    const account = `/v1/projects/${target.project}/serviceAccounts/${email}`;
+    if (path === account) return json(200, { email, disabled: false });
+    if (path === `${account}:getIamPolicy`) return json(200, policyView());
+    if (path === `${account}:setIamPolicy`) {
+      const { policy } = bodyOf(request);
+      if (!policy || policy.etag !== iamState.policy.etag) {
+        return json(409, { error: { code: 409, status: "ABORTED" } });
+      }
+      if ((policy.bindings ?? []).some((b) => b.condition) && policy.version < 3) {
+        return json(400, { error: { code: 400, status: "INVALID_ARGUMENT" } });
+      }
+      iamState.etagCounter += 1;
+      iamState.policy = {
+        etag: `etag-${iamState.etagCounter}`,
+        bindings: structuredClone(policy.bindings ?? []),
+      };
+      iamState.appliedAt = clock.now();
+      return json(200, policyView());
+    }
+    if (path === `/v1/projects/${target.project}/roles` && request.method === "POST") {
+      const body = bodyOf(request);
+      if (!body.roleId || !Array.isArray(body.role?.includedPermissions)) {
+        return json(400, { error: { code: 400, status: "INVALID_ARGUMENT" } });
+      }
+      const key = `projects/${target.project}/roles/${body.roleId}`;
+      if (iamState.roles.has(key))
+        return json(409, { error: { code: 409, status: "ALREADY_EXISTS" } });
+      iamState.roles.set(key, { name: key, ...body.role, deleted: false });
+      return json(200, iamState.roles.get(key));
+    }
+    if (path.startsWith(`/v1/projects/${target.project}/roles/`)) {
+      const key = path.slice(4);
+      const role = iamState.roles.get(key);
+      if (request.method === "DELETE") {
+        if (!role) return json(404, { error: { code: 404 } });
+        role.deleted = true;
+        return json(200, role);
+      }
+      return role ? json(200, role) : json(404, { error: { code: 404, status: "NOT_FOUND" } });
+    }
+    if (path.startsWith("/v1/roles/")) {
+      const permissions = iamConfig.predefinedRoles[path.slice("/v1/roles/".length)];
+      return permissions
+        ? json(200, { name: path.slice(4), includedPermissions: permissions })
+        : json(404, { error: { code: 404 } });
+    }
+    void segments;
+    return json(404, { error: { code: 404 } });
+  }
+
   /** The SDK signer: one signBlob request (production), then a URL of the SDK's V4 shape. */
   async function sign(spec, meter) {
     if (target.name === "production") {
@@ -206,7 +329,7 @@ export function createFakeWorld({
         method: "POST",
         url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${target.signer}:signBlob`,
       });
-      const answer = faults.signBlob ?? 200;
+      const answer = faults.signBlob ?? (signerEnabled() ? 200 : 403);
       delete faults.signBlob;
       meter.after("signBlob", answer);
       if (answer !== 200) throw new Error(`signBlob refused with ${answer}`);
@@ -251,6 +374,8 @@ export function createFakeWorld({
   return {
     objects,
     log,
+    iam: iamState,
+    signerEnabled,
     deps: {
       net,
       sign,
@@ -293,4 +418,9 @@ export const LOCAL_LIKE = Object.freeze({
   name: "local",
   bucket: "demo-bucket.appspot.com",
   origin: "http://127.0.0.1:9199",
+});
+
+export const IAM_CONFIG = Object.freeze({
+  member: "user:owner@example.com",
+  windowMinutes: 60,
 });

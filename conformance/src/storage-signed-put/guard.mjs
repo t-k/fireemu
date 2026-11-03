@@ -2,12 +2,13 @@
 // passes `classifyRequest` before it leaves the process: only the forms below, only the project's
 // own bucket, and every object name under the run prefix.
 
-import { PREFIX_ROOT } from "./plan.mjs";
+import { PREFIX_ROOT, ROLE_ID } from "./plan.mjs";
 
 const PRODUCTION_HOSTS = new Set([
   "storage.googleapis.com",
   "iam.googleapis.com",
   "iamcredentials.googleapis.com",
+  "cloudresourcemanager.googleapis.com",
 ]);
 const SIGNED_PARAMS = [
   "X-Goog-Algorithm",
@@ -39,6 +40,71 @@ function checkName(name, prefix) {
   if (name.split("/").some((part) => part === ".." || part === "."))
     fail("dot segment in object name");
   return name;
+}
+
+const ROLE_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** The iam.googleapis.com forms: the signer, its policy, the signer role, and role definitions. */
+function classifyIam(target, method, segments, only) {
+  const decoded = segments.map(decodeSegment);
+  if (decoded[0] !== "v1") fail("IAM version");
+  const account = `serviceAccounts`;
+  const project = target.project;
+  if (
+    decoded.length === 5 &&
+    decoded[1] === "projects" &&
+    decoded[2] === project &&
+    decoded[3] === account
+  ) {
+    const leaf = decoded[4];
+    if (leaf === target.signer) {
+      if (method !== "GET") fail("IAM method");
+      only([]);
+      return "signer-get";
+    }
+    for (const [suffix, kind] of [
+      [":getIamPolicy", "signer-get-policy"],
+      [":setIamPolicy", "signer-set-policy"],
+    ]) {
+      if (leaf === `${target.signer}${suffix}`) {
+        if (method !== "POST") fail("IAM policy method");
+        only([]);
+        return kind;
+      }
+    }
+    return fail("IAM path");
+  }
+  if (
+    decoded.length === 4 &&
+    decoded[1] === "projects" &&
+    decoded[2] === project &&
+    decoded[3] === "roles"
+  ) {
+    if (method !== "POST") fail("IAM role method");
+    only([]);
+    return "role-create";
+  }
+  if (
+    decoded.length === 5 &&
+    decoded[1] === "projects" &&
+    decoded[2] === project &&
+    decoded[3] === "roles"
+  ) {
+    if (!ROLE_NAME.test(decoded[4])) fail("IAM role name");
+    if (method === "DELETE" && decoded[4] === ROLE_ID) {
+      only(["etag"]);
+      return "role-delete";
+    }
+    if (method !== "GET") fail("IAM role method");
+    only([]);
+    return decoded[4] === ROLE_ID ? "role-get" : "role-read";
+  }
+  if (decoded.length === 3 && decoded[1] === "roles") {
+    if (method !== "GET" || !ROLE_NAME.test(decoded[2])) fail("IAM predefined role");
+    only([]);
+    return "role-read";
+  }
+  return fail("IAM path");
 }
 
 /**
@@ -73,13 +139,14 @@ export function classifyRequest(target, request, prefix) {
   };
   const jsonBase = ["storage", "v1", "b", bucket];
 
-  if (url.hostname === "iam.googleapis.com") {
-    if (method !== "GET") fail("IAM method");
-    const expected = ["v1", "projects", target.project, "serviceAccounts", target.signer];
-    if (segments.length !== 5 || segments.some((s, i) => decodeSegment(s) !== expected[i]))
-      fail("IAM path");
+  if (url.hostname === "iam.googleapis.com") return classifyIam(target, method, segments, only);
+  if (url.hostname === "cloudresourcemanager.googleapis.com") {
+    if (method !== "POST") fail("resource manager method");
+    const expected = ["v1", `projects`, `${target.project}:getIamPolicy`];
+    if (segments.length !== 3 || segments.some((s, i) => decodeSegment(s) !== expected[i]))
+      fail("resource manager path");
     only([]);
-    return "signer-get";
+    return "project-policy";
   }
   if (url.hostname === "iamcredentials.googleapis.com") {
     if (method !== "POST") fail("IAM credentials method");
@@ -96,6 +163,11 @@ export function classifyRequest(target, request, prefix) {
       if (method !== "GET") fail("bucket method");
       only([]);
       return "bucket-get";
+    }
+    if (segments.length === 5 && segments[4] === "iam") {
+      if (method !== "GET") fail("bucket policy method");
+      only(["optionsRequestedPolicyVersion"]);
+      return "bucket-policy";
     }
     if (segments.length === 5 && segments[4] === "o") {
       if (method !== "GET") fail("list method");

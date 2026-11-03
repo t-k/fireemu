@@ -5,20 +5,32 @@
 // metered metadata GET instead (the SDK's exists() is that same GET).
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import http from "node:http";
 import https from "node:https";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 
 import { createProductionDeps, installEgressGuard } from "./storage-signed-put/deps.mjs";
 import { classifyRequest } from "./storage-signed-put/guard.mjs";
 import { UnknownAnswer } from "./storage-signed-put/observe.mjs";
 import { BUCKET, PROJECT, SIGNER, runPrefix } from "./storage-signed-put/plan.mjs";
 
-// No test here may reach a network: any outbound http(s) request or fetch throws.
-installEgressGuard([]);
-globalThis.fetch = () => {
+// No test here may reach a network: any outbound http(s) request or fetch is refused and recorded,
+// and the `after` hook at the end of the file fails the run if any attempt was recorded, even one
+// an SDK swallowed. (On 2026-11-03 an earlier version of this file let `file.exists()` reach
+// storage.googleapis.com; see the sentinel test below.)
+const attempts = [];
+installEgressGuard([], { onRefuse: (host) => attempts.push(`http: ${host}`) });
+globalThis.fetch = (url) => {
+  attempts.push(`fetch: ${String(url?.url ?? url)}`);
   throw new Error("fetch is not allowed in this test");
 };
+after(() => {
+  assert.deepEqual(attempts, [], "a real network request was attempted");
+});
 
 const RUN = "sp-0123abcd";
 const target = { name: "production", bucket: BUCKET, project: PROJECT, signer: SIGNER };
@@ -240,11 +252,61 @@ describe("production dependencies: SDK paths", () => {
     }
   });
 
-  it("refuses an http(s) request to any host once the egress guard is installed", () => {
+  it("sentinel: an attempted request is refused and recorded, so the hook at the end would fail", () => {
     assert.throws(() => https.request("https://storage.googleapis.com/"), /egress refused/);
     assert.throws(
       () => http.get({ hostname: "metadata.google.internal", path: "/" }),
       /egress refused/,
     );
+    assert.throws(
+      () => globalThis.fetch("https://storage.googleapis.com/storage/v1/b/x"),
+      /fetch is not allowed/,
+    );
+    assert.deepEqual(attempts, [
+      "http: storage.googleapis.com",
+      "http: metadata.google.internal",
+      "fetch: https://storage.googleapis.com/storage/v1/b/x",
+    ]);
+    attempts.length = 0;
+  });
+
+  it("sentinel: a test file built like this one fails when it attempts a real request, and passes when it does not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sp-sentinel-"));
+    try {
+      const depsUrl = new URL("./storage-signed-put/deps.mjs", import.meta.url).href;
+      const fixture = (body) => `
+        import assert from "node:assert/strict";
+        import https from "node:https";
+        import { after, it } from "node:test";
+        import { installEgressGuard } from ${JSON.stringify(depsUrl)};
+        const attempts = [];
+        installEgressGuard([], { onRefuse: (host) => attempts.push(host) });
+        after(() => assert.deepEqual(attempts, [], "a real network request was attempted"));
+        it("body", () => { ${body} });
+      `;
+      const run = (name, body) => {
+        const file = join(dir, name);
+        writeFileSync(file, fixture(body));
+        // The test runner marks its children through NODE_TEST_CONTEXT; a nested run must not inherit it.
+        const env = { ...process.env };
+        delete env.NODE_TEST_CONTEXT;
+        return spawnSync(process.execPath, ["--test", file], {
+          encoding: "utf8",
+          timeout: 60_000,
+          env,
+        });
+      };
+      const quiet = run("quiet.test.mjs", "assert.ok(true);");
+      assert.equal(quiet.status, 0, quiet.stdout);
+      // The attempt is swallowed by the test itself, as an SDK might: only the hook can notice it.
+      const swallowed = run(
+        "swallowed.test.mjs",
+        'try { https.request("https://storage.googleapis.com/"); } catch {}',
+      );
+      assert.notEqual(swallowed.status, 0);
+      assert.match(swallowed.stdout, /a real network request was attempted/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

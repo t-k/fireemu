@@ -14,6 +14,7 @@ import {
   staticBounds,
 } from "./storage-signed-put/plan.mjs";
 import {
+  IAM_CONFIG,
   LOCAL_LIKE,
   PRODUCTION_LIKE,
   createFakeWorld,
@@ -30,12 +31,13 @@ async function run({
   cases,
   mutateDeps,
   intercept,
+  iam,
 } = {}) {
   const clock = createVirtualClock();
-  const world = createFakeWorld({ target, clock, faults, intercept });
+  const world = createFakeWorld({ target, clock, faults, intercept, iam });
   const out = memoryOut();
   const deps = mutateDeps ? mutateDeps(world.deps) : world.deps;
-  const result = await observe({ target, runId: RUN, deps, out, caps, cases });
+  const result = await observe({ target, runId: RUN, deps, out, caps, cases, iam: IAM_CONFIG });
   return { ...result, world, out };
 }
 
@@ -46,7 +48,10 @@ describe("signed PUT observer on the fake world", () => {
     const { report, rows, reads, world } = await run();
     assert.equal(report.finished, true, report.stopped);
     assert.equal(report.closureReady, true, JSON.stringify(report.unresolved));
-    assert.equal(report.requests, expectedRequests(CASES, 2, "production"));
+    assert.equal(
+      report.requests,
+      expectedRequests(CASES, 2, "production", { roleReads: 1, probes: 1 }),
+    );
     assert.equal(rows.length, 2 * CASES.length);
     assert.equal(world.objects.size, 0);
     assert.deepEqual(report.recordingDifferences, []);
@@ -117,7 +122,7 @@ describe("signed PUT observer on the fake world", () => {
         putTimes.push(clock.now());
       return net(request);
     };
-    await observe({ target: PRODUCTION_LIKE, runId: RUN, deps, out: memoryOut() });
+    await observe({ iam: IAM_CONFIG, target: PRODUCTION_LIKE, runId: RUN, deps, out: memoryOut() });
     assert.equal(seen.length, 2);
     for (const { spec, url } of seen) {
       assert.equal(spec.expires - spec.accessibleAt, 1000);
@@ -149,6 +154,7 @@ describe("signed PUT observer on the fake world", () => {
     });
     const out = memoryOut();
     const { report } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps: world.deps,
@@ -223,6 +229,7 @@ describe("signed PUT observer on the fake world", () => {
       },
     };
     const { report } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps,
@@ -412,17 +419,26 @@ describe("signed PUT observer on the fake world", () => {
     const clock = createVirtualClock();
     const world = createFakeWorld({ target: PRODUCTION_LIKE, clock, lenient: true });
     const { report } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps: world.deps,
       out: memoryOut(),
     });
-    const bounds = staticBounds();
+    const bounds = staticBounds(CASES, 2, { roleReads: 1, probes: 1 });
     assert.equal(report.requests, bounds.total);
     assert.equal(report.rows, 2 * CASES.length);
     assert.equal(report.closureReady, true, JSON.stringify(report.unresolved));
     assert.equal(world.objects.size, 0);
-    assert.deepEqual(bounds, { setup: 3, perRecording: 50, main: 103, cleanup: 66, total: 169 });
+    assert.deepEqual(bounds, {
+      setup: 8,
+      iamGrant: 4,
+      perRecording: 50,
+      main: 112,
+      iamRemove: 5,
+      cleanup: 71,
+      total: 183,
+    });
   });
 
   it("sends the headers each case names and nothing else on the PUT; credentials only on admin requests", async () => {
@@ -470,7 +486,7 @@ describe("signed PUT observer on the fake world", () => {
       report.requests,
     );
     const sdk = out.entries.filter((e) => e.phase.startsWith("sdk-"));
-    assert.equal(sdk.filter((e) => e.phase === "sdk-after").length, 2 * CASES.length);
+    assert.equal(sdk.filter((e) => e.phase === "sdk-after").length, 2 * CASES.length + 1);
     const text = JSON.stringify(out.entries);
     assert.ok(!/Bearer/i.test(text));
     assert.ok(!/X-Goog-Signature=[0-9a-f]{16}/.test(text));
@@ -614,7 +630,7 @@ describe("signed PUT observer on the fake world", () => {
       if (request.method === "PUT" && request.url.includes("/expired.png")) putAt.push(clock.now());
       return net(request);
     };
-    await observe({ target: PRODUCTION_LIKE, runId: RUN, deps, out: memoryOut() });
+    await observe({ iam: IAM_CONFIG, target: PRODUCTION_LIKE, runId: RUN, deps, out: memoryOut() });
     for (const { spec, at } of specs) {
       if (spec.accessibleAt === undefined) {
         assert.equal(spec.expires - at, 300_000);
@@ -655,6 +671,7 @@ describe("signed PUT observer on the fake world", () => {
       hideFromList: new Set([hidden]),
     });
     const { report } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps: world.deps,
@@ -693,6 +710,7 @@ describe("signed PUT observer on the fake world", () => {
       },
     };
     const { report, reads } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps,
@@ -714,15 +732,22 @@ describe("signed PUT observer on the fake world", () => {
     assert.deepEqual(unknown.report.unknownRequests, ["signBlob"]);
     assert.equal(unknown.report.closureReady, false);
     assert.equal(unknown.report.cleanupVerified, false);
-    const refused = await run({ faults: { signBlob: 403 } });
+    // A refusal while the binding propagates is retried by the probe; no recording is lost.
+    const slow = await run({ faults: { signBlob: 403 } });
+    assert.deepEqual(slow.report.unknownRequests, []);
+    assert.equal(slow.report.finished, true);
+    assert.equal(slow.report.iam.signProbes, 2);
+    assert.equal(slow.report.closureReady, true);
+    const refused = await run({ iam: { propagationMs: 1e9 } });
     assert.deepEqual(refused.report.unknownRequests, []);
-    assert.match(refused.report.stopped, /signBlob refused with 403/);
-    assert.equal(refused.report.cleanupVerified, true);
+    assert.match(refused.report.stopped, /signBlob still refused after 12 probes/);
+    assert.equal(refused.report.iam.signProbes, 12);
+    assert.equal(refused.report.cleanupVerified, true, JSON.stringify(refused.report.unresolved));
     assert.equal(refused.rows.length, 0);
   });
 
   it("surfaces a non-unknown error during cleanup as a cleanup error", async () => {
-    const { report } = await run({ caps: { main: 130, total: 104 } });
+    const { report } = await run({ caps: { main: 130, total: 116 } });
     assert.ok(report.cleanupError);
     assert.match(report.cleanupError, /budget/);
     assert.equal(report.closureReady, false);
@@ -792,6 +817,7 @@ describe("signed PUT observer on the fake world", () => {
       },
     };
     const { report } = await observe({
+      iam: IAM_CONFIG,
       target: PRODUCTION_LIKE,
       runId: RUN,
       deps,

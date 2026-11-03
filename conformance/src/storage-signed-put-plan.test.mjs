@@ -90,7 +90,7 @@ describe("signed PUT plan", () => {
     assert.ok(bounds.total <= TOTAL_CAP, `total ${bounds.total}`);
     assert.ok(expectedRequests() <= bounds.total);
     assert.ok(expectedRequests(CASES, 2, "local") < expectedRequests());
-    assert.equal(TOTAL_CAP, 200);
+    assert.equal(TOTAL_CAP, 220);
   });
 
   it("lists every name a recording can create under the recording prefix", () => {
@@ -122,17 +122,19 @@ describe("signed PUT plan", () => {
         ESTIMATED_USD,
         RECORDINGS,
       ],
-      [130, 200, 40, 30_000, 2500, 5000, 0.05, 2],
+      [150, 220, 45, 30_000, 2500, 5000, 0.05, 2],
     );
     assert.equal(CASES.length, 16);
     assert.deepEqual(staticBounds(), {
-      setup: 3,
+      setup: 15,
+      iamGrant: 15,
       perRecording: 50,
-      main: 103,
-      cleanup: 66,
-      total: 169,
+      main: 130,
+      iamRemove: 5,
+      cleanup: 71,
+      total: 201,
     });
-    assert.equal(expectedRequests(), 3 + 2 * 50 + 2 + 2 * 5 * 2);
+    assert.equal(expectedRequests(), 9 + 9 + 2 * 50 + 2 + 2 * 5 * 2);
     assert.equal(expectedRequests(CASES, 2, "local"), 1 + 2 * 34 + 2 + 2 * 5 * 2);
     assert.equal(byId("ok-origin").preflight, true);
     assert.equal(CASES.filter((c) => c.preflight).length, 1);

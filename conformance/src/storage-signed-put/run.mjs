@@ -2,7 +2,8 @@
 //
 //   node run.mjs record-production --out <new dir>   coordinator only; ADC, project lock, sends
 //   node run.mjs record-local --out <new dir>        under `fireemu exec --only storage -- ...`
-//   node run.mjs readback --run-dir <dir>            the A2 read-back (production, reads only)
+//   node run.mjs readback --run-dir <dir>            the A2 read-back of objects and signer access (reads only)
+//   node run.mjs iam-remove --run-dir <dir>          the reviewed standalone removal of the signer binding and role
 //   node run.mjs compare --production <dir> --local <dir> --out <new dir>
 //
 // The recorder never writes a ledger row; it prints the run report for the coordinator.
@@ -16,12 +17,30 @@ import { fileURLToPath } from "node:url";
 import { withProjectLocks } from "../storage-rules/project-locks.mjs";
 import { createLocalDeps, createProductionDeps, fetchNet, installEgressGuard } from "./deps.mjs";
 import { validateSigner } from "./guard.mjs";
+import { validateMember, validateWindow } from "./iam.mjs";
 import { compareTargets } from "./judge.mjs";
-import { observe, readbackAbsent } from "./observe.mjs";
-import { BUCKET, ESTIMATED_USD, PROJECT, SIGNER, newRunId, runPrefix } from "./plan.mjs";
+import { observe, readbackAbsent, readbackIam, removeSignerAccess } from "./observe.mjs";
+import {
+  BUCKET,
+  DEFAULT_WINDOW_MINUTES,
+  ESTIMATED_USD,
+  PROJECT,
+  SIGNER,
+  newRunId,
+  runPrefix,
+} from "./plan.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MODULES = ["plan.mjs", "guard.mjs", "judge.mjs", "observe.mjs", "deps.mjs", "run.mjs"];
+const MODULES = [
+  "plan.mjs",
+  "guard.mjs",
+  "judge.mjs",
+  "wire.mjs",
+  "iam.mjs",
+  "observe.mjs",
+  "deps.mjs",
+  "run.mjs",
+];
 const FORBIDDEN_ENV = [/^GOOGLE_APPLICATION_CREDENTIALS$/, /^FIREBASE_TOKEN$/, /^CLOUDSDK_/];
 
 function argValue(name) {
@@ -91,6 +110,10 @@ async function recordProduction() {
   }
   const runId = newRunId();
   const signer = validateSigner(argValue("signer") ?? SIGNER, PROJECT);
+  const member = validateMember(required("member"));
+  const windowMinutes = validateWindow(
+    Number(argValue("window-minutes") ?? DEFAULT_WINDOW_MINUTES),
+  );
   const pin = pins();
   if (pin.dirty) throw new Error("the recorder's checkout has uncommitted or untracked files");
   const out = newOutDir(required("out"));
@@ -99,6 +122,7 @@ async function recordProduction() {
     "storage.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
   ]);
   let accessToken;
   try {
@@ -117,6 +141,7 @@ async function recordProduction() {
     startedAt,
     ...pin,
     target: { ...target },
+    iam: { member, windowMinutes },
   });
   let final;
   await withProjectLocks(
@@ -133,7 +158,13 @@ async function recordProduction() {
     async (lease) => {
       const deps = createProductionDeps({ accessToken, lease, signer });
       try {
-        const { report } = await observe({ target, runId, deps, out });
+        const { report } = await observe({
+          target,
+          runId,
+          deps,
+          out,
+          iam: { member, windowMinutes },
+        });
         final = finish(out, report, { startedAt, ...pin });
         if (report.closureReady) lease.confirmClosed();
       } finally {
@@ -163,9 +194,16 @@ async function recordLocal() {
   }
 }
 
-async function readback() {
+function productionAccess() {
   const dir = required("run-dir");
   const header = JSON.parse(readFileSync(join(dir, "run-header.json"), "utf8"));
+  const signer = validateSigner(argValue("signer") ?? header.target.signer, PROJECT);
+  installEgressGuard([
+    "storage.googleapis.com",
+    "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+  ]);
   const accessToken = execFileSync(
     "gcloud",
     ["auth", "application-default", "print-access-token"],
@@ -176,15 +214,22 @@ async function readback() {
     },
   ).trim();
   const target = { name: "production", bucket: BUCKET, project: PROJECT, signer };
+  const stamp = (name) => `${name}-${new Date().toISOString().replace(/[:.]/g, "")}`;
+  const journalName = stamp("followup-journal") + ".jsonl";
   const out = {
     journal: (entry) =>
       appendFileSync(
-        join(dir, "a2-journal.jsonl"),
+        join(dir, journalName),
         `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`,
         { mode: 0o600 },
       ),
+    // Follow-up files get a time stamp in the name; nothing already in the run directory is rewritten.
     save: (name, data) =>
-      writeFileSync(join(dir, name), `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 }),
+      writeFileSync(
+        join(dir, `${name.replace(/\.json$/, "")}-${stamp("at")}.json`),
+        `${JSON.stringify(data, null, 2)}\n`,
+        { mode: 0o600, flag: "wx" },
+      ),
   };
   const deps = {
     adminHeaders: () => ({
@@ -193,7 +238,30 @@ async function readback() {
     }),
     net: fetchNet,
   };
+  return { dir, header, target, out, deps };
+}
+
+async function readback() {
+  const { dir, header, target, out, deps } = productionAccess();
   const report = await readbackAbsent({ target, runId: header.runId, deps, out });
+  const preflight = JSON.parse(readFileSync(join(dir, "iam-preflight.json"), "utf8"));
+  const iam = await readbackIam({ target, runId: header.runId, deps, out, preflight });
+  console.log(JSON.stringify({ objects: report, iam }));
+  return { report, iam };
+}
+
+async function iamRemoveCommand() {
+  const { dir, header, target, out, deps } = productionAccess();
+  const preflight = JSON.parse(readFileSync(join(dir, "iam-preflight.json"), "utf8"));
+  const plan = JSON.parse(readFileSync(join(dir, "iam-grant-plan.json"), "utf8"));
+  const report = await removeSignerAccess({
+    target,
+    runId: header.runId,
+    deps,
+    out,
+    preflight,
+    plan,
+  });
   console.log(JSON.stringify(report));
   return report;
 }
@@ -215,6 +283,7 @@ const commands = {
   "record-production": recordProduction,
   "record-local": recordLocal,
   readback,
+  "iam-remove": iamRemoveCommand,
   compare,
 };
 const command = process.argv[2];

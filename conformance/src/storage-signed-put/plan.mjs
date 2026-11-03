@@ -10,6 +10,26 @@ export const SIGNER = "firebase-adminsdk-fbsvc@fireemu-oracle-query.iam.gservice
 export const PREFIX_ROOT = "storage-signed-put";
 export const RECORDINGS = 2;
 
+/** The signer role (owner ledger 2216, same form as AUTH-CONFIG-SDK K6): signBlob and nothing else. */
+export const ROLE_ID = "fireemuAdminSdkSigner";
+export const SIGNER_PERMISSION = "iam.serviceAccounts.signBlob";
+/** What the signer must already be able to do in the default bucket (read from its existing roles). */
+export const STORAGE_PERMISSIONS = [
+  "storage.objects.create",
+  "storage.objects.get",
+  "storage.objects.delete",
+];
+/** At most this many distinct roles are read to resolve the signer's permissions. */
+export const MAX_ROLE_READS = 8;
+/** IAM changes need time to take effect; signBlob is probed this often before the first recording. */
+export const MAX_SIGN_PROBES = 12;
+export const SIGN_PROBE_WAIT_MS = 20_000;
+/** The time condition of the binding: from the grant to this many minutes later. */
+export const DEFAULT_WINDOW_MINUTES = 60;
+export const MAX_WINDOW_MINUTES = 180;
+/** Retries of the policy removal after a definitive etag conflict (409). */
+export const MAX_REMOVE_ATTEMPTS = 3;
+
 /** The range header value of the assigned flow, and the narrow range of the size cases. */
 export const ASSIGNED_RANGE = "0,10485760";
 export const NARROW_RANGE = "5,8";
@@ -17,10 +37,10 @@ export const RANGE_HEADER = "x-goog-content-length-range";
 export const PNG_MAGIC = Uint8Array.from([137, 80, 78, 71]);
 
 /** Request caps: the main phase (setup and both recordings) and the whole run with cleanup. */
-export const MAIN_CAP = 130;
-export const TOTAL_CAP = 200;
+export const MAIN_CAP = 150;
+export const TOTAL_CAP = 220;
 /** A2 read-back (a separate command, at least 10 minutes after the last request). */
-export const READBACK_CAP = 40;
+export const READBACK_CAP = 45;
 /** Per-request timeout, from the 30000 ms of the existing Storage recorders (no signed-PUT latency is recorded yet). */
 export const REQUEST_TIMEOUT_MS = 30_000;
 /** The shortest lifetime the SDK can sign is 1 s; the PUT waits this long past it. */
@@ -154,36 +174,48 @@ export function plannedNames(runId, cases = CASES, recordings = RECORDINGS) {
 }
 
 /**
- * Worst-case request counts. Setup: bucket read, signer read, empty-prefix list. Per case: one
- * signBlob, one PUT, one follow-up read (the positive control adds a media read; `exists()` is the metadata read), the
- * preflight case adds one OPTIONS. Cleanup, when every planned name exists: one list, a DELETE and
- * a read-back per name, a final list.
+ * Worst-case request counts for production. Setup: bucket read, signer read, signer policy read,
+ * role read, project policy read, bucket policy read, up to `roleReads` role definitions, empty-prefix
+ * list. IAM grant: role create, policy set, policy read-back, then up to `probes` signBlob probes.
+ * Per case: one signBlob, one PUT, one follow-up read (the positive control adds a media read;
+ * `exists()` is the metadata read), the preflight case adds one OPTIONS. Cleanup, when every planned
+ * name exists: one list, a DELETE and a read-back per name, a final list. IAM removal: policy read,
+ * policy set, policy read-back, role delete, role read-back.
  */
-export function staticBounds(cases = CASES, recordings = RECORDINGS) {
-  const setup = 3;
+export function staticBounds(
+  cases = CASES,
+  recordings = RECORDINGS,
+  { roleReads = MAX_ROLE_READS, probes = MAX_SIGN_PROBES } = {},
+) {
+  const setup = 7 + roleReads;
+  const iamGrant = 3 + probes;
   let perRecording = 0;
   for (const testCase of cases) {
     perRecording += 3;
     if (testCase.followUps === "full") perRecording += 1;
     if (testCase.preflight) perRecording += 1;
   }
-  const main = setup + perRecording * recordings;
+  const main = setup + iamGrant + perRecording * recordings;
   const names = new Set(cases.map((c) => caseObjects(c).sent)).size * recordings;
-  const cleanup = 2 + 2 * names;
-  return { setup, perRecording, main, cleanup, total: main + cleanup };
+  const iamRemove = 5;
+  const cleanup = 2 + 2 * names + iamRemove;
+  return { setup, iamGrant, perRecording, main, iamRemove, cleanup, total: main + cleanup };
 }
 
 /**
- * The request count of a run in which every case behaves as planned. Production adds the bucket
- * and signer reads and one signBlob per case; the local dry run signs with a local key.
+ * The request count of a run in which every case behaves as planned, with `roleReads` role
+ * definitions to read and `probes` signBlob probes before the first recording. The local dry run
+ * signs with a local key and has no IAM steps.
  */
 export function expectedRequests(
   cases = CASES,
   recordings = RECORDINGS,
   targetName = "production",
+  { roleReads = 2, probes = 1 } = {},
 ) {
   const production = targetName === "production";
-  const setup = production ? 3 : 1;
+  const setup = production ? 7 + roleReads : 1;
+  const iam = production ? 3 + probes + 5 : 0;
   let perRecording = 0;
   let created = 0;
   for (const testCase of cases) {
@@ -192,5 +224,5 @@ export function expectedRequests(
     if (testCase.preflight) perRecording += 1;
     if (testCase.expect === "create") created += 1;
   }
-  return setup + perRecording * recordings + 2 + 2 * created * recordings;
+  return setup + iam + perRecording * recordings + 2 + 2 * created * recordings;
 }

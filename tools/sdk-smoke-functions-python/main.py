@@ -303,6 +303,12 @@ def tk_echo(request):
 
 
 @tasks_fn.on_task_dispatched()
+def tk_code(request):
+    """Refuses with the error code the request names, to read the status table."""
+    raise https_fn.HttpsError(https_fn.FunctionsErrorCode(request.data["code"]), "refused with " + request.data["code"])
+
+
+@tasks_fn.on_task_dispatched()
 def tk_refuse(request):
     raise https_fn.HttpsError(https_fn.FunctionsErrorCode.FAILED_PRECONDITION, "not now")
 
@@ -323,6 +329,14 @@ def _blocking_entry(name, event):
 def bc_user(event):
     _record(_blocking_entry("bc_user", event))
     email = event.data.email or ""
+    if email.startswith("code:"):
+        raise https_fn.HttpsError(https_fn.FunctionsErrorCode(email[5:].split("@")[0]), "refused with " + email[5:].split("@")[0])
+    if email.startswith("reserved"):
+        return identity_fn.BeforeCreateResponse(custom_claims={"iss": "https://elsewhere.example"})
+    if email.startswith("subclaim"):
+        return identity_fn.BeforeCreateResponse(custom_claims={"sub": "someone-else"})
+    if email.startswith("oversized"):
+        return identity_fn.BeforeCreateResponse(custom_claims={"big": "x" * 1100})
     if email.startswith("blocked"):
         raise https_fn.HttpsError(https_fn.FunctionsErrorCode.PERMISSION_DENIED, "no accounts for you")
     if email.startswith("claims"):
@@ -359,6 +373,13 @@ def reads_nothing(request):
     if request.args.get("hold"):
         time.sleep(float(request.args["hold"]))
     return jsonify(env=_secrets_in_environment())
+
+
+@https_fn.on_request(secrets=["API_KEY"])
+def closes_badly(request):
+    response = jsonify(env=_secrets_in_environment())
+    response.call_on_close(lambda: 1 / 0)
+    return response
 
 
 @https_fn.on_request(secrets=["API_KEY"])

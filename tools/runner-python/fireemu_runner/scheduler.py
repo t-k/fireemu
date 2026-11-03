@@ -17,6 +17,8 @@ from werkzeug.test import EnvironBuilder
 
 _INSTANT = re.compile(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?Z$")
 _LOS_ANGELES = ZoneInfo("America/Los_Angeles")
+_JOB_NAME = re.compile(r"projects/([^/]*)/locations/([^/]*)/jobs/")
+_NAME = re.compile(r"[A-Za-z0-9-]+")
 _MAX_ANSWER_CHARS = 256
 
 
@@ -43,17 +45,35 @@ def _schedule_time(instant) -> str:
     return local.strftime("%Y-%m-%dT%H:%M:%S") + (f".{fraction}" if fraction else "") + f"{offset[:3]}:{offset[3:]}"
 
 
+def _function_host(job: str) -> str | None:
+    """The public host of a function, `<region>-<project>.cloudfunctions.net`, from a job's resource name.
+
+    Recorded for us-central1 only (all 76 distinct Gen2 frames of run 156715222b86ea44); another region follows the
+    same rule, unrecorded. A name without a project and a location in this form invents no host (the Node runner's
+    `functionHost`).
+    """
+    match = _JOB_NAME.match(job)
+    if match is None or not _NAME.fullmatch(match.group(1)) or not _NAME.fullmatch(match.group(2)):
+        return None
+    return f"{match.group(2)}-{match.group(1)}.cloudfunctions.net"
+
+
 def scheduler_headers(data) -> dict:
     """The headers of the request for one scheduled run (`{jobName, scheduleTime}`)."""
     job = data.get("jobName") if isinstance(data, dict) else None
     if not isinstance(job, str) or not job:
         raise SchedulerFailure("the scheduled run names no job name")
+    host = _function_host(job)
     return {
         "x-cloudscheduler": "true",
         "x-cloudscheduler-jobname": job.rsplit("/", 1)[-1],
         "x-cloudscheduler-scheduletime": _schedule_time(data.get("scheduleTime")),
         "user-agent": "Google-Cloud-Scheduler",
         "content-length": "0",
+        # Constant in every recorded frame: the front end's encodings and protocol.
+        "accept-encoding": "gzip, deflate, br",
+        "x-forwarded-proto": "https",
+        **({"host": host} if host else {}),
     }
 
 

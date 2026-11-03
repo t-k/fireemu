@@ -168,13 +168,13 @@ def test_without_a_runner_secret_in_the_environment_no_presented_secret_is_accep
     from harness import read_runner_frame
 
     hello = read_runner_frame(os.fdopen(wiring.read_fd, "rb"))
-    for presented in ("XXXX", "wrong"):
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{hello['httpPort']}/demo-proj/us-central1/only", headers={"x-fireemu-runner-secret": presented}
-        )
+    for presented in (None, "", "XXXX", "wrong"):
+        headers = {} if presented is None else {"x-fireemu-runner-secret": presented}
+        request = urllib.request.Request(f"http://127.0.0.1:{hello['httpPort']}/demo-proj/us-central1/only", headers=headers)
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(request, timeout=10)
-        assert error.value.code == 403
+        # The Node runner answers 500 "FIREEMU_RUNNER_SECRET is required" to every request in this configuration.
+        assert error.value.code == 500
     os.write(pipe_in[1], encode_frame({"type": "shutdown"}))
     thread.join(10)
     os.close(pipe_in[1])

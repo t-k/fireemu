@@ -17,12 +17,16 @@ def data(time="2026-10-05T08:45:00Z", job=JOB):
 def test_the_headers_are_the_ones_cloud_scheduler_sends_with_the_job_id_not_its_resource_name(monkeypatch):
     monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
     headers = scheduler_headers(data())
+    # The Node runner's `schedulerRequest` (tools/runner-node/schedule-delivery.mjs), header for header.
     assert headers == {
         "x-cloudscheduler": "true",
         "x-cloudscheduler-jobname": "firebase-schedule-sch_ok-us-central1",
         "x-cloudscheduler-scheduletime": "2026-10-05T01:45:00-07:00",
         "user-agent": "Google-Cloud-Scheduler",
         "content-length": "0",
+        "accept-encoding": "gzip, deflate, br",
+        "x-forwarded-proto": "https",
+        "host": "us-central1-demo-proj.cloudfunctions.net",
     }
 
 
@@ -177,3 +181,43 @@ def test_an_answer_without_a_body_is_just_its_status():
     with pytest.raises(SchedulerFailure) as error:
         deliver_schedule(lambda request: Answer(), data())
     assert str(error.value) == "the scheduled function answered 503"
+
+
+@pytest.mark.parametrize(
+    "job, host",
+    [
+        ("projects/demo-proj/locations/us-central1/jobs/j", "us-central1-demo-proj.cloudfunctions.net"),
+        ("projects/p-1/locations/europe-west1/jobs/j", "europe-west1-p-1.cloudfunctions.net"),
+        ("projects/demo-proj/locations/us-central1/jobs/", "us-central1-demo-proj.cloudfunctions.net"),
+        # No host is invented when the name does not carry a project and a location in the recorded form.
+        ("j", None),
+        ("a/b/jobs/last", None),
+        ("projects//locations/us-central1/jobs/j", None),
+        ("projects/demo-proj/locations//jobs/j", None),
+        ("projects/de mo/locations/us-central1/jobs/j", None),
+        ("projects/demo_proj/locations/us-central1/jobs/j", None),
+        ("projects/demo-proj/locations/us.central1/jobs/j", None),
+        ("projects/demo-proj/locations/us-central1/jobs/j\n", "us-central1-demo-proj.cloudfunctions.net"),
+        ("projects/demo-proj/locations/us-central1/other/j", None),
+        ("xprojects/demo-proj/locations/us-central1/jobs/j", None),
+    ],
+)
+def test_the_public_host_comes_from_the_jobs_project_and_location_only_in_the_recorded_form(job, host):
+    headers = scheduler_headers(data(job=job))
+    assert headers.get("host") == host
+    assert ("host" in headers) == (host is not None)
+
+
+def test_the_request_the_function_sees_carries_those_headers():
+    seen = {}
+
+    def function(request):
+        seen.update({name: request.headers.get(name) for name in ("host", "x-forwarded-proto", "accept-encoding")})
+
+        class Answer:
+            status_code = 200
+
+        return Answer()
+
+    deliver_schedule(function, data())
+    assert seen == {"host": "us-central1-demo-proj.cloudfunctions.net", "x-forwarded-proto": "https", "accept-encoding": "gzip, deflate, br"}

@@ -2,7 +2,6 @@
 
 import os
 import threading
-import traceback
 
 from .events import (
     database_cloud_event,
@@ -11,6 +10,7 @@ from .events import (
     pubsub_cloud_event,
     storage_cloud_event,
 )
+from .diagnostics import describe
 from .environment import EnvironmentGate
 from .framing import FrameWriter
 from .scheduler import SchedulerFailure, deliver_schedule
@@ -82,24 +82,39 @@ class Dispatcher:
         """Runs one invoke frame on a new thread; the caller has reserved a slot with `reserve`."""
         threading.Thread(target=self._run, args=(message,), daemon=True, name=f"invoke-{message['invocationId']}").start()
 
+    def _deliver_held(self, message: dict) -> tuple[str, str] | None:
+        """Runs the invocation and returns `(diagnostic, text)` of its failure, or None.
+
+        The failure is described here, inside the gate: turning an exception into text can run user code
+        (`__str__`), and after the invocation leaves the gate another invocation's secrets may be present.
+        """
+        try:
+            spec, function = self._check(message)
+        except BaseException as error:  # not user code, but a malformed frame: still answered, never raised
+            return describe(error)
+        with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
+            try:
+                # One process serves the whole codebase, so these name the invocation that started most
+                # recently, not a fixed target (the design memo, section 5).
+                os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
+                os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
+                os.environ["K_SERVICE"] = spec["name"]
+                _deliver(message["trigger"], function, message["event"])
+            except BaseException as error:  # a SystemExit in user code must still answer the daemon
+                diagnostic, text = describe(error)
+                # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.
+                return (str(error) if isinstance(error, SchedulerFailure) else diagnostic), text
+        return None
+
     def _run(self, message: dict) -> None:
         invocation = message["invocationId"]
         try:
-            try:
-                spec, function = self._check(message)
-                with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
-                    # One process serves the whole codebase, so these name the invocation that started most
-                    # recently, not a fixed target (the design memo, section 5).
-                    os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
-                    os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
-                    os.environ["K_SERVICE"] = spec["name"]
-                    _deliver(message["trigger"], function, message["event"])
+            failure = self._deliver_held(message)
+            if failure is None:
                 result = {"type": "result", "invocationId": invocation, "ok": True}
-            except BaseException as error:  # a SystemExit in user code must still answer the daemon
-                # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.
-                diagnostic = str(error) if isinstance(error, SchedulerFailure) else "".join(traceback.format_exception(error))
+            else:
+                diagnostic, text = failure
                 self._send_log("error", f"{message['function']}: {diagnostic}", invocation, message["function"])
-                text = str(error) or type(error).__name__
                 result = {"type": "result", "invocationId": invocation, "ok": False, "error": _bound(text, _MAX_ERROR_CHARS)}
             self._writer.write(result)
         finally:

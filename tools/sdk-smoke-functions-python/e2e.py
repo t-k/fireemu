@@ -231,6 +231,39 @@ def secrets_by_function():
     assert wait_for(lambda e: e["function"] == "fs_plain", "fs_plain")["env"] == {"API_KEY": None, "TOKEN": None}
 
 
+def negative_ingress():
+    """What the public Functions URL and the Auth emulator refuse for the new function kinds."""
+    ran = lambda: len([e for e in seen() if e["function"] == "tk_echo"])  # noqa: E731
+    before = ran()
+    body = {"data": {"n": 9}}
+    unsigned = b64({"alg": "none", "typ": "JWT"}) + "." + b64({"iss": "https://accounts.google.com", "aud": "x", "exp": 4102444800}) + "."
+    attempts = [("no credentials", {}), ("a forged bearer", {"Authorization": f"Bearer {unsigned}"}), ("the queue header alone", {"x-cloudtasks-queuename": "tk_echo"})]
+    for label, headers in attempts:
+        status, response = call("POST", f"{FUNCTIONS}/tk_echo", body, headers)
+        if PROFILE == "strict":
+            assert status in (401, 403) and b'"result"' not in response, (label, status, response)
+        else:
+            assert status == 200, (label, status, response)  # the official emulator serves a task function to anyone
+    assert ran() == before + (0 if PROFILE == "strict" else len(attempts)), (before, ran())
+    # A blocking function has no public URL, whoever asks.
+    for headers in ({}, OWNER):
+        status, response = call("POST", f"{FUNCTIONS}/bc_user", {"data": {"jwt": unsigned}}, headers)
+        assert status == 404, (status, response)
+    # The SDK refuses a reserved claim name and an oversized payload.
+    for email, fragment in (("reserved@example.com", b""), ("oversized@example.com", b"")):
+        status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": email, "password": "secret1", "returnSecureToken": True})
+        assert status == 400 and fragment in response and b"idToken" not in response, (email, status, response)
+    # A `sub` claim passes the SDK, and the daemon keeps the protocol's own subject when it assembles the token.
+    status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "subclaim@example.com", "password": "secret1", "returnSecureToken": True})
+    assert status == 200, (status, response)
+    answer = json.loads(response)
+    subject = json.loads(base64.urlsafe_b64decode(answer["idToken"].split(".")[1] + "=="))["sub"]
+    assert subject == answer["localId"] and subject != "someone-else", (subject, answer["localId"])
+    # Every refusal code a blocking function can use reaches the caller with its message.
+    status, response = call("POST", f"{AUTH}/accounts:signUp?key=fake", {"email": "code:permission-denied@example.com", "password": "secret1"})
+    assert status == 400 and b"refused with permission-denied" in response, (status, response)
+
+
 APP_ID = "1:1234567890:web:pyapp"
 
 
@@ -334,6 +367,7 @@ def main():
     app_check()
     request_families()
     secrets_by_function()
+    negative_ingress()
     print(json.dumps({"ok": True, "profile": PROFILE}))
 
 

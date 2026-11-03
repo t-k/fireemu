@@ -12,6 +12,13 @@ the duration of an invocation, as the Node runner's `withFunctionEnvironment` do
 
 The model is `EnvGate.tla` (checked with TLC): an exclusive invocation never overlaps any other, a plain one never
 sees a secret, and nothing is exposed while nothing runs.
+
+What this does not isolate, as in the Node runner (one process serves the whole codebase):
+- work a function leaves running after its invocation ends (a thread it started, a child process it launched) runs in
+  the shared process and sees whatever the environment holds at that moment;
+- a function that holds a secret and waits, synchronously, for another function of the same codebase (a request to its
+  own URL) deadlocks: the other invocation queues behind the gate the caller holds.
+Both are stated on the Functions page.
 """
 
 import collections

@@ -557,3 +557,79 @@ def test_a_router_without_a_gate_leaves_the_environment_alone(discovered, monkey
     monkeypatch.setenv("API_KEY", "process-value")
     client = Client(RunnerRouter(discovered, build_manifest(discovered), "demo-proj", SECRET))
     assert env_of(get(client, "/demo-proj/us-central1/reads_nothing"))["API_KEY"] == "process-value"
+
+
+# --- an empty runner secret is a configuration error, as in the Node runner (Codex r1 on slice 2b) --------------
+
+
+@pytest.mark.parametrize("presented", [None, "", "anything"])
+def test_a_router_with_no_secret_refuses_every_request_instead_of_accepting_an_empty_one(discovered, presented):
+    client = Client(RunnerRouter(discovered, build_manifest(discovered), "demo-proj", ""))
+    headers = {} if presented is None else {"x-fireemu-runner-secret": presented}
+    for path in ("/demo-proj/us-central1/hello", "/nowhere"):
+        response = client.open(path, headers=headers, buffered=True)
+        assert response.status_code == 500
+        assert response.get_data(as_text=True) == "FIREEMU_RUNNER_SECRET is required"
+
+
+# --- the refusal table: an error code in a task queue or blocking function becomes this HTTP status --------------
+
+STATUS_OF_CODE = {
+    "cancelled": 499,
+    "unknown": 500,
+    "invalid-argument": 400,
+    "deadline-exceeded": 504,
+    "not-found": 404,
+    "already-exists": 409,
+    "permission-denied": 403,
+    "resource-exhausted": 429,
+    "failed-precondition": 400,
+    "aborted": 409,
+    "out-of-range": 400,
+    "unimplemented": 501,
+    "internal": 500,
+    "unavailable": 503,
+    "data-loss": 500,
+    "unauthenticated": 401,
+}
+CANONICAL_NAME = {code: code.upper().replace("-", "_") for code in STATUS_OF_CODE}
+
+
+@pytest.mark.parametrize("code, status", sorted(STATUS_OF_CODE.items()))
+def test_a_task_queue_function_that_refuses_with_a_code_answers_that_codes_status(client, code, status):
+    response = post(client, "tk_code", {"data": {"code": code}})
+    body = json.loads(response.get_data())
+    assert response.status_code == status
+    assert body["error"] == {"status": CANONICAL_NAME[code], "message": "refused with " + code}
+
+
+@pytest.mark.parametrize("code, status", sorted(STATUS_OF_CODE.items()))
+def test_a_blocking_function_that_refuses_with_a_code_answers_that_codes_status(client, emulated_auth, code, status):
+    response = blocking(client, "bc_user", "beforeCreate", f"code:{code}@example.com")
+    body = json.loads(response.get_data())
+    assert response.status_code == status
+    assert body["error"] == {"status": CANONICAL_NAME[code], "message": "refused with " + code}
+
+
+def test_the_table_covers_every_code_the_sdk_knows():
+    from firebase_functions import https_fn
+
+    assert {code.value for code in https_fn.FunctionsErrorCode} - {"ok"} == set(STATUS_OF_CODE)
+
+
+def test_the_sdk_itself_refuses_a_reserved_claim_name(client, emulated_auth):
+    response = blocking(client, "bc_user", "beforeCreate", "reserved@example.com")
+    assert response.status_code == 400 and json.loads(response.get_data())["error"]["status"] == "INVALID_ARGUMENT"
+
+
+def test_a_sub_claim_passes_the_sdk_and_the_runner_adds_nothing_to_the_payload(client, emulated_auth):
+    # The SDK permits `sub`; the daemon gives the protocol's own claim precedence when it assembles the token
+    # (tested end to end in e2e.py).
+    response = blocking(client, "bc_user", "beforeCreate", "subclaim@example.com")
+    body = json.loads(response.get_data())
+    assert response.status_code == 200 and "someone-else" in json.dumps(body)
+
+
+def test_the_sdk_itself_refuses_an_oversized_claims_payload(client, emulated_auth):
+    response = blocking(client, "bc_user", "beforeCreate", "oversized@example.com")
+    assert response.status_code == 400 and json.loads(response.get_data())["error"]["status"] == "INVALID_ARGUMENT"

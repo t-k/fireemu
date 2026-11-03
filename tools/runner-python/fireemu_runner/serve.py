@@ -9,12 +9,13 @@ function sees the path below its mount point, as it does in production, and answ
 import contextlib
 import hmac
 import os
+import sys
 
 import flask
 from functions_framework import crash_handler, read_request
 from werkzeug.serving import WSGIRequestHandler, make_server
-from werkzeug.wsgi import ClosingIterator
 
+from .diagnostics import describe
 from .environment import EnvironmentGate
 from .manifest import DEFAULT_REGION
 
@@ -36,6 +37,52 @@ def _flask_app() -> flask.Flask:
     app.add_url_rule("/", endpoint="run", view_func=run, defaults={"path": ""}, methods=_METHODS)
     app.add_url_rule("/<path:path>", endpoint="run", view_func=run, methods=_METHODS)
     return app
+
+
+class ResponseBodyFailed(Exception):
+    """A response body failed while it was being sent. The details were logged inside the function's environment."""
+
+
+def _log_failure(name: str, error: BaseException) -> None:
+    diagnostic, _ = describe(error)
+    sys.stderr.write(f"[functions] {name}: {diagnostic[:8192]}\n")
+
+
+class _HeldBody:
+    """A response body that keeps its function's environment until the body is finished, whatever happens to it.
+
+    Closing the body, and running the callbacks `Response.call_on_close` registered, is user code: if it raises the
+    gate must still be released, or the process is locked with a secret in its environment. Errors are described
+    here, while the environment is still held, and the server sees only a plain exception.
+    """
+
+    def __init__(self, body, held: contextlib.ExitStack, name: str):
+        self._body = body
+        self._iterator = iter(body)
+        self._held = held
+        self._name = name
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            raise
+        except BaseException as error:
+            _log_failure(self._name, error)
+            raise ResponseBodyFailed(type(error).__name__) from None
+
+    def close(self):
+        try:
+            close = getattr(self._body, "close", None)
+            if close is not None:
+                close()
+        except BaseException as error:  # the response has been sent; there is nobody to tell but the log
+            _log_failure(self._name, error)
+        finally:
+            self._held.close()
 
 
 class RunnerRouter:
@@ -64,6 +111,10 @@ class RunnerRouter:
 
     def __call__(self, environ, start_response):
         presented = environ.pop(SECRET_ENVIRON_KEY, "").encode()
+        if not self._secret:
+            # A runner with no secret would accept any request without the header (an empty value equals an empty
+            # secret). The Node runner answers every request this way (`http-admission.mjs`).
+            return self._plain(start_response, "500 Internal Server Error", "FIREEMU_RUNNER_SECRET is required")
         if not hmac.compare_digest(presented, self._secret):
             return self._plain(start_response, "403 Forbidden", "forbidden")
         parts = environ.get("PATH_INFO", "").split("/")
@@ -88,10 +139,11 @@ class RunnerRouter:
             os.environ["FUNCTION_SIGNATURE_TYPE"] = "http"
             os.environ["K_SERVICE"] = name
             body = self._app(environ, start_response)
-        except BaseException:
+        except BaseException as error:
+            _log_failure(name, error)
             held.close()
-            raise
-        return ClosingIterator(body, held.close)
+            raise ResponseBodyFailed(type(error).__name__) from None
+        return _HeldBody(body, held, name)
 
 
 class _QuietHandler(WSGIRequestHandler):

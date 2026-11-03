@@ -7734,6 +7734,53 @@ service cloud.firestore {
         parse_ruleset(&source).unwrap()
     }
 
+    /// Unrelated blocks written before the allowing block, at the top level and nested, so the
+    /// walk of the items meets every one of them before it reaches the allow.
+    fn unrelated_before_allow_rules(unrelated: usize, nested: bool) -> crate::ast::Ruleset {
+        let siblings = (0..unrelated).fold(String::new(), |mut source, index| {
+            let _ = write!(
+                source,
+                " match /unrelated{index}/{{id}} {{ allow get: if id == 'x'; }}"
+            );
+            source
+        });
+        let source = if nested {
+            format!(
+                "rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{{siblings} match /notes/{{id}} {{ allow get: if true; }} }} }}"
+            )
+        } else {
+            format!(
+                "rules_version = '2'; service cloud.firestore {{{siblings} match /databases/{{db}}/documents/notes/{{id}} {{ allow get: if true; }} }}"
+            )
+        };
+        parse_ruleset(&source).unwrap()
+    }
+
+    #[test]
+    fn unrelated_sibling_blocks_before_the_allow_are_not_examined() {
+        for nested in [false, true] {
+            let mut counts = Vec::new();
+            for unrelated in [0, 100, 1_000] {
+                let ruleset = unrelated_before_allow_rules(unrelated, nested);
+                let (reference, expected) = blocks_examined(&ruleset, &note_request(), true);
+                let (examined, decision) = blocks_examined(&ruleset, &note_request(), false);
+                assert_eq!(decision, expected);
+                assert_eq!(decision, Decision::Allow);
+                println!(
+                    "blocks examined per request, nested={nested} unrelated-before={unrelated:5}: reference {reference:5}, filtered {examined:5}"
+                );
+                counts.push((unrelated, examined));
+            }
+            let baseline = counts[0].1;
+            for (unrelated, examined) in counts {
+                assert_eq!(
+                    examined, baseline,
+                    "nested={nested}: {unrelated} unrelated blocks before the allow"
+                );
+            }
+        }
+    }
+
     #[test]
     fn unrelated_sibling_blocks_are_not_examined_after_an_early_allow() {
         let mut counts = Vec::new();

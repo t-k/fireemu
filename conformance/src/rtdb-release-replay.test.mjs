@@ -4,7 +4,16 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { campaignPlan, judgeExport } from "./rtdb-release-replay.mjs";
 
-const paths = ["rest-old", "ondisconnect", "auth", "residual", "s5", "functions", "rest-v033"];
+const paths = [
+  "rest-old",
+  "ondisconnect",
+  "auth",
+  "residual",
+  "s5",
+  "sdk-small",
+  "functions",
+  "rest-v033",
+];
 test("each comparison resolves to its actual local producer and installed binary", () => {
   for (const name of paths) {
     const plan = campaignPlan(name, "/installed/fireemu", "/output");
@@ -143,6 +152,7 @@ test("campaign selection pins the actual distinct producer scripts", () => {
     auth: "cv11-genuine-auth.mjs",
     residual: "rtdb-residual.mjs",
     s5: "rtdb-s5.mjs",
+    "sdk-small": "rtdb-sdk-small.mjs",
     functions: "local-run.mjs",
   };
   for (const [name, script] of Object.entries(expected))
@@ -163,6 +173,7 @@ test("recorded SDK journals and Functions frames are recomputed, and altered res
       ["auth", "production-cv11-genuine-auth.json"],
       ["residual", "production-rtdb-residual.json"],
       ["s5", "production-rtdb-s5.json"],
+      ["sdk-small", "production-sdk-small.json"],
     ]) {
       const fixture = JSON.parse(
         readFileSync(
@@ -276,7 +287,16 @@ test("the Functions fixture requires its recorded locked SDK versions", async ()
 
 test("every RTDB campaign binds its recorded fixture and local producer sources", async () => {
   const { sourceResources } = await import("./rtdb-release-replay.mjs");
-  for (const name of ["rest", "ondisconnect", "auth", "residual", "s5", "functions", "smoke"]) {
+  for (const name of [
+    "rest",
+    "ondisconnect",
+    "auth",
+    "residual",
+    "s5",
+    "sdk-small",
+    "functions",
+    "smoke",
+  ]) {
     const resources = sourceResources(name);
     assert.ok(Object.keys(resources).length >= 2, name);
     assert.ok(
@@ -502,3 +522,71 @@ test(
     }
   },
 );
+
+test("the SDK small campaign replays strict with the package SDK and binds the observer case code", async () => {
+  const { sourceResources } = await import("./rtdb-release-replay.mjs");
+  const plan = campaignPlan("sdk-small", "/installed/fireemu", "/output");
+  assert.equal(plan.campaign, "sdk-small");
+  assert.equal(plan.argv[plan.argv.indexOf("--profile") + 1], "strict");
+  assert.ok(
+    plan.argv[plan.argv.indexOf("--modules") + 1].endsWith(
+      "/tools/sdk-smoke-database/node_modules",
+    ),
+  );
+  const resources = Object.keys(sourceResources("sdk-small"));
+  for (const file of [
+    "rtdb-sdk-small.mjs",
+    "rtdb-sdk-small-judge.mjs",
+    "rtdb-sdk-small-fixture.mjs",
+    "fixtures/production-sdk-small.json",
+    ...[
+      "actor.mjs",
+      "sequence.mjs",
+      "rules.mjs",
+      "page.mjs",
+      "page.html",
+      "lib.mjs",
+      "observer.mjs",
+    ].map((name) => `sdk-observer/${name}`),
+  ])
+    assert.ok(resources.includes(`tools/sdk-smoke-database/${file}`), file);
+  const hash = "b".repeat(64);
+  assert.deepEqual(
+    judgeExport("sdk-small", { campaign: "sdk-small", binarySha256: hash, match: true }, hash),
+    [],
+  );
+  assert.equal(
+    judgeExport("sdk-small", { campaign: "s5", binarySha256: hash, match: true }, hash).length,
+    1,
+  );
+});
+
+test("SDK small adjudication needs all 32 rows to match and refuses the v0.41.0 frozen clock", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { adjudicate } = await import("./rtdb-release-replay.mjs");
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("../../tools/sdk-smoke-database/fixtures/production-sdk-small.json", import.meta.url),
+    ),
+  );
+  const dir = mkdtempSync(join(tmpdir(), "rtdb-sdk-small-"));
+  try {
+    writeFileSync(join(dir, "journal.json"), JSON.stringify(fixture));
+    const good = adjudicate("sdk-small", dir);
+    assert.equal(good.match, true);
+    assert.equal(good.result.counts.MATCH, 32);
+    for (const profile of fixture.profiles) {
+      const st = profile.rows.find((row) => row.id === "server_timestamp").value;
+      st.value = st.before - 300;
+      profile.rows.find((row) => row.id === "increment").value.at = st.value;
+    }
+    writeFileSync(join(dir, "journal.json"), JSON.stringify(fixture));
+    const frozen = adjudicate("sdk-small", dir);
+    assert.equal(frozen.match, false);
+    assert.deepEqual(frozen.result.counts, { MATCH: 24, MISMATCH: 8, NEEDS_REVIEW: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

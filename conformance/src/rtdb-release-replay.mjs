@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { summarize as summarizeResidual } from "../../tools/sdk-smoke-database/rtdb-residual-fixture.mjs";
 import { summarize as summarizeS5 } from "../../tools/sdk-smoke-database/rtdb-s5-fixture.mjs";
+import { summarize as summarizeSdkSmall } from "../../tools/sdk-smoke-database/rtdb-sdk-small-judge.mjs";
 import { comparison as compareAuth } from "../../tools/sdk-smoke-database/cv11-fixture.mjs";
 import { judgeCaptured } from "../../tools/sdk-smoke-database/cv07-ondisconnect.mjs";
 import { judgeRow, judgeM14, localRequests } from "../../tools/sdk-smoke-database/rest-replay.mjs";
@@ -22,6 +23,7 @@ const names = {
   auth: "auth",
   residual: "residual",
   s5: "s5",
+  "sdk-small": "sdk-small",
   functions: "functions",
   smoke: "smoke",
 };
@@ -31,6 +33,7 @@ const scripts = {
   auth: `${T}/cv11-genuine-auth.mjs`,
   residual: `${T}/rtdb-residual.mjs`,
   s5: `${T}/rtdb-s5.mjs`,
+  "sdk-small": `${T}/rtdb-sdk-small.mjs`,
   functions: "conformance/src/rtdb-functions/local-run.mjs",
 };
 export function campaignPlan(name, binary, out) {
@@ -55,8 +58,9 @@ export function campaignPlan(name, binary, out) {
   const argv = [process.execPath, repo(scripts[campaign])];
   if (campaign !== "functions") argv.push("local");
   argv.push("--fireemu", binary, "--out", out);
-  if (["residual", "s5", "functions"].includes(campaign)) argv.push("--profile", "strict");
-  if (["ondisconnect", "auth", "residual", "s5"].includes(campaign))
+  if (["residual", "s5", "sdk-small", "functions"].includes(campaign))
+    argv.push("--profile", "strict");
+  if (["ondisconnect", "auth", "residual", "s5", "sdk-small"].includes(campaign))
     argv.push("--modules", repo(`${T}/node_modules`));
   return { campaign, argv };
 }
@@ -119,6 +123,21 @@ export function sourceResources(campaign) {
       `${T}/rtdb-s5-judge.mjs`,
       `${T}/fixtures/production-rtdb-s5.json`,
     ],
+    "sdk-small": [
+      `${T}/rtdb-sdk-small.mjs`,
+      `${T}/rtdb-sdk-small-fixture.mjs`,
+      `${T}/rtdb-sdk-small-judge.mjs`,
+      `${T}/fixtures/production-sdk-small.json`,
+      ...[
+        "actor.mjs",
+        "sequence.mjs",
+        "rules.mjs",
+        "page.mjs",
+        "page.html",
+        "lib.mjs",
+        "observer.mjs",
+      ].map((name) => `${T}/sdk-observer/${name}`),
+    ],
     functions: [
       "conformance/src/rtdb-functions/local-run.mjs",
       "conformance/src/rtdb-functions/compare-local.mjs",
@@ -169,7 +188,8 @@ export function runtimeResources(
       ].map((path) => [path, digestFile(join(root, path))]),
     );
   }
-  if (!["ondisconnect", "auth", "residual", "s5", "smoke"].includes(campaign)) return {};
+  if (!["ondisconnect", "auth", "residual", "s5", "sdk-small", "smoke"].includes(campaign))
+    return {};
   for (const [name, version] of [
     ["firebase", "12.18.0"],
     ["firebase-admin", "14.3.0"],
@@ -332,6 +352,13 @@ export function adjudicate(campaign, out) {
   if (campaign === "s5") {
     const result = summarizeS5(fixture("production-rtdb-s5.json"), json(join(out, "journal.json")));
     return { match: result.match && result.rounds.length === 2, result };
+  }
+  if (campaign === "sdk-small") {
+    const result = summarizeSdkSmall(
+      fixture("production-sdk-small.json"),
+      json(join(out, "journal.json")),
+    );
+    return { match: result.match && result.counts.MATCH === 32, result };
   }
   if (campaign === "functions") {
     const production = json(

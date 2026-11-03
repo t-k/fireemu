@@ -375,8 +375,9 @@ export async function iamRemove({ io, target, ctx, ours }) {
     });
   }
   // A role still referenced by a binding that could not be removed is kept, and reported.
-  const stillBound =
-    ctx.finalPolicy && (ctx.finalPolicy.bindings ?? []).some((b) => isOurs(b, ours));
+  // Any binding of the role counts, in any spelling: the same prefix match as the removal read and
+  // the final-read report.
+  const stillBound = ctx.finalPolicy && holdsRole(ctx.finalPolicy, ours.role);
   if (ctx.roleCreateAttempted && !unknownRemoval && !stillBound) {
     let deleted;
     try {

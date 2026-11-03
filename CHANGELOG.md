@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The Realtime Database compatibility record (`spec/compatibility/closure/RTDB.json`, still `IMPLEMENTING`) now lists as recorded the REST `POST`/`DELETE`/`shallow`/`print=silent`/`writeSizeLimit=small` requests, the `equalTo`/`endAt`/`startAfter`/`endBefore` bounds, the REST `.sv` writes, the finite Rules cases and the web SDK's one-shot queries, `push`, `update`, multi-path updates, `serverTimestamp` and `increment`, replayed in both profiles (the SDK cases on the v0.43.0 release, 32 of 32). Everything else stays listed as not observed in production. Two differences from the official emulator with no production answer are recorded as known differences, not changed: the order in which a write covering several nested listens reaches them, and a 768-byte key in a write body, which fireemu accepts.
+
 ## [0.43.0] - 2026-11-03
 
 Firestore Enterprise pipelines (FS-PIPELINE) are `COMPAT_VERIFIED` against production within the recorded corpus, and Cloud Functions codebases written in Python run.

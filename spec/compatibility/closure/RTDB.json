@@ -1138,11 +1138,10 @@
           "tools/sdk-smoke-database/rtdb-sdk-small-judge.test.mjs",
           "tools/sdk-smoke-database/rtdb-sdk-small-fixture.test.mjs",
           "tools/sdk-smoke-database/rtdb-sdk-small.test.mjs",
-          "conformance/src/rtdb-release-replay.test.mjs",
-          "conformance/src/release-strict-regression.test.mjs",
           "conformance/src/rtdb-finite-families-closure.test.mjs"
         ],
-        "scope": "The 32 recorded observations only: one-shot gets, not listeners; child events, windows, compound cursors, transaction variants and Admin SDK paths stay unobserved (/outOfScope)."
+        "scope": "The 32 recorded observations only: one-shot gets, not listeners; child events, windows, compound cursors, transaction variants and Admin SDK paths stay unobserved (/outOfScope).",
+        "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small)"
       }
     }
   ],

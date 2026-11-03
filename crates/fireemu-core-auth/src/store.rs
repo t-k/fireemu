@@ -7276,7 +7276,10 @@ impl AuthRegistry {
         let Ok(mut projects) = self.projects.lock() else {
             return SessionRegistrationRollback::Unavailable;
         };
-        let Some(pending) = projects.pending_sessions.remove(project) else {
+        // Decide before changing anything: every refusal below leaves the pending registration,
+        // the registered store, the displaced routed store and every tenant map as they were,
+        // so the caller can retry.
+        let Some(pending) = projects.pending_sessions.get(project) else {
             return SessionRegistrationRollback::NotPending;
         };
         if !projects
@@ -7284,36 +7287,47 @@ impl AuthRegistry {
             .get(project)
             .is_some_and(|current| Arc::ptr_eq(current, &pending.registered))
         {
-            projects
-                .pending_sessions
-                .insert(project.to_owned(), pending);
             return SessionRegistrationRollback::Conflict;
         }
+        // Take every tenant map before the first mutation, in the registry-wide order
+        // membership -> tenants -> tenant metadata -> overrides (the order `register_session`
+        // and `remove` use). A poisoned map is found here, while nothing has been removed yet;
+        // skipping only the tenant restore would report Restored with the displaced tenants
+        // lost.
+        let Ok(mut tenants) = self.tenants.lock() else {
+            return SessionRegistrationRollback::Unavailable;
+        };
+        let Ok(mut metadata) = self.tenant_metadata.lock() else {
+            return SessionRegistrationRollback::Unavailable;
+        };
+        let Ok(mut runtime_overrides) = self.tenant_runtime_config_overrides.lock() else {
+            return SessionRegistrationRollback::Unavailable;
+        };
+        let Some(pending) = projects.pending_sessions.remove(project) else {
+            return SessionRegistrationRollback::NotPending;
+        };
         projects.registered.remove(project);
         if let Some(displaced) = pending.displaced {
             projects.routed.insert(project.to_owned(), displaced);
         }
-        if let (Ok(mut tenants), Ok(mut metadata), Ok(mut runtime_overrides)) = (
-            self.tenants.lock(),
-            self.tenant_metadata.lock(),
-            self.tenant_runtime_config_overrides.lock(),
-        ) {
-            // A tenant made while the registration was pending belongs to the session that is
-            // going away: it must not outlive it (a stray tenant refuses every later session
-            // for the project). Only the displaced routed namespace's tenants come back.
-            tenants.retain(|(candidate, _), _| candidate != project);
-            metadata.retain(|(candidate, _), _| candidate != project);
-            runtime_overrides.retain(|(candidate, _), _| candidate != project);
-            for tenant in pending.displaced_tenants {
-                if let Some(published) = tenant.metadata {
-                    metadata.insert(tenant.key.clone(), published);
-                }
-                if let Some(patch) = tenant.runtime_override {
-                    runtime_overrides.insert(tenant.key.clone(), patch);
-                }
-                tenants.insert(tenant.key, tenant.store);
+        // A tenant made while the registration was pending belongs to the session that is
+        // going away: it must not outlive it (a stray tenant refuses every later session
+        // for the project). Only the displaced routed namespace's tenants come back.
+        tenants.retain(|(candidate, _), _| candidate != project);
+        metadata.retain(|(candidate, _), _| candidate != project);
+        runtime_overrides.retain(|(candidate, _), _| candidate != project);
+        for tenant in pending.displaced_tenants {
+            if let Some(published) = tenant.metadata {
+                metadata.insert(tenant.key.clone(), published);
             }
+            if let Some(patch) = tenant.runtime_override {
+                runtime_overrides.insert(tenant.key.clone(), patch);
+            }
+            tenants.insert(tenant.key, tenant.store);
         }
+        drop(runtime_overrides);
+        drop(metadata);
+        drop(tenants);
         self.membership_generation.fetch_add(1, Ordering::Release);
         SessionRegistrationRollback::Restored
     }
@@ -11296,6 +11310,164 @@ mod compatibility_routing_tests {
             .unwrap()
             .pending_sessions
             .contains_key("worker-alpha"));
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum RollbackTenantMap {
+        Tenants,
+        Metadata,
+        RuntimeOverrides,
+    }
+
+    /// Registers a session over a routed namespace that owns the tenant `kept`, so a rollback
+    /// has a displaced tenant to restore. Returns the displaced routed store.
+    fn pending_session_over_routed_tenant(registry: &AuthRegistry) -> super::SharedAuthStore {
+        let routed = Arc::new(Mutex::new(
+            registry.routed_candidate("worker-alpha").unwrap(),
+        ));
+        assert!(matches!(
+            registry.install_routed("worker-alpha", routed.clone()),
+            RoutedStoreInstall::Installed(_)
+        ));
+        assert!(registry.ensure_tenant("worker-alpha", "kept").is_some());
+        assert!(registry.register_session(
+            "worker-alpha",
+            AuthStore::new("worker-alpha", SplitMix64::new(2), TotpPolicy::default())
+        ));
+        assert!(registry.tenant_store("worker-alpha", "kept").is_none());
+        routed
+    }
+
+    fn poison_rollback_tenant_map(registry: &Arc<AuthRegistry>, map: RollbackTenantMap) {
+        let registry = registry.clone();
+        assert!(std::thread::spawn(move || {
+            match map {
+                RollbackTenantMap::Tenants => {
+                    let _guard = registry.tenants.lock().unwrap();
+                    panic!("poison tenant map");
+                }
+                RollbackTenantMap::Metadata => {
+                    let _guard = registry.tenant_metadata.lock().unwrap();
+                    panic!("poison tenant metadata map");
+                }
+                RollbackTenantMap::RuntimeOverrides => {
+                    let _guard = registry.tenant_runtime_config_overrides.lock().unwrap();
+                    panic!("poison tenant runtime override map");
+                }
+            }
+        })
+        .join()
+        .is_err());
+    }
+
+    fn assert_rollback_with_a_poisoned_tenant_map_keeps_the_pending_session(
+        map: RollbackTenantMap,
+    ) {
+        let registry = Arc::new(AuthRegistry::new("demo-app", store("demo-app", 1)));
+        pending_session_over_routed_tenant(&registry);
+        let registered = registry.store_for("worker-alpha").unwrap();
+        let generation = registry.membership_generation.load(Ordering::Acquire);
+        poison_rollback_tenant_map(&registry, map);
+
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::Unavailable,
+            "{map:?}: a skipped tenant restore must not be reported as Restored"
+        );
+        // Nothing changed: the registration is still pending with its recovery handle, the
+        // session store is still registered, the routed store is still displaced, and no
+        // tenant was removed or restored.
+        {
+            let projects = registry.projects.lock().unwrap();
+            let pending = projects
+                .pending_sessions
+                .get("worker-alpha")
+                .expect("the pending registration must survive an Unavailable rollback");
+            assert!(Arc::ptr_eq(&pending.registered, &registered));
+            assert!(pending.displaced.is_some());
+            assert_eq!(pending.displaced_tenants.len(), 1);
+            assert!(Arc::ptr_eq(
+                projects.registered.get("worker-alpha").unwrap(),
+                &registered
+            ));
+            assert!(!projects.routed.contains_key("worker-alpha"));
+        }
+        let tenants = registry
+            .tenants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!tenants.keys().any(|(project, _)| project == "worker-alpha"));
+        drop(tenants);
+        assert_eq!(
+            registry.membership_generation.load(Ordering::Acquire),
+            generation
+        );
+        // The caller can retry: the pending session is still there, so a second call answers
+        // Unavailable again rather than NotPending.
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::Unavailable,
+            "{map:?}: a retry must still find the pending session"
+        );
+    }
+
+    #[test]
+    fn session_rollback_with_a_poisoned_tenant_map_is_unavailable_and_keeps_the_pending_session() {
+        assert_rollback_with_a_poisoned_tenant_map_keeps_the_pending_session(
+            RollbackTenantMap::Tenants,
+        );
+    }
+
+    #[test]
+    fn session_rollback_with_a_poisoned_tenant_metadata_map_is_unavailable_and_keeps_the_pending_session(
+    ) {
+        assert_rollback_with_a_poisoned_tenant_map_keeps_the_pending_session(
+            RollbackTenantMap::Metadata,
+        );
+    }
+
+    #[test]
+    fn session_rollback_with_a_poisoned_tenant_runtime_override_map_is_unavailable_and_keeps_the_pending_session(
+    ) {
+        assert_rollback_with_a_poisoned_tenant_map_keeps_the_pending_session(
+            RollbackTenantMap::RuntimeOverrides,
+        );
+    }
+
+    #[test]
+    fn session_rollback_without_poison_restores_the_displaced_routed_tenant() {
+        let registry = AuthRegistry::new("demo-app", store("demo-app", 1));
+        let routed = pending_session_over_routed_tenant(&registry);
+        let generation = registry.membership_generation.load(Ordering::Acquire);
+
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::Restored
+        );
+        assert!(Arc::ptr_eq(
+            &registry.routed_store_for("worker-alpha").unwrap(),
+            &routed
+        ));
+        assert!(!registry
+            .projects
+            .lock()
+            .unwrap()
+            .registered
+            .contains_key("worker-alpha"));
+        assert_eq!(registry.tenants("worker-alpha"), ["kept"]);
+        assert!(registry.tenant_store("worker-alpha", "kept").is_some());
+        assert!(registry.tenant_metadata("worker-alpha", "kept").is_some());
+        assert!(!registry
+            .projects
+            .lock()
+            .unwrap()
+            .pending_sessions
+            .contains_key("worker-alpha"));
+        assert!(registry.membership_generation.load(Ordering::Acquire) > generation);
+        assert_eq!(
+            registry.rollback_session("worker-alpha"),
+            super::SessionRegistrationRollback::NotPending
+        );
     }
 
     #[test]

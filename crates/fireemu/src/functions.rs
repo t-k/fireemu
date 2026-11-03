@@ -3718,7 +3718,14 @@ async fn start_codebase(
         });
         if !supports {
             runner.kill_now();
-            return Err(format!("the Functions codebase {label:?}: runner does not support the requested virtual clock"));
+            let why = if python {
+                " (Python code runs on real time)"
+            } else {
+                ""
+            };
+            return Err(format!(
+                "the Functions codebase {label:?}: runner does not support the requested virtual clock{why}"
+            ));
         }
         if let Err(error) = runner.sync_clock(clock_snapshot).await {
             runner.kill_now();

@@ -3,7 +3,7 @@ title: Cloud Functions
 description: Run Cloud Functions for Firebase locally, with HTTP, callable, event, scheduled, task queue and blocking functions.
 ---
 
-Fireemu loads the Functions codebases declared in `firebase.json` and runs them with Node.js. Running Functions requires `firebase-functions` v6 or v7 in the codebase. When a codebase is loaded, the Eventarc and Cloud Tasks emulators start with it.
+Fireemu loads the Functions codebases declared in `firebase.json` and runs them with Node.js. Running Functions requires `firebase-functions` v6 or v7 in the codebase. Python codebases (`python310` to `python314`) run too; see [Python codebases](#python-codebases). When a codebase is loaded, the Eventarc and Cloud Tasks emulators start with it.
 
 ```sh
 # All codebases declared in firebase.json
@@ -15,6 +15,29 @@ npx fireemu up --only functions:<codebase>
 # One directory, whatever firebase.json declares
 npx fireemu up --functions ./functions
 ```
+
+## Python codebases
+
+A codebase is Python when its `runtime` in `firebase.json` is `python310`, `python311`, `python312`, `python313` or `python314`, or when it declares no `runtime`, has no `package.json` and has a `requirements.txt` (the order the Firebase CLI uses). Fireemu runs it with the interpreter of the codebase's own virtual environment, always `<source>/venv/bin/python`, and never creates the environment or installs packages:
+
+```sh
+cd functions
+python3.12 -m venv venv
+venv/bin/pip install -r requirements.txt   # includes firebase-functions
+npx fireemu up
+```
+
+Before anything starts, fireemu checks the environment and stops with the Firebase CLI's message when `venv` is missing or `firebase_functions` cannot be imported, and with a message naming both versions when the interpreter's Python differs from the declared `runtime`. The tested SDK is `firebase-functions` 0.6.0. Linux and macOS only.
+
+This release serves HTTP (`https_fn.on_request`), callable (`https_fn.on_call`) and Firestore document triggers (`on_document_created`, `updated`, `deleted`, `written` and the `_with_auth_context` variants). A callable sees the user of the Auth emulator. Any other trigger family is reported when the codebase loads and never runs; discovery refuses such a codebase unless `functions.unservedTriggers` is `"report"`, as for the products listed below.
+
+Where it differs from production and from the Firebase CLI:
+
+- One Python process serves the whole codebase, where production gives each function its own instance and the CLI its own process. Module-level state is shared between functions, the `@init` callback runs once per process, on the first call of any function, and `FUNCTION_TARGET`, `FUNCTION_SIGNATURE_TYPE` and `K_SERVICE` name the function that started most recently when calls overlap.
+- Time is real time. Python code is not moved onto the virtual clock, so `datetime.now()` ignores `daemon.clock` settings; a configuration that asks for a virtual date for the Functions runner is refused for a Python codebase.
+- Source changes are not reloaded; restart fireemu.
+- `--inspect-functions` is ignored with a warning, as the Firebase CLI does.
+- App Check is not available for Python callables. A callable that enforces it keeps the SDK's own check, which cannot see a Fireemu token, and a configuration that turns App Check on explicitly refuses to start with a Python codebase.
 
 ## Supported triggers
 

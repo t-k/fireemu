@@ -992,13 +992,15 @@
       "export order is the codebase's, not the ES module namespace's alphabetical order, so the emulator lists functions the way the official one does",
       "every selected codebase declared in a firebase.json `functions` array is loaded, one runner process per codebase, behind one runtime and one functions port; --only functions:<codebase> selects one; at most 32 codebases may be selected in one fireemu run",
       "a function name two codebases both export is refused, naming both",
-      "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is not nodejs* is refused with the language named",
+      "`source`, `codebase`, `runtime` and `ignore` are read; a codebase whose runtime is neither nodejs<major> nor python310 to python314 is refused with the language named",
+      "a Python codebase (`runtime` python310 to python314, or no runtime with a requirements.txt and no package.json) runs under its own `venv/bin/python` after a preflight with the Firebase CLI's messages; it serves HTTP, callable and Firestore document triggers through the bundled Python runner, while other Python trigger families are reported as planned and fail discovery unless functions.unservedTriggers is \"report\"; one process serves the codebase, time is real time, and reload, --inspect-functions and App Check are not available for it",
       "the bundled runner selects Node before loading user code: functions.runner and FIREEMU_NODE are exact overrides; on Unix automatic candidates are the first Node on PATH plus installed runtimes under VOLTA_HOME, a Node 20+ request prefers the capability to synchronously load ES modules from CommonJS before the firebase runtime major, package.json engines.node and stable discovery order, and every effective mismatch is reported without evaluating user code twice; on Windows FIREEMU_NODE or the first PATH Node preserves the previous runner behavior",
       "source, compiled output, dotenv, local-secret and runtime-config changes start a fresh discovery runner and atomically replace the old generation only when its trigger manifest is unchanged; every non-ignored byte remains content-hashed, while one daemon-wide scan admission paces aggregate steady-state source work to 64 MiB/s and 20,000 directory entries/s, rejects trees above 100,000 entries or 128 directory levels, and cancels abandoned scans and snapshots between 64 KiB chunks",
       "SIGINT and SIGTERM cleanly close each Node runner through its shutdown protocol, reap the runner's process group including descendants, release the Functions and Hub listeners, and remove the daemon's exact Hub locator without signalling unrelated processes"
     ],
     "unimplemented": [
-      "Python (functions-framework) and Dart loader paths: refused by name, never handed to node"
+      "Dart loader path: refused by name, never handed to node",
+      "Python Functions triggers other than HTTP, callable and Firestore documents, and Python source reload, virtual-clock time and App Check"
     ],
     "notes": [
       "a trigger family belonging to a product fireemu does not serve fails discovery by default, naming every such function; functions.unservedTriggers = \"report\" asks for the official emulator's carry-on instead, which prints the line and starts anyway",

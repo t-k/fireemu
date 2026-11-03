@@ -282,3 +282,27 @@ fn a_python_trigger_family_that_is_planned_fails_discovery_naming_the_function()
     assert!(err.contains("planned"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+#[ignore = "requires the fixture virtual environment; CI creates it"]
+fn a_virtual_clock_for_the_functions_runner_is_refused_for_a_python_codebase() {
+    let dir = scratch("clock");
+    let firebase = firebase_json(&dir, &fixture(), None);
+    let config = dir.join("fireemu.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"daemon":{"clockStart":"2026-01-01T00:00:00Z"},"functions":{"clock":{"date":"virtual"}}}"#,
+    )
+    .unwrap();
+    let config = config.display().to_string();
+    let out = exec(&firebase, &["--config", &config], &["true"]);
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(
+        err.contains(
+            "does not support the requested virtual clock (Python code runs on real time)"
+        ),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

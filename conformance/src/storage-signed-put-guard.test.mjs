@@ -234,4 +234,78 @@ describe("signed PUT request guard", () => {
     assert.match(text, /X-Goog-Credential=<redacted>/);
     assert.ok(text.includes("X-Goog-Expires=300"));
   });
+
+  it("refuses a bad run prefix whichever half is wrong", () => {
+    const request = { method: "GET", url: json("") };
+    for (const bad of [
+      "other/",
+      "storage-signed-put/sp-1",
+      "storage-signed-put",
+      "",
+      "/storage-signed-put/sp-1/",
+    ]) {
+      assert.throws(() => classifyRequest(PRODUCTION_LIKE, request, bad), GuardError, bad);
+    }
+  });
+
+  it("refuses a user name alone in the URL", () => {
+    refused({ method: "PUT", url: signed("rec1/ok.png").replace("https://", "https://user@") });
+  });
+
+  it("refuses dot segments hidden in one encoded JSON segment, and allows only control characters out of a name", () => {
+    for (const name of [`${prefix}rec1/../x`, `${prefix}rec1/./x`, `${prefix}..`, `${prefix}.`]) {
+      refused({ method: "GET", url: json(`/o/${encodeURIComponent(name)}`) });
+    }
+    for (const name of [`${prefix}rec1/a b.png`, `${prefix}rec1/~x.png`, `${prefix}rec1/..x.png`]) {
+      assert.equal(
+        kind({ method: "GET", url: json(`/o/${encodeURIComponent(name)}`) }),
+        "object-get",
+        name,
+      );
+    }
+    for (const control of ["\u0000", "\u001f", "\u007f", "\n"]) {
+      refused({
+        method: "GET",
+        url: json(`/o/${encodeURIComponent(`${prefix}rec1/a${control}b`)}`),
+      });
+    }
+  });
+
+  it("holds the IAM and signBlob requests to the signer, the project and the right method", () => {
+    const iam = `https://iam.googleapis.com/v1/projects/${PRODUCTION_LIKE.project}/serviceAccounts/${PRODUCTION_LIKE.signer}`;
+    refused({ method: "POST", url: iam });
+    refused({
+      method: "GET",
+      url: iam.replace(PRODUCTION_LIKE.signer, "other@x.iam.gserviceaccount.com"),
+    });
+    refused({ method: "GET", url: iam.replace(PRODUCTION_LIKE.project, "other-project") });
+    refused({ method: "GET", url: `${iam}/keys` });
+    refused({ method: "GET", url: `${iam}?alt=json` });
+    const blob = `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${PRODUCTION_LIKE.signer}:signBlob`;
+    refused({ method: "GET", url: blob });
+    refused({ method: "POST", url: `${blob}?key=1` });
+    refused({ method: "POST", url: blob.replace("/v1/", "/v2/") });
+  });
+
+  it("holds the JSON API to the exact list and object forms", () => {
+    refused({ method: "POST", url: json(`/o?prefix=${encodeURIComponent(prefix)}`) });
+    refused({ method: "DELETE", url: json(`/o?prefix=${encodeURIComponent(prefix)}`) });
+    const name = encodeURIComponent(`${prefix}rec1/ok.png`);
+    refused({ method: "GET", url: json(`/acl/${name}`) });
+    refused({ method: "GET", url: json(`/xyz/${name}`) });
+    refused({ method: "GET", url: json(`/o/${name}/extra`) });
+    refused({ method: "PATCH", url: json(`/o/${name}`) });
+    refused({ method: "GET", url: json(`/o/${name}?generation=1`) });
+  });
+
+  it("refuses an XML path with no object, and the bucket alone", () => {
+    refused({
+      method: "PUT",
+      url: `https://storage.googleapis.com/${PRODUCTION_LIKE.bucket}?X-Goog-Algorithm=a&X-Goog-Credential=b&X-Goog-Date=c&X-Goog-Expires=1&X-Goog-SignedHeaders=host`,
+    });
+    refused({
+      method: "PUT",
+      url: `https://storage.googleapis.com/${PRODUCTION_LIKE.bucket}/?X-Goog-Algorithm=a&X-Goog-Credential=b&X-Goog-Date=c&X-Goog-Expires=1&X-Goog-SignedHeaders=host`,
+    });
+  });
 });

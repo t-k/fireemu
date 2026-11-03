@@ -4,7 +4,13 @@ import { describe, it } from "node:test";
 import {
   ASSIGNED_RANGE,
   CASES,
+  ESTIMATED_USD,
+  EXPIRY_MARGIN_MS,
   MAIN_CAP,
+  MAX_CLOCK_SKEW_MS,
+  READBACK_CAP,
+  RECORDINGS,
+  REQUEST_TIMEOUT_MS,
   NARROW_RANGE,
   PNG_MAGIC,
   RANGE_HEADER,
@@ -101,5 +107,63 @@ describe("signed PUT plan", () => {
       newRunId(() => 0),
       "sp-00000000",
     );
+  });
+
+  it("pins the constants the packet states", () => {
+    assert.deepEqual([...PNG_MAGIC], [137, 80, 78, 71]);
+    assert.deepEqual(
+      [
+        MAIN_CAP,
+        TOTAL_CAP,
+        READBACK_CAP,
+        REQUEST_TIMEOUT_MS,
+        EXPIRY_MARGIN_MS,
+        MAX_CLOCK_SKEW_MS,
+        ESTIMATED_USD,
+        RECORDINGS,
+      ],
+      [130, 200, 40, 30_000, 2500, 5000, 0.05, 2],
+    );
+    assert.equal(CASES.length, 16);
+    assert.deepEqual(staticBounds(), {
+      setup: 3,
+      perRecording: 50,
+      main: 103,
+      cleanup: 66,
+      total: 169,
+    });
+    assert.equal(expectedRequests(), 3 + 2 * 50 + 2 + 2 * 5 * 2);
+    assert.equal(expectedRequests(CASES, 2, "local"), 1 + 2 * 34 + 2 + 2 * 5 * 2);
+    assert.equal(byId("ok-origin").preflight, true);
+    assert.equal(CASES.filter((c) => c.preflight).length, 1);
+    assert.equal(CASES.filter((c) => c.expect === "create").length, 5);
+    assert.ok(
+      byId("range-header-mismatch").body.length <= 3,
+      "inside the range the mismatched header names",
+    );
+  });
+
+  it("builds hexadecimal run ids from the whole random range", () => {
+    assert.equal(
+      newRunId(() => 0.9999999),
+      "sp-ffffffff",
+    );
+    assert.match(
+      newRunId(() => 0.5),
+      /^sp-8{8}$/,
+    );
+    let n = 0;
+    assert.match(
+      newRunId(() => (n++ % 16) / 16),
+      /^sp-0123456[0-9a-f]$/,
+    );
+  });
+
+  it("names the sent object after the case unless the case names another", () => {
+    assert.deepEqual(caseObjects(byId("ok")), { signed: "ok.png", sent: "ok.png" });
+    assert.deepEqual(caseObjects(byId("other-object")), {
+      signed: "other-object.png",
+      sent: "other-sent.png",
+    });
   });
 });

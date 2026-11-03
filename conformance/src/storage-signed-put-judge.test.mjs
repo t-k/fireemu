@@ -201,6 +201,18 @@ describe("signed PUT judge", () => {
     assert.equal(clockSkewOk(base, "not a date"), false);
   });
 
+  it("reports no credential for a URL that has none", () => {
+    const described = describeSignedUrl("https://s.example/b/x?X-Goog-Expires=1", []);
+    assert.equal(described.hasCredential, false);
+    assert.equal(described.signatureHexLength, 0);
+    assert.equal(described.credentialScope, "");
+    assert.equal(
+      describeSignedUrl("https://s.example/b/x?X-Goog-Credential=a%2F1%2F2%2F3%2F4", [])
+        .hasCredential,
+      true,
+    );
+  });
+
   it("describes a signed URL without its credential or signature", () => {
     const url =
       "https://s.example/b/storage-signed-put/sp-1a2b3c4d/rec1/ok.png?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=sa%40p.iam%2F20261103%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261103T120000Z&X-Goog-Expires=300&X-Goog-SignedHeaders=content-type%3Bhost&X-Goog-Signature=" +
@@ -325,5 +337,39 @@ describe("signed PUT settlement (presubmission checklist 3)", () => {
       true,
     );
     assert.equal(open(settle(["a", "create", 200], ["a", "delete", 204]), "a") !== undefined, true);
+  });
+
+  it("takes 200 as a delete and 2xx only; a 3xx read or an unnamed event settles nothing", () => {
+    for (const status of [200, 204, 299]) {
+      assert.equal(
+        settle(["a", "create", 200], ["a", "delete", status], ["a", "read-after-delete", 404])
+          .closureReady,
+        true,
+        String(status),
+      );
+    }
+    assert.equal(
+      open(settle(["a", "create", 503], ["a", "read", 300]), "a"),
+      "unknown create, no positive read",
+    );
+    assert.equal(
+      open(settle(["a", "create", 503], ["a", "read", 199]), "a"),
+      "unknown create, no positive read",
+    );
+    assert.equal(
+      open(settle(["a", "create", 503], ["a", "read", 299]), "a"),
+      "created, not deleted and read back absent",
+    );
+    assert.equal(
+      open(settle(["a", "create", 200], ["a", "delete", 204], ["a", "noop", 404]), "a"),
+      "created, not deleted and read back absent",
+    );
+    assert.equal(
+      open(
+        settle(["a", "create", 200], ["a", "delete", 199], ["a", "read-after-delete", 404]),
+        "a",
+      ),
+      "unknown delete",
+    );
   });
 });

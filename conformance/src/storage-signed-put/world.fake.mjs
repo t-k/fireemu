@@ -32,7 +32,14 @@ const formatDate = (ms) =>
  * @param {object} [options.faults] `{ [label-substring]: answer | "transport" }` overrides the
  *   answer of the first matching request (an `{status, body?}` or the string "transport")
  */
-export function createFakeWorld({ target, clock, faults = {} }) {
+export function createFakeWorld({
+  target,
+  clock,
+  faults = {},
+  lenient = false,
+  hideFromList = new Set(),
+  intercept = () => undefined,
+}) {
   const objects = new Map();
   const log = [];
   let generation = 1000;
@@ -52,7 +59,7 @@ export function createFakeWorld({ target, clock, faults = {} }) {
   function xmlPut(url, request) {
     const params = url.searchParams;
     const signature = params.get("X-Goog-Signature");
-    if (!signature)
+    if (!signature && !lenient)
       return {
         status: 403,
         headers: {},
@@ -64,10 +71,10 @@ export function createFakeWorld({ target, clock, faults = {} }) {
     );
     const issued = parseDate(params.get("X-Goog-Date"));
     const lifetime = Number(params.get("X-Goog-Expires")) * 1000;
-    if (!(lifetime >= 1000) || Number.isNaN(issued)) {
+    if (!lenient && (!(lifetime >= 1000) || Number.isNaN(issued))) {
       return { status: 400, headers: {}, body: xmlError("InvalidArgument", "Invalid argument.") };
     }
-    if (clock.now() > issued + lifetime) {
+    if (!lenient && clock.now() > issued + lifetime) {
       return { status: 400, headers: {}, body: xmlError("ExpiredToken", "Invalid argument.") };
     }
     const unsignedGoog = Object.keys(headers).filter(
@@ -79,7 +86,7 @@ export function createFakeWorld({ target, clock, faults = {} }) {
       query: [...params.entries()].filter(([k]) => k !== "X-Goog-Signature").toSorted(),
       headers: signedHeaders.filter((h) => h !== "host").map((h) => [h, headers[h] ?? null]),
     });
-    if (signature !== fakeSignature(stringToSign) || unsignedGoog.length) {
+    if (!lenient && (signature !== fakeSignature(stringToSign) || unsignedGoog.length)) {
       return {
         status: 403,
         headers: { "content-type": "application/xml; charset=UTF-8" },
@@ -90,7 +97,7 @@ export function createFakeWorld({ target, clock, faults = {} }) {
       };
     }
     const range = headers["x-goog-content-length-range"];
-    if (range !== undefined) {
+    if (range !== undefined && !lenient) {
       const [min, max] = range.split(",").map(Number);
       const length = request.body?.length ?? 0;
       if (length > max)
@@ -129,7 +136,13 @@ export function createFakeWorld({ target, clock, faults = {} }) {
 
   async function net(request) {
     const url = new URL(request.url);
-    log.push({ method: request.method, url: request.url });
+    log.push({ method: request.method, url: request.url, headers: request.headers ?? {} });
+    const headersIn = Object.fromEntries(
+      Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+    const custom = intercept(request, log);
+    if (custom === "transport") throw new Error("socket hang up");
+    if (custom) return { headers: {}, body: Buffer.alloc(0), ...custom };
     for (const [needle, fault] of Object.entries(faults)) {
       if (request.url.includes(needle) || `${request.method} ${url.pathname}`.includes(needle)) {
         delete faults[needle];
@@ -138,13 +151,20 @@ export function createFakeWorld({ target, clock, faults = {} }) {
       }
     }
     const segments = url.pathname.split("/").slice(1);
+    const isSigned = url.searchParams.has("X-Goog-Algorithm");
+    if (isSigned && headersIn.authorization !== undefined) {
+      throw new Error("a signed request must not carry credentials");
+    }
+    if (!isSigned && target.name === "production" && headersIn.authorization === undefined) {
+      return json(401, { error: { code: 401, message: "Invalid Credentials" } });
+    }
     if (url.hostname === "iam.googleapis.com") return json(200, { email: target.signer });
     if (segments[0] === "storage") {
       if (segments.length === 4) return json(200, { name: target.bucket });
       if (segments.length === 5) {
         const prefix = url.searchParams.get("prefix") ?? "";
         const items = [...objects.values()]
-          .filter((o) => o.name.startsWith(prefix))
+          .filter((o) => o.name.startsWith(prefix) && !hideFromList.has(o.name))
           .map((o) => ({ name: o.name, generation: o.generation }));
         return json(
           200,
@@ -186,7 +206,10 @@ export function createFakeWorld({ target, clock, faults = {} }) {
         method: "POST",
         url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${target.signer}:signBlob`,
       });
-      meter.after("signBlob", 200);
+      const answer = faults.signBlob ?? 200;
+      delete faults.signBlob;
+      meter.after("signBlob", answer);
+      if (answer !== 200) throw new Error(`signBlob refused with ${answer}`);
     }
     const issued = spec.accessibleAt ?? Math.floor(clock.now() / 1000) * 1000;
     const period = Math.floor(spec.expires / 1000) - Math.floor(issued / 1000);
@@ -231,7 +254,7 @@ export function createFakeWorld({ target, clock, faults = {} }) {
     deps: {
       net,
       sign,
-      adminHeaders: () => ({}),
+      adminHeaders: () => (target.name === "production" ? { authorization: "Bearer fake" } : {}),
       now: () => clock.now(),
       sleep: (ms) => clock.sleep(ms),
     },

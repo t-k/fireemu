@@ -85,6 +85,7 @@ describe("production dependencies: SDK paths", () => {
         `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER}:signBlob`,
       );
       assert.equal(sent[0].retry, false);
+      assert.deepEqual(sent[0].retryConfig, { retry: 0 });
       assert.deepEqual(
         metered.map((m) => m.label),
         ["signBlob", "signBlob"],
@@ -106,6 +107,31 @@ describe("production dependencies: SDK paths", () => {
       assert.equal(parsed.searchParams.get("X-Goog-Signature"), "ab".repeat(8));
       assert.equal(parsed.searchParams.get("X-Goog-Expires"), "300");
       classifyRequest(target, { method: "PUT", url }, runPrefix(RUN));
+    } finally {
+      await deps.close();
+    }
+  });
+
+  it("signs from the given accessibleAt, not from now", async () => {
+    const { deps, meter } = harness(signBlobAnswer);
+    try {
+      const accessibleAt = (Math.floor(Date.now() / 1000) + 3600) * 1000;
+      const url = await deps.sign(
+        {
+          name: NAME,
+          contentType: "image/png",
+          range: null,
+          expires: accessibleAt + 1000,
+          accessibleAt,
+        },
+        meter,
+      );
+      const parsed = new URL(url);
+      assert.equal(parsed.searchParams.get("X-Goog-Expires"), "1");
+      assert.equal(
+        parsed.searchParams.get("X-Goog-Date"),
+        new Date(accessibleAt).toISOString().replace(/[-:]|\.\d{3}/g, ""),
+      );
     } finally {
       await deps.close();
     }

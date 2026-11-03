@@ -110,9 +110,10 @@ export async function observe({
   let finished = false;
 
   async function wire(label, request, { admin = false, context = {} } = {}) {
-    const kind = classifyRequest(target, request, prefix);
-    const n = budget.take();
+    // The guard sees the headers that will actually be sent, credentials included.
     const headers = { ...(admin ? deps.adminHeaders() : {}), ...request.headers };
+    const kind = classifyRequest(target, { ...request, headers }, prefix);
+    const n = budget.take();
     out.journal({
       phase: "before",
       n,

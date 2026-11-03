@@ -20,6 +20,8 @@ FIXTURE = _find_fixture()
 
 sys.path.insert(0, str(RUNNER_DIR))
 os.environ.setdefault("GCLOUD_PROJECT", "demo-proj")
+# The daemon exports this to every runner; the Storage default bucket is read from it.
+os.environ.setdefault("FIREBASE_CONFIG", '{"storageBucket": "demo-proj.appspot.com"}')
 
 
 import pytest  # noqa: E402

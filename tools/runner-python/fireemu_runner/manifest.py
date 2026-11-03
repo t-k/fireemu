@@ -18,10 +18,19 @@ from firebase_functions.private.util import Sentinel
 DEFAULT_REGION = "us-central1"
 
 _FIRESTORE_PREFIX = "google.cloud.firestore."
-_FAMILIES = (
-    ("google.firebase.database.ref.", "database"),
-    ("google.cloud.pubsub.", "pubsub"),
-    ("google.cloud.storage.object.", "storage"),
+_PUBSUB_EVENT = "google.cloud.pubsub.topic.v1.messagePublished"
+_STORAGE_EVENTS = frozenset(
+    "google.cloud.storage.object.v1." + kind for kind in ("finalized", "deleted", "archived", "metadataUpdated")
+)
+_DATABASE_EVENTS = frozenset("google.firebase.database.ref.v1." + kind for kind in ("created", "updated", "deleted", "written"))
+# Products the official emulator has a trigger service for and fireemu does not serve, matched on a substring of
+# the event type as the Node runner does (`DEFERRED_TRIGGER_PRODUCTS` in `tools/runner-node/index.mjs`).
+_UNSERVED_PRODUCTS = (
+    ("remoteconfig", "remoteConfig", "deferred", "deferred: Remote Config has no emulator in the active supported surface"),
+    ("dataconnect", "dataconnect", "deferred", "deferred: the Data Connect emulator is not in the active supported surface"),
+    ("ailogic", "ai", "notPlanned", "not planned: Firebase AI Logic blocking triggers have no local emulator"),
+    ("analytics", "analytics", "notPlanned", "not planned: Google Analytics triggers have no local emulator"),
+    ("testing", "testLab", "notPlanned", "not planned: Test Lab triggers have no local emulator"),
 )
 _PLANNED = "Python {family} triggers are planned for a later slice and are not served yet"
 
@@ -112,40 +121,107 @@ def _platform_options(endpoint) -> dict | None:
     return options or None
 
 
-def _event_family(event_type: str) -> str:
-    for prefix, family in _FAMILIES:
-        if event_type.startswith(prefix):
-            return family
-    return "eventarc"
+def _mapping(value) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
-def _string_filter(filters: dict, key: str, field: str):
+def _text(filters: dict, key: str, field: str, family: str, *, required: bool = False, allow_empty: bool = True):
+    """A string filter, resolved. Absent is None (or an error when required); another type is an error."""
     value = _resolved(filters.get(key), field)
-    if value is not None and not isinstance(value, str):
-        raise Unserved("firestore", "unsupported", f"{field} did not resolve to a string")
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or (not allow_empty and not value):
+        what = "a string" if allow_empty else "a non-empty string"
+        raise Unserved(family, "unsupported", f"{field} did not resolve to {what}")
     return value
 
 
 def _firestore_trigger(event_trigger: dict) -> dict:
-    filters = event_trigger.get("eventFilters") if isinstance(event_trigger.get("eventFilters"), dict) else {}
-    patterns = (
-        event_trigger.get("eventFilterPathPatterns")
-        if isinstance(event_trigger.get("eventFilterPathPatterns"), dict)
-        else {}
-    )
+    filters = _mapping(event_trigger.get("eventFilters"))
+    patterns = _mapping(event_trigger.get("eventFilterPathPatterns"))
     # The SDK keeps a document path without wildcards in `eventFilters.document` and one with
     # wildcards in `eventFilterPathPatterns.document` (`options.py:1065-1075`).
-    document = _string_filter(patterns, "document", "eventFilterPathPatterns.document") or _string_filter(
-        filters, "document", "eventFilters.document"
+    document = _text(patterns, "document", "eventFilterPathPatterns.document", "firestore") or _text(
+        filters, "document", "eventFilters.document", "firestore"
     )
     if not document:
         raise Unserved("firestore", "unsupported", "the Firestore trigger names no document (eventFilters.document)")
     return {
         "type": "firestore",
         "eventType": event_trigger["eventType"],
-        "database": _string_filter(filters, "database", "eventFilters.database") or "(default)",
+        "database": _text(filters, "database", "eventFilters.database", "firestore") or "(default)",
         "document": document,
     }
+
+
+def _pubsub_trigger(event_trigger: dict) -> dict:
+    topic = _text(_mapping(event_trigger.get("eventFilters")), "topic", "eventFilters.topic", "pubsub", required=True, allow_empty=False)
+    # A full resource name is reduced to the short name the daemon matches on.
+    short = topic.rsplit("/topics/", 1)[-1] if "/topics/" in topic else topic
+    if not short:
+        raise Unserved("pubsub", "unsupported", "eventFilters.topic resolved to an empty topic")
+    return {"type": "pubsub", "topic": short}
+
+
+def _storage_trigger(event_trigger: dict, event_type: str) -> dict:
+    bucket = _text(_mapping(event_trigger.get("eventFilters")), "bucket", "eventFilters.bucket", "storage")
+    trigger = {"type": "storage", "eventType": event_type}
+    if bucket is not None:
+        trigger["bucket"] = bucket
+    return trigger
+
+
+def _database_trigger(event_trigger: dict, event_type: str) -> dict:
+    filters = _mapping(event_trigger.get("eventFilters"))
+    patterns = _mapping(event_trigger.get("eventFilterPathPatterns"))
+    # The SDK keeps a reference without wildcards in `eventFilters` and one with wildcards in
+    # `eventFilterPathPatterns`; the Node runner reads the patterns first as well.
+    reference = _text(patterns, "ref", "eventFilterPathPatterns.ref", "database")
+    if reference is None:
+        reference = _text(filters, "ref", "eventFilters.ref", "database", required=True)
+    instance = _text(patterns, "instance", "eventFilterPathPatterns.instance", "database")
+    if instance is None:
+        instance = _text(filters, "instance", "eventFilters.instance", "database")
+    return {
+        "type": "database",
+        "eventType": event_type,
+        "ref": "/" + reference.strip("/"),
+        "instance": instance if instance is not None else "*",
+    }
+
+
+def _eventarc_trigger(event_trigger: dict, event_type: str, channel: str) -> dict:
+    filters = _mapping(event_trigger.get("eventFilters"))
+    return {
+        "type": "eventarc",
+        "eventType": event_type,
+        "channel": channel,
+        "filters": {key: _text(filters, key, f"eventFilters.{key}", "eventarc", required=True) for key in filters},
+    }
+
+
+def _event_trigger(event_trigger: dict) -> dict:
+    """The canonical trigger of an `eventTrigger`, or `Unserved` for an event type fireemu does not serve."""
+    event_type = str(_resolved(event_trigger.get("eventType"), "eventType") or "")
+    if event_type.startswith(_FIRESTORE_PREFIX):
+        return _firestore_trigger({**event_trigger, "eventType": event_type})
+    if event_type == _PUBSUB_EVENT:
+        return _pubsub_trigger(event_trigger)
+    if event_type in _STORAGE_EVENTS:
+        return _storage_trigger(event_trigger, event_type)
+    if event_type in _DATABASE_EVENTS:
+        return _database_trigger(event_trigger, event_type)
+    # `onCustomEventPublished` is the only SDK trigger that names a channel.
+    channel = _text(event_trigger, "channel", "eventTrigger.channel", "eventarc")
+    if channel is not None:
+        return _eventarc_trigger(event_trigger, event_type, channel)
+    for fragment, trigger_type, scope, reason in _UNSERVED_PRODUCTS:
+        if fragment in event_type:
+            raise Unserved(trigger_type, scope, reason)
+    family = "storage" if event_type.startswith("google.cloud.storage.") else (
+        "database" if event_type.startswith("google.firebase.database.") else "unknown"
+    )
+    raise Unserved(family, "unsupported", f"event type {event_type} is not recognised")
 
 
 def describe_endpoint(name: str, endpoint) -> dict:
@@ -176,15 +252,11 @@ def describe_endpoint(name: str, endpoint) -> dict:
     elif endpoint.blockingTrigger is not None:
         raise Unserved("blockingAuth", "planned", _PLANNED.format(family="Auth blocking"))
     elif endpoint.eventTrigger is not None:
-        event_type = str(_resolved(endpoint.eventTrigger.get("eventType"), "eventType") or "")
-        if not event_type.startswith(_FIRESTORE_PREFIX):
-            family = _event_family(event_type)
-            raise Unserved(family, "planned", _PLANNED.format(family=family))
+        described["trigger"] = _event_trigger(endpoint.eventTrigger)
         retry = _resolved(endpoint.eventTrigger.get("retry"), "eventTrigger.retry")
         if retry is not None and not isinstance(retry, bool):
-            raise Unserved("firestore", "unsupported", "eventTrigger.retry did not resolve to a boolean")
+            raise Unserved(described["trigger"]["type"], "unsupported", "eventTrigger.retry did not resolve to a boolean")
         described["retry"] = retry is True
-        described["trigger"] = _firestore_trigger(endpoint.eventTrigger)
     else:
         raise Unserved("unknown", "unsupported", "the endpoint declares no trigger")
     return described

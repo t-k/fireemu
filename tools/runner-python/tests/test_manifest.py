@@ -135,22 +135,6 @@ def test_task_queue_and_blocking_triggers_are_planned_families():
     }
 
 
-@pytest.mark.parametrize(
-    "event_type, family",
-    [
-        ("google.cloud.pubsub.topic.v1.messagePublished", "pubsub"),
-        ("google.cloud.storage.object.v1.finalized", "storage"),
-        ("google.firebase.database.ref.v1.written", "database"),
-        ("com.example.custom", "eventarc"),
-    ],
-)
-def test_event_families_other_than_firestore_are_planned(event_type, family):
-    trigger = sdk_manifest.EventTrigger(eventType=event_type, retry=False)
-    result = build_manifest({"f": _wrapped(sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))})
-    assert result["ignored"][0]["triggerType"] == family
-    assert result["ignored"][0]["scope"] == "planned"
-
-
 def test_the_region_list_serves_its_first_entry_and_an_empty_list_none():
     assert describe_endpoint("f", endpoint(region=["us-east1", "europe-west1"]))["region"] == "us-east1"
     assert "region" not in describe_endpoint("f", endpoint(region=[]))
@@ -249,13 +233,6 @@ def test_the_exact_reasons_of_the_families_not_served_yet():
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", taskQueueTrigger={})) == ("tasks", "planned", planned.format("task queue"))
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", scheduleTrigger={"schedule": "x"})) == ("schedule", "planned", planned.format("schedule"))
     assert _unserved(sdk_manifest.ManifestEndpoint(entryPoint="f", blockingTrigger={"eventType": "x"})) == ("blockingAuth", "planned", planned.format("Auth blocking"))
-    for event_type, family in (
-        ("google.cloud.pubsub.topic.v1.messagePublished", "pubsub"),
-        ("google.cloud.storage.object.v1.finalized", "storage"),
-        ("google.firebase.database.ref.v1.written", "database"),
-        ("anything.else", "eventarc"),
-    ):
-        assert _unserved(_event(event_type)) == (family, "planned", planned.format(family))
 
 
 def test_the_other_unsupported_shapes_have_exact_reasons():
@@ -396,3 +373,114 @@ def test_the_http_types_of_a_plain_and_a_callable_function_are_exact():
     callable_ = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", callableTrigger={}))
     assert plain["trigger"] == {"type": "http", "callable": False}
     assert callable_["trigger"] == {"type": "http", "callable": True}
+
+
+# --- slice 2a: Pub/Sub, Storage, Eventarc and Realtime Database --------------------------------------
+
+PS = "google.cloud.pubsub.topic.v1.messagePublished"
+ST = "google.cloud.storage.object.v1."
+DB = "google.firebase.database.ref.v1."
+
+
+@pytest.mark.parametrize(
+    "name, trigger, extra",
+    [
+        ("ps_orders", {"type": "pubsub", "topic": "orders"}, {"retry": False}),
+        ("ps_retried", {"type": "pubsub", "topic": "retried"}, {"retry": True, "region": "europe-west1"}),
+        ("st_finalized", {"type": "storage", "eventType": ST + "finalized", "bucket": "demo-bucket"}, {"retry": False}),
+        ("st_deleted", {"type": "storage", "eventType": ST + "deleted", "bucket": "demo-bucket"}, {"retry": False}),
+        ("st_archived", {"type": "storage", "eventType": ST + "archived", "bucket": "demo-bucket"}, {"retry": False}),
+        ("st_metadata", {"type": "storage", "eventType": ST + "metadataUpdated", "bucket": "demo-bucket"}, {"retry": False}),
+        # No bucket given: the SDK falls back to the default bucket of FIREBASE_CONFIG (the daemon sets it).
+        ("st_default_bucket", {"type": "storage", "eventType": ST + "finalized", "bucket": "demo-proj.appspot.com"}, {"retry": False}),
+        (
+            "ea_plain",
+            {"type": "eventarc", "eventType": "acme.thing.v1.happened", "channel": "locations/us-central1/channels/firebase", "filters": {}},
+            {"retry": False},
+        ),
+        (
+            "ea_filtered",
+            {
+                "type": "eventarc",
+                "eventType": "acme.thing.v1.filtered",
+                "channel": "locations/us-central1/channels/acme",
+                "filters": {"colour": "red"},
+            },
+            {"retry": False},
+        ),
+        ("db_created", {"type": "database", "eventType": DB + "created", "ref": "/messages/{room}/{id}", "instance": "*"}, {"retry": False}),
+        ("db_updated", {"type": "database", "eventType": DB + "updated", "ref": "/messages/{room}/{id}", "instance": "*"}, {"retry": False}),
+        ("db_deleted", {"type": "database", "eventType": DB + "deleted", "ref": "/messages/{room}/{id}", "instance": "*"}, {"retry": False}),
+        ("db_written", {"type": "database", "eventType": DB + "written", "ref": "/messages/{room}/{id}", "instance": "*"}, {"retry": False}),
+        ("db_literal_glob", {"type": "database", "eventType": DB + "written", "ref": "/config/mode", "instance": "demo-proj-*"}, {"retry": False}),
+    ],
+)
+def test_each_event_family_of_the_real_sdk_reaches_the_canonical_manifest(manifest, name, trigger, extra):
+    assert function(manifest, name) == {"name": name, "entryPoint": name, "generation": 2, "trigger": trigger, **extra}
+
+
+def test_a_pubsub_topic_given_as_a_full_resource_name_is_kept_as_the_daemon_matches_it():
+    trigger = sdk_manifest.EventTrigger(eventType=PS, retry=False, eventFilters={"topic": "projects/p/topics/orders"})
+    described = describe_endpoint("f", sdk_manifest.ManifestEndpoint(entryPoint="f", eventTrigger=trigger))
+    assert described["trigger"] == {"type": "pubsub", "topic": "orders"}
+
+
+def test_an_empty_pubsub_topic_is_unsupported():
+    assert _unserved(_event(PS, eventFilters={"topic": "projects/p/topics/"})) == (
+        "pubsub", "unsupported", "eventFilters.topic resolved to an empty topic"
+    )
+    assert _unserved(_event(PS)) == ("pubsub", "unsupported", "eventFilters.topic did not resolve to a non-empty string")
+    assert _unserved(_event(PS, eventFilters={"topic": 4})) == ("pubsub", "unsupported", "eventFilters.topic did not resolve to a non-empty string")
+
+
+def test_a_storage_trigger_without_a_bucket_names_no_bucket():
+    described = describe_endpoint("f", _event(ST + "deleted"))
+    assert described["trigger"] == {"type": "storage", "eventType": ST + "deleted"}
+    assert _unserved(_event(ST + "deleted", eventFilters={"bucket": 3})) == ("storage", "unsupported", "eventFilters.bucket did not resolve to a string")
+    assert _unserved(_event(ST + "bogus")) == ("storage", "unsupported", f"event type {ST}bogus is not recognised")
+
+
+def test_a_database_trigger_takes_its_ref_and_instance_from_patterns_then_filters():
+    both = _event(DB + "created", eventFilterPathPatterns={"ref": "a/{b}", "instance": "i-*"}, eventFilters={"ref": "x", "instance": "j"})
+    assert describe_endpoint("f", both)["trigger"] == {"type": "database", "eventType": DB + "created", "ref": "/a/{b}", "instance": "i-*"}
+    filters_only = _event(DB + "deleted", eventFilters={"ref": "/a/b/", "instance": "j"})
+    assert describe_endpoint("f", filters_only)["trigger"] == {"type": "database", "eventType": DB + "deleted", "ref": "/a/b", "instance": "j"}
+    root = _event(DB + "written", eventFilters={"ref": ""})
+    assert describe_endpoint("f", root)["trigger"] == {"type": "database", "eventType": DB + "written", "ref": "/", "instance": "*"}
+
+
+def test_a_database_trigger_that_names_no_ref_or_a_wrong_type_is_unsupported():
+    assert _unserved(_event(DB + "written")) == ("database", "unsupported", "eventFilters.ref did not resolve to a string")
+    assert _unserved(_event(DB + "written", eventFilterPathPatterns={"ref": 3})) == (
+        "database", "unsupported", "eventFilterPathPatterns.ref did not resolve to a string"
+    )
+    assert _unserved(_event(DB + "written", eventFilters={"ref": "a", "instance": 5})) == (
+        "database", "unsupported", "eventFilters.instance did not resolve to a string"
+    )
+    assert _unserved(_event(DB + "sideways", eventFilters={"ref": "a"})) == ("database", "unsupported", f"event type {DB}sideways is not recognised")
+
+
+def test_an_eventarc_trigger_keeps_its_filters_as_strings_and_refuses_other_values():
+    described = describe_endpoint("f", _event("acme.x", channel="locations/l/channels/c", eventFilters={"a": "1", "b": ""}))
+    assert described["trigger"] == {"type": "eventarc", "eventType": "acme.x", "channel": "locations/l/channels/c", "filters": {"a": "1", "b": ""}}
+    assert _unserved(_event("acme.x", channel="locations/l/channels/c", eventFilters={"a": 1})) == (
+        "eventarc", "unsupported", "eventFilters.a did not resolve to a string"
+    )
+    assert _unserved(_event("acme.x", channel=7)) == ("eventarc", "unsupported", "eventTrigger.channel did not resolve to a string")
+
+
+@pytest.mark.parametrize(
+    "event_type, trigger_type, scope",
+    [
+        ("google.firebase.remoteconfig.update", "remoteConfig", "deferred"),
+        ("google.firebase.dataconnect.connector.v1.mutationExecuted", "dataconnect", "deferred"),
+        ("google.firebase.analytics.log.v1.written", "analytics", "notPlanned"),
+        ("google.firebase.ailogic.v1.something", "ai", "notPlanned"),
+        ("google.firebase.firebasealerts.alerts.v1.published", "unknown", "unsupported"),
+        ("com.example.no-channel", "unknown", "unsupported"),
+    ],
+)
+def test_an_event_type_without_a_channel_that_fireemu_does_not_serve_is_reported_never_dropped(event_type, trigger_type, scope):
+    # The Node runner classifies the same event types the same way (`DEFERRED_TRIGGER_PRODUCTS`).
+    unserved = _unserved(_event(event_type))
+    assert unserved[:2] == (trigger_type, scope)

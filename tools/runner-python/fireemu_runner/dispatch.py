@@ -4,7 +4,13 @@ import os
 import threading
 import traceback
 
-from .events import firestore_cloud_event
+from .events import (
+    database_cloud_event,
+    eventarc_cloud_event,
+    firestore_cloud_event,
+    pubsub_cloud_event,
+    storage_cloud_event,
+)
 from .framing import FrameWriter
 
 MAX_ACTIVE_INVOCATIONS = 4096
@@ -12,7 +18,13 @@ _MAX_ERROR_CHARS = 4096
 _MAX_DIAGNOSTIC_CHARS = 256 * 1024
 
 # Trigger types that arrive as an `invoke` frame, and how each becomes the handler's argument.
-_EVENT_ADAPTERS = {"firestore": firestore_cloud_event}
+_EVENT_ADAPTERS = {
+    "firestore": firestore_cloud_event,
+    "pubsub": pubsub_cloud_event,
+    "storage": storage_cloud_event,
+    "eventarc": eventarc_cloud_event,
+    "database": database_cloud_event,
+}
 
 
 def _bound(text: str, limit: int) -> str:

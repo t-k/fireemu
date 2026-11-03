@@ -41,6 +41,7 @@ class Runner:
             "HOME": os.environ.get("HOME", ""),
             "GCLOUD_PROJECT": "demo-proj",
             "GOOGLE_CLOUD_PROJECT": "demo-proj",
+            "FIREBASE_CONFIG": '{"storageBucket": "demo-proj.appspot.com"}',
             "FIREEMU_RUNNER_SECRET": SECRET,
             "FIRESTORE_EMULATOR_HOST": "127.0.0.1:9",
             "FIREBASE_AUTH_EMULATOR_HOST": "127.0.0.1:9",

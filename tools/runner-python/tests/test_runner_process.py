@@ -107,13 +107,13 @@ def test_a_missing_main_py_says_so(tmp_path):
     assert "main.py" in process.stderr
 
 
-def test_event_families_not_served_yet_are_reported_as_planned_never_dropped(tmp_path):
+def test_families_not_served_yet_are_reported_as_planned_never_dropped(tmp_path):
     (tmp_path / "main.py").write_text(
         "from firebase_admin import initialize_app\n"
-        "from firebase_functions import pubsub_fn, scheduler_fn, firestore_fn\n"
+        "from firebase_functions import tasks_fn, scheduler_fn, firestore_fn\n"
         "initialize_app()\n"
-        "@pubsub_fn.on_message_published(topic='jobs')\n"
-        "def later_pubsub(event):\n    pass\n"
+        "@tasks_fn.on_task_dispatched()\n"
+        "def later_tasks(request):\n    pass\n"
         "@scheduler_fn.on_schedule(schedule='every 5 minutes')\n"
         "def later_schedule(request):\n    pass\n"
         "@firestore_fn.on_document_created(document='a/{id}')\n"
@@ -123,8 +123,8 @@ def test_event_families_not_served_yet_are_reported_as_planned_never_dropped(tmp
     manifest = process.hello()["manifest"]
     assert [entry["name"] for entry in manifest["functions"]] == ["served"]
     ignored = {entry["name"]: entry for entry in manifest["ignored"]}
-    assert set(ignored) == {"later_pubsub", "later_schedule"}
-    assert (ignored["later_pubsub"]["triggerType"], ignored["later_schedule"]["triggerType"]) == ("pubsub", "schedule")
+    assert set(ignored) == {"later_tasks", "later_schedule"}
+    assert (ignored["later_tasks"]["triggerType"], ignored["later_schedule"]["triggerType"]) == ("tasks", "schedule")
     for entry in ignored.values():
         assert entry["scope"] == "planned" and entry["region"] == "us-central1" and "Python" in entry["reason"]
     assert process.close() == 0

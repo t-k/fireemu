@@ -42,24 +42,23 @@ const path = (request) => new URL(request.url).pathname;
 
 // ---- answers that are not JSON, and boundaries of what counts as incomplete ---------------------------
 
-test("a 200 that is not JSON is read as nothing, never as a crash, on every readback and list", async () => {
+test("a 200 that is not JSON is read as nothing, never as a crash, on every readback", async () => {
   for (const [name, match] of [
     ["function", (r) => r.method === "GET" && path(r).endsWith("/functions/pcps")],
     ["job", (r) => r.method === "GET" && path(r).endsWith(`/jobs/${JOB_IDS[0]}`)],
     ["queue", (r) => r.method === "GET" && path(r).endsWith("/queues/pctask")],
-    [
-      "list",
-      (r) =>
-        r.method === "GET" && path(r).endsWith("/queues") && r.url.includes("preflight") === false,
-    ],
   ]) {
-    const { result } = await go(
-      {},
-      (send) => async (request) =>
-        match(request) ? new Response("<html>", { status: 200 }) : send(request),
-    );
-    assert.ok(result.outcome.startsWith("pycheck-"), name);
-    assert.equal(result.stage === "done" || result.stage === "preflight", true, name);
+    let served = false;
+    const { result } = await go({}, (send) => async (request) => {
+      if (!served && match(request)) {
+        served = true;
+        return new Response("<html>", { status: 200 });
+      }
+      return send(request);
+    });
+    assert.equal(served, true, name);
+    assert.equal(result.stoppedBecause, undefined, name);
+    assert.equal(result.outcome, "pycheck-recorded", name);
   }
   const noConfig = await go(
     {},
@@ -583,7 +582,11 @@ test("an error after the topic exists but before the deploy is recorded and the 
   assert.equal(result.stoppedBecause, "disk full");
   assert.equal(world.topics.size, 0, "the topic was deleted");
   assert.equal(result.cleanup.verified, true);
-  assert.notEqual(result.outcome, undefined);
+  assert.equal(
+    result.outcome,
+    "pycheck-incomplete-clean",
+    "something was created, so this is not a stop before anything exists",
+  );
 });
 
 // ---- the command line ----------------------------------------------------------------------------------

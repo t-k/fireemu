@@ -203,6 +203,15 @@ test('r2.3 LP: after the stop the hard cap still holds: every request the server
   const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used(); server.close();
   assert.ok(received >= 1); assert.ok(used.direct >= 6 && used.direct <= 12, JSON.stringify(used)); assert.equal(used.overflow, undefined); assert.ok(received <= used.direct, JSON.stringify({ used, received }));
 });
+test('r1.3 LP: without an injected margin the page stops at cap - BROWSER_MARGIN', async () => {
+  const { BROWSER_MARGIN } = await import('./observer.mjs');
+  const server = await fakeServer(), counter = createCounter({ direct: BROWSER_MARGIN + 3 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
+  const profile = lpProfile(ctx).catch(() => {});
+  try {
+    for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+    assert.match(aborts[0] ?? '', new RegExp(`direct 3 of cap ${BROWSER_MARGIN + 3} \\(margin ${BROWSER_MARGIN}\\)`));
+  } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); server.close(); }
+});
 test('r1.5 the cleanup does not depend on the journal: with every journal write failing the restoration still happens', async () => {
   let down = false;
   const h = await harness({}, { createJournal: file => { const j = createJournal(file); return { ...j, write: row => { if (down) throw new Error('ENOSPC'); return j.write(row); } }; }, profiles: { ws: async () => { down = true; throw new Error('disk gone'); }, lp: goodProfiles.lp } }).catch(error => ({ error }));
@@ -235,17 +244,6 @@ test('r2.2 a profile that finishes starting after its deadline is awaited and it
 test('r2.2 a profile that never finishes starting keeps the claims', async () => {
   const r = await production({ profiles: { ws: () => new Promise(() => {}), lp: goodProfiles.lp }, opts: { profileMs: 100, closeMs: 100 } });
   assert.equal(r.outcome.exit, 3); assert.ok(r.outcome.result.unverified.includes('profile r1-ws did not settle')); assert.equal(r.leaseLeft, true);
-});
-test('r2.3 LP: a request is charged before it is dispatched: the server receives exactly the admitted requests and none is counted after it left', async () => {
-  const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
-  const profile = lpProfile(ctx).catch(() => {});
-  try {
-    for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
-    await new Promise(r => setTimeout(r, 500));
-  } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); }
-  await new Promise(resolve => setTimeout(resolve, 300));
-  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used(); server.close();
-  assert.ok(received >= 1); assert.equal(used.direct, 2); assert.equal(used.overflow, undefined); assert.equal(received, used.direct, JSON.stringify({ used, received }));
 });
 
 // ---- repository copy (2026-11-03): private production inputs come from --production-config, output from --out ----

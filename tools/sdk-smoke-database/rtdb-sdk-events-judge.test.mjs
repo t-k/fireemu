@@ -207,3 +207,12 @@ test('document: a production run whose Admin SDK credential was refused is a cre
   const bogus = copy(FIXTURE); bogus.result.credentialOutcome = 'r1-admin';
   assert.equal(summarize(bogus, copy(FIXTURE)).match, false, 'a malformed credentialOutcome member is refused');
 });
+
+test('document: a malformed or foreign credentialOutcome is never accepted (not a list, empty, not an admin profile, unknown name, not a string)', () => {
+  for (const bad of ['r1-admin', [], ['r1-ws'], ['nope'], [1], ['r1-admin', 'r1-ws'], null]) {
+    const doc = copy(FIXTURE); doc.result.credentialOutcome = bad;
+    const s = summarize(doc, copy(FIXTURE));
+    assert.equal(s.match, false, JSON.stringify(bad)); assert.ok(s.problems.some(p => /result is not in the reduced shape/.test(p)), JSON.stringify([bad, s.problems]));
+    assert.equal(s.credentialOutcome, undefined, 'a malformed list is not reported as a credential outcome');
+  }
+});

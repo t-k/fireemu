@@ -342,3 +342,28 @@ test('the CLI read-back command: usage is refused before anything else, and it n
   const env = spawnSync(process.execPath, ['--max-old-space-size=1024', observer, 'readback', '--run-dir', '/x', '--production-config', '/y', '--out', '/z'], { encoding: 'utf8', env: { PATH: process.env.PATH, FIREBASE_TOKEN: 'x' } });
   assert.equal(env.status, 2); assert.match(env.stderr, /environment variable set: FIREBASE_TOKEN/);
 });
+
+// ---- mutation round of the v2 delta ----
+test('browser margin: the in-flight tracker follows requests and sockets (a fake page, no browser)', async () => {
+  const { watchBrowserTraffic } = await import('./observer.mjs'), { EventEmitter } = await import('node:events');
+  const page = Object.assign(new EventEmitter(), { close: async () => { page.closed = true; } }), counter = createCounter({ direct: 100 });
+  const watch = watchBrowserTraffic(page, { profile: 'p', counter, abort: () => {}, journal: { write() {} } }, url => url.startsWith('db:'), 10);
+  const req = url => ({ url: () => url, method: () => 'GET', postData: () => null }), sock = new EventEmitter(); sock.url = () => 'db:ws';
+  for (let i = 0; i < 3; i++) page.emit('request', req('db:a'));
+  page.emit('request', req('other:b')); page.emit('websocket', sock);
+  assert.deepEqual(watch.stats(), { maxInFlight: 4, inFlight: 4, stopped: false });
+  page.emit('requestfinished', req('db:a')); page.emit('requestfailed', req('db:a')); page.emit('requestfinished', req('other:b')); sock.emit('close');
+  assert.deepEqual(watch.stats(), { maxInFlight: 4, inFlight: 1, stopped: false });
+  page.emit('requestfinished', req('db:a')); page.emit('requestfinished', req('db:a')); assert.equal(watch.stats().inFlight, 0, 'never below zero');
+  assert.deepEqual(counter.used(), { direct: 4, reserve: 0, adc: 0 });
+});
+test('the small suite result keeps its recorded members: no prefix', async () => {
+  const server = await fakeServer(), out = mkdtempSync(path.join(tmpdir(), 'small-prefix-'));
+  const rows = [['observer', 'key_range'], ['observer', 'value_equal'], ['observer', 'priority_range'], ['writer', 'push'], ['writer', 'update'], ['writer', 'multipath'], ['writer', 'server_timestamp'], ['writer', 'increment']].map(([role, id]) => ({ role, id, ok: true }));
+  const profile = async () => rows;
+  try {
+    const target = { kind: 'emulator', host: server.host, namespace: 'ns', projectId: 'demo-x' };
+    const { result } = await run({ target, runId: 'TEST-SMALL-01', prefix: PREFIX, directCap: 40, outDir: path.join(out, 'run') }, { profiles: { ws: profile, lp: profile } });
+    assert.equal(Object.hasOwn(result, 'prefix'), false); assert.equal(Object.hasOwn(result, 'suite'), false); assert.equal(Object.hasOwn(result, 'adminStartup'), false);
+  } finally { server.close(); rmSync(out, { recursive: true, force: true }); }
+});

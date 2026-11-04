@@ -80,8 +80,7 @@ test("a clean run records, cleans up, reads every name back, finds the configura
     function: true,
     "package-fireemu--oracle--idp__us--central1__pcblock": true,
     "package-fireemu--oracle--idp__us--central1__pcblock%2Fcache": true,
-    "source-object-1": true,
-    "source-object-2": true,
+    "upload-object-1": true,
     account: true,
   });
   assert.deepEqual(result.judged.counts, {
@@ -108,7 +107,8 @@ test("a clean run writes only the sign-up, the account's delete and the two imag
     /^POST identitytoolkit\.googleapis\.com\/v1\/accounts:signUp$/,
     /^POST identitytoolkit\.googleapis\.com\/v1\/projects\/[^/]+\/accounts:delete$/,
     /^DELETE artifactregistry\.googleapis\.com\/.*\/packages\/fireemu--oracle--idp__us--central1__pcblock(%2Fcache)?$/,
-    /^DELETE storage\.googleapis\.com\/storage\/v1\/b\/gcf-v2-(uploads|sources)-[^/]+\/o\/[^/]+$/,
+    /^DELETE storage\.googleapis\.com\/storage\/v1\/b\/gcf-v2-uploads-[^/]+\/o\/[^/]+$/,
+    /^POST run\.googleapis\.com\/v2\/projects\/[^/]+\/locations\/[^/]+\/services\/pcblock:setIamPolicy$/,
   ];
   for (const call of writes(world))
     assert.ok(
@@ -201,8 +201,11 @@ test("the result carries the readbacks, the baselines and the inventory", async 
   );
   assert.equal(result.configBefore.blockingFunctions, null);
   assert.deepEqual(result.inventory.sourceObjects.uploads, { added: [], removed: [] });
-  assert.deepEqual(result.inventory.sourceObjects.sources, { added: [], removed: [] });
-  assert.equal(result.cleanup.sourceObjectsDeleted.length, 2);
+  assert.deepEqual(result.inventory.sourceObjects.sources, {
+    added: ["pcblock/function-source.zip"],
+    removed: [],
+  });
+  assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
   assert.deepEqual(result.inventory.iam, { added: [], removed: [] });
   assert.deepEqual(result.inventory.services, { added: [], removed: [] });
   assert.deepEqual(result.frames, { "blocking-raw": 1, "blocking-sdk": 1 });

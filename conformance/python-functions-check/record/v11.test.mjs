@@ -54,14 +54,15 @@ test("the two source buckets are the project's Gen2 upload and source buckets", 
   ]);
 });
 
-test("the objects the deploy added to the source buckets are deleted by name, and the ones that were there are left", async () => {
+test("the upload object the deploy made is deleted by name, the build's copies and the objects that were there are left", async () => {
   const { result, world } = await go();
   assert.deepEqual(result.inventory.sourceObjects.uploads, { added: [], removed: [] });
-  assert.deepEqual(result.inventory.sourceObjects.sources, { added: [], removed: [] });
-  assert.equal(result.cleanup.sourceObjectsDeleted.length, 26);
+  assert.equal(result.inventory.sourceObjects.sources.added.length, 13);
+  assert.deepEqual(result.inventory.sourceObjects.sources.removed, []);
+  assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
   assert.deepEqual(
     [...world.sourceBuckets.values()].map((items) => items.length),
-    [1, 0],
+    [1, 13],
   );
   assert.equal(result.outcome, "pycheck-recorded");
   assert.equal(result.closureReady, true);

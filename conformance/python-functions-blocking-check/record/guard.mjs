@@ -6,9 +6,10 @@ import {
   FUNCTION,
   PROJECT,
   REGION,
-  isOwnSourceObject,
+  isOwnUploadObject,
   packageIds,
   sourceBuckets,
+  uploadBucket,
 } from "./plan.mjs";
 import { signUpBody } from "./script.mjs";
 
@@ -23,6 +24,35 @@ const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const alt = (names) => "(?:" + names.map(esc).join("|") + ")";
 const OPERATION_ID = "[A-Za-z0-9._-]+";
 const BUILD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
+/**
+ * The body of the one policy write on a Cloud Run service: the policy the service has, minus the public members. It has
+ * only `policy`, whose only keys are `version`, `etag` and `bindings`; every binding is a `roles/` role with a list of
+ * string members and no condition; no member is `allUsers` or `allAuthenticatedUsers`, so the write can only remove.
+ */
+export function policyWithoutPublicMembers(json) {
+  if (!isObject(json) || Object.keys(json).some((k) => k !== "policy") || !isObject(json.policy))
+    return false;
+  const policy = json.policy;
+  if (Object.keys(policy).some((k) => !["version", "etag", "bindings"].includes(k))) return false;
+  if (policy.etag !== undefined && typeof policy.etag !== "string") return false;
+  if (policy.version !== undefined && !Number.isInteger(policy.version)) return false;
+  const bindings = policy.bindings ?? [];
+  return (
+    Array.isArray(bindings) &&
+    bindings.every(
+      (b) =>
+        isObject(b) &&
+        Object.keys(b).every((k) => k === "role" || k === "members") &&
+        typeof b.role === "string" &&
+        b.role.startsWith("roles/") &&
+        Array.isArray(b.members) &&
+        b.members.every(
+          (m) => typeof m === "string" && m !== "allUsers" && m !== "allAuthenticatedUsers",
+        ),
+    )
+  );
+}
 
 export const ownPackages = () => packageIds();
 
@@ -118,12 +148,20 @@ export function rules(runId, projectNumber, state = { localIds: new Set(), objec
       "cloudbuild.googleapis.com",
       `^/v1/projects/${esc(projectNumber)}/locations/${R}/builds/${BUILD_ID}$`,
     ),
-    // Cloud Run: the list, the function's service and its public-invoker policy (reads only)
+    // Cloud Run: the list, the function's service, its public-invoker policy, and the removal of that public member before the delete
     read("run.googleapis.com", `^/v2/projects/${P}/locations/(?:${R}|-)/services$`, {
       pageToken: token,
     }),
     read("run.googleapis.com", `^/v2/projects/${P}/locations/${R}/services/${fn}$`),
     read("run.googleapis.com", `^/v2/projects/${P}/locations/${R}/services/${fn}:getIamPolicy$`),
+    [
+      "POST",
+      "run.googleapis.com",
+      `^/v2/projects/${P}/locations/${R}/services/${fn}:setIamPolicy$`,
+      {},
+      policyWithoutPublicMembers,
+      true,
+    ],
     // Artifact Registry: the repository, lists, and the deletes of this function's own images
     read(
       "artifactregistry.googleapis.com",
@@ -157,21 +195,24 @@ export function rules(runId, projectNumber, state = { localIds: new Set(), objec
         pageToken: token,
       }),
     ),
-    // The deployment's own new objects in those buckets: read and delete, one name at a time, after the run adopted it
-    ...sourceBuckets(projectNumber).flatMap((name) =>
-      [
-        ["GET", false],
-        ["DELETE", true],
-      ].map(([method, mutation]) => [
-        method,
-        "storage.googleapis.com",
-        `^/storage/v1/b/${esc(name)}/o/[^/]+$`,
-        {},
-        nothing,
-        mutation,
-        (pathname) => state.objects.has(name + "/" + decodeName(pathname.split("/o/")[1])),
-      ]),
-    ),
+    // The upload object the deploy's own generateUploadUrl answer named (the run adopted it from the CLI log): its metadata
+    // is read, and it is deleted once, by generation. The sources bucket has no object rule.
+    ...[
+      ["GET", false, { fields: (v) => v === "bucket,name,generation" }],
+      ["DELETE", true, { ifGenerationMatch: (v) => /^\d{1,20}$/.test(v) }],
+    ].map(([method, mutation, query]) => [
+      method,
+      "storage.googleapis.com",
+      `^/storage/v1/b/${esc(uploadBucket(projectNumber))}/o/[^/]+$`,
+      query,
+      nothing,
+      mutation,
+      (pathname, params) =>
+        state.objects.has(
+          uploadBucket(projectNumber) + "/" + decodeName(pathname.split("/o/")[1]),
+        ) &&
+        (method === "GET" || params.has("ifGenerationMatch")),
+    ]),
     // Cloud Logging (a read through POST): the filter is one the recorder builds
     [
       "POST",
@@ -215,7 +256,7 @@ export function matchRule(spec, ruleList) {
     if (new Set(keys).size !== keys.length) continue;
     if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
     if (!rule.body(spec.json)) continue;
-    if (rule.check && rule.check(url.pathname) !== true) continue;
+    if (rule.check && rule.check(url.pathname, url.searchParams) !== true) continue;
     return rule;
   }
   return null;
@@ -233,9 +274,9 @@ export function createGuard(runId, projectNumber) {
         state.localIds.add(localId);
     },
     adopted: () => [...state.localIds],
-    /** Records a source object the deployment added, so that it may be read and deleted; false when it is not one of the deployment's. */
+    /** Records the upload object the deploy's receipt named, so that it may be read and deleted; false for any other name. */
     adoptObject: (bucket, name) => {
-      if (!isOwnSourceObject(projectNumber, bucket, name)) return false;
+      if (!isOwnUploadObject(projectNumber, bucket, name)) return false;
       state.objects.add(bucket + "/" + name);
       return true;
     },

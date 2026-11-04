@@ -3,7 +3,7 @@
 // judgement `cliFailed`) is the scheduled-delivery recorder's, unchanged: it runs the pinned firebase-tools once per action
 // and never retries.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   BLOCKING_EVENT_TYPE,
@@ -211,3 +211,65 @@ export function summarize({ v2, run }) {
 export const isActive = (summary) => summary?.active === true;
 export const isGone = (summary) =>
   summary?.present === false && summary?.runService !== true && summary?.stray !== true;
+
+// ---- the upload receipt -----------------------------------------------------------------------------
+
+// The only place the deploy tells which object it uploaded is the CLI's own `--debug` output (firebase-tools 15.28.2, recorded
+// in production by the Gen2 upload probe): the `generateUploadUrl` answer names the bucket and the object, and the upload's
+// PUT status line says whether the CLI's create was answered. Time, size and count never make an object ours.
+const GENERATE_LINE =
+  /<<< \[apiv2\]\[body\] POST \S+\/functions:generateUploadUrl(?:\?\S*)? (\{.*\})\s*$/u;
+const PUT_STATUS_LINE =
+  /<<< \[apiv2\]\[status\] PUT https:\/\/storage\.googleapis\.com\/([^/\s?]+)\/([^\s?]+) (\d{3})\s*$/u;
+
+/** One CLI output line as an event (`receipt` or `put-status`), or null. The signed upload URL is never kept. */
+export function uploadEventFromLine(line) {
+  const put = PUT_STATUS_LINE.exec(line);
+  if (put) return { type: "put-status", bucket: put[1], object: put[2], status: Number(put[3]) };
+  const match = GENERATE_LINE.exec(line);
+  if (!match) return null;
+  let body;
+  try {
+    body = JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
+  const source = body?.storageSource;
+  return typeof source?.bucket === "string" && typeof source.object === "string"
+    ? { type: "receipt", bucket: source.bucket, object: source.object }
+    : null;
+}
+
+export const uploadEventsFromCliOutput = (text) =>
+  String(text)
+    .split(/\r?\n/u)
+    .map(uploadEventFromLine)
+    .filter((event) => event !== null);
+
+/**
+ * "confirmed": some status is a 2xx. "refused": there is at least one status and every one is a definite 4xx (not 408, 429
+ * or 499), so nothing was made. Anything else is "unknown": no line, a 3xx or 5xx, or a retried PUT that met a retryable code
+ * before a refusal.
+ */
+export function putClass(statuses) {
+  if (statuses.some((status) => status >= 200 && status < 300)) return "confirmed";
+  const definite = (status) => status >= 400 && status < 500 && ![408, 429, 499].includes(status);
+  return statuses.length > 0 && statuses.every(definite) ? "refused" : "unknown";
+}
+
+/**
+ * The CLI result with the upload events of its stdout file (the deploy only). A file that cannot be read gives `null`: the
+ * run then cannot tell which object the deploy made and reports it.
+ */
+export function withUploadEvents(result, directory) {
+  if (result?.action !== "deploy") return result;
+  let uploadEvents = null;
+  try {
+    uploadEvents = uploadEventsFromCliOutput(
+      readFileSync(join(directory, "cli-deploy-stdout.txt"), "utf8"),
+    );
+  } catch {
+    // no events: reported by the run
+  }
+  return { ...result, uploadEvents };
+}

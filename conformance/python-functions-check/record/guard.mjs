@@ -14,8 +14,9 @@ import {
   TOPIC,
   packageIds,
   runMarker,
-  isOwnSourceObject,
+  isOwnUploadObject,
   sourceBuckets,
+  uploadBucket,
 } from "./plan.mjs";
 
 const decodeName = (text) => {
@@ -31,6 +32,41 @@ const OPERATION_ID = "[A-Za-z0-9._-]+";
 const BUILD_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // The project's default bucket, in either of the two forms Firebase gives it; no other bucket is ever touched.
 const BUCKET = `(?:${esc(PROJECT)}\\.firebasestorage\\.app|${esc(PROJECT)}\\.appspot\\.com)`;
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The body of the one policy write on a Cloud Run service: the policy the service has, minus the public members. It has
+ * only `policy`, whose only keys are `version`, `etag` and `bindings`; every binding is a `roles/` role with a list of
+ * string members and no condition; no member is `allUsers` or `allAuthenticatedUsers`, so the write can only remove.
+ */
+export function policyWithoutPublicMembers(json) {
+  if (
+    !isPlainObject(json) ||
+    Object.keys(json).some((k) => k !== "policy") ||
+    !isPlainObject(json.policy)
+  )
+    return false;
+  const policy = json.policy;
+  if (Object.keys(policy).some((k) => !["version", "etag", "bindings"].includes(k))) return false;
+  if (policy.etag !== undefined && typeof policy.etag !== "string") return false;
+  if (policy.version !== undefined && !Number.isInteger(policy.version)) return false;
+  const bindings = policy.bindings ?? [];
+  return (
+    Array.isArray(bindings) &&
+    bindings.every(
+      (b) =>
+        isPlainObject(b) &&
+        Object.keys(b).every((k) => k === "role" || k === "members") &&
+        typeof b.role === "string" &&
+        b.role.startsWith("roles/") &&
+        Array.isArray(b.members) &&
+        b.members.every(
+          (m) => typeof m === "string" && m !== "allUsers" && m !== "allAuthenticatedUsers",
+        ),
+    )
+  );
+}
 
 export const ownPackages = () => ALL_FUNCTIONS.flatMap(packageIds);
 
@@ -57,6 +93,7 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
   const onlyKeys = (json, keys) =>
     isObject(json) && Object.keys(json).every((k) => keys.includes(k));
   const read = (host, path, query = q({})) => ["GET", host, path, query, nothing, false];
+  const invokerRemoval = (json) => policyWithoutPublicMembers(json);
   return [
     // identity and the project's own state
     read("firebaserules.googleapis.com", `^/v1/projects/${P}/releases/cloud\\.firestore$`),
@@ -122,6 +159,17 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
       `^/v2/projects/${P}/locations/(?:${R}|-)/services$`,
       q({ pageToken: token }),
     ),
+    // The service-level public invoker the CLI adds to HTTP, callable and blocking functions: read, and removed (only that
+    // member) before the function is deleted. The services are the run's function ids.
+    read("run.googleapis.com", `^/v2/projects/${P}/locations/${R}/services/${fns}:getIamPolicy$`),
+    [
+      "POST",
+      "run.googleapis.com",
+      `^/v2/projects/${P}/locations/${R}/services/${fns}:setIamPolicy$`,
+      q({}),
+      invokerRemoval,
+      true,
+    ],
     read(
       "eventarc.googleapis.com",
       `^/v1/projects/${P}/locations/(?:${R}|-)/triggers$`,
@@ -308,21 +356,24 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
         q({ maxResults: num(1000), pageToken: token }),
       ),
     ),
-    // The deployment's own new objects in those buckets: read and delete, one name at a time, after the run adopted it
-    ...sourceBuckets(projectNumber).flatMap((name) =>
-      [
-        ["GET", false],
-        ["DELETE", true],
-      ].map(([method, mutation]) => [
-        method,
-        "storage.googleapis.com",
-        `^/storage/v1/b/${esc(name)}/o/[^/]+$`,
-        q({}),
-        nothing,
-        mutation,
-        (pathname) => state.objects.has(name + "/" + decodeName(pathname.split("/o/")[1])),
-      ]),
-    ),
+    // The upload object the deploy's own generateUploadUrl answer named (the run adopted it from the CLI log): its metadata
+    // is read, and it is deleted once, by generation. The sources bucket has no object rule.
+    ...[
+      ["GET", false, q({ fields: (v) => v === "bucket,name,generation" })],
+      ["DELETE", true, q({ ifGenerationMatch: (v) => /^\d{1,20}$/.test(v) })],
+    ].map(([method, mutation, query]) => [
+      method,
+      "storage.googleapis.com",
+      `^/storage/v1/b/${esc(uploadBucket(projectNumber))}/o/[^/]+$`,
+      query,
+      nothing,
+      mutation,
+      (pathname, params) =>
+        state.objects.has(
+          uploadBucket(projectNumber) + "/" + decodeName(pathname.split("/o/")[1]),
+        ) &&
+        (method === "GET" || params.has("ifGenerationMatch")),
+    ]),
     // Cloud Storage: the default bucket (read), the objects under the check's prefix (list), and the run's one object
     read("storage.googleapis.com", `^/storage/v1/b/${BUCKET}$`),
     read(
@@ -408,7 +459,7 @@ export function matchRule(spec, ruleList) {
     if (new Set(keys).size !== keys.length) continue;
     if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
     if (!rule.body(spec.json)) continue;
-    if (rule.check && rule.check(url.pathname) !== true) continue;
+    if (rule.check && rule.check(url.pathname, url.searchParams) !== true) continue;
     return rule;
   }
   return null;
@@ -420,9 +471,9 @@ export function createGuard(runId, projectNumber) {
   return {
     allow: (spec) => matchRule(spec, ruleList) !== null,
     isMutation: (spec) => matchRule(spec, ruleList)?.mutation === true,
-    /** Records a source object the deployment added, so that it may be read and deleted; false when it is not one of the deployment's. */
+    /** Records the upload object the deploy's receipt named, so that it may be read and deleted; false for any other name. */
     adoptObject: (bucket, name) => {
-      if (!isOwnSourceObject(projectNumber, bucket, name)) return false;
+      if (!isOwnUploadObject(projectNumber, bucket, name)) return false;
       state.objects.add(bucket + "/" + name);
       return true;
     },

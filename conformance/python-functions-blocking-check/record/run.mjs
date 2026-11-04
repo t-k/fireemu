@@ -26,6 +26,7 @@ import {
   cliFailed,
   isActive,
   isGone,
+  putClass,
   summarize,
 } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
@@ -42,8 +43,9 @@ import {
   REQUIRED_SERVICES,
   functionName,
   packageIds,
-  isOwnSourceObject,
+  isOwnUploadObject,
   sourceBuckets,
+  uploadBucket,
 } from "./plan.mjs";
 import { countAccounts, deleteAccount, emailOf, lookupAccount, signUp } from "./script.mjs";
 
@@ -664,6 +666,67 @@ export async function record({
         });
         if (answerClass(answer) === "2xx") ownDeleted.add("account");
       });
+    // The CLI gives a blocking function's Cloud Run service a public invoker (`allUsers` with `roles/run.invoker`). The
+    // service's policy is read, that member alone is removed (one write, never re-sent) and read back, before the function
+    // is deleted: a delete that fails must not leave a public service. The result keeps what was found.
+    out.cleanup.invoker = null;
+    if (created)
+      await step("invoker-removal", async () => {
+        const policy = await read(
+          {
+            id: "cleanup-invoker-policy",
+            method: "GET",
+            url: RUN + ":getIamPolicy",
+            cleanup: true,
+          },
+          { observe: true },
+        );
+        if (!(policy?.status === 200 && readable(policy))) {
+          out.cleanup.invoker = { read: answerClass(policy) };
+          return;
+        }
+        const bindings = Array.isArray(policy.json.bindings) ? policy.json.bindings : [];
+        const members = (b) => (Array.isArray(b?.members) ? b.members : []);
+        const found = {
+          invokers: bindings
+            .filter((b) => b?.role === "roles/run.invoker")
+            .flatMap(members)
+            .toSorted(),
+          allUsers: bindings.some((b) => members(b).includes("allUsers")),
+        };
+        out.cleanup.invoker = found;
+        if (!found.allUsers) return;
+        const kept = bindings
+          .map((b) => ({ role: b.role, members: members(b).filter((m) => m !== "allUsers") }))
+          .filter((b) => b.members.length > 0);
+        const answer = await mutate({
+          id: "cleanup-remove-invoker",
+          method: "POST",
+          url: RUN + ":setIamPolicy",
+          json: {
+            policy: {
+              ...(Number.isInteger(policy.json.version) ? { version: policy.json.version } : {}),
+              ...(typeof policy.json.etag === "string" ? { etag: policy.json.etag } : {}),
+              bindings: kept,
+            },
+          },
+          cleanup: true,
+        });
+        found.removeClass = answerClass(answer);
+        const back = await read(
+          {
+            id: "cleanup-invoker-readback",
+            method: "GET",
+            url: RUN + ":getIamPolicy",
+            cleanup: true,
+          },
+          { observe: true },
+        );
+        found.removed =
+          back?.status === 200 &&
+          readable(back) &&
+          !(back.json.bindings ?? []).some((b) => members(b).includes("allUsers"));
+      });
     if (created) await step("cli-delete", () => cliDelete());
     let found = null;
     const settled = () => complete(found ?? {}) && isGone(summarize(found));
@@ -758,43 +821,113 @@ export async function record({
         }
       });
     }
-    // The deployment's own new objects in the two Gen2 source buckets: found by diffing a fresh list with the preflight's,
-    // each deleted once by its exact name, then read back with the other names.
-    out.cleanup.sourceObjectsDeleted = [];
-    out.cleanup.sourceObjectsSkipped = [];
-    await step("source-objects-delete", async () => {
-      const now = await sourceObjects("cleanup");
-      let n = 0;
-      for (const bucketName of sourceBuckets(projectNumber)) {
-        const before = sourceObjectsBefore?.[bucketName];
-        if (!Array.isArray(before) || !Array.isArray(now[bucketName])) continue;
-        for (const name of now[bucketName].filter((x) => !before.includes(x))) {
-          if (!isOwnSourceObject(projectNumber, bucketName, name)) {
-            out.cleanup.sourceObjectsSkipped.push({ bucket: bucketName, name });
-            continue;
-          }
-          guard.adoptObject(bucketName, name);
-          const answer = await mutate({
-            id: `delete-source-object-${++n}`,
-            method: "DELETE",
-            url: `https://storage.googleapis.com/storage/v1/b/${bucketName}/o/${encodeURIComponent(name)}`,
-            cleanup: true,
-          });
-          out.cleanup.sourceObjectsDeleted.push({
-            bucket: bucketName,
-            name,
-            class: answerClass(answer),
-            status: answer?.status ?? null,
-          });
+    // The deploy's own upload object: the one its generateUploadUrl answer named (read from the CLI log), deleted once by
+    // generation and read back below. Any other new object in the upload bucket is reported and keeps the cleanup
+    // unverified. The sources bucket (the build's copies) is left alone; the inventory below reports what it gained.
+    out.cleanup.uploadObjectsDeleted = [];
+    out.cleanup.uploadObjectsUnexplained = [];
+    out.cleanup.uploadReasons = [];
+    await step("upload-objects", async () => {
+      const bucketName = uploadBucket(projectNumber);
+      const reasons = out.cleanup.uploadReasons;
+      const before = sourceObjectsBefore?.[bucketName];
+      const deployed = out.cli.deploy;
+      const receipts = new Map();
+      if (deployed) {
+        if (!Array.isArray(deployed.uploadEvents)) reasons.push("receipt-log-unreadable");
+        for (const event of deployed.uploadEvents ?? []) {
+          if (event.type === "receipt") {
+            if (
+              event.bucket !== bucketName ||
+              !isOwnUploadObject(projectNumber, event.bucket, event.object)
+            )
+              reasons.push("receipt-invalid");
+            else if (!receipts.has(event.object) && receipts.size < 3)
+              receipts.set(event.object, []);
+            else if (!receipts.has(event.object)) reasons.push("too-many-receipts");
+          } else if (event.type === "put-status" && event.bucket === bucketName)
+            receipts.get(event.object)?.push(event.status);
+        }
+        if (receipts.size === 0 && Array.isArray(deployed.uploadEvents)) {
+          const ended =
+            deployed.exitCode !== null && !deployed.timedOut && !deployed.signal && !deployed.error;
+          if (!ended) reasons.push("killed-without-receipt");
+          else if (deployed.exitCode === 0) reasons.push("no-receipt");
         }
       }
+      if (!Array.isArray(before)) reasons.push("upload-baseline-unreadable");
+      let n = 0;
+      for (const [object, statuses] of receipts) {
+        const klass = putClass(statuses);
+        if (!Array.isArray(before)) break;
+        if (before.includes(object)) {
+          reasons.push(`receipt-names-baseline-object:${object}`);
+          continue;
+        }
+        if (klass === "refused") continue;
+        n += 1;
+        guard.adoptObject(bucketName, object);
+        const url = `https://storage.googleapis.com/storage/v1/b/${bucketName}/o/${encodeURIComponent(object)}`;
+        const meta = await read(
+          {
+            id: `upload-object-${n}-metadata`,
+            method: "GET",
+            url: url + "?fields=bucket,name,generation",
+            cleanup: true,
+          },
+          { observe: true },
+        );
+        if (absent(meta)) {
+          reasons.push(
+            `${klass === "confirmed" ? "confirmed-upload-absent" : "receipt-unconfirmed"}:${object}`,
+          );
+          continue;
+        }
+        const generation = String(meta?.json?.generation ?? "");
+        if (
+          !(meta?.status === 200 && readable(meta)) ||
+          meta.json.bucket !== bucketName ||
+          meta.json.name !== object ||
+          !/^\d{1,20}$/.test(generation)
+        ) {
+          reasons.push(`object-unreadable:${object}`);
+          continue;
+        }
+        const answer = await mutate({
+          id: `delete-upload-object-${n}`,
+          method: "DELETE",
+          url: `${url}?ifGenerationMatch=${generation}`,
+          cleanup: true,
+        });
+        out.cleanup.uploadObjectsDeleted.push({
+          bucket: bucketName,
+          name: object,
+          generation,
+          putStatuses: statuses,
+          class: answerClass(answer),
+          status: answer?.status ?? null,
+        });
+      }
+      const now = (await sourceObjects("cleanup"))[bucketName];
+      if (!Array.isArray(now) || !Array.isArray(before)) {
+        reasons.push("upload-list-incomplete");
+        return;
+      }
+      const explained = new Set(
+        [...receipts]
+          .filter(([, statuses]) => putClass(statuses) !== "refused")
+          .map(([object]) => object),
+      );
+      for (const name of now)
+        if (!before.includes(name) && !explained.has(name))
+          out.cleanup.uploadObjectsUnexplained.push({ bucket: bucketName, name });
     });
     // Read every name back directly. Only a direct read of an absence counts; a name that was not read is not absent.
     const names = [
       ["function", GCF + functionName(), "get"],
       ...packageIds().map((id) => ["package-" + id, REGISTRY + "/packages/" + id, "get"]),
-      ...out.cleanup.sourceObjectsDeleted.map((item, index) => [
-        "source-object-" + (index + 1),
+      ...out.cleanup.uploadObjectsDeleted.map((item, index) => [
+        "upload-object-" + (index + 1),
         `https://storage.googleapis.com/storage/v1/b/${item.bucket}/o/${encodeURIComponent(item.name)}`,
         "get",
       ]),
@@ -864,7 +997,8 @@ export async function record({
       out.cleanup.configAfterEmptyBlocking === true;
     out.cleanup.verified =
       out.cleanup.listsEmpty &&
-      out.cleanup.sourceObjectsSkipped.length === 0 &&
+      out.cleanup.uploadObjectsUnexplained.length === 0 &&
+      out.cleanup.uploadReasons.length === 0 &&
       Object.values(readBack).every((v) => v === true) &&
       out.cleanup.configRestored &&
       accountsSame;

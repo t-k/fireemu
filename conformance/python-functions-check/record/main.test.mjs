@@ -446,7 +446,7 @@ test("resultOf reads the unconfirmed creates and the bucket, and refuses anythin
   mkdirSync(d, { recursive: true });
   const path = join(d, "r.json");
   writeFileSync(path, JSON.stringify({ unconfirmedCreates: [], bucket: 5 }));
-  assert.deepEqual(resultOf(path), { ok: true, creates: [], bucket: null, sourceObjects: [] });
+  assert.deepEqual(resultOf(path), { ok: true, creates: [], bucket: null, uploadObjects: [] });
   writeFileSync(path, "{");
   assert.equal(resultOf(path).ok, false);
   assert.equal(resultOf(join(d, "none")).ok, false);

@@ -644,7 +644,7 @@ test("readback hands the recorded baselines to the read, journals privately and 
   assert.equal(seen.localId, "L".repeat(28));
   assert.equal(seen.accountsBefore, 3);
   assert.equal(seen.configBeforeDigest, "c".repeat(64));
-  assert.deepEqual(seen.sourceObjects, []);
+  assert.deepEqual(seen.uploadObjects, []);
   assert.equal(readFileSync(join(d, `readback-${RUN}-${stamp}.jsonl`), "utf8"), '{"id":"r"}\n');
   assert.equal(lstatSync(join(d, `readback-${RUN}-${stamp}.jsonl`)).mode & 0o777, 0o600);
   assert.equal(
@@ -746,7 +746,7 @@ test("the latest time in a journal wins, and a file that cannot be read has none
     localId: null,
     accountsBefore: null,
     configBeforeDigest: null,
-    sourceObjects: [],
+    uploadObjects: [],
   });
   writeFileSync(file, "{");
   assert.equal(resultOf(file).why, "the run's result file cannot be read (not JSON)");

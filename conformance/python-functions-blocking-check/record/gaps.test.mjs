@@ -713,7 +713,7 @@ test("the inventory notes the services and IAM changes, and nothing when a read 
   });
   assert.deepEqual(source.result.inventory.sourceObjects.uploads.removed, ["old-upload.zip"]);
   assert.deepEqual(source.result.inventory.sourceObjects.uploads.added, []);
-  assert.equal(source.result.cleanup.sourceObjectsDeleted.length, 2);
+  assert.equal(source.result.cleanup.uploadObjectsDeleted.length, 1);
 });
 
 // ---- the judge, the guard and the command line ----------------------------------------------------------

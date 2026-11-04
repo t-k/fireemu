@@ -84,33 +84,27 @@ export const packageId = (fn) =>
 export const packageIds = (fn) => [packageId(fn), packageId(fn) + "%2Fcache"];
 
 /**
- * The two buckets a Gen2 deployment leaves objects in (the source upload and the build's copy). Their objects are not
- * deleted by this check; the run reads them before and after and reports what was added.
+ * The two buckets a Gen2 deployment leaves objects in: the source upload slot (the CLI's zip, named by the deploy's own
+ * generateUploadUrl answer) and the build's copy. The run lists both before and after; it deletes only the upload object
+ * that answer named, and leaves the copies in the sources bucket (reported, not deleted).
  */
 export const sourceBuckets = (projectNumber) => [
   `gcf-v2-uploads-${projectNumber}.${REGION}.cloudfunctions.appspot.com`,
   `gcf-v2-sources-${projectNumber}-${REGION}`,
 ];
 
+/** The one bucket the recorder may delete objects in: the CLI's own source upload slot for the region. */
+export const uploadBucket = (projectNumber) => sourceBuckets(projectNumber)[0];
+
+const UPLOAD_OBJECT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+
 /**
- * Whether an object that appeared in a source bucket during the run is one of this deployment's: in the upload bucket any
- * new object with a plain name (the CLI's source upload), in the source bucket one under a function of this run (the
- * precedent's rule). Anything else is reported and left alone.
+ * Whether a name may be adopted as one of this deployment's upload objects: the upload bucket of the project and a plain
+ * object name (the recorded form is `<uuid>.zip`). Whether the deployment actually made it is decided by the receipt in the
+ * CLI log, never by the name. The Gen2 sources bucket is inventory only: nothing in it is ever read by name or deleted.
  */
-export function isOwnSourceObject(projectNumber, bucket, name) {
-  if (
-    typeof name !== "string" ||
-    name.length === 0 ||
-    name.length > 1024 ||
-    [...name].some((ch) => ch.charCodeAt(0) < 32)
-  )
-    return false;
-  const [uploads, sources] = sourceBuckets(projectNumber);
-  if (bucket === uploads)
-    return /^[A-Za-z0-9._/-]+$/.test(name) && !name.startsWith("/") && !name.includes("..");
-  if (bucket === sources) return ALL_FUNCTIONS.includes(name.split("/")[0]) && !name.includes("..");
-  return false;
-}
+export const isOwnUploadObject = (projectNumber, bucket, name) =>
+  bucket === uploadBucket(projectNumber) && typeof name === "string" && UPLOAD_OBJECT.test(name);
 
 /** Every Scheduler job and Cloud Tasks queue the CLI creates for the run's functions. */
 export const JOB_IDS = Object.freeze(SCHEDULER_FUNCTIONS.map(jobId));

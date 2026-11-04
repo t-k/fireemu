@@ -84,7 +84,8 @@ const REQUIRED = [
 /**
  * `hooks` maps "METHOD host/path" to a function returning a Response, "throw", or nothing. `leaveOnDelete` makes the fake CLI's
  * delete leave the function behind; `leaveTrigger` makes it leave the trigger registered. `failDeploy` makes the deploy exit 1
- * without creating anything. `silent` suppresses the frames. `preexistingAccounts` is the number of accounts the project already has.
+ * without creating anything. `uploadLines` is "normal", "none" (no receipt in the CLI log), "refused" (the upload PUT answered 403)
+ * or "extra" (a second receipt for an object nobody made). `silent` suppresses the frames. `preexistingAccounts` is the number of accounts the project already has.
  */
 export function createWorld({
   runId = "0123456789abcdef",
@@ -100,6 +101,7 @@ export function createWorld({
   withSourceBuckets = true,
   baselineBlocking = undefined,
   publicInvoker = true,
+  uploadLines = "normal",
   deleteLeaves = undefined,
   sourcePageSize = 0,
 } = {}) {
@@ -123,6 +125,9 @@ export function createWorld({
     cliRuns: [],
     signUps: 0,
     insert: 0,
+    generations: new Map(),
+    upload: null,
+    policy: null,
     sourceBuckets: withSourceBuckets
       ? new Map(
           sourceBuckets(NUMBER).map((name) => [
@@ -152,17 +157,27 @@ export function createWorld({
     w.config.blockingFunctions = {
       triggers: { beforeCreate: { functionUri: SERVICE_URI, updateTime: iso(w.now) } },
     };
-    for (const [bucket, items] of w.sourceBuckets)
-      items.push(
-        bucket.startsWith("gcf-v2-uploads")
-          ? "upload-" + ++w.insert + ".zip"
-          : FUNCTION + "/function-source.zip",
-      );
+    for (const [bucket, items] of w.sourceBuckets) {
+      if (bucket.startsWith("gcf-v2-uploads")) {
+        w.upload =
+          "514cacbe-3258-46fd-9a02-54b7485b" + String(++w.insert).padStart(4, "0") + ".zip";
+        if (uploadLines !== "refused") {
+          items.push(w.upload);
+          w.generations.set(bucket + "/" + w.upload, String(1760000000000000 + w.insert));
+        }
+      } else items.push(FUNCTION + "/function-source.zip");
+    }
+    w.policy = {
+      version: 1,
+      etag: "etag-1",
+      bindings: publicInvoker ? [{ role: "roles/run.invoker", members: ["allUsers"] }] : [],
+    };
   };
   const deleteDeployed = () => {
     if (!leaveOnDelete) {
       w.functions.delete(functionName());
       w.runServices.delete(FUNCTION);
+      w.policy = null;
     }
     if (!leaveTrigger) {
       if (deleteLeaves !== undefined) w.config.blockingFunctions = structuredClone(deleteLeaves);
@@ -176,13 +191,39 @@ export function createWorld({
     w.cliRuns.push(action);
     if (action === "deploy") {
       if (failDeploy)
-        return { action, exitCode: 1, timedOut: false, error: null, errored: 1, durationMs: 1 };
+        return {
+          action,
+          exitCode: 1,
+          timedOut: false,
+          error: null,
+          errored: 1,
+          uploadEvents: [],
+          durationMs: 1,
+        };
       createDeployed();
       w.advance(110_000);
     } else if (action === "delete") {
       deleteDeployed();
       w.advance(30_000);
     }
+    const bucket = sourceBuckets(NUMBER)[0];
+    const uploadEvents =
+      action === "deploy" && uploadLines !== "none" && w.upload
+        ? [
+            { type: "receipt", bucket, object: w.upload },
+            {
+              type: "put-status",
+              bucket,
+              object: w.upload,
+              status: uploadLines === "refused" ? 403 : 200,
+            },
+            ...(uploadLines === "extra"
+              ? [{ type: "receipt", bucket, object: "99999999-0000-0000-0000-000000000000.zip" }]
+              : []),
+          ]
+        : action === "deploy"
+          ? []
+          : undefined;
     return {
       action,
       exitCode: 0,
@@ -191,6 +232,7 @@ export function createWorld({
       error: null,
       errored: 0,
       unknownWrites: [],
+      ...(uploadEvents ? { uploadEvents } : {}),
       durationMs: 1,
     };
   };
@@ -315,12 +357,19 @@ export function createWorld({
           url,
         );
       if (path.endsWith(":getIamPolicy"))
-        return w.runServices.has(FUNCTION)
-          ? reply(200, {
-              version: 1,
-              bindings: publicInvoker ? [{ role: "roles/run.invoker", members: ["allUsers"] }] : [],
-            })
-          : notFound("service");
+        return w.runServices.has(FUNCTION) && w.policy ? reply(200, w.policy) : notFound("service");
+      if (path.endsWith(":setIamPolicy")) {
+        if (!w.runServices.has(FUNCTION) || !w.policy) return notFound("service");
+        const given = body?.policy;
+        if (method !== "POST" || !given || Object.keys(body).length !== 1)
+          return reply(400, {
+            error: { code: 400, status: "INVALID_ARGUMENT", message: "policy" },
+          });
+        if (given.etag !== w.policy.etag)
+          return reply(409, { error: { code: 409, status: "ABORTED", message: "etag mismatch" } });
+        w.policy = { version: 1, etag: given.etag + "+", bindings: given.bindings ?? [] };
+        return reply(200, w.policy);
+      }
     }
     if (host === "artifactregistry.googleapis.com") {
       if (path.includes("/operations/")) return reply(200, { name: path, done: true });
@@ -352,8 +401,18 @@ export function createWorld({
         const held = w.sourceBuckets.get(object[1]);
         const name = decodeURIComponent(object[2]);
         if (!held || !held.includes(name)) return gcsNotFound(name);
-        if (method === "GET") return reply(200, { name, bucket: object[1] });
+        const generation = w.generations.get(object[1] + "/" + name) ?? "1";
+        if (method === "GET") return reply(200, { name, bucket: object[1], generation });
         if (method === "DELETE") {
+          const wanted = url.searchParams.get("ifGenerationMatch");
+          if (wanted !== null && wanted !== generation)
+            return reply(412, {
+              error: {
+                code: 412,
+                message: "Precondition Failed",
+                errors: [{ domain: "global", reason: "conditionNotMet" }],
+              },
+            });
           held.splice(held.indexOf(name), 1);
           return new Response(null, { status: 204 });
         }

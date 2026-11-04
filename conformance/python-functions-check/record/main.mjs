@@ -34,9 +34,10 @@ import {
   runCli as realRunCli,
   sdkVersionProblems,
   sourceProblems,
+  withUploadEvents,
 } from "./deploy.mjs";
 import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID } from "./plan.mjs";
-import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, sourceObjectEntries } from "./readback.mjs";
+import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, uploadObjectEntries } from "./readback.mjs";
 import { MAX_REQUESTS, record } from "./run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -205,7 +206,7 @@ export function resultOf(path) {
     ok: true,
     creates: result.unconfirmedCreates,
     bucket: typeof result.bucket === "string" ? result.bucket : null,
-    sourceObjects: sourceObjectEntries(result.cleanup?.sourceObjectsDeleted),
+    uploadObjects: uploadObjectEntries(result.cleanup?.uploadObjectsDeleted),
   };
 }
 
@@ -250,7 +251,7 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       runId,
       projectNumber: values["project-number"],
       bucket: judged.ok ? judged.bucket : null,
-      sourceObjects: judged.ok ? judged.sourceObjects : [],
+      uploadObjects: judged.ok ? judged.uploadObjects : [],
       accessToken: deps.token(),
       save: async (row) => {
         writeSync(journal, JSON.stringify(row) + "\n");
@@ -389,20 +390,23 @@ export async function main(
   });
   const configHome = join(runDir, "cli-config");
   mkdirSync(configHome, { recursive: true, mode: 0o700 });
-  const runCli = ({ action }) =>
-    deps.runCli({
-      action,
-      plan: cliPlan(action, {
-        configHome,
-        configPath: prepared.configPath,
-        workDir: dirname(prepared.configPath),
-        home: env.HOME,
-        path: dirname(values.node) + ":" + (env.PATH ?? ""),
+  const runCli = async ({ action }) =>
+    withUploadEvents(
+      await deps.runCli({
+        action,
+        plan: cliPlan(action, {
+          configHome,
+          configPath: prepared.configPath,
+          workDir: dirname(prepared.configPath),
+          home: env.HOME,
+          path: dirname(values.node) + ":" + (env.PATH ?? ""),
+        }),
+        firebaseJs: values["firebase-js"],
+        node: values.node,
+        directory: join(runDir, "cli"),
       }),
-      firebaseJs: values["firebase-js"],
-      node: values.node,
-      directory: join(runDir, "cli"),
-    });
+      join(runDir, "cli"),
+    );
   let result;
   try {
     result = await deps.record({

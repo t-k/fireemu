@@ -97,7 +97,9 @@ const REQUIRED = [
 /**
  * `hooks` maps "METHOD host/path" (or "METHOD /path") to a function returning a Response, "throw", or nothing.
  * `leaveOnDelete` names functions the fake CLI's delete leaves behind. `failDeploy` makes the deploy exit 1 without
- * creating anything. `failSources` names source operation keys the world answers with 500 after applying them.
+ * creating anything. `publicInvokers` names functions whose Cloud Run service the CLI makes public (`allUsers`).
+ * `uploadLines` is "normal", "none" (no receipt in the CLI log), "refused" (the upload PUT answered 403) or "extra" (a second
+ * receipt for an object nobody made). `failSources` names source operation keys the world answers with 500 after applying them.
  */
 export function createWorld({
   runId = "0123456789abcdef",
@@ -113,6 +115,8 @@ export function createWorld({
   foreignSubscriptions = 0,
   withSourceBuckets = true,
   sourcePageSize = 0,
+  publicInvokers = [],
+  uploadLines = "normal",
 } = {}) {
   const w = {
     runId,
@@ -143,6 +147,9 @@ export function createWorld({
         )
       : new Map(),
     deliveries: [],
+    policies: new Map(),
+    generations: new Map(),
+    upload: null,
     insert: 0,
     services: new Set([
       ...REQUIRED,
@@ -210,19 +217,33 @@ export function createWorld({
       w.queues.set(id, { name: queueName(id), state: "RUNNING", retryConfig: { maxAttempts: 1 } });
     w.topics.add(TOPIC);
     w.channels.add("firebase");
-    for (const [name, items] of w.sourceBuckets)
-      for (const fn of ALL_FUNCTIONS)
-        items.push(
-          name.startsWith("gcf-v2-uploads")
-            ? "upload-" + ++w.insert + ".zip"
-            : fn + "/function-source.zip",
-        );
+    for (const [name, items] of w.sourceBuckets) {
+      if (name.startsWith("gcf-v2-uploads")) {
+        w.upload =
+          "514cacbe-3258-46fd-9a02-54b7485b" + String(++w.insert).padStart(4, "0") + ".zip";
+        if (uploadLines !== "refused") {
+          items.push(w.upload);
+          w.generations.set(name + "/" + w.upload, String(1760000000000000 + w.insert));
+        }
+      } else for (const fn of ALL_FUNCTIONS) items.push(fn + "/function-source.zip");
+    }
+    for (const fn of ALL_FUNCTIONS)
+      w.policies.set(fn, {
+        version: 1,
+        etag: "etag-" + fn + "-1",
+        bindings: publicInvokers.includes(fn)
+          ? [{ role: "roles/run.invoker", members: ["allUsers"] }]
+          : SCHEDULER_FUNCTIONS.includes(fn)
+            ? [{ role: "roles/run.invoker", members: ["serviceAccount:" + SERVICE_ACCOUNT] }]
+            : [],
+      });
   };
   const deleteDeployed = () => {
     for (const fn of ALL_FUNCTIONS) {
       if (leaveOnDelete.includes(fn)) continue;
       w.functions.delete(functionName(fn));
       w.runServices.delete(fn);
+      w.policies.delete(fn);
       w.triggers.delete(fn + "-123");
     }
     for (const id of JOB_IDS) if (!leaveOnDelete.includes("job:" + id)) w.jobs.delete(id);
@@ -234,13 +255,39 @@ export function createWorld({
     w.cliRuns.push(action);
     if (action === "deploy") {
       if (failDeploy)
-        return { action, exitCode: 1, timedOut: false, error: null, errored: 5, durationMs: 1 };
+        return {
+          action,
+          exitCode: 1,
+          timedOut: false,
+          error: null,
+          errored: 5,
+          uploadEvents: [],
+          durationMs: 1,
+        };
       createDeployed();
       w.advance(110_000);
     } else if (action === "delete") {
       deleteDeployed();
       w.advance(30_000);
     }
+    const bucket = sourceBuckets(NUMBER)[0];
+    const uploadEvents =
+      action === "deploy" && uploadLines !== "none" && w.upload
+        ? [
+            { type: "receipt", bucket, object: w.upload },
+            {
+              type: "put-status",
+              bucket,
+              object: w.upload,
+              status: uploadLines === "refused" ? 403 : 200,
+            },
+            ...(uploadLines === "extra"
+              ? [{ type: "receipt", bucket, object: "99999999-0000-0000-0000-000000000000.zip" }]
+              : []),
+          ]
+        : action === "deploy"
+          ? []
+          : undefined;
     return {
       action,
       exitCode: 0,
@@ -249,6 +296,7 @@ export function createWorld({
       error: null,
       errored: 0,
       unknownWrites: [],
+      ...(uploadEvents ? { uploadEvents } : {}),
       durationMs: 1,
     };
   };
@@ -306,6 +354,23 @@ export function createWorld({
           parent: "projects/" + NUMBER,
         })),
       });
+    const policyCall =
+      /^\/v2\/projects\/[^/]+\/locations\/[^/]+\/services\/([^/:]+):(get|set)IamPolicy$/.exec(path);
+    if (host === "run.googleapis.com" && policyCall) {
+      const [, fn, verb] = policyCall;
+      if (!w.policies.has(fn))
+        return reply(404, {
+          error: { code: 404, message: "Resource " + fn + " not found", status: "NOT_FOUND" },
+        });
+      if (verb === "get") return reply(200, w.policies.get(fn));
+      const given = body?.policy;
+      if (method !== "POST" || !given || Object.keys(body).length !== 1)
+        return badRequest("policy is required");
+      if (given.etag !== w.policies.get(fn).etag)
+        return reply(409, { error: { code: 409, status: "ABORTED", message: "etag mismatch" } });
+      w.policies.set(fn, { version: 1, etag: given.etag + "+", bindings: given.bindings ?? [] });
+      return reply(200, w.policies.get(fn));
+    }
     if (path.endsWith(":getIamPolicy")) return reply(200, { version: 1, etag: "e", bindings: [] });
     if (path.endsWith("/adminSdkConfig"))
       return reply(200, { projectId: PROJECT, storageBucket: BUCKET });
@@ -563,8 +628,19 @@ export function createWorld({
         const items = w.sourceBuckets.get(sourceObject[1]);
         const objectName_ = decodeURIComponent(sourceObject[2]);
         if (!items || !items.includes(objectName_)) return gcsNotFound(objectName_);
-        if (method === "GET") return reply(200, { name: objectName_, bucket: sourceObject[1] });
+        const generation = w.generations.get(sourceObject[1] + "/" + objectName_) ?? "1";
+        if (method === "GET")
+          return reply(200, { name: objectName_, bucket: sourceObject[1], generation });
         if (method === "DELETE") {
+          const wanted = url.searchParams.get("ifGenerationMatch");
+          if (wanted !== null && wanted !== generation)
+            return reply(412, {
+              error: {
+                code: 412,
+                message: "Precondition Failed",
+                errors: [{ domain: "global", reason: "conditionNotMet" }],
+              },
+            });
           items.splice(items.indexOf(objectName_), 1);
           return new Response(null, { status: 204 });
         }

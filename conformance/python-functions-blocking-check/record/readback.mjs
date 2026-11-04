@@ -19,15 +19,15 @@ const GCF = "https://cloudfunctions.googleapis.com/v2/";
 const REGISTRY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts/packages`;
 
 /** The read-back's allowlist: the recording's, narrowed to requests that are not mutations. */
-export function readbackAllow(runId, projectNumber, localId = null, sourceObjects = []) {
+export function readbackAllow(runId, projectNumber, localId = null, uploadObjects = []) {
   const guard = createGuard(runId, projectNumber);
   guard.adopt(localId);
-  for (const item of sourceObjectEntries(sourceObjects)) guard.adoptObject(item.bucket, item.name);
+  for (const item of uploadObjectEntries(uploadObjects)) guard.adoptObject(item.bucket, item.name);
   return { allow: (spec) => guard.allow(spec) && !guard.isMutation(spec), guard };
 }
 
 /** The source objects the run deleted, as `{ bucket, name }` entries from its result, kept only when they are well formed. */
-export const sourceObjectEntries = (list) =>
+export const uploadObjectEntries = (list) =>
   (Array.isArray(list) ? list : []).filter(
     (item) => typeof item?.bucket === "string" && typeof item?.name === "string",
   );
@@ -36,7 +36,7 @@ export async function readbackRun({
   runId,
   projectNumber,
   localId = null,
-  sourceObjects = [],
+  uploadObjects = [],
   accountsBefore = null,
   configBeforeDigest = null,
   accessToken,
@@ -44,7 +44,7 @@ export async function readbackRun({
   send,
   clock = Date.now,
 }) {
-  const { allow } = readbackAllow(runId, projectNumber, localId, sourceObjects);
+  const { allow } = readbackAllow(runId, projectNumber, localId, uploadObjects);
   const { capture, counts, authStop } = createCapture({
     accessToken,
     save,
@@ -91,8 +91,8 @@ export async function readbackRun({
     for (const [label, url] of [
       ["function", GCF + functionName()],
       ...packageIds().map((id) => ["package-" + id, REGISTRY + "/" + id]),
-      ...sourceObjectEntries(sourceObjects).map((item, index) => [
-        "source-object-" + (index + 1),
+      ...uploadObjectEntries(uploadObjects).map((item, index) => [
+        "upload-object-" + (index + 1),
         `https://storage.googleapis.com/storage/v1/b/${item.bucket}/o/${encodeURIComponent(item.name)}`,
       ]),
     ]) {
@@ -150,7 +150,7 @@ export async function readbackRun({
   out.attempted = known.attempted;
   out.unknown = known.unknown;
   if (stop) out.authStop = stop;
-  const expectedNames = 3 + (localId === null ? 0 : 1) + sourceObjectEntries(sourceObjects).length;
+  const expectedNames = 3 + (localId === null ? 0 : 1) + uploadObjectEntries(uploadObjects).length;
   const namesGone =
     Object.keys(out.names).length === expectedNames &&
     Object.values(out.names).every((n) => n.absent === true);

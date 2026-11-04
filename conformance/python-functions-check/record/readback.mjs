@@ -31,12 +31,12 @@ const REGISTRY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}
 
 /** Every name of the run with the URL that reads it directly. The object needs the bucket the run recorded. */
 /** The source objects the run deleted, as `{ bucket, name }` entries from its result, kept only when they are well formed. */
-export const sourceObjectEntries = (list) =>
+export const uploadObjectEntries = (list) =>
   (Array.isArray(list) ? list : []).filter(
     (item) => typeof item?.bucket === "string" && typeof item?.name === "string",
   );
 
-export const readbackNames = (runId, bucket, sourceObjects = []) => [
+export const readbackNames = (runId, bucket, uploadObjects = []) => [
   ...ALL_FUNCTIONS.map((fn) => ["function-" + fn, GCF + functionName(fn)]),
   ...JOB_IDS.map((id) => ["job-" + id, SCHEDULER + "/" + id]),
   ...QUEUE_IDS.map((id) => ["queue-" + id, TASKS + "/" + id]),
@@ -44,16 +44,16 @@ export const readbackNames = (runId, bucket, sourceObjects = []) => [
   ["document", documentUrl(documentId(runId))],
   ...(bucket ? [["object", storageObjectUrl(bucket, objectName(runId))]] : []),
   ...ALL_FUNCTIONS.flatMap(packageIds).map((id) => ["package-" + id, REGISTRY + "/" + id]),
-  ...sourceObjectEntries(sourceObjects).map((item, index) => [
-    "source-object-" + (index + 1),
+  ...uploadObjectEntries(uploadObjects).map((item, index) => [
+    "upload-object-" + (index + 1),
     `https://storage.googleapis.com/storage/v1/b/${item.bucket}/o/${encodeURIComponent(item.name)}`,
   ]),
 ];
 
 /** The read-back's allowlist: the recording's, narrowed to GETs that are not mutations. */
-export function readbackAllow(runId, projectNumber, sourceObjects = []) {
+export function readbackAllow(runId, projectNumber, uploadObjects = []) {
   const guard = createGuard(runId, projectNumber);
-  for (const item of sourceObjectEntries(sourceObjects)) guard.adoptObject(item.bucket, item.name);
+  for (const item of uploadObjectEntries(uploadObjects)) guard.adoptObject(item.bucket, item.name);
   return (spec) => spec.method === "GET" && guard.allow(spec) && !guard.isMutation(spec);
 }
 
@@ -61,7 +61,7 @@ export async function readbackRun({
   runId,
   projectNumber,
   bucket = null,
-  sourceObjects = [],
+  uploadObjects = [],
   accessToken,
   save,
   send,
@@ -74,7 +74,7 @@ export async function readbackRun({
     clock,
     maxRequests: READBACK_MAX_REQUESTS,
     maxRequestCap: READBACK_MAX_REQUESTS,
-    allow: readbackAllow(runId, projectNumber, sourceObjects),
+    allow: readbackAllow(runId, projectNumber, uploadObjects),
     quotaProject: PROJECT,
     timeoutFor: () => 15_000,
   });
@@ -104,7 +104,7 @@ export async function readbackRun({
   };
   const last = (item) => String(item.name).split("/").at(-1);
   try {
-    for (const [label, url] of readbackNames(runId, bucket, sourceObjects)) {
+    for (const [label, url] of readbackNames(runId, bucket, uploadObjects)) {
       const answer = await capture({ id: "readback-" + label, method: "GET", url });
       out.names[label] = { status: answer?.status ?? null, absent: absent(answer) };
     }
@@ -171,7 +171,7 @@ export async function readbackRun({
   out.unknown = known.unknown;
   if (stop) out.authStop = stop;
   const namesGone =
-    Object.keys(out.names).length === readbackNames(runId, bucket, sourceObjects).length &&
+    Object.keys(out.names).length === readbackNames(runId, bucket, uploadObjects).length &&
     Object.values(out.names).every((n) => n.absent === true);
   const listsGone =
     out.lists.functionsAndServices === true &&

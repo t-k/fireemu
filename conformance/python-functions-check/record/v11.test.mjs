@@ -195,3 +195,17 @@ test("the allowlist reads the two source buckets' object lists and nothing else 
     false,
   );
 });
+
+test("a source bucket that could not be read before the run, and can after it, gives no comparison and no cleanup error", async () => {
+  let first = true;
+  const { result } = await go({}, (send) => async (request) => {
+    if (request.url.includes("gcf-v2-sources") && first) {
+      first = false;
+      return reply(403, { error: { code: 403, status: "PERMISSION_DENIED" } });
+    }
+    return send(request);
+  });
+  assert.equal(result.inventory.sourceObjects.sources, null);
+  assert.equal(result.cleanup.errors, undefined);
+  assert.ok(result.inventory.sourceObjects.uploads);
+});

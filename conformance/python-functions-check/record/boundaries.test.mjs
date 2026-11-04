@@ -626,3 +626,13 @@ test("another function is not a stray of this one", () => {
   assert.equal(summary.pcst.present, true);
   assert.equal(summary.pcst.stray, false);
 });
+
+test("a commit hash with zeros in it passes the shape check", () => {
+  const target = mkdtempSync(join(tmpdir(), "pc-sha0-"));
+  for (const sha of ["0123456789abcdef0123456789abcdef01234567", "0".repeat(40)])
+    assert.throws(
+      () => prepareSource({ repoRoot: "/nonexistent-repo", commit: sha, target }),
+      (e) => !/full SHA/.test(e.message),
+      sha,
+    );
+});

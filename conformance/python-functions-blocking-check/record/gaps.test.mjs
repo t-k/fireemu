@@ -1215,3 +1215,16 @@ test("a 403 on the account lookup of the cleanup is data, and the raw-only verdi
   });
   assert.deepEqual(raw.cases["blocking-sdk"].observed, { rawDelivered: true, errors: 1 });
 });
+
+test("a configuration that cannot be read after the cleanup records no blocking form", async () => {
+  const { result } = await go(
+    {},
+    (send, world) => async (request) =>
+      request.method === "GET" &&
+      path(request).endsWith("/config") &&
+      world.cliRuns.includes("delete")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.cleanup.blockingForm, undefined);
+});

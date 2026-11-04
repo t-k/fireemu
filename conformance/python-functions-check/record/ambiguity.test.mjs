@@ -7,7 +7,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { redactCliText, withCliLog } from "./deploy.mjs";
-import { withoutPublicMember } from "./guard.mjs";
+import { createGuard, withoutPublicMember } from "./guard.mjs";
+import { frameFilter, listRequest } from "./logs.mjs";
 import { ALL_FUNCTIONS, JOB_IDS, PROJECT, QUEUE_IDS, REGION, queueName } from "./plan.mjs";
 import { readbackAllow, readbackRun } from "./readback.mjs";
 import { record } from "./run.mjs";
@@ -201,6 +202,13 @@ test("only a 403 that names SERVICE_DISABLED is read again: another 403, an unre
     );
     assert.equal(result.stoppedBecause, because, label);
     assert.equal(sleeps.filter((ms) => ms === 30_000).length, 0, label);
+    if (because)
+      assert.ok(
+        result.incompleteReads.some(
+          (r) => r.id === "preflight-jobs" && r.class !== "service-disabled",
+        ),
+        `${label}: the read is recorded as incomplete`,
+      );
   }
 });
 
@@ -673,10 +681,12 @@ test("the read-back's allowlist admits the project IAM read and no other POST", 
   const iam = `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`;
   assert.equal(allow({ method: "POST", url: iam, json: {} }), true);
   assert.equal(allow({ method: "POST", url: iam.replace(PROJECT, "other"), json: {} }), false);
-  assert.equal(
-    allow({ method: "POST", url: `https://logging.googleapis.com/v2/entries:list`, json: {} }),
-    false,
-  );
+  const entries = listRequest({
+    id: "x",
+    filter: frameFilter({ start: "2026-11-04T00:00:00.000Z", end: "2026-11-04T01:00:00.000Z" }),
+  });
+  assert.equal(createGuard(RUN, NUMBER).allow(entries), true, "the recording may read the logs");
+  assert.equal(allow(entries), false, "the read-back may not");
   assert.equal(allow({ method: "POST", url: iam, json: { policy: {} } }), false);
   assert.equal(allow({ method: "PUT", url: iam, json: {} }), false);
 });

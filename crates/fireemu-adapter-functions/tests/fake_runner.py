@@ -62,6 +62,15 @@ class Echo(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802 - the stdlib spelling
         length = int(self.headers.get("content-length") or 0)
         body = self.rfile.read(length) if length else b""
+        if request_log := os.environ.get("FIREEMU_FAKE_REQUEST_LOG"):
+            # Every request as it reached the runner: the path, each header (lower-cased) and the body text.
+            with open(request_log, "a", encoding="utf-8") as log:
+                entry = {
+                    "path": self.path,
+                    "headers": {k.lower(): v for k, v in self.headers.items()},
+                    "body": body.decode("utf-8", "replace"),
+                }
+                log.write(json.dumps(entry) + "\n")
         task_probe = os.environ.get("FIREEMU_FAKE_TASK_PROBE")
         if task_probe and self.path.rsplit("/", 1)[-1] in {"taskA", "taskB"}:
             queue = self.path.rsplit("/", 1)[-1]

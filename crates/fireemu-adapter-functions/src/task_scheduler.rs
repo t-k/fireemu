@@ -880,6 +880,7 @@ mod tests {
             url: "http://127.0.0.1/function".to_owned(),
             headers: BTreeMap::new(),
             body: json!({"data": {"id": name}}),
+            raw_body: Vec::new(),
             schedule_time: None,
             dispatch_deadline_seconds: 60,
         }

@@ -3342,6 +3342,32 @@ impl FunctionsRuntime {
         .await
     }
 
+    /// The headers one dispatch carries: production's in the strict profile, the official emulator's otherwise.
+    fn task_headers(
+        &self,
+        dispatch: &crate::task_scheduler::Dispatch,
+        attempt: u32,
+        execution_count: u32,
+        previous: Option<u16>,
+    ) -> Vec<(String, String)> {
+        let shape = if self.profile == FunctionsHttpProfile::Strict {
+            crate::tasks::DispatchShape::Production {
+                queue: &dispatch.queue,
+            }
+        } else {
+            crate::tasks::DispatchShape::Official
+        };
+        crate::tasks::dispatch_headers(
+            &dispatch.task,
+            &dispatch.queue_key,
+            attempt,
+            execution_count,
+            previous,
+            self.task_epoch_millis(),
+            shape,
+        )
+    }
+
     /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
     ///
     /// Backoff follows the explicit task-clock policy. Request and shutdown deadlines always
@@ -3356,7 +3382,7 @@ impl FunctionsRuntime {
         let mut attempt = 1u32;
         let mut execution_count = 0u32;
         let mut previous: Option<u16> = None;
-        let body = serde_json::to_vec(&task.body).unwrap_or_default();
+        let body = task.delivery_body().to_vec();
         loop {
             // A reset supersedes every task accepted before it.
             if self.inner.lock().ok().map(|i| i.epoch) != Some(epoch) {
@@ -3381,14 +3407,7 @@ impl FunctionsRuntime {
                 );
                 return true;
             };
-            let headers = crate::tasks::dispatch_headers(
-                task,
-                &dispatch.queue_key,
-                attempt,
-                execution_count,
-                previous,
-                self.task_epoch_millis(),
-            );
+            let headers = self.task_headers(dispatch, attempt, execution_count, previous);
             // The runner's HTTP server routes on the public path, and strips it before the
             // handler sees the request, so the dispatch carries the function's own URL path
             // rather than the `/` the queue would send to an arbitrary address.

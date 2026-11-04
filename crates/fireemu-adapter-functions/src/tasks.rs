@@ -38,6 +38,9 @@ pub struct Task {
     pub headers: BTreeMap<String, String>,
     /// The decoded body -- `{"data": payload}` for anything the Admin SDK enqueued.
     pub body: Value,
+    /// The decoded bytes exactly as the enqueuer wrote them. Production delivers these (member
+    /// order and spacing included); `body` is only the parsed echo of the enqueue response.
+    pub(crate) raw_body: Vec<u8>,
     /// `scheduleTime`, echoed into `X-CloudTasks-TaskETA`. Native task mode does not delay dispatch:
     /// nothing in the official `dispatchTasks` or `runTask` consults it either.
     /// Explicit virtual task mode gates eligibility on this value.
@@ -47,6 +50,12 @@ pub struct Task {
 }
 
 impl Task {
+    /// The bytes one dispatch carries as its request body: the task's body as it was enqueued.
+    #[must_use]
+    pub fn delivery_body(&self) -> &[u8] {
+        &self.raw_body
+    }
+
     /// Approximate heap data retained while this task is pending or being dispatched.
     #[must_use]
     pub fn retained_bytes(&self) -> usize {
@@ -65,6 +74,7 @@ impl Task {
                     .map_or(0, std::string::String::len),
             )
             .saturating_add(serde_json::to_vec(&self.body).map_or(usize::MAX, |body| body.len()))
+            .saturating_add(self.raw_body.len())
     }
 }
 
@@ -226,6 +236,7 @@ pub fn accept(
         url,
         headers,
         body,
+        raw_body: decoded,
         schedule_time: task
             .get("scheduleTime")
             .and_then(Value::as_str)
@@ -252,6 +263,34 @@ pub fn accepted_response(task: &Task) -> Value {
     }})
 }
 
+/// Whose headers a dispatch carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchShape<'a> {
+    /// The official emulator's: the internal queue key, the ETA as it was written (a schedule
+    /// time as given, else the dispatch instant in milliseconds), and no user agent.
+    Official,
+    /// Production's, as recorded on 2026-11-04 (sandbox run PYCHECK-EVENTS-20261104-01): the
+    /// bare queue id, the ETA as seconds with six decimals, and the `Google-Cloud-Tasks` user
+    /// agent. Production also sends an OIDC `Authorization` header and Cloud Run's own headers,
+    /// which a local dispatch has no source for.
+    Production {
+        /// The queue id, `onJob` for `.../queues/onJob`.
+        queue: &'a str,
+    },
+}
+
+/// The ETA production writes: Unix seconds with six decimals. A schedule time that is not an
+/// RFC 3339 timestamp is kept as given.
+fn production_eta(schedule_time: Option<&str>, now_millis: u64) -> String {
+    match schedule_time {
+        None => format!("{}.{:06}", now_millis / 1000, (now_millis % 1000) * 1000),
+        Some(text) => chrono::DateTime::parse_from_rfc3339(text).map_or_else(
+            |_| text.to_owned(),
+            |time| format!("{}.{:06}", time.timestamp(), time.timestamp_subsec_micros()),
+        ),
+    }
+}
+
 /// The headers one dispatch carries (`taskQueue.js:192`).
 ///
 /// `attempt` is 1-based, so the first delivery reports `X-CloudTasks-TaskRetryCount: 0`.
@@ -265,10 +304,24 @@ pub fn dispatch_headers(
     execution_count: u32,
     previous_response: Option<u16>,
     now_millis: u64,
+    shape: DispatchShape<'_>,
 ) -> Vec<(String, String)> {
+    let queue_name = match shape {
+        DispatchShape::Official => queue_key,
+        DispatchShape::Production { queue } => queue,
+    };
+    let eta = match shape {
+        DispatchShape::Official => task
+            .schedule_time
+            .clone()
+            .unwrap_or_else(|| now_millis.to_string()),
+        DispatchShape::Production { .. } => {
+            production_eta(task.schedule_time.as_deref(), now_millis)
+        }
+    };
     let mut out = vec![
         ("Content-Type".to_owned(), "application/json".to_owned()),
-        ("X-CloudTasks-QueueName".to_owned(), queue_key.to_owned()),
+        ("X-CloudTasks-QueueName".to_owned(), queue_name.to_owned()),
         (
             "X-CloudTasks-TaskName".to_owned(),
             task.name
@@ -285,13 +338,11 @@ pub fn dispatch_headers(
             "X-CloudTasks-TaskExecutionCount".to_owned(),
             execution_count.to_string(),
         ),
-        (
-            "X-CloudTasks-TaskETA".to_owned(),
-            task.schedule_time
-                .clone()
-                .unwrap_or_else(|| now_millis.to_string()),
-        ),
+        ("X-CloudTasks-TaskETA".to_owned(), eta),
     ];
+    if matches!(shape, DispatchShape::Production { .. }) {
+        out.push(("User-Agent".to_owned(), "Google-Cloud-Tasks".to_owned()));
+    }
     if let Some(status) = previous_response {
         out.push((
             "X-CloudTasks-TaskPreviousResponse".to_owned(),
@@ -334,9 +385,30 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{accept, dispatch_headers, queue_key, route, Route};
+    use super::{accept, dispatch_headers, queue_key, route, DispatchShape, Route};
     use fireemu_core_functions::manifest::TaskRetryConfig;
     use serde_json::json;
+
+    /// Standard base64 with padding.
+    fn b64(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
 
     fn enqueue_body() -> serde_json::Value {
         json!({"task": {"httpRequest": {
@@ -433,6 +505,7 @@ mod tests {
             0,
             None,
             1_700_000_000_000,
+            DispatchShape::Official,
         );
         let get = |name: &str| {
             headers
@@ -460,6 +533,7 @@ mod tests {
             2,
             Some(503),
             1_700_000_000_000,
+            DispatchShape::Official,
         );
         let get = |name: &str| {
             retried
@@ -469,6 +543,181 @@ mod tests {
         };
         assert_eq!(get("X-CloudTasks-TaskRetryCount"), Some("2"));
         assert_eq!(get("X-CloudTasks-TaskPreviousResponse"), Some("503"));
+    }
+
+    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Production delivers the bytes the task was created with (recorded 2026-11-04, sandbox run
+    /// PYCHECK-EVENTS-20261104-01: the body of a raw task request arrived with the enqueuer's own
+    /// member order). Re-serialising the parsed value sorted the members.
+    #[test]
+    fn a_task_body_is_delivered_byte_for_byte() {
+        let text = r#"{ "data": {"run": "r", "label": "l", "n": [3, 1, 2]},"z":null }"#;
+        let mut body = enqueue_body();
+        body["task"]["httpRequest"]["body"] = json!(b64(text.as_bytes()));
+        let task =
+            accept("demo", "us-central1", "onJob", "http://unused", &body, 1).expect("accepted");
+        assert_eq!(task.delivery_body(), text.as_bytes());
+        // The echo of the enqueue keeps the decoded JSON, as before.
+        assert_eq!(task.body["data"]["label"], json!("l"));
+    }
+
+    #[test]
+    fn a_task_body_that_is_not_utf8_json_is_still_refused() {
+        let mut body = enqueue_body();
+        body["task"]["httpRequest"]["body"] = json!(b64(&[0xff, 0xfe]));
+        assert!(accept("demo", "us-central1", "onJob", "http://unused", &body, 1).is_err());
+    }
+
+    #[test]
+    fn the_retained_size_counts_the_delivered_bytes() {
+        let small = accept("demo", "us-central1", "q", "http://u", &enqueue_body(), 1).unwrap();
+        let mut body = enqueue_body();
+        let text = format!(r#"{{"data":{{"pad":"{}"}}}}"#, "x".repeat(4096));
+        body["task"]["httpRequest"]["body"] = json!(b64(text.as_bytes()));
+        let large = accept("demo", "us-central1", "q", "http://u", &body, 1).unwrap();
+        assert!(large.retained_bytes() >= small.retained_bytes() + 4096);
+    }
+
+    /// What production sent to a Tasks function (recorded 2026-11-04, sandbox run
+    /// PYCHECK-EVENTS-20261104-01): the bare queue id, the ETA as seconds with six decimals, and
+    /// the `Google-Cloud-Tasks` user agent.
+    #[test]
+    fn the_production_shape_sends_the_bare_queue_the_decimal_eta_and_the_user_agent() {
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://unused",
+            &enqueue_body(),
+            7,
+        )
+        .expect("accepted");
+        let headers = dispatch_headers(
+            &task,
+            &queue_key("demo", "us-central1", "onJob"),
+            1,
+            0,
+            None,
+            1_700_000_000_123,
+            DispatchShape::Production { queue: "onJob" },
+        );
+        assert_eq!(header(&headers, "X-CloudTasks-QueueName"), Some("onJob"));
+        assert_eq!(
+            header(&headers, "X-CloudTasks-TaskETA"),
+            Some("1700000000.123000")
+        );
+        assert_eq!(header(&headers, "User-Agent"), Some("Google-Cloud-Tasks"));
+        assert_eq!(header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(header(&headers, "X-CloudTasks-TaskName"), Some("7"));
+        assert_eq!(header(&headers, "X-CloudTasks-TaskRetryCount"), Some("0"));
+        assert_eq!(
+            header(&headers, "X-CloudTasks-TaskExecutionCount"),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn the_official_shape_has_no_user_agent_and_keeps_the_internal_queue_key() {
+        let task = accept(
+            "demo",
+            "us-central1",
+            "onJob",
+            "http://unused",
+            &enqueue_body(),
+            7,
+        )
+        .expect("accepted");
+        let headers = dispatch_headers(
+            &task,
+            &queue_key("demo", "us-central1", "onJob"),
+            1,
+            0,
+            None,
+            1_700_000_000_123,
+            DispatchShape::Official,
+        );
+        assert_eq!(
+            header(&headers, "X-CloudTasks-QueueName"),
+            Some("queue:demo-us-central1-onJob")
+        );
+        assert_eq!(
+            header(&headers, "X-CloudTasks-TaskETA"),
+            Some("1700000000123")
+        );
+        assert_eq!(header(&headers, "User-Agent"), None);
+    }
+
+    #[test]
+    fn the_production_eta_of_a_scheduled_task_is_its_schedule_time_with_six_decimals() {
+        for (schedule, expected) in [
+            ("2026-02-01T00:30:00Z", "1769905800.000000"),
+            ("2026-02-01T00:30:00.5Z", "1769905800.500000"),
+            ("2026-02-01T01:30:00.123456+01:00", "1769905800.123456"),
+        ] {
+            let mut body = enqueue_body();
+            body["task"]["scheduleTime"] = json!(schedule);
+            let task = accept("demo", "us-central1", "q", "http://u", &body, 1).unwrap();
+            let headers = dispatch_headers(
+                &task,
+                "queue:demo-us-central1-q",
+                1,
+                0,
+                None,
+                1,
+                DispatchShape::Production { queue: "q" },
+            );
+            assert_eq!(
+                header(&headers, "X-CloudTasks-TaskETA"),
+                Some(expected),
+                "{schedule}"
+            );
+        }
+        // A schedule time that is not a timestamp is kept as given rather than invented.
+        let mut body = enqueue_body();
+        body["task"]["scheduleTime"] = json!("soon");
+        let task = accept("demo", "us-central1", "q", "http://u", &body, 1).unwrap();
+        let headers = dispatch_headers(
+            &task,
+            "queue:demo-us-central1-q",
+            1,
+            0,
+            None,
+            1,
+            DispatchShape::Production { queue: "q" },
+        );
+        assert_eq!(header(&headers, "X-CloudTasks-TaskETA"), Some("soon"));
+    }
+
+    #[test]
+    fn a_task_header_still_wins_over_the_production_shape() {
+        let mut body = enqueue_body();
+        body["task"]["httpRequest"]["headers"] =
+            json!({"User-Agent": "custom/1", "X-CloudTasks-QueueName": "mine"});
+        let task = accept("demo", "us-central1", "q", "http://u", &body, 1).unwrap();
+        let headers = dispatch_headers(
+            &task,
+            "queue:demo-us-central1-q",
+            1,
+            0,
+            None,
+            1,
+            DispatchShape::Production { queue: "q" },
+        );
+        assert_eq!(header(&headers, "User-Agent"), Some("custom/1"));
+        assert_eq!(header(&headers, "X-CloudTasks-QueueName"), Some("mine"));
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+                .count(),
+            1
+        );
     }
 
     /// The official backoff formula and stop condition, with the official defaults.

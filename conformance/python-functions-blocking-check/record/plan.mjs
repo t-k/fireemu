@@ -52,6 +52,26 @@ export const sourceBuckets = (projectNumber) => [
   `gcf-v2-sources-${projectNumber}-${REGION}`,
 ];
 
+/**
+ * Whether an object that appeared in a source bucket during the run is this deployment's: in the upload bucket any new
+ * object with a plain name (the CLI's source upload), in the source bucket one under the function of this run (the
+ * precedent's rule). Anything else is reported and left alone.
+ */
+export function isOwnSourceObject(projectNumber, bucket, name) {
+  if (
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 1024 ||
+    [...name].some((ch) => ch.charCodeAt(0) < 32)
+  )
+    return false;
+  const [uploads, sources] = sourceBuckets(projectNumber);
+  if (bucket === uploads)
+    return /^[A-Za-z0-9._/-]+$/.test(name) && !name.startsWith("/") && !name.includes("..");
+  if (bucket === sources) return name.split("/")[0] === FUNCTION && !name.includes("..");
+  return false;
+}
+
 export const CONFIG_URL = `https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT}/config`;
 export const SIGN_UP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signUp";
 export const ACCOUNTS_URL = `https://identitytoolkit.googleapis.com/v1/projects/${PROJECT}/accounts`;

@@ -102,6 +102,7 @@ test("a clean run writes only the run's own names, once each", async () => {
     /^POST pubsub\.googleapis\.com\/v1\/projects\/[^/]+\/topics\/pycheck-orders:publish$/,
     /^POST storage\.googleapis\.com\/upload\/storage\/v1\/b\/[^/]+\/o$/,
     /^DELETE storage\.googleapis\.com\/storage\/v1\/b\/[^/]+\/o\/pycheck%2Fpcrun-0123456789abcdef-a\.json$/,
+    /^DELETE storage\.googleapis\.com\/storage\/v1\/b\/gcf-v2-(uploads|sources)-[^/]+\/o\/[^/]+$/,
     /^POST eventarcpublishing\.googleapis\.com\/.*\/channels\/firebase:publishEvents$/,
     /^POST cloudscheduler\.googleapis\.com\/.*\/jobs\/firebase-schedule-(pcsch|pcschraw)-us-central1:run$/,
     /^POST cloudtasks\.googleapis\.com\/.*\/queues\/(pctask|pctaskraw)\/tasks$/,

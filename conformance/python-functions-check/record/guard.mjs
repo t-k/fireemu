@@ -14,9 +14,17 @@ import {
   TOPIC,
   packageIds,
   runMarker,
+  isOwnSourceObject,
   sourceBuckets,
 } from "./plan.mjs";
 
+const decodeName = (text) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return null;
+  }
+};
 const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const alt = (names) => "(?:" + names.map(esc).join("|") + ")";
 const OPERATION_ID = "[A-Za-z0-9._-]+";
@@ -30,7 +38,7 @@ export const ownPackages = () => ALL_FUNCTIONS.flatMap(packageIds);
  * Rules for one run. `projectNumber` is for the Service Usage and Cloud Build reads. A rule is
  * `[method, host, path regex, query keys allowed, body check, mutation]`.
  */
-export function rules(runId, projectNumber) {
+export function rules(runId, projectNumber, state = { objects: new Set() }) {
   const P = esc(PROJECT);
   const R = esc(REGION);
   const marker = runMarker(runId);
@@ -300,6 +308,21 @@ export function rules(runId, projectNumber) {
         q({ maxResults: num(1000), pageToken: token }),
       ),
     ),
+    // The deployment's own new objects in those buckets: read and delete, one name at a time, after the run adopted it
+    ...sourceBuckets(projectNumber).flatMap((name) =>
+      [
+        ["GET", false],
+        ["DELETE", true],
+      ].map(([method, mutation]) => [
+        method,
+        "storage.googleapis.com",
+        `^/storage/v1/b/${esc(name)}/o/[^/]+$`,
+        q({}),
+        nothing,
+        mutation,
+        (pathname) => state.objects.has(name + "/" + decodeName(pathname.split("/o/")[1])),
+      ]),
+    ),
     // Cloud Storage: the default bucket (read), the objects under the check's prefix (list), and the run's one object
     read("storage.googleapis.com", `^/storage/v1/b/${BUCKET}$`),
     read(
@@ -357,13 +380,14 @@ export function rules(runId, projectNumber) {
         onlyKeys(json, ["resourceNames", "filter", "orderBy", "pageSize", "pageToken"]),
       false,
     ],
-  ].map(([method, host, path, keys, body, mutation]) => ({
+  ].map(([method, host, path, keys, body, mutation, check]) => ({
     method,
     host,
     path: new RegExp(path),
     query: keys,
     body,
     mutation,
+    check,
   }));
 }
 
@@ -384,15 +408,24 @@ export function matchRule(spec, ruleList) {
     if (new Set(keys).size !== keys.length) continue;
     if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
     if (!rule.body(spec.json)) continue;
+    if (rule.check && rule.check(url.pathname) !== true) continue;
     return rule;
   }
   return null;
 }
 
 export function createGuard(runId, projectNumber) {
-  const ruleList = rules(runId, projectNumber);
+  const state = { objects: new Set() };
+  const ruleList = rules(runId, projectNumber, state);
   return {
     allow: (spec) => matchRule(spec, ruleList) !== null,
     isMutation: (spec) => matchRule(spec, ruleList)?.mutation === true,
+    /** Records a source object the deployment added, so that it may be read and deleted; false when it is not one of the deployment's. */
+    adoptObject: (bucket, name) => {
+      if (!isOwnSourceObject(projectNumber, bucket, name)) return false;
+      state.objects.add(bucket + "/" + name);
+      return true;
+    },
+    adoptedObjects: () => [...state.objects],
   };
 }

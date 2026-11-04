@@ -55,7 +55,8 @@ const REQUESTS = [
   ],
   [
     "delete the object",
-    (r) => r.method === "DELETE" && r.url.includes("/storage/v1/b/"),
+    (r) =>
+      r.method === "DELETE" && r.url.includes("/storage/v1/b/") && r.url.includes("pycheck%2F"),
     "cleanup-st-delete",
   ],
   ["delete the topic", (r) => r.method === "DELETE" && r.url.includes("/topics/"), "delete-topic"],

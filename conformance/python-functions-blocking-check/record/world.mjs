@@ -101,6 +101,7 @@ export function createWorld({
   baselineBlocking = undefined,
   publicInvoker = true,
   deleteLeaves = undefined,
+  sourcePageSize = 0,
 } = {}) {
   const w = {
     runId,
@@ -155,7 +156,7 @@ export function createWorld({
       items.push(
         bucket.startsWith("gcf-v2-uploads")
           ? "upload-" + ++w.insert + ".zip"
-          : "pcblock-" + ++w.insert + ".zip",
+          : FUNCTION + "/function-source.zip",
       );
   };
   const deleteDeployed = () => {
@@ -346,10 +347,28 @@ export function createWorld({
       }
     }
     if (host === "storage.googleapis.com") {
+      const object = /^\/storage\/v1\/b\/([^/]+)\/o\/([^/]+)$/.exec(path);
+      if (object) {
+        const held = w.sourceBuckets.get(object[1]);
+        const name = decodeURIComponent(object[2]);
+        if (!held || !held.includes(name)) return gcsNotFound(name);
+        if (method === "GET") return reply(200, { name, bucket: object[1] });
+        if (method === "DELETE") {
+          held.splice(held.indexOf(name), 1);
+          return new Response(null, { status: 204 });
+        }
+      }
       const bucket = /^\/storage\/v1\/b\/([^/]+)\/o$/.exec(path)?.[1];
       const items = bucket ? w.sourceBuckets.get(bucket) : null;
       if (!items) return gcsNotFound(bucket ?? path);
-      return reply(200, items.length ? { items: items.map((name) => ({ name })) } : {});
+      const start = Number(url.searchParams.get("pageToken") ?? 0);
+      const slice = sourcePageSize ? items.slice(start, start + sourcePageSize) : items;
+      return reply(200, {
+        ...(slice.length ? { items: slice.map((name) => ({ name })) } : {}),
+        ...(sourcePageSize && start + sourcePageSize < items.length
+          ? { nextPageToken: String(start + sourcePageSize) }
+          : {}),
+      });
     }
     if (host === "logging.googleapis.com") {
       const filter = body.filter;

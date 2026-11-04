@@ -112,6 +112,7 @@ export function createWorld({
   deployState = "ACTIVE",
   foreignSubscriptions = 0,
   withSourceBuckets = true,
+  sourcePageSize = 0,
 } = {}) {
   const w = {
     runId,
@@ -210,11 +211,12 @@ export function createWorld({
     w.topics.add(TOPIC);
     w.channels.add("firebase");
     for (const [name, items] of w.sourceBuckets)
-      items.push(
-        name.startsWith("gcf-v2-uploads")
-          ? "upload-" + ++w.insert + ".zip"
-          : "pycheck-" + ++w.insert + ".zip",
-      );
+      for (const fn of ALL_FUNCTIONS)
+        items.push(
+          name.startsWith("gcf-v2-uploads")
+            ? "upload-" + ++w.insert + ".zip"
+            : fn + "/function-source.zip",
+        );
   };
   const deleteDeployed = () => {
     for (const fn of ALL_FUNCTIONS) {
@@ -547,7 +549,25 @@ export function createWorld({
       if (sourceBucket && sourceBucket !== BUCKET) {
         const items = w.sourceBuckets.get(sourceBucket);
         if (!items) return gcsNotFound(sourceBucket);
-        return reply(200, items.length ? { items: items.map((name) => ({ name })) } : {});
+        const start = Number(url.searchParams.get("pageToken") ?? 0);
+        const slice = sourcePageSize ? items.slice(start, start + sourcePageSize) : items;
+        return reply(200, {
+          ...(slice.length ? { items: slice.map((name) => ({ name })) } : {}),
+          ...(sourcePageSize && start + sourcePageSize < items.length
+            ? { nextPageToken: String(start + sourcePageSize) }
+            : {}),
+        });
+      }
+      const sourceObject = /^\/storage\/v1\/b\/([^/]+)\/o\/([^/]+)$/.exec(path);
+      if (sourceObject && sourceObject[1] !== BUCKET) {
+        const items = w.sourceBuckets.get(sourceObject[1]);
+        const objectName_ = decodeURIComponent(sourceObject[2]);
+        if (!items || !items.includes(objectName_)) return gcsNotFound(objectName_);
+        if (method === "GET") return reply(200, { name: objectName_, bucket: sourceObject[1] });
+        if (method === "DELETE") {
+          items.splice(items.indexOf(objectName_), 1);
+          return new Response(null, { status: 204 });
+        }
       }
       if (/^\/storage\/v1\/b\/[^/]+$/.test(path)) return reply(200, { name: BUCKET });
       if (path.endsWith("/o"))

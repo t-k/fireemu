@@ -2,9 +2,23 @@
 // journaled or sent. Each rule pins the method, the host, the path (case-exact names), the allowed query keys and the body,
 // and says whether it is a mutation. The one sign-up body is built from the run's id, and an account can be read or deleted
 // only when its id was returned by this run's own sign-up (`state.localIds`).
-import { FUNCTION, PROJECT, REGION, packageIds, sourceBuckets } from "./plan.mjs";
+import {
+  FUNCTION,
+  PROJECT,
+  REGION,
+  isOwnSourceObject,
+  packageIds,
+  sourceBuckets,
+} from "./plan.mjs";
 import { signUpBody } from "./script.mjs";
 
+const decodeName = (text) => {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return null;
+  }
+};
 const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const alt = (names) => "(?:" + names.map(esc).join("|") + ")";
 const OPERATION_ID = "[A-Za-z0-9._-]+";
@@ -15,7 +29,7 @@ export const ownPackages = () => packageIds();
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 /** Rules for one run. `state.localIds` is the set of account ids this run's sign-up returned. */
-export function rules(runId, projectNumber, state = { localIds: new Set() }) {
+export function rules(runId, projectNumber, state = { localIds: new Set(), objects: new Set() }) {
   const P = esc(PROJECT);
   const R = esc(REGION);
   const fn = esc(FUNCTION);
@@ -143,6 +157,21 @@ export function rules(runId, projectNumber, state = { localIds: new Set() }) {
         pageToken: token,
       }),
     ),
+    // The deployment's own new objects in those buckets: read and delete, one name at a time, after the run adopted it
+    ...sourceBuckets(projectNumber).flatMap((name) =>
+      [
+        ["GET", false],
+        ["DELETE", true],
+      ].map(([method, mutation]) => [
+        method,
+        "storage.googleapis.com",
+        `^/storage/v1/b/${esc(name)}/o/[^/]+$`,
+        {},
+        nothing,
+        mutation,
+        (pathname) => state.objects.has(name + "/" + decodeName(pathname.split("/o/")[1])),
+      ]),
+    ),
     // Cloud Logging (a read through POST): the filter is one the recorder builds
     [
       "POST",
@@ -158,13 +187,14 @@ export function rules(runId, projectNumber, state = { localIds: new Set() }) {
         onlyKeys(json, ["resourceNames", "filter", "orderBy", "pageSize", "pageToken"]),
       false,
     ],
-  ].map(([method, host, path, keys, body, mutation]) => ({
+  ].map(([method, host, path, keys, body, mutation, check]) => ({
     method,
     host,
     path: new RegExp(path),
     query: keys,
     body,
     mutation,
+    check,
   }));
 }
 
@@ -185,13 +215,14 @@ export function matchRule(spec, ruleList) {
     if (new Set(keys).size !== keys.length) continue;
     if (!keys.every((key) => rule.query[key]?.(url.searchParams.get(key)) === true)) continue;
     if (!rule.body(spec.json)) continue;
+    if (rule.check && rule.check(url.pathname) !== true) continue;
     return rule;
   }
   return null;
 }
 
 export function createGuard(runId, projectNumber) {
-  const state = { localIds: new Set() };
+  const state = { localIds: new Set(), objects: new Set() };
   const ruleList = rules(runId, projectNumber, state);
   return {
     allow: (spec) => matchRule(spec, ruleList) !== null,
@@ -202,5 +233,12 @@ export function createGuard(runId, projectNumber) {
         state.localIds.add(localId);
     },
     adopted: () => [...state.localIds],
+    /** Records a source object the deployment added, so that it may be read and deleted; false when it is not one of the deployment's. */
+    adoptObject: (bucket, name) => {
+      if (!isOwnSourceObject(projectNumber, bucket, name)) return false;
+      state.objects.add(bucket + "/" + name);
+      return true;
+    },
+    adoptedObjects: () => [...state.objects],
   };
 }

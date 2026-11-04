@@ -687,7 +687,7 @@ test("the working tree check agrees with git, and the read-back's messages and h
       {
         project: "fireemu-oracle-events",
         command: "readback",
-        maxRequests: 80,
+        maxRequests: 130,
         packetDigest: "d".repeat(64),
       },
       null,

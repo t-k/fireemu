@@ -36,7 +36,7 @@ import {
   sourceProblems,
 } from "./deploy.mjs";
 import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID, SIGN_UP_URL } from "./plan.mjs";
-import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun } from "./readback.mjs";
+import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, sourceObjectEntries } from "./readback.mjs";
 import { MAX_REQUESTS, record } from "./run.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -230,6 +230,7 @@ export function resultOf(path) {
       : null,
     configBeforeDigest:
       typeof result.configBefore?.sha256 === "string" ? result.configBefore.sha256 : null,
+    sourceObjects: sourceObjectEntries(result.cleanup?.sourceObjectsDeleted),
   };
 }
 
@@ -276,6 +277,7 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       localId: judged.ok ? judged.localId : null,
       accountsBefore: judged.ok ? judged.accountsBefore : null,
       configBeforeDigest: judged.ok ? judged.configBeforeDigest : null,
+      sourceObjects: judged.ok ? judged.sourceObjects : [],
       accessToken: deps.token(),
       save: async (row) => {
         writeSync(journal, JSON.stringify(row) + "\n");

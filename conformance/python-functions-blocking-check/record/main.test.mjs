@@ -644,6 +644,7 @@ test("readback hands the recorded baselines to the read, journals privately and 
   assert.equal(seen.localId, "L".repeat(28));
   assert.equal(seen.accountsBefore, 3);
   assert.equal(seen.configBeforeDigest, "c".repeat(64));
+  assert.deepEqual(seen.sourceObjects, []);
   assert.equal(readFileSync(join(d, `readback-${RUN}-${stamp}.jsonl`), "utf8"), '{"id":"r"}\n');
   assert.equal(lstatSync(join(d, `readback-${RUN}-${stamp}.jsonl`)).mode & 0o777, 0o600);
   assert.equal(
@@ -665,7 +666,7 @@ test("readback hands the recorded baselines to the read, journals privately and 
   assert.equal(
     out[0],
     JSON.stringify(
-      { project: "fireemu-oracle-idp", command: "readback", maxRequests: 40, packetDigest: DIGEST },
+      { project: "fireemu-oracle-idp", command: "readback", maxRequests: 60, packetDigest: DIGEST },
       null,
       2,
     ),
@@ -745,6 +746,7 @@ test("the latest time in a journal wins, and a file that cannot be read has none
     localId: null,
     accountsBefore: null,
     configBeforeDigest: null,
+    sourceObjects: [],
   });
   writeFileSync(file, "{");
   assert.equal(resultOf(file).why, "the run's result file cannot be read (not JSON)");

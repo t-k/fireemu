@@ -92,6 +92,26 @@ export const sourceBuckets = (projectNumber) => [
   `gcf-v2-sources-${projectNumber}-${REGION}`,
 ];
 
+/**
+ * Whether an object that appeared in a source bucket during the run is one of this deployment's: in the upload bucket any
+ * new object with a plain name (the CLI's source upload), in the source bucket one under a function of this run (the
+ * precedent's rule). Anything else is reported and left alone.
+ */
+export function isOwnSourceObject(projectNumber, bucket, name) {
+  if (
+    typeof name !== "string" ||
+    name.length === 0 ||
+    name.length > 1024 ||
+    [...name].some((ch) => ch.charCodeAt(0) < 32)
+  )
+    return false;
+  const [uploads, sources] = sourceBuckets(projectNumber);
+  if (bucket === uploads)
+    return /^[A-Za-z0-9._/-]+$/.test(name) && !name.startsWith("/") && !name.includes("..");
+  if (bucket === sources) return ALL_FUNCTIONS.includes(name.split("/")[0]) && !name.includes("..");
+  return false;
+}
+
 /** Every Scheduler job and Cloud Tasks queue the CLI creates for the run's functions. */
 export const JOB_IDS = Object.freeze(SCHEDULER_FUNCTIONS.map(jobId));
 export const QUEUE_IDS = Object.freeze([...TASK_FUNCTIONS]);

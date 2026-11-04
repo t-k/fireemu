@@ -12,23 +12,31 @@ import { CONFIG_URL, PROJECT, REGION, functionName, packageIds } from "./plan.mj
 import { configDigest, absent, emptyBlocking } from "./run.mjs";
 import { countAccounts, lookupAccount } from "./script.mjs";
 
-export const READBACK_MAX_REQUESTS = 40;
+export const READBACK_MAX_REQUESTS = 60;
 export const SETTLE_MS = 10 * 60 * 1000;
 
 const GCF = "https://cloudfunctions.googleapis.com/v2/";
 const REGISTRY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts/packages`;
 
 /** The read-back's allowlist: the recording's, narrowed to requests that are not mutations. */
-export function readbackAllow(runId, projectNumber, localId = null) {
+export function readbackAllow(runId, projectNumber, localId = null, sourceObjects = []) {
   const guard = createGuard(runId, projectNumber);
   guard.adopt(localId);
+  for (const item of sourceObjectEntries(sourceObjects)) guard.adoptObject(item.bucket, item.name);
   return { allow: (spec) => guard.allow(spec) && !guard.isMutation(spec), guard };
 }
+
+/** The source objects the run deleted, as `{ bucket, name }` entries from its result, kept only when they are well formed. */
+export const sourceObjectEntries = (list) =>
+  (Array.isArray(list) ? list : []).filter(
+    (item) => typeof item?.bucket === "string" && typeof item?.name === "string",
+  );
 
 export async function readbackRun({
   runId,
   projectNumber,
   localId = null,
+  sourceObjects = [],
   accountsBefore = null,
   configBeforeDigest = null,
   accessToken,
@@ -36,7 +44,7 @@ export async function readbackRun({
   send,
   clock = Date.now,
 }) {
-  const { allow } = readbackAllow(runId, projectNumber, localId);
+  const { allow } = readbackAllow(runId, projectNumber, localId, sourceObjects);
   const { capture, counts, authStop } = createCapture({
     accessToken,
     save,
@@ -83,6 +91,10 @@ export async function readbackRun({
     for (const [label, url] of [
       ["function", GCF + functionName()],
       ...packageIds().map((id) => ["package-" + id, REGISTRY + "/" + id]),
+      ...sourceObjectEntries(sourceObjects).map((item, index) => [
+        "source-object-" + (index + 1),
+        `https://storage.googleapis.com/storage/v1/b/${item.bucket}/o/${encodeURIComponent(item.name)}`,
+      ]),
     ]) {
       const answer = await capture({ id: "readback-" + label, method: "GET", url });
       out.names[label] = { status: answer?.status ?? null, absent: absent(answer) };
@@ -138,7 +150,7 @@ export async function readbackRun({
   out.attempted = known.attempted;
   out.unknown = known.unknown;
   if (stop) out.authStop = stop;
-  const expectedNames = 3 + (localId === null ? 0 : 1);
+  const expectedNames = 3 + (localId === null ? 0 : 1) + sourceObjectEntries(sourceObjects).length;
   const namesGone =
     Object.keys(out.names).length === expectedNames &&
     Object.values(out.names).every((n) => n.absent === true);

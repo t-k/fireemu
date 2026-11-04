@@ -65,7 +65,7 @@ test("after a clean run everything reads absent and nothing is sent but reads", 
   assert.equal(rb.unknown, 0);
   assert.deepEqual(rb.incompleteReads, []);
   assert.equal(SETTLE_MS, 600_000);
-  assert.equal(READBACK_MAX_REQUESTS, 40);
+  assert.equal(READBACK_MAX_REQUESTS, 60);
 });
 
 test("without an account id, no account is read and the names are the function and its images", async () => {

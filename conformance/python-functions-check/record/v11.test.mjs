@@ -54,36 +54,17 @@ test("the two source buckets are the project's Gen2 upload and source buckets", 
   ]);
 });
 
-test("the objects the deploy left in the source buckets are reported, not deleted", async () => {
+test("the objects the deploy added to the source buckets are deleted by name, and the ones that were there are left", async () => {
   const { result, world } = await go();
-  assert.deepEqual(result.inventory.sourceObjects.uploads.removed, []);
-  assert.equal(result.inventory.sourceObjects.uploads.added.length, 1);
-  assert.match(result.inventory.sourceObjects.uploads.added[0], /^upload-\d+\.zip$/);
-  assert.equal(result.inventory.sourceObjects.sources.added.length, 1);
-  assert.ok(
-    ![...world.sourceBuckets.values()].every((items) => items.length === 0),
-    "nothing was deleted from the buckets",
-  );
-  assert.equal(
-    world.calls.filter((c) => c.startsWith("DELETE storage") && !c.includes("pycheck")).length,
-    0,
+  assert.deepEqual(result.inventory.sourceObjects.uploads, { added: [], removed: [] });
+  assert.deepEqual(result.inventory.sourceObjects.sources, { added: [], removed: [] });
+  assert.equal(result.cleanup.sourceObjectsDeleted.length, 26);
+  assert.deepEqual(
+    [...world.sourceBuckets.values()].map((items) => items.length),
+    [1, 0],
   );
   assert.equal(result.outcome, "pycheck-recorded");
   assert.equal(result.closureReady, true);
-});
-
-test("an object that was there before the run is not reported as added, and one that disappeared is reported as removed", async () => {
-  const { result } = await go({}, (send, world) => async (request) => {
-    if (
-      request.method === "GET" &&
-      request.url.includes("gcf-v2-uploads") &&
-      world.cliRuns.includes("delete")
-    )
-      world.sourceBuckets.get(request.url.split("/b/")[1].split("/o")[0]).splice(0, 1);
-    return send(request);
-  });
-  assert.deepEqual(result.inventory.sourceObjects.uploads.removed, ["old-upload.zip"]);
-  assert.equal(result.inventory.sourceObjects.uploads.added.length, 1);
 });
 
 test("buckets that do not exist read as empty, and a bucket that cannot be read is incomplete but not a stop", async () => {

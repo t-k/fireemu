@@ -57,7 +57,7 @@ test("the waits and the read-back limits are the packet's stated values", () => 
   );
   assert.deepEqual([READY_POLL_SECONDS, READY_MAX_POLLS], [30, 40]);
   assert.equal(SETTLE_MS, 600_000);
-  assert.equal(READBACK_MAX_REQUESTS, 80);
+  assert.equal(READBACK_MAX_REQUESTS, 130);
 });
 
 test("the document the check writes holds the run marker and n, then n 2", () => {

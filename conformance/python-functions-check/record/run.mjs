@@ -44,6 +44,7 @@ import {
   QUEUE_IDS,
   REGION,
   REQUIRED_SERVICES,
+  isOwnSourceObject,
   sourceBuckets,
   STEP_GAP_SECONDS,
   TOPIC,
@@ -558,21 +559,38 @@ export async function record({
   async function sourceObjects(prefix) {
     const found = {};
     for (const bucketName of sourceBuckets(projectNumber)) {
-      const answer = await read(
-        {
-          id: `${prefix}-source-objects-${bucketName.startsWith("gcf-v2-uploads") ? "uploads" : "sources"}`,
-          method: "GET",
-          url: `https://storage.googleapis.com/storage/v1/b/${bucketName}/o?maxResults=1000`,
-          cleanup: stopped === "cleanup",
-        },
-        { observe: true },
-      );
-      if (absent(answer)) found[bucketName] = [];
-      else if (answer?.status === 200 && readable(answer) && !answer.json.nextPageToken)
-        found[bucketName] = (answer.json.items ?? []).map((item) => item.name).toSorted();
-      else {
-        found[bucketName] = null;
-        incompleteReads.push({ id: `${prefix}-source-objects`, class: answerClass(answer) });
+      const label = bucketName.startsWith("gcf-v2-uploads") ? "uploads" : "sources";
+      const names = [];
+      let token = "";
+      found[bucketName] = null;
+      for (let page = 0; page < 5; page++) {
+        const answer = await read(
+          {
+            id: `${prefix}-source-objects-${label}${page ? "-page-" + (page + 1) : ""}`,
+            method: "GET",
+            url:
+              `https://storage.googleapis.com/storage/v1/b/${bucketName}/o?maxResults=1000` +
+              (token ? "&pageToken=" + encodeURIComponent(token) : ""),
+            cleanup: stopped === "cleanup",
+          },
+          { observe: true },
+        );
+        if (absent(answer) && page === 0) {
+          found[bucketName] = [];
+          break;
+        }
+        if (!(answer?.status === 200 && readable(answer))) {
+          incompleteReads.push({ id: `${prefix}-source-objects`, class: answerClass(answer) });
+          break;
+        }
+        names.push(...(answer.json.items ?? []).map((item) => item.name));
+        token = answer.json.nextPageToken ?? "";
+        if (!token) {
+          found[bucketName] = names.toSorted();
+          break;
+        }
+        if (page === 4)
+          incompleteReads.push({ id: `${prefix}-source-objects`, class: "more-than-five-pages" });
       }
     }
     return found;
@@ -1038,6 +1056,37 @@ export async function record({
         }
       });
     }
+    // The deployment's own new objects in the two Gen2 source buckets: found by diffing a fresh list with the preflight's,
+    // each deleted once by its exact name, then read back with the other names.
+    out.cleanup.sourceObjectsDeleted = [];
+    out.cleanup.sourceObjectsSkipped = [];
+    await step("source-objects-delete", async () => {
+      const now = await sourceObjects("cleanup");
+      let n = 0;
+      for (const bucketName of sourceBuckets(projectNumber)) {
+        const before = sourceObjectsBefore?.[bucketName];
+        if (!Array.isArray(before) || !Array.isArray(now[bucketName])) continue;
+        for (const name of now[bucketName].filter((x) => !before.includes(x))) {
+          if (!isOwnSourceObject(projectNumber, bucketName, name)) {
+            out.cleanup.sourceObjectsSkipped.push({ bucket: bucketName, name });
+            continue;
+          }
+          guard.adoptObject(bucketName, name);
+          const answer = await mutate({
+            id: `delete-source-object-${++n}`,
+            method: "DELETE",
+            url: `https://storage.googleapis.com/storage/v1/b/${bucketName}/o/${encodeURIComponent(name)}`,
+            cleanup: true,
+          });
+          out.cleanup.sourceObjectsDeleted.push({
+            bucket: bucketName,
+            name,
+            class: answerClass(answer),
+            status: answer?.status ?? null,
+          });
+        }
+      }
+    });
     // Read every name back directly. Only a direct read of an absence counts; a name that was not read is not absent.
     const names = [
       ...ALL_FUNCTIONS.map((fn) => ["function-" + fn, GCF + functionName(fn)]),
@@ -1047,6 +1096,10 @@ export async function record({
       ["document", documentUrl(documentId(runId))],
       ["object", bucket ? storageObjectUrl(bucket, objectName(runId)) : null],
       ...ALL_FUNCTIONS.flatMap(packageIds).map((id) => ["package-" + id, REGISTRY + "/" + id]),
+      ...out.cleanup.sourceObjectsDeleted.map((item, index) => [
+        "source-object-" + (index + 1),
+        `https://storage.googleapis.com/storage/v1/b/${item.bucket}/o/${encodeURIComponent(item.name)}`,
+      ]),
     ].filter(([, url]) => url !== null);
     const readBack = Object.fromEntries(names.map(([label]) => [label, false]));
     out.cleanup.readBack = readBack;
@@ -1093,7 +1146,9 @@ export async function record({
         nonePresent(summarize(fns));
     });
     out.cleanup.verified =
-      out.cleanup.listsEmpty && Object.values(readBack).every((v) => v === true);
+      out.cleanup.listsEmpty &&
+      out.cleanup.sourceObjectsSkipped.length === 0 &&
+      Object.values(readBack).every((v) => v === true);
     // Read-only inventory: what the deploy left that this recorder does not delete, and what it changed.
     await step("source-objects", async () => {
       const after = await sourceObjects("inventory");

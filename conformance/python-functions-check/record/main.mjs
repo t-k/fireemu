@@ -231,6 +231,9 @@ export function resultOf(path) {
       ),
       ...(result.inventory?.differences ?? []).map((d) => "inventory:" + JSON.stringify(d)),
       ...(result.inventory?.complete === false ? ["inventory-incomplete"] : []),
+      ...Object.entries(result.cleanup?.invoker ?? {})
+        .filter(([, finding]) => typeof finding?.refused === "string")
+        .map(([fn, finding]) => `invoker-refused:${fn}:${finding.refused}`),
     ],
   };
 }

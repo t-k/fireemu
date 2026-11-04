@@ -5,7 +5,7 @@
 // proves nothing about whether the create happened); the command that runs it reads the run's own result for the
 // unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { iamUnexpected, inventoryDifferences, nonePresent, summarize } from "./deploy.mjs";
+import { iamPolicyDifferences, inventoryDifferences, nonePresent, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
 import {
   ALL_FUNCTIONS,
@@ -20,7 +20,7 @@ import {
   functionName,
   packageIds,
 } from "./plan.mjs";
-import { absent, iamKeyChanges, iamKeys } from "./run.mjs";
+import { absent, iamPolicyOf } from "./run.mjs";
 import { documentId, documentUrl, objectName, storageObjectUrl, topicUrl } from "./script.mjs";
 
 export const READBACK_MAX_REQUESTS = 130;
@@ -240,7 +240,7 @@ export async function readbackRun({
     if (baseline) {
       const compared = inventoryDifferences({ before: baseline, after, enabled });
       // Project IAM may only have gained service-account members since the preflight.
-      const iam = iamUnexpected(iamKeyChanges(baseline.iam, iamKeys(iamNow)));
+      const iam = iamPolicyDifferences(baseline.iam, iamPolicyOf(iamNow));
       out.inventory = {
         baseline: true,
         complete: compared.complete && iam.complete,

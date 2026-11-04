@@ -12,7 +12,7 @@ import {
   packageIds,
   queueName,
 } from "./plan.mjs";
-import { MAX_REQUESTS, absent, iamChanges, isBusy, record } from "./run.mjs";
+import { MAX_REQUESTS, absent, iamPolicyOf, isBusy, record } from "./run.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
@@ -557,7 +557,7 @@ test("the run waits for the deliveries up to the window and no longer once they 
 test("the inventory records what the deploy left: the channel, the IAM changes and the services", async () => {
   const { result } = await go();
   assert.deepEqual(result.inventory.channelsAfter, ["firebase"]);
-  assert.deepEqual(result.inventory.iam, { added: [], removed: [] });
+  assert.deepEqual(result.inventory.iam, { complete: true, unexpected: [] });
   assert.deepEqual(result.inventory.services, { added: [], removed: [] });
 });
 
@@ -599,17 +599,21 @@ test("isBusy matches only the recorded 409", () => {
   );
 });
 
-test("iamChanges lists additions and removals, and nothing when a read failed", () => {
-  const policy = (...pairs) => ({
-    status: 200,
-    json: { bindings: pairs.map(([role, member]) => ({ role, members: [member] })) },
+test("iamPolicyOf keeps the whole policy without its etag and version, and is null when the read is not a policy it can compare", () => {
+  const policy = {
+    version: 3,
+    etag: "e",
+    bindings: [{ role: "r", members: ["u"], condition: { title: "t" } }],
+    auditConfigs: [{ service: "allServices" }],
+  };
+  assert.deepEqual(iamPolicyOf({ status: 200, json: policy }), {
+    bindings: policy.bindings,
+    auditConfigs: policy.auditConfigs,
   });
-  assert.deepEqual(iamChanges(policy(["a", "x"], ["b", "y"]), policy(["b", "y"], ["c", "z"])), {
-    added: ["c|z"],
-    removed: ["a|x"],
-  });
-  assert.equal(iamChanges({ status: 403, json: {} }, policy()), null);
-  assert.equal(iamChanges(policy(), null), null);
+  assert.deepEqual(iamPolicyOf({ status: 200, json: {} }), {});
+  assert.equal(iamPolicyOf({ status: 403, json: {} }), null);
+  assert.equal(iamPolicyOf(null), null);
+  assert.equal(iamPolicyOf({ status: 200, json: { bindings: "x" } }), null);
 });
 
 test("a default bucket that is not the project's own stops the run before anything is created", async () => {

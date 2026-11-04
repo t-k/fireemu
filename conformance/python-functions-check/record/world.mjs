@@ -216,7 +216,7 @@ export function createWorld({
         base + "/locations/" + REGION + "/repositories/gcf-artifacts/packages/",
       ),
       services: [...w.services].toSorted(),
-      iam: w.projectIam.flatMap((b) => b.members.map((m) => b.role + "|" + m)).toSorted(),
+      iam: { bindings: structuredClone(w.projectIam) },
       notifications: [...w.notifications].toSorted(),
       sourceObjects: {
         uploads: [...(w.sourceBuckets.get(buckets[0]) ?? [])].toSorted(),

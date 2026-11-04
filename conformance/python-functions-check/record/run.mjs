@@ -27,10 +27,11 @@ import {
   allActive,
   cliFailed,
   inventoryDifferences,
-  iamUnexpected,
+  iamPolicyDifferences,
   nonePresent,
   putClass,
   summarize,
+  supportedIamPolicy,
 } from "./deploy.mjs";
 import { createGuard, ownPackages, withoutPublicMember } from "./guard.mjs";
 import { judge } from "./judge.mjs";
@@ -91,31 +92,16 @@ export const absent = (a) =>
       Array.isArray(a.json.error?.errors) &&
       a.json.error.errors.some((e) => e?.reason === "notFound")));
 
-/** The IAM members added and removed between two policy reads (recorded, not judged here). */
-export function iamChanges(before, after) {
-  return iamKeyChanges(iamKeys(before), iamKeys(after));
-}
-
-/** The `role|member` keys of a policy read (sorted), or `null` when the read is not a readable policy. */
-export function iamKeys(answer) {
-  return answer?.status === 200 && readable(answer)
-    ? [
-        ...new Set(
-          (answer.json.bindings ?? []).flatMap((b) =>
-            (b.members ?? []).map((m) => b.role + "|" + m),
-          ),
-        ),
-      ].toSorted()
-    : null;
-}
-
-/** The keys added and removed between two sorted key lists, or `null` when either is missing. */
-export function iamKeyChanges(before, after) {
-  if (!Array.isArray(before) || !Array.isArray(after)) return null;
-  return {
-    added: after.filter((k) => !before.includes(k)).toSorted(),
-    removed: before.filter((k) => !after.includes(k)).toSorted(),
-  };
+/**
+ * The project IAM policy of a read, without `etag` and `version`, or `null` when the read is not a readable policy of a
+ * shape the packet can compare. The whole policy is kept (audit configuration and binding conditions included).
+ */
+export function iamPolicyOf(answer) {
+  if (!(answer?.status === 200 && readable(answer)) || !supportedIamPolicy(answer.json))
+    return null;
+  return Object.fromEntries(
+    Object.entries(answer.json).filter(([key]) => key !== "etag" && key !== "version"),
+  );
 }
 
 class BudgetError extends Error {}
@@ -441,6 +427,11 @@ export async function record({
         vanished.length > 0,
     };
   };
+  /** The services whose public member the cleanup refused to remove (it stood in a binding the write must not touch). */
+  const refusedInvokers = () =>
+    Object.entries(out.cleanup.invoker ?? {})
+      .filter(([, finding]) => typeof finding?.refused === "string")
+      .map(([fn, finding]) => `${fn}:${finding.refused}`);
   const summary = (stage, closureReady) => {
     const known = counts();
     const stop = authStop();
@@ -463,7 +454,8 @@ export async function record({
         out.cleanup.uploadReasons?.length > 0 ||
         out.cleanup.uploadObjectsUnexplained?.length > 0 ||
         out.inventory.differences?.length > 0 ||
-        out.inventory.complete === false,
+        out.inventory.complete === false ||
+        refusedInvokers().length > 0,
       ...(stop ? { authStop: stop } : {}),
       closureReady: closureReady && !blocked,
     };
@@ -540,7 +532,7 @@ export async function record({
     });
     // The project IAM is part of the baseline every closure compares with: a policy that cannot be read stops the run
     // before anything is enabled or created.
-    if (iamKeys(iamBefore) === null) return "iam";
+    if (iamPolicyOf(iamBefore) === null) return "iam";
     const sdk = await read(
       {
         id: "admin-sdk-config",
@@ -625,7 +617,7 @@ export async function record({
       subscriptions: names(subs.subscriptions),
       topics: names(topics.topics),
       services: enabledBefore,
-      iam: iamKeys(iamBefore),
+      iam: iamPolicyOf(iamBefore),
       notifications: notifications.items.map((item) => item.id).toSorted(),
     };
     // The inventory every closure compares against must be complete: a bucket that cannot be listed to its end stops the run
@@ -1546,7 +1538,7 @@ export async function record({
         json: {},
         cleanup: true,
       });
-      out.inventory.iam = iamChanges(iamBefore, iamAfter);
+      out.inventory.iam = iamPolicyDifferences(out.inventory.before.iam, iamPolicyOf(iamAfter));
       const after = await list("services-after", SERVICES_URL, "services");
       const servicesNow = after ? after.services.map((svc) => svc.config?.name).toSorted() : null;
       const notificationsAfter = await list(
@@ -1598,7 +1590,7 @@ export async function record({
         },
         enabled: out.servicesEnabled ?? [],
       });
-      const iam = iamUnexpected(out.inventory.iam);
+      const iam = out.inventory.iam;
       out.inventory.complete = compared.complete && iam.complete;
       out.inventory.missing = compared.missing;
       out.inventory.differences = [
@@ -1612,6 +1604,7 @@ export async function record({
       out.cleanup.uploadReasons.length === 0 &&
       out.inventory.complete === true &&
       out.inventory.differences.length === 0 &&
+      refusedInvokers().length === 0 &&
       Object.values(readBack).every((v) => v === true);
     await step("final-logs", async () => {
       await pause(wait.logDelay);

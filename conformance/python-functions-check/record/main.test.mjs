@@ -518,10 +518,20 @@ test("readback never exits 0 while the run carries an open obligation: a clean A
       { inventory: { differences: [{ kind: "iam", what: "added roles/owner|user:a@b.c" }] } },
     ],
     ["an incomplete inventory", { inventory: { complete: false, differences: [] } }],
+    [
+      "an invoker refusal",
+      { cleanup: { invoker: { pcps: { refused: "public-member-outside-the-invoker-binding" } } } },
+    ],
   ]) {
     const f = finishedRun({ ...base, ...patch });
     const r = await run(rbArgs(f.d), rbDeps(f.at));
     assert.equal(r.code, 3, label);
     assert.match(r.err.join("\n"), /open obligations that a read-back cannot settle/, label);
+    if (label === "an invoker refusal")
+      assert.match(
+        r.err.join("\n"),
+        /invoker-refused:pcps:public-member-outside-the-invoker-binding/,
+        label,
+      );
   }
 });

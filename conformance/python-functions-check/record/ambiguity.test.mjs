@@ -615,7 +615,7 @@ test("the read-back never reports everything absent while the run carries an obl
 
 test("the read-back compares a fresh project IAM policy with the baseline: only service-account additions are expected", async () => {
   const { world, result } = await go();
-  assert.deepEqual(result.inventory.before.iam, []);
+  assert.deepEqual(result.inventory.before.iam, { bindings: [] });
   assert.equal((await a2(world, result)).allAbsent, true);
   const policyAs = (bindings) => async (request) =>
     request.url.endsWith(":getIamPolicy") && request.url.includes("cloudresourcemanager")
@@ -641,7 +641,9 @@ test("the read-back compares a fresh project IAM policy with the baseline: only 
   const removed = await go({
     projectIam: [{ role: "roles/owner", members: ["user:a@example.com"] }],
   });
-  assert.deepEqual(removed.result.inventory.before.iam, ["roles/owner|user:a@example.com"]);
+  assert.deepEqual(removed.result.inventory.before.iam, {
+    bindings: [{ role: "roles/owner", members: ["user:a@example.com"] }],
+  });
   const gone = await a2(removed.world, removed.result, {
     send: async (request) =>
       request.url.endsWith(":getIamPolicy") && request.url.includes("cloudresourcemanager")
@@ -791,10 +793,227 @@ test("a policy shape the write could not keep is refused before anything is sent
     withoutPublicMember({
       version: 3,
       etag: "e",
-      bindings: [{ role: "roles/x", members: ["allUsers"] }],
+      bindings: [{ role: "roles/run.invoker", members: ["allUsers"] }],
     }),
     { ok: true, policy: { version: 3, etag: "e", bindings: [] } },
   );
+});
+
+test("a binding that held only allUsers is dropped, and every other binding stays exactly as read", () => {
+  const viewer = { role: "roles/run.viewer", members: ["user:v@b.c"] };
+  const out = withoutPublicMember({
+    version: 3,
+    etag: "e",
+    bindings: [
+      { role: "roles/run.invoker", members: ["allUsers"] },
+      CONDITIONAL,
+      viewer,
+      { role: "roles/run.invoker", members: ["user:a@b.c", "allUsers"] },
+    ],
+  });
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.policy, {
+    version: 3,
+    etag: "e",
+    bindings: [CONDITIONAL, viewer, { role: "roles/run.invoker", members: ["user:a@b.c"] }],
+  });
+});
+
+test("allUsers outside the unconditional roles/run.invoker binding is refused, not removed: another role, or a conditional invoker binding", async () => {
+  for (const [label, binding] of [
+    ["another role", { role: "roles/run.viewer", members: ["allUsers", "user:keep@example.com"] }],
+    ["a conditional invoker binding", { ...CONDITIONAL, members: ["allUsers", "user:a@b.c"] }],
+  ]) {
+    assert.deepEqual(
+      withoutPublicMember({ bindings: [binding] }),
+      { ok: false, why: "public-member-outside-the-invoker-binding" },
+      label,
+    );
+    const { journal, result } = await go({
+      invokerBindings: [{ role: "roles/run.invoker", members: ["allUsers"] }, binding],
+    });
+    const finding = result.cleanup.invoker[ALL_FUNCTIONS[0]];
+    assert.equal(finding.refused, "public-member-outside-the-invoker-binding", label);
+    assert.equal(finding.removed, false, label);
+    assert.ok(
+      !journal.some((r) => r.id?.startsWith("cleanup-remove-invoker")),
+      `${label}: nothing is sent`,
+    );
+    assert.equal(result.cleanup.verified, false, label);
+    assert.equal(result.closureReady, false, label);
+    assert.equal(result.readBackRequired, true, label);
+  }
+});
+
+test("the run.viewer binding Codex used stays exactly as it was when the public invoker is removed", async () => {
+  const viewer = { role: "roles/run.viewer", members: ["user:keep@example.com"] };
+  const { journal, result } = await go({
+    invokerBindings: [viewer, { role: "roles/run.invoker", members: ["allUsers"] }],
+  });
+  const write = journal.find(
+    (r) => r.state === "before-send" && r.id === `cleanup-remove-invoker-${ALL_FUNCTIONS[0]}`,
+  );
+  assert.deepEqual(write.json.policy.bindings, [viewer]);
+  assert.equal(result.cleanup.invoker[ALL_FUNCTIONS[0]].removed, true);
+});
+
+// ---- the whole project IAM policy is compared ----------------------------------------------------------------------------
+
+const AUDIT = [{ service: "allServices", auditLogConfigs: [{ logType: "DATA_READ" }] }];
+const WHEN = { title: "until", expression: "request.time < timestamp('2030-01-01T00:00:00Z')" };
+const policyAnswer = (policy) => reply(200, { version: 3, etag: "e" + Math.random(), ...policy });
+/** A world whose project policy is `before` until the CLI delete has run and `after` from then on. */
+const projectPolicies = (before, after) => (send, w) => async (request) =>
+  request.method === "POST" &&
+  request.url.endsWith(":getIamPolicy") &&
+  request.url.includes("cloudresourcemanager")
+    ? policyAnswer(w.cliRuns.includes("delete") ? after : before)
+    : send(request);
+
+test("a removed audit configuration, a removed or changed condition and a changed field are IAM differences in the run, and the run does not close", async () => {
+  const owner = { role: "roles/owner", members: ["user:o@example.com"] };
+  const conditional = { role: "roles/x", members: ["user:c@example.com"], condition: WHEN };
+  const base = { bindings: [owner, conditional], auditConfigs: AUDIT };
+  for (const [label, after, expected] of [
+    ["audit configuration removed", { bindings: [owner, conditional] }, ["changed auditConfigs"]],
+    [
+      "audit configuration changed",
+      { ...base, auditConfigs: [{ service: "allServices", auditLogConfigs: [] }] },
+      ["changed auditConfigs"],
+    ],
+    [
+      "condition removed",
+      { ...base, bindings: [owner, { role: "roles/x", members: ["user:c@example.com"] }] },
+      ["removed roles/x|user:c@example.com", "added roles/x|user:c@example.com"],
+    ],
+    [
+      "condition changed",
+      {
+        ...base,
+        bindings: [owner, { ...conditional, condition: { ...WHEN, expression: "true" } }],
+      },
+      ["removed roles/x|user:c@example.com", "added roles/x|user:c@example.com"],
+    ],
+    [
+      "binding removed",
+      { ...base, bindings: [conditional] },
+      ["removed roles/owner|user:o@example.com"],
+    ],
+    ["another field appears", { ...base, somethingNew: true }, ["changed somethingNew"]],
+  ]) {
+    const { result } = await go({}, projectPolicies(base, after));
+    assert.deepEqual(
+      result.inventory.differences.filter((d) => d.kind === "iam").map((d) => d.what),
+      expected,
+      label,
+    );
+    assert.equal(result.closureReady, false, label);
+    assert.equal(result.cleanup.verified, false, label);
+  }
+  const same = await go({}, projectPolicies(base, { ...base, bindings: [conditional, owner] }));
+  assert.deepEqual(same.result.inventory.differences, [], "order and etag are not differences");
+  assert.equal(same.result.closureReady, true);
+});
+
+test("the read-back compares the whole policy: audit configuration, conditions, fields and service-account additions", async () => {
+  const owner = { role: "roles/owner", members: ["user:o@example.com"] };
+  const conditional = { role: "roles/x", members: ["user:c@example.com"], condition: WHEN };
+  const base = { bindings: [owner, conditional], auditConfigs: AUDIT };
+  const { world, result } = await go({}, projectPolicies(base, base));
+  assert.deepEqual(result.inventory.before.iam, base);
+  const a2With = (policy) =>
+    a2(world, result, {
+      send: async (request) =>
+        request.url.endsWith(":getIamPolicy") && request.url.includes("cloudresourcemanager")
+          ? policyAnswer(policy)
+          : world.send(request),
+    });
+  assert.equal((await a2With({ ...base })).allAbsent, true);
+  assert.equal(
+    (
+      await a2With({
+        ...base,
+        bindings: [
+          ...base.bindings,
+          { role: "roles/y", members: ["serviceAccount:s@t.iam.gserviceaccount.com"] },
+        ],
+      })
+    ).allAbsent,
+    true,
+    "a new binding of a service account is the CLI's own step",
+  );
+  for (const [label, policy] of [
+    ["audit configuration removed", { bindings: base.bindings }],
+    [
+      "condition removed",
+      { ...base, bindings: [owner, { role: "roles/x", members: ["user:c@example.com"] }] },
+    ],
+    [
+      "a service account in a new binding with a condition",
+      {
+        ...base,
+        bindings: [
+          ...base.bindings,
+          { role: "roles/z", members: ["serviceAccount:s@t"], condition: WHEN },
+        ],
+      },
+    ],
+    ["a policy shape not supported", { bindings: "x" }],
+  ]) {
+    const rb = await a2With(policy);
+    assert.equal(rb.allAbsent, false, label);
+    assert.ok(rb.inventory.differences.length > 0 || rb.inventory.complete === false, label);
+  }
+});
+
+test("an IAM baseline in a shape the comparison does not know stops the preflight, like one that cannot be read", async () => {
+  for (const [label, answer] of [
+    ["bindings not a list", () => reply(200, { bindings: "x" })],
+    ["a binding with no members", () => reply(200, { bindings: [{ role: "roles/x" }] })],
+    ["a 503", () => error(503, "UNAVAILABLE")],
+  ]) {
+    const { world, result } = await go(
+      { withoutServices: [TASKS_HOST] },
+      (send) => async (request) =>
+        request.method === "POST" &&
+        request.url.endsWith(":getIamPolicy") &&
+        request.url.includes("cloudresourcemanager")
+          ? answer()
+          : send(request),
+    );
+    assert.equal(result.stoppedBecause, "iam", label);
+    assert.deepEqual(world.enableRequests, [], label);
+    assert.deepEqual(world.cliRuns, [], label);
+  }
+});
+
+test("signed query parameters are redacted wherever they stand, in any case, and the replacement says so", () => {
+  for (const line of [
+    "[t] >>> [apiv2][query] PUT https://storage.googleapis.com/b/o.zip X-Goog-Signature=abc123&X-Goog-Credential=cred&Expires=5",
+    "[t] >>> [apiv2][query] PUT https://storage.googleapis.com/b/o.zip googleaccessid=svc%40x&expires=5&signature=abc123",
+  ]) {
+    const out = redactCliText(line);
+    assert.ok(!/abc123|cred|svc/.test(out), out);
+    assert.ok(out.includes("[REDACTED SIGNATURE]"), out);
+    assert.ok(/xpires=5/.test(out), "the parameters that are not signatures stay: " + out);
+  }
+});
+
+test("a project IAM read that fails after the cleanup leaves the inventory incomplete and the run open", async () => {
+  const { result } = await go(
+    {},
+    (send, w) => async (request) =>
+      w.cliRuns.includes("delete") &&
+      request.method === "POST" &&
+      request.url.endsWith(":getIamPolicy") &&
+      request.url.includes("cloudresourcemanager")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.inventory.complete, false);
+  assert.equal(result.inventory.iam.complete, false);
+  assert.equal(result.closureReady, false);
+  assert.equal(result.cleanup.verified, false);
 });
 
 // ---- Should: signed query strings after a space -------------------------------------------------------------------------------

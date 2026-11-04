@@ -3,7 +3,7 @@
 // JSON, and the inventory the closure compares.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cliWritesFromOutput, inventoryDifferences, iamUnexpected } from "./deploy.mjs";
+import { cliWritesFromOutput, inventoryDifferences, iamPolicyDifferences } from "./deploy.mjs";
 import { ENABLE_SERVICES } from "./plan.mjs";
 import { record } from "./run.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
@@ -458,23 +458,72 @@ test("inventoryDifferences compares by identity, allows only what the run enable
   assert.equal(inventoryDifferences({ before: null, after: null }).complete, false);
 });
 
-test("iamUnexpected lets service accounts in and nothing else", () => {
-  assert.deepEqual(iamUnexpected(null), { complete: false, unexpected: [] });
-  assert.deepEqual(iamUnexpected({ added: [], removed: [] }), { complete: true, unexpected: [] });
+test("iamPolicyDifferences lets service-account members in and nothing else", () => {
+  const policy = (...bindings) => ({ bindings });
+  const same = policy({ role: "roles/x", members: ["user:a@b"] });
+  assert.deepEqual(iamPolicyDifferences(null, same), { complete: false, unexpected: [] });
+  assert.deepEqual(iamPolicyDifferences(same, null), { complete: false, unexpected: [] });
+  assert.deepEqual(iamPolicyDifferences(same, same), { complete: true, unexpected: [] });
   assert.deepEqual(
-    iamUnexpected({ added: ["roles/x|serviceAccount:a@b"], removed: [] }).unexpected,
+    iamPolicyDifferences(
+      same,
+      policy({ role: "roles/x", members: ["user:a@b", "serviceAccount:a@b"] }),
+    ).unexpected,
     [],
   );
   assert.deepEqual(
-    iamUnexpected({
-      added: ["roles/x|user:a@b", "roles/y|allUsers"],
-      removed: ["roles/z|user:c@d"],
-    }).unexpected,
+    iamPolicyDifferences(
+      same,
+      policy(
+        { role: "roles/x", members: ["user:a@b"] },
+        { role: "roles/y", members: ["serviceAccount:s@t"] },
+      ),
+    ).unexpected,
+    [],
+    "a new binding of service accounts",
+  );
+  assert.deepEqual(
+    iamPolicyDifferences(
+      policy({ role: "roles/z", members: ["user:c@d"] }),
+      policy(
+        { role: "roles/x", members: ["user:a@b"] },
+        { role: "roles/y", members: ["allUsers"] },
+      ),
+    ).unexpected,
     ["removed roles/z|user:c@d", "added roles/x|user:a@b", "added roles/y|allUsers"],
   );
-  assert.deepEqual(iamUnexpected({ added: ["roles/x"], removed: [] }).unexpected, [
-    "added roles/x",
-  ]);
+  const reordered = (condition, audit) => ({
+    bindings: [{ role: "roles/x", members: ["user:a@b"], condition }],
+    auditConfigs: audit,
+  });
+  assert.deepEqual(
+    iamPolicyDifferences(
+      reordered({ title: "t", expression: "e" }, [
+        { service: "s", auditLogConfigs: [{ logType: "L", exemptedMembers: ["m"] }] },
+      ]),
+      reordered({ expression: "e", title: "t" }, [
+        { auditLogConfigs: [{ exemptedMembers: ["m"], logType: "L" }], service: "s" },
+      ]),
+    ),
+    { complete: true, unexpected: [] },
+    "the order of keys inside a condition or an audit configuration is not a difference",
+  );
+  assert.deepEqual(
+    iamPolicyDifferences(
+      reordered({ title: "t", expression: "e" }, undefined),
+      reordered({ title: "t", expression: "other" }, undefined),
+    ).unexpected,
+    ["removed roles/x|user:a@b", "added roles/x|user:a@b"],
+  );
+  for (const bad of [
+    { bindings: {} },
+    { bindings: [null] },
+    { bindings: [{ role: "r" }] },
+    { bindings: [{ role: 5, members: [] }] },
+    { bindings: [{ role: "r", members: [1] }] },
+    [],
+  ])
+    assert.equal(iamPolicyDifferences(same, bad).complete, false, JSON.stringify(bad));
 });
 
 // ---- what the CLI wrote -------------------------------------------------------------------------------

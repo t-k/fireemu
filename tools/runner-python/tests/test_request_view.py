@@ -9,6 +9,7 @@ Production's raw twins were recorded on 2026-11-04 (sandbox run PYCHECK-EVENTS-2
 
 import json
 import threading
+from pathlib import Path
 
 import flask
 import pytest
@@ -23,6 +24,7 @@ from fireemu_runner.events import (
     storage_cloud_event,
 )
 
+RECORDED = json.loads((Path(__file__).parent / "recorded_bodies.json").read_text(encoding="utf-8"))
 APIS_GOOGLE = "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)"
 TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 PARENT = "projects/demo-proj/databases/(default)/documents"
@@ -91,13 +93,13 @@ def record_request(sink):
     return handler
 
 
-def deliver(trigger, event, monkeypatch, profile=None):
+def deliver(trigger, event, monkeypatch, profile=None, raw=None):
     if profile is None:
         monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
     else:
         monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
     sink = []
-    dispatch._deliver(trigger, record_request(sink), event)
+    dispatch._deliver(trigger, record_request(sink), event, raw)
     assert len(sink) == 1
     return sink[0]
 
@@ -110,33 +112,12 @@ def test_a_cloudevent_function_runs_inside_a_post_to_the_root(trigger, profile, 
     assert (seen["method"], seen["path"]) == ("POST", "/")
 
 
-@pytest.mark.parametrize("profile", [None, "strict"])
-@pytest.mark.parametrize("trigger", TRIGGERS)
-def test_the_request_carries_the_events_attributes_as_binary_mode_headers_and_the_events_body(trigger, profile, monkeypatch):
-    seen = deliver(trigger, EVENTS[trigger], monkeypatch, profile)
-    expected = ADAPTERS[trigger](EVENTS[trigger])
-    for name, value in expected._get_attributes().items():
-        if name == "datacontenttype":
-            continue
-        assert seen["headers"][f"ce-{name}"] == value, name
-    assert seen["content_type"] == expected["datacontenttype"]
-    assert seen["content_length"] == len(seen["body"]) > 0
-    assert seen["body"] == (expected.get_data() if isinstance(expected.get_data(), bytes) else json.dumps(expected.get_data(), separators=(",", ":"), ensure_ascii=False).encode())
-
-
 @pytest.mark.parametrize("trigger", TRIGGERS)
 def test_the_function_is_given_the_event_the_request_describes(trigger, monkeypatch):
     seen = deliver(trigger, EVENTS[trigger], monkeypatch, "strict")
     rebuilt = from_http(seen["headers"], seen["body"])
     assert rebuilt._get_attributes() == seen["event"]._get_attributes()
     assert rebuilt.get_data() == seen["event"].get_data()
-
-
-def test_a_json_body_is_the_compact_text_the_publisher_sends(monkeypatch):
-    event = base(data={"run": "pcrun-1", "label": "é", "n": [1, 2]})
-    seen = deliver("eventarc", event, monkeypatch)
-    assert seen["body"] == '{"run":"pcrun-1","label":"é","n":[1,2]}'.encode()
-    assert seen["headers"]["content-length"] == str(len(seen["body"]))
 
 
 def test_a_firestore_request_is_protobuf(monkeypatch):
@@ -243,3 +224,156 @@ def test_an_event_without_data_has_an_empty_body(monkeypatch):
     seen = deliver("eventarc", event, monkeypatch)
     assert seen["body"] == b"" and seen["content_length"] in (0, None)
     assert seen["event"].get_data() in (None, b"")
+
+
+# ---- the body: literal bytes of the recorded shapes -------------------------------------------------------------------------
+# Recorded 2026-11-04 (tests/recorded_bodies.json): an Eventarc custom event arrives as the publisher's compact text (51 and 48
+# bytes); Pub/Sub as sorted compact JSON plus a newline (348 and 382 bytes); Storage as the object resource, indented by two
+# spaces, in the Cloud Storage JSON API member order, plus a newline (963 bytes). The daemon's frame orders members
+# alphabetically (serde_json) and, for a custom Eventarc event in the strict profile only, keeps the publisher's text.
+
+
+def frame_text(value):
+    """What the daemon's frame carries for a value: alphabetical members, compact."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def daemon_pubsub(recorded):
+    """A Pub/Sub event as the daemon frames it: no snake-case members, members alphabetical."""
+    data = json.loads(recorded)
+    for key in ("message_id", "publish_time"):
+        data["message"].pop(key)
+    return base(type="google.cloud.pubsub.topic.v1.messagePublished", data=data), frame_text(data)
+
+
+@pytest.mark.parametrize("name, text", [("EVENTARC_FRACTION", 51), ("EVENTARC_WHOLE", 48)])
+@pytest.mark.parametrize("profile", [None, "strict"])
+def test_a_custom_eventarc_event_is_delivered_as_the_publishers_text(name, text, profile, monkeypatch):
+    recorded = RECORDED[name]
+    assert len(recorded.encode()) == text
+    seen = deliver("eventarc", base(data=json.loads(recorded)), monkeypatch, profile, raw=recorded)
+    assert seen["body"] == recorded.encode()
+    assert seen["content_length"] == text and seen["headers"]["content-length"] == str(text)
+
+
+def test_the_emulator_profile_delivers_the_text_the_daemon_sent_whatever_its_order(monkeypatch):
+    sent = '{"label":"fraction","run":"pcrun-1"}'
+    seen = deliver("eventarc", base(data=json.loads(sent)), monkeypatch, "emulator", raw=sent)
+    assert seen["body"] == sent.encode()
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", "strict"])
+def test_number_and_character_forms_in_the_delivered_text_are_not_rewritten(profile, monkeypatch):
+    sent = '{"a":1e-7,"b":1e20,"c":"\u00e9","d":-0.0,"e":9007199254740993,"f":1.0,"g":[1E3,0.10]}'
+    seen = deliver("eventarc", base(data=json.loads(sent)), monkeypatch, profile, raw=sent)
+    assert seen["body"] == sent.encode()
+
+
+def test_without_the_delivered_text_the_body_is_the_compact_encoding_of_the_data(monkeypatch):
+    seen = deliver("eventarc", base(data={"run": "r", "n": [1, 2], "s": "é"}), monkeypatch)
+    assert seen["body"] == '{"run":"r","n":[1,2],"s":"é"}'.encode()
+
+
+@pytest.mark.parametrize("name, length", [("PUBSUB_PLAIN", 348), ("PUBSUB_ORDERED", 382)])
+def test_the_strict_pubsub_body_is_the_recorded_sorted_text_with_a_newline(name, length, monkeypatch):
+    recorded = RECORDED[name]
+    event, frame = daemon_pubsub(recorded)
+    seen = deliver("pubsub", event, monkeypatch, "strict", raw=json.dumps(event["data"], sort_keys=True, separators=(",", ":")))
+    assert len(recorded.encode()) == length
+    assert seen["body"] == recorded.encode()
+    assert seen["content_length"] == length
+
+
+@pytest.mark.parametrize("profile", [None, "emulator"])
+def test_the_emulator_pubsub_body_is_compact_in_the_frames_order_with_the_two_snake_case_members(profile, monkeypatch):
+    event, frame = daemon_pubsub(RECORDED["PUBSUB_PLAIN"])
+    seen = deliver("pubsub", event, monkeypatch, profile, raw=frame)
+    body = json.loads(seen["body"])
+    assert list(body["message"]) == ["attributes", "data", "messageId", "publishTime", "message_id", "publish_time"]
+    assert seen["body"] == json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()
+    assert not seen["body"].endswith(b"\n")
+
+
+def test_pubsub_number_forms_are_kept_and_members_are_sorted_in_strict(monkeypatch):
+    data = {"subscription": "s", "message": {"data": "aGk=", "n": 1e-7, "m": 1e20, "attributes": {"b": "1", "a": "é"}}}
+    raw = '{"message":{"attributes":{"a":"é","b":"1"},"data":"aGk=","m":1e20,"n":1e-7},"subscription":"s"}'
+    seen = deliver("pubsub", base(data=data), monkeypatch, "strict", raw=raw)
+    text = seen["body"].decode()
+    assert text.startswith('{"message":{"attributes":{"a":"é","b":"1"},"data":"aGk=","m":1e20,') and text.endswith(',"n":1e-7},"subscription":"s"}\n')
+
+
+def test_the_strict_storage_body_is_the_recorded_indented_text_in_the_api_member_order(monkeypatch):
+    recorded = RECORDED["STORAGE"]
+    data = json.loads(recorded)
+    event = base(type="google.cloud.storage.object.v1.finalized", data=data)
+    seen = deliver("storage", event, monkeypatch, "strict", raw=frame_text(data))
+    assert len(recorded.encode()) == 963
+    assert seen["body"] == recorded.encode()
+    assert seen["content_length"] == 963
+
+
+def test_storage_members_the_recording_does_not_show_follow_in_sorted_order_in_strict(monkeypatch):
+    # UNRECORDED: only the recorded members have a known place; the rest are appended alphabetically.
+    data = {"etag": "e", "zeta": 1, "kind": "storage#object", "alpha": {"y": 1, "x": 2}}
+    seen = deliver("storage", base(type="google.cloud.storage.object.v1.finalized", data=data), monkeypatch, "strict", raw=frame_text(data))
+    assert seen["body"].decode() == '{\n  "kind": "storage#object",\n  "etag": "e",\n  "alpha": {\n    "x": 2,\n    "y": 1\n  },\n  "zeta": 1\n}\n'
+
+
+@pytest.mark.parametrize("profile", [None, "emulator"])
+def test_the_emulator_storage_body_is_the_text_the_daemon_sent(profile, monkeypatch):
+    data = json.loads(RECORDED["STORAGE"])
+    sent = frame_text(data)
+    seen = deliver("storage", base(type="google.cloud.storage.object.v1.finalized", data=data), monkeypatch, profile, raw=sent)
+    assert seen["body"] == sent.encode()
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", "strict"])
+def test_a_realtime_database_body_is_the_delivered_text_UNRECORDED(profile, monkeypatch):
+    # No raw Realtime Database delivery was recorded: nothing is claimed beyond keeping the text the daemon sent.
+    sent = '{"data":{"a":1e-7},"delta":null}'
+    seen = deliver("database", base(type="google.firebase.database.ref.v1.created", data=json.loads(sent)), monkeypatch, profile, raw=sent)
+    assert seen["body"] == sent.encode()
+
+
+def test_a_text_event_without_a_json_content_type_keeps_its_text_as_the_body(monkeypatch):
+    seen = deliver("eventarc", base(datacontenttype="text/plain", data="plain é text"), monkeypatch, "strict", raw='"plain \u00e9 text"')
+    assert seen["body"] == "plain é text".encode()
+    assert seen["event"].get_data() == "plain é text".encode()
+
+
+# ---- the header policy -------------------------------------------------------------------------------------------------------
+
+
+def test_a_control_character_in_a_value_other_than_tab_becomes_a_space_in_the_request(monkeypatch):
+    seen = deliver("eventarc", base(subject="a\x00b\x1fc\x7fd\te\u0085f"), monkeypatch)
+    assert seen["headers"]["ce-subject"] == "a b c d\te\u0085f"
+    assert seen["event"]["subject"] == "a\x00b\x1fc\x7fd\te\u0085f"
+
+
+@pytest.mark.parametrize("name", ["bad name", "bad:name", "bad\nname", "bad\x00", "über", "a(b)", "a/b", 'a"b', "a@b"])
+def test_an_attribute_that_is_not_a_header_name_is_left_out_of_the_request_and_kept_in_the_event(name, monkeypatch):
+    seen = deliver("eventarc", base(**{name: "v"}), monkeypatch)
+    assert f"ce-{name}" not in seen["headers"]
+    assert {k for k in seen["headers"] if k.startswith("ce-")} == {"ce-specversion", "ce-id", "ce-source", "ce-type", "ce-time"}
+    assert seen["event"][name] == "v"
+
+
+def test_an_attribute_with_an_underscore_is_left_out_of_the_request_and_kept_in_the_event(monkeypatch):
+    # UNRECORDED: the usual servers drop header names with an underscore; the event keeps the attribute.
+    seen = deliver("eventarc", base(foo_bar="u", **{"foo-bar": "h"}), monkeypatch)
+    assert seen["headers"]["ce-foo-bar"] == "h"
+    assert "ce-foo_bar" not in seen["headers"]
+    assert seen["event"]["foo_bar"] == "u" and seen["event"]["foo-bar"] == "h"
+
+
+def test_two_attributes_that_differ_only_in_case_give_one_header_the_first_and_the_event_is_the_one_main_built(monkeypatch):
+    seen = deliver("eventarc", {**base(), "Colour": "first", "colour": "second"}, monkeypatch)
+    assert seen["headers"]["ce-colour"] == "first"
+    assert [k for k in seen["headers"] if k == "ce-colour"] == ["ce-colour"]
+    # The SDK's event lower-cases attribute names and keeps the last (main's behaviour, unchanged by the view).
+    assert seen["event"]["colour"] == "second"
+
+
+def test_a_very_long_value_reaches_the_request_whole(monkeypatch):
+    seen = deliver("eventarc", base(subject="x" * 70000), monkeypatch)
+    assert seen["headers"]["ce-subject"] == "x" * 70000

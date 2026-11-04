@@ -27,13 +27,61 @@ def encode_frame(message: dict) -> bytes:
     return str(len(payload)).encode("ascii") + b"\n" + payload
 
 
+_DECODER = json.JSONDecoder()
+_WHITESPACE = " \t\n\r"
+# The trigger types whose request body is the event's JSON data as the daemon framed it.
+_RAW_DATA_TRIGGERS = frozenset(("eventarc", "pubsub", "storage", "database"))
+
+
+def _after_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index] in _WHITESPACE:
+        index += 1
+    return index
+
+
+def raw_event_data(text: str) -> str | None:
+    """The text of `event.data` exactly as it stands in a frame, or None when the frame has none or is malformed.
+
+    The decoder turns the data into Python values and forgets its spelling (`1e-7`, `\\u00e9`, member order, white space).
+    For a custom Eventarc event in the strict profile the daemon frames the publisher's own JSON text, and that text is the
+    request body production delivered, so it is read here from the frame text, member by member, without parsing the data.
+    """
+    try:
+        index = _after_whitespace(text, 0)
+        for wanted in ("event", "data"):
+            if text[index] != "{":
+                return None
+            index += 1
+            while True:
+                index = _after_whitespace(text, index)
+                if text[index] == "}":
+                    return None
+                key, index = _DECODER.raw_decode(text, index)
+                index = _after_whitespace(text, index)
+                if text[index] != ":" or not isinstance(key, str):
+                    return None
+                index = _after_whitespace(text, index + 1)
+                if key == wanted:
+                    break
+                index = _after_whitespace(text, _DECODER.raw_decode(text, index)[1])
+                if text[index] == ",":
+                    index += 1
+        start = index
+        end = _DECODER.raw_decode(text, start)[1]
+        # A value must be followed by what ends it, or the frame is cut short.
+        return text[start:end] if text[_after_whitespace(text, end)] in ",}" else None
+    except (IndexError, ValueError):
+        return None
+
+
 def _text(value) -> bool:
     return isinstance(value, str) and len(value) > 0
 
 
 def _decode_message(payload: bytes) -> dict:
     try:
-        message = json.loads(payload.decode("utf-8"))
+        text = payload.decode("utf-8")
+        message = json.loads(text)
     except (UnicodeDecodeError, ValueError):
         raise ProtocolError("UTF-8 or JSON") from None
     if not isinstance(message, dict):
@@ -49,6 +97,10 @@ def _decode_message(payload: bytes) -> dict:
         or ("entryPoint" in message and not _text(message["entryPoint"]))
     ):
         raise ProtocolError("message fields")
+    if message["trigger"] in _RAW_DATA_TRIGGERS and "data" in message["event"]:
+        raw = raw_event_data(text)
+        if raw is not None:
+            message["rawEventData"] = raw
     return message
 
 

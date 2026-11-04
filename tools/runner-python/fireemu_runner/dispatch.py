@@ -29,14 +29,15 @@ _CLOUD_EVENTS = {
 _TRIGGERS = frozenset((*_CLOUD_EVENTS, "schedule"))
 
 
-def _deliver(trigger: str, function, event) -> None:
+def _deliver(trigger: str, function, event, raw_data: str | None = None) -> None:
     if trigger == "schedule":
         deliver_schedule(function, event.get("data") if isinstance(event, dict) else None)
     else:
-        headers, body = _CLOUD_EVENTS[trigger](event)
-        # As functions-framework does: the function runs inside the request that delivers the event.
-        with delivery_request(headers, body, event):
-            function(from_http(headers, body))
+        delivery = _CLOUD_EVENTS[trigger](event, raw_data)
+        # As functions-framework does: the function runs inside the request that delivers the event. The event is built
+        # from the encoding the adapters have always used; the request shows the layout the recorded delivery had.
+        with delivery_request(delivery.headers, delivery.request_body, event):
+            function(from_http(delivery.headers, delivery.event_body))
 
 
 # What `FUNCTION_SIGNATURE_TYPE` says for each (the Node runner's `signatureType`).
@@ -102,7 +103,7 @@ class Dispatcher:
                 os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
                 os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
                 os.environ["K_SERVICE"] = spec["name"]
-                _deliver(message["trigger"], function, message["event"])
+                _deliver(message["trigger"], function, message["event"], message.get("rawEventData"))
             except BaseException as error:  # a SystemExit in user code must still answer the daemon
                 diagnostic, text = describe(error)
                 # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.

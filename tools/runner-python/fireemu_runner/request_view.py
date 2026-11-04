@@ -4,7 +4,11 @@ functions-framework serves a CloudEvent function from a Flask view and calls the
 `flask.request` shows the delivered request. Production's raw twins were recorded on 2026-11-04 (sandbox run
 PYCHECK-EVENTS-20261104-01): `POST /` with the binary-mode `ce-*` headers, `content-type`, `content-length` and, in the strict
 profile, constants every recorded frame carries (the sender's user agent, the encodings, the protocol) plus Cloud Run's plain
-`traceparent` header. The OIDC `Authorization`, `Forwarded`, `X-Forwarded-For`, `Function-Execution-Id`, `X-Cloud-Trace-Context`,
+`traceparent` header. The body is the text the delivery had, not a re-encoding of the event: the layouts recorded per family are in
+`bodies.py` (strict Pub/Sub and Storage; Eventarc keeps the publisher's text), and the emulator and unset profiles carry the bytes the
+daemon delivered. A Realtime Database body was not recorded. Header policy: a name that is not an HTTP token (or has an underscore) is
+left out of the request, a control character in a value becomes a space, and of two names that differ only in case the first one
+is the header; the event the function receives is never changed by the view. The OIDC `Authorization`, `Forwarded`, `X-Forwarded-For`, `Function-Execution-Id`, `X-Cloud-Trace-Context`,
 `From`, `Accept` and the Cloud Run host have no local source and are not invented.
 """
 
@@ -17,7 +21,12 @@ from werkzeug.test import EnvironBuilder
 from .events import is_strict
 
 _APP = flask.Flask("fireemu-cloudevent")
-_LINE_BREAK = re.compile(r"[\r\n]")
+# What an HTTP header may be called: a token without an underscore. Header names with an underscore are dropped by the usual
+# servers, and Werkzeug folds `foo_bar` into `foo-bar`; both are UNRECORDED, so such an attribute stays out of the request
+# (the event keeps it).
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^`|~0-9A-Za-z-]+")
+# A control character other than the tab cannot be in a header value; it becomes a space, as a line break does.
+_CONTROL = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
 # Constant in every recorded Eventarc delivery (the four raw twins of run 57ab27296dedaedc).
 _STRICT_CONSTANTS = {
     "user-agent": "APIs-Google; (+https://developers.google.com/webmasters/APIs-Google.html)",
@@ -28,14 +37,23 @@ _STRICT_CONSTANTS = {
 
 def request_headers(headers: dict, event: dict) -> dict:
     """The headers of the request: the event's binary-mode headers, and in the strict profile the recorded constants and the
-    trace context as the plain `traceparent` header. A line break in a value is replaced by a space (an HTTP header cannot hold
-    one); the event the function receives keeps its text."""
-    view = {name: _LINE_BREAK.sub(" ", value) for name, value in headers.items()}
+    trace context as the plain `traceparent` header.
+
+    The request is what a server would have received, so a name that is not a header name is left out, and when two names
+    differ only in case the first one stays. A control character in a value other than the tab, a line break included, is
+    replaced by a space. The event the function receives keeps every attribute and its text.
+    """
+    view = {}
+    taken = set()
+    for name, value in headers.items():
+        if _HEADER_NAME.fullmatch(name) and name.lower() not in taken:
+            taken.add(name.lower())
+            view[name] = _CONTROL.sub(" ", value)
     if is_strict():
         view.update(_STRICT_CONSTANTS)
         traceparent = event.get("traceparent")
         if isinstance(traceparent, str):
-            view["traceparent"] = _LINE_BREAK.sub(" ", traceparent)
+            view["traceparent"] = _CONTROL.sub(" ", traceparent)
     return view
 
 

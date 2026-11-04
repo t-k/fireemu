@@ -1,0 +1,1210 @@
+{
+ "database": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "big": 9007199254740993,
+    "empty": {},
+    "flag": true,
+    "large": 1e+20,
+    "list": [
+     1,
+     [
+      2,
+      {
+       "z": null
+      }
+     ],
+     2.5
+    ],
+    "neg": -0.0,
+    "nothing": null,
+    "ratio": 0.1,
+    "small": 1e-07,
+    "text": "é日本  \"q\" \\ /"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.firebase.database.ref.v1.created"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.firebase.database.ref.v1.created"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.firebase.database.ref.v1.created"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.firebase.database.ref.v1.created"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   }
+  },
+  "trigger": "database"
+ },
+ "eventarc": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "big": 9007199254740993,
+    "empty": {},
+    "flag": true,
+    "large": 1e+20,
+    "list": [
+     1,
+     [
+      2,
+      {
+       "z": null
+      }
+     ],
+     2.5
+    ],
+    "neg": -0.0,
+    "nothing": null,
+    "ratio": 0.1,
+    "small": 1e-07,
+    "text": "é日本  \"q\" \\ /"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "acme.thing"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   }
+  },
+  "trigger": "eventarc"
+ },
+ "eventarc-nodata": {
+  "event": {
+   "colour": "red",
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "acme.thing"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": null
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "acme.thing"
+    },
+    "json": null
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": null
+   }
+  },
+  "trigger": "eventarc"
+ },
+ "eventarc-text": {
+  "event": {
+   "colour": "red",
+   "data": "plain é text",
+   "datacontenttype": "text/plain",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "acme.thing"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "text/plain",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "base64": "cGxhaW4gw6kgdGV4dA=="
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "text/plain",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "acme.thing"
+    },
+    "base64": "cGxhaW4gw6kgdGV4dA=="
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "text/plain",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "base64": "cGxhaW4gw6kgdGV4dA=="
+   }
+  },
+  "trigger": "eventarc"
+ },
+ "eventarc-whole": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "big": 9007199254740993,
+    "empty": {},
+    "flag": true,
+    "large": 1e+20,
+    "list": [
+     1,
+     [
+      2,
+      {
+       "z": null
+      }
+     ],
+     2.5
+    ],
+    "neg": -0.0,
+    "nothing": null,
+    "ratio": 0.1,
+    "small": 1e-07,
+    "text": "é日本  \"q\" \\ /"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "acme.thing"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.000Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02Z",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.000Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "acme.thing"
+    },
+    "json": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    }
+   }
+  },
+  "trigger": "eventarc"
+ },
+ "firestore-created": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "value": {
+     "createTime": "2026-01-01T00:00:00Z",
+     "fields": {
+      "d": {
+       "doubleValue": 1e-07
+      },
+      "n": {
+       "integerValue": "9007199254740993"
+      },
+      "s": {
+       "stringValue": "é日本"
+      }
+     },
+     "name": "projects/demo-proj/databases/(default)/documents/items/a",
+     "updateTime": "2026-01-01T00:00:01Z"
+    }
+   },
+   "database": "(default)",
+   "datacontenttype": "application/json",
+   "document": "items/a",
+   "id": "e-1",
+   "location": "nam5",
+   "namespace": "(default)",
+   "project": "demo-proj",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.firestore.document.v1.created"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "database": "(default)",
+     "datacontenttype": "application/protobuf",
+     "document": "items/a",
+     "id": "e-1",
+     "location": "nam5",
+     "namespace": "(default)",
+     "project": "demo-proj",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.firestore.document.v1.created"
+    },
+    "base64": "CnwKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEg4KAW4SCRCBgICAgICAEBIQCgFzEguKAQjDqeaXpeacrBIOCgFkEgkZSK+8mvLXej4aBgiA8tbKBiIGCIHy1soG"
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "database": "(default)",
+     "datacontenttype": "application/protobuf",
+     "dataschema": "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto",
+     "document": "items/a",
+     "id": "e-1",
+     "location": "nam5",
+     "namespace": "(default)",
+     "project": "demo-proj",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.cloud.firestore.document.v1.created"
+    },
+    "base64": "CnwKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEg4KAW4SCRCBgICAgICAEBIQCgFzEguKAQjDqeaXpeacrBIOCgFkEgkZSK+8mvLXej4aBgiA8tbKBiIGCIHy1soG"
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "database": "(default)",
+     "datacontenttype": "application/protobuf",
+     "document": "items/a",
+     "id": "e-1",
+     "location": "nam5",
+     "namespace": "(default)",
+     "project": "demo-proj",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.firestore.document.v1.created"
+    },
+    "base64": "CnwKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEg4KAW4SCRCBgICAgICAEBIQCgFzEguKAQjDqeaXpeacrBIOCgFkEgkZSK+8mvLXej4aBgiA8tbKBiIGCIHy1soG"
+   }
+  },
+  "trigger": "firestore"
+ },
+ "firestore-updated": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "oldValue": {
+     "fields": {
+      "n": {
+       "integerValue": "1"
+      }
+     },
+     "name": "projects/demo-proj/databases/(default)/documents/items/a"
+    },
+    "updateMask": {
+     "fieldPaths": [
+      "n"
+     ]
+    },
+    "value": {
+     "fields": {
+      "n": {
+       "integerValue": "2"
+      }
+     },
+     "name": "projects/demo-proj/databases/(default)/documents/items/a"
+    }
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.firestore.document.v1.updated"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/protobuf",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.firestore.document.v1.updated"
+    },
+    "base64": "CkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhACEkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhABGgMKAW4="
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/protobuf",
+     "dataschema": "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.cloud.firestore.document.v1.updated"
+    },
+    "base64": "CkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhACEkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhABGgMKAW4="
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/protobuf",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.firestore.document.v1.updated"
+    },
+    "base64": "CkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhACEkMKOHByb2plY3RzL2RlbW8tcHJvai9kYXRhYmFzZXMvKGRlZmF1bHQpL2RvY3VtZW50cy9pdGVtcy9hEgcKAW4SAhABGgMKAW4="
+   }
+  },
+  "trigger": "firestore"
+ },
+ "pubsub": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "message": {
+     "attributes": {
+      "k": "é"
+     },
+     "data": "aGk=",
+     "messageId": "1",
+     "orderingKey": "key",
+     "publishTime": "2026-01-01T00:00:00Z"
+    },
+    "subscription": "projects/demo-proj/subscriptions/s"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.pubsub.topic.v1.messagePublished"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "message": {
+      "attributes": {
+       "k": "é"
+      },
+      "data": "aGk=",
+      "messageId": "1",
+      "message_id": "1",
+      "orderingKey": "key",
+      "publishTime": "2026-01-01T00:00:00Z",
+      "publish_time": "2026-01-01T00:00:00Z"
+     },
+     "subscription": "projects/demo-proj/subscriptions/s"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "message": {
+      "attributes": {
+       "k": "é"
+      },
+      "data": "aGk=",
+      "messageId": "1",
+      "message_id": "1",
+      "orderingKey": "key",
+      "publishTime": "2026-01-01T00:00:00Z",
+      "publish_time": "2026-01-01T00:00:00Z"
+     },
+     "subscription": "projects/demo-proj/subscriptions/s"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "message": {
+      "attributes": {
+       "k": "é"
+      },
+      "data": "aGk=",
+      "messageId": "1",
+      "message_id": "1",
+      "orderingKey": "key",
+      "publishTime": "2026-01-01T00:00:00Z",
+      "publish_time": "2026-01-01T00:00:00Z"
+     },
+     "subscription": "projects/demo-proj/subscriptions/s"
+    }
+   }
+  },
+  "trigger": "pubsub"
+ },
+ "pubsub-plain": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "extra": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    },
+    "message": {
+     "data": "aGk="
+    },
+    "subscription": "s"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.pubsub.topic.v1.messagePublished"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "extra": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "message": {
+      "data": "aGk="
+     },
+     "subscription": "s"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "extra": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "message": {
+      "data": "aGk="
+     },
+     "subscription": "s"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.pubsub.topic.v1.messagePublished"
+    },
+    "json": {
+     "extra": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "message": {
+      "data": "aGk="
+     },
+     "subscription": "s"
+    }
+   }
+  },
+  "trigger": "pubsub"
+ },
+ "storage": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "bucket": "b",
+    "generation": "1",
+    "metadata": {
+     "big": 9007199254740993,
+     "empty": {},
+     "flag": true,
+     "large": 1e+20,
+     "list": [
+      1,
+      [
+       2,
+       {
+        "z": null
+       }
+      ],
+      2.5
+     ],
+     "neg": -0.0,
+     "nothing": null,
+     "ratio": 0.1,
+     "small": 1e-07,
+     "text": "é日本  \"q\" \\ /"
+    },
+    "name": "o é",
+    "size": "32"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02.250Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.storage.object.v1.finalized"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "generation": "1",
+     "metadata": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "name": "o é",
+     "size": "32"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "generation": "1",
+     "metadata": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "name": "o é",
+     "size": "32"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.250Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "generation": "1",
+     "metadata": {
+      "big": 9007199254740993,
+      "empty": {},
+      "flag": true,
+      "large": 1e+20,
+      "list": [
+       1,
+       [
+        2,
+        {
+         "z": null
+        }
+       ],
+       2.5
+      ],
+      "neg": -0.0,
+      "nothing": null,
+      "ratio": 0.1,
+      "small": 1e-07,
+      "text": "é日本  \"q\" \\ /"
+     },
+     "name": "o é",
+     "size": "32"
+    }
+   }
+  },
+  "trigger": "storage"
+ },
+ "storage-whole": {
+  "event": {
+   "colour": "red",
+   "data": {
+    "bucket": "b",
+    "name": "o"
+   },
+   "datacontenttype": "application/json",
+   "id": "e-1",
+   "source": "//example.googleapis.com/x",
+   "specversion": "1.0",
+   "subject": "s/é",
+   "time": "2026-01-01T00:00:02Z",
+   "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+   "type": "google.cloud.storage.object.v1.finalized"
+  },
+  "profiles": {
+   "emulator": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.000Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "name": "o"
+    }
+   },
+   "strict": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02Z",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "name": "o"
+    }
+   },
+   "unset": {
+    "attributes": {
+     "colour": "red",
+     "datacontenttype": "application/json",
+     "id": "e-1",
+     "source": "//example.googleapis.com/x",
+     "specversion": "1.0",
+     "subject": "s/é",
+     "time": "2026-01-01T00:00:02.000Z",
+     "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+     "type": "google.cloud.storage.object.v1.finalized"
+    },
+    "json": {
+     "bucket": "b",
+     "name": "o"
+    }
+   }
+  },
+  "trigger": "storage"
+ }
+}

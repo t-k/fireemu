@@ -44,11 +44,12 @@ test('finish: the observer journal becomes journal.json; with a recorded record 
     const s = finish(dir, FIXTURE);
     assert.equal(s.match, true, JSON.stringify(s.problems)); assert.equal(s.counts.MATCH, 54);
     assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'journal.json'), 'utf8')), FIXTURE);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'comparison.json'), 'utf8')), s);
     assert.throws(() => finish(dir, FIXTURE), /EEXIST/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-function fakeFireemu(dir, { exitCode = 0, hang = false } = {}) {
+function fakeFireemu(dir, { exitCode = 0, hang = false, leaveChild = false } = {}) {
   writeFileSync(path.join(dir, 'raw.jsonl'), rawRows(FIXTURE).map(r => JSON.stringify(r)).join('\n') + '\n');
   const file = path.join(dir, 'fake-fireemu.mjs');
   writeFileSync(file, `#!${process.execPath}
@@ -61,7 +62,7 @@ writeFileSync(${JSON.stringify(path.join(dir, 'pids'))}, JSON.stringify([process
 mkdirSync(out);
 copyFileSync(${JSON.stringify(path.join(dir, 'raw.jsonl'))}, out + '/journal.jsonl');
 writeFileSync(out + '/result.json', ${JSON.stringify(JSON.stringify({ ...RESULT, exit: exitCode, status: exitCode ? 'incomplete' : 'complete' }))});
-${hang ? '' : `child.kill(); process.exit(${exitCode});`}
+${hang ? '' : `${leaveChild ? '' : 'child.kill(); '}process.exit(${exitCode});`}
 `);
   chmodSync(file, 0o755);
   return file;
@@ -87,6 +88,8 @@ test('the entry refuses an existing --out, fails with the observer status, and e
     const existing = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir), '--out', dir], { encoding: 'utf8' });
     assert.equal(existing.status, 2); assert.equal(existsSync(path.join(dir, 'config.json')), false);
     assert.equal(spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { exitCode: 3 }), '--out', path.join(dir, 'f')], { encoding: 'utf8' }).status, 3);
+    assert.equal(spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { leaveChild: true }), '--out', path.join(dir, 'c')], { encoding: 'utf8', timeout: 60000 }).status, 0);
+    for (const pid of JSON.parse(readFileSync(path.join(dir, 'pids'), 'utf8'))) assert.equal(alive(pid), false, `a child the producer left behind is ended with its group (${pid})`);
     const h = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { hang: true }), '--out', path.join(dir, 'h'), '--exec-timeout-ms', '6000'], { encoding: 'utf8', timeout: 60000 });
     assert.equal(h.status, 3, h.stderr); assert.match(h.stderr, /timed out/);
     for (const pid of JSON.parse(readFileSync(path.join(dir, 'pids'), 'utf8'))) assert.equal(alive(pid), false, String(pid));

@@ -116,9 +116,9 @@ test('tokensProfile is wired to the profile cancellation and the run\'s project:
   assert.equal((await tokensProfile(live)).length, 2, 'the start probe and two cases, then nothing');
   const own = sent.find(a => a[0] === 'auth-none-own');
   assert.equal(own, undefined);
-  const all = []; const full = { ...ctx, cancelled: false, rest: async (...a) => { all.push(a); return answer; } };
+  const all = []; const full = { ...ctx, projectId: 'demo-wiring-project', cancelled: false, rest: async (...a) => { all.push(a); return answer; } };
   await tokensProfile(full);
-  assert.ok(all.find(a => a[0] === 'auth-none-own')[2].includes(encodeURIComponent(credentials('demo-tokens-observer').none_own)), 'the own-project token carries the run\'s project');
+  assert.ok(all.find(a => a[0] === 'auth-none-own')[2].includes(encodeURIComponent(credentials('demo-wiring-project').none_own)), 'the own-project token carries the run\'s project');
 });
 test('the tokens suite deadlines: 120 s per profile, 6 minutes per run, the backstop 8 minutes; observations 54; cap at most 100', () => {
   assert.deepEqual([SUITES.tokens.profileMs, SUITES.tokens.runMs, backstopMs('tokens')], [120000, 360000, 480000]);

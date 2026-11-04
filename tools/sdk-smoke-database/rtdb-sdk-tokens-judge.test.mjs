@@ -44,6 +44,14 @@ test('probeProblems: exactly one start probe that ended ready after at least one
     assert.equal(probeProblems({ ...p, probes }, 'local').length, 1, JSON.stringify(probes));
   assert.deepEqual(probeProblems({ ...p, probes: [{ after: 'start', attempts: 7, ready: true, outcome: 'answered' }] }, 'recorded'), [], 'the number of attempts is not compared');
 });
+test('summarize: a local ready probe that did not end ready is a problem even when every case matches', () => {
+  for (const side of ['recorded', 'local']) {
+    const p = copy(), l = copy(); (side === 'recorded' ? p : l).profiles[1].probes = [{ after: 'start', attempts: 20, ready: false, outcome: 'answered' }];
+    const s = summarize(p, l);
+    assert.equal(s.counts.MATCH, 54, side); assert.equal(s.match, false, side);
+    assert.deepEqual(s.problems, [`${side} r2-tokens: the ready probe did not end ready`]);
+  }
+});
 test('judgeProfile: a missing, extra or misplaced row and another profile name fail closed', () => {
   const d = copy(), l = copy();
   l.profiles[0].rows.splice(3, 1);

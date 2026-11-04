@@ -25,6 +25,7 @@ test('reduce: per profile the case rows in journal order without kind/suite/prof
   const faulted = reduceTokensJournal([...raw(), { kind: 'abort', reason: 'x' }, { kind: 'profile-error', profile: 'r2-tokens' }], { ...RESULT, unverified: 'x' });
   assert.deepEqual(faulted.faults, [{ kind: 'abort', profile: null }, { kind: 'profile-error', profile: 'r2-tokens' }]);
   assert.deepEqual(faulted.result.unverified, ['result.json has no unverified list']);
+  assert.equal(reduceTokensJournal(raw(), { ...RESULT, prefix: '/p' }).result.prefixLength, 2, 'the length of the run\'s own prefix');
 });
 test('reduce: refuses a row it cannot place', () => {
   const bad = [
@@ -40,6 +41,8 @@ test('reduce: refuses a row it cannot place', () => {
     [rows => rows.push([]), /not an object/],
   ];
   for (const [change, re] of bad) { const rows = raw(); change(rows); assert.throws(() => reduceTokensJournal(rows, RESULT), re, String(re)); }
+  const gap = raw(); gap.splice(gap.findIndex(r => r.kind === 'probe' && r.attempt === 2), 1, probe('r1-tokens', 3, true));
+  assert.throws(() => reduceTokensJournal(gap, RESULT), /probe attempts out of order/, 'a missing attempt after a probe that was not ready');
   const skipped = raw().filter(r => !(r.kind === 'probe' && r.attempt === 1 && r.profile === 'r1-tokens'));
   assert.throws(() => reduceTokensJournal(skipped, RESULT), /probe attempts out of order/);
   assert.throws(() => reduceTokensJournal(raw(), { ...RESULT, suite: 'rules' }), /not the tokens suite/);

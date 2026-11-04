@@ -904,23 +904,32 @@ test("the channel delete's operation is read only when the answer is a 2xx that 
   const cases = [
     [
       "a 409 that looks like an operation",
-      () => reply(409, { name: "projects/p/locations/us-central1/operations/x", done: false }),
+      () =>
+        reply(409, {
+          name: "projects/fireemu-oracle-events/locations/us-central1/operations/x",
+          done: false,
+        }),
     ],
     ["a 200 with no name", () => reply(200, {})],
     ["a 200 with a name that is not text", () => reply(200, { name: 5, done: false })],
     [
       "a 200 that is already done",
-      () => reply(200, { name: "projects/p/locations/us-central1/operations/x", done: true }),
+      () =>
+        reply(200, {
+          name: "projects/fireemu-oracle-events/locations/us-central1/operations/x",
+          done: true,
+        }),
     ],
   ];
   for (const [label, answer] of cases) {
-    const { journal } = await go(
+    const { journal, result } = await go(
       { seedChannels: [] },
       (send) => async (request) =>
         request.method === "DELETE" && request.url.includes("/channels/")
           ? (await send(request), answer())
           : send(request),
     );
+    assert.equal(result.cleanup.errors, undefined, label);
     assert.equal(ids(journal).filter((id) => id.startsWith("channel-operation-")).length, 0, label);
   }
   const forbidden = await go(

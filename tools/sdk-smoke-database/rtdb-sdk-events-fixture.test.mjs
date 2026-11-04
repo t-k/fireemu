@@ -76,3 +76,9 @@ test('reduce: an empty unknown list is not kept', () => {
   const rows = journal(); rows.find(r => r.kind === 'case' && r.id === 'get_exists').unknown = [];
   assert.equal(Object.hasOwn(reduceEventsJournal(rows, RESULT).profiles[0].rows.find(x => x.id === 'get_exists'), 'unknown'), false);
 });
+
+test('reduce: the credential outcome of an admin refusal is kept in the reduced result, and absent otherwise', () => {
+  const r = reduceEventsJournal(journal(), { ...RESULT, status: 'incomplete', observed: 42, exit: 1, credentialOutcome: ['r1-admin'] });
+  assert.deepEqual(r.result, { status: 'incomplete', observed: 42, exit: 1, cleanup: { prefix: 'verified', rules: 'verified' }, credentialOutcome: ['r1-admin'] });
+  assert.equal(Object.hasOwn(reduceEventsJournal(journal(), RESULT).result, 'credentialOutcome'), false);
+});

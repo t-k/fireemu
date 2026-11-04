@@ -179,55 +179,67 @@ test('the quiescence window of a step is at least 800 ms: a production round tri
   assert.ok(SETTLE_MAX_MS >= 4 * QUIET_MS, `SETTLE_MAX_MS ${SETTLE_MAX_MS} must leave room for several quiet windows`);
 });
 
-// ---- Codex presend review of packet 1 v1, Must 1: browser traffic is admitted before it is dispatched ----
-async function admissionWorld({ cap }) {
-  const { chromium } = await import('playwright'), { admitBrowserTraffic } = await import('./observer.mjs');
+// ---- Opus/Codex presend review of packet 1 v1: browser traffic is stopped at a margin below the cap (nothing is routed) ----
+async function marginWorld({ cap, margin }) {
+  const { chromium } = await import('playwright'), { watchBrowserTraffic } = await import('./observer.mjs');
   const hits = { http: 0, upgrades: 0 };
-  const server = createServer((req, res) => { if (req.url.startsWith('/hit')) { hits.http += 1; setTimeout(() => res.writeHead(200).end('ok'), 50); } else res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>x</title>'); });
+  const server = createServer((req, res) => { if (req.url.startsWith('/hit')) { hits.http += 1; setTimeout(() => res.writeHead(200).end('ok'), 20); } else res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>x</title>'); });
   server.on('upgrade', (req, socket) => { hits.upgrades += 1; socket.destroy(); });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const host = `127.0.0.1:${server.address().port}`, counter = createCounter({ direct: cap }), aborts = [], rows = [];
-  const browser = await chromium.launch({ headless: true }), close = async () => { await browser.close(); server.closeAllConnections(); server.close(); };
+  const browser = await chromium.launch({ headless: true }), close = async () => { await browser.close().catch(() => {}); server.closeAllConnections(); server.close(); };
   try {
     const page = await browser.newPage(), ctx = { profile: 'r1-lp', counter, abort: m => aborts.push(m), journal: { write: row => rows.push(row) } };
-    await admitBrowserTraffic(page, ctx, url => { try { const u = new URL(url); return u.host === host && (u.pathname === '/hit' || u.pathname === '/.ws'); } catch { return false; } });   // the page itself is served from the same host
+    const watch = watchBrowserTraffic(page, ctx, url => { try { const u = new URL(url); return u.host === host && (u.pathname === '/hit' || u.pathname === '/.ws'); } catch { return false; } }, margin);   // the page itself is served from the same host
     await page.goto(`http://${host}/`);
-    return { page, host, hits, counter, aborts, rows, close };
+    return { page, host, hits, counter, aborts, rows, watch, close };
   } catch (error) { await close(); throw error; }
 }
-test('browser admission: with the cap reached in the middle of a burst of long-polling requests none leaves past the cap', async () => {
-  const w = await admissionWorld({ cap: 5 });
+test('browser margin: the page is stopped once direct reaches cap - margin; with at most `margin` requests in flight the hard cap is never passed and nothing is counted as overflow', async () => {
+  const w = await marginWorld({ cap: 30, margin: 8 });
   try {
-    await w.page.evaluate(async () => { await Promise.allSettled(Array.from({ length: 20 }, (_, i) => fetch(`/hit?i=${i}`))); });
-    assert.equal(w.hits.http, 5, 'the server saw exactly the admitted requests');
-    assert.deepEqual(w.counter.used(), { direct: 5, reserve: 0, adc: 0 });
-    assert.equal(w.counter.used().overflow, undefined, 'nothing is counted after it left');
-    assert.equal(w.aborts.length >= 1, true); assert.match(w.aborts[0], /direct cap 5/);
-    assert.equal(w.rows.filter(r => r.kind === 'raw-lp-request').length, 5);
+    // a pool of 6 parallel requests (fewer than the margin) until the page is closed under it
+    await w.page.evaluate(async () => { let n = 0; const worker = async () => { for (;;) { try { await fetch(`/hit?i=${n++}`); } catch { return; } } }; await Promise.allSettled(Array.from({ length: 6 }, worker)); }).catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(w.page.isClosed(), true, 'the page is closed at the margin');
+    const used = w.counter.used();
+    assert.ok(used.direct >= 22 && used.direct <= 30, JSON.stringify(used)); assert.equal(used.overflow, undefined);
+    assert.equal(w.aborts.length, 1); assert.match(w.aborts[0], /browser traffic stopped at the margin: direct 22 of cap 30 \(margin 8\)/);
+    assert.ok(w.hits.http <= 30 && w.hits.http >= used.direct - 1, `server ${w.hits.http} counted ${used.direct}`);
+    assert.ok(w.watch.stats().stopped);
   } finally { await w.close(); }
 });
-test('browser admission: a burst of WebSocket connections from the page is cut at the cap before any upgrade reaches the server', async () => {
-  const w = await admissionWorld({ cap: 3 });
+test('browser margin: page WebSockets count like requests and stop the page the same way', async () => {
+  const w = await marginWorld({ cap: 12, margin: 6 });
   try {
-    await w.page.evaluate(async host => { await Promise.allSettled(Array.from({ length: 12 }, () => new Promise(resolve => { const s = new WebSocket(`ws://${host}/.ws`); s.onerror = s.onclose = () => resolve(); setTimeout(resolve, 2500); }))); }, w.host);   // a bounded wait: an unconnected socket never closes
-    assert.equal(w.hits.upgrades, 3, 'the server saw exactly the admitted upgrades');
-    assert.deepEqual(w.counter.used(), { direct: 3, reserve: 0, adc: 0 }); assert.equal(w.counter.used().overflow, undefined);
-    assert.match(w.aborts[0], /direct cap 3/); assert.equal(w.rows.filter(r => r.kind === 'raw-page-ws').length, 3);
+    await w.page.evaluate(async host => { for (let i = 0; i < 20; i++) { try { const s = new WebSocket(`ws://${host}/.ws`); await new Promise(resolve => { s.onerror = s.onclose = resolve; setTimeout(resolve, 500); }); } catch { return; } } }, w.host).catch(() => {});
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(w.page.isClosed(), true); assert.equal(w.counter.used().direct, 6); assert.equal(w.counter.used().overflow, undefined);
+    assert.match(w.aborts[0], /direct 6 of cap 12 \(margin 6\)/); assert.equal(w.rows.filter(r => r.kind === 'raw-page-ws').length, 6);
   } finally { await w.close(); }
 });
-test('browser admission: a WebSocket to another path is neither counted nor held back', async () => {
-  const w = await admissionWorld({ cap: 1 });
+test('browser margin: other hosts and paths are neither counted nor stopped', async () => {
+  const w = await marginWorld({ cap: 8, margin: 6 });
   try {
-    await w.page.evaluate(async host => { await new Promise(resolve => { const s = new WebSocket(`ws://${host}/other.ws`); s.onerror = s.onclose = () => resolve(); setTimeout(resolve, 2500); }); }, w.host);
-    assert.equal(w.hits.upgrades, 1, 'the unrelated socket reached the server'); assert.deepEqual(w.counter.used(), { direct: 0, reserve: 0, adc: 0 }); assert.deepEqual(w.aborts, []);
+    await w.page.evaluate(async host => { await fetch('/other.html'); await new Promise(resolve => { const s = new WebSocket(`ws://${host}/other.ws`); s.onerror = s.onclose = resolve; setTimeout(resolve, 600); }); }, w.host);
+    assert.deepEqual(w.counter.used(), { direct: 0, reserve: 0, adc: 0 }); assert.deepEqual(w.aborts, []); assert.equal(w.page.isClosed(), false);
   } finally { await w.close(); }
 });
-test('browser admission: requests to other hosts are neither counted nor delayed', async () => {
-  const w = await admissionWorld({ cap: 1 });
-  try {
-    await w.page.evaluate(async () => { await fetch('/other.html'); });
-    assert.deepEqual(w.counter.used(), { direct: 0, reserve: 0, adc: 0 }); assert.deepEqual(w.aborts, []);
-  } finally { await w.close(); }
+test('browser margin: BROWSER_MARGIN covers the most requests the code can have in flight (SDK bound from its source, measured bound on a real events page)', async () => {
+  const { BROWSER_MARGIN, eventsLpProfile } = await import('./observer.mjs'), { withTimeout } = await import('./sequence.mjs');
+  // From the SDK source: a long-polling connection never has more than 2 script-tag requests outstanding.
+  const sdk = readFileSync(path.join(HERE, '..', 'node_modules', '@firebase', 'database', 'dist', 'index.esm.js'), 'utf8');
+  assert.ok(sdk.includes('this.outstandingRequests.size < (this.pendingSegs.length > 0 ? 2 : 1)'), 'the SDK still limits a long-polling connection to 2 outstanding requests');
+  const LP_CONNECTIONS = 2, OUTSTANDING_PER_CONNECTION = 2, PAGE_SOCKETS = 1, HANDSHAKE_DOCUMENTS = 2;   // observer and transaction writer poll; the writer is one page WebSocket; each connection loads one iframe document
+  const bound = LP_CONNECTIONS * OUTSTANDING_PER_CONNECTION + PAGE_SOCKETS + HANDSHAKE_DOCUMENTS;
+  assert.ok(BROWSER_MARGIN >= bound + 1, `margin ${BROWSER_MARGIN} must exceed the structural bound ${bound}`);
+  const server = await fakeServer(), counter = createCounter({ direct: 200 }), rows = [];
+  const ctx = { profile: 'r1-lp', scope: 'p/sdk-events/r1-lp', transport: 'lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write: row => rows.push(row) }, counter, abort: () => {}, caseMs: 5000, closeMs: 1000, closers: [] };
+  await withTimeout(8000, 'events lp', eventsLpProfile(ctx)).catch(() => {});
+  for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {});
+  server.close();
+  const row = rows.find(r => r.kind === 'lp-inflight');
+  assert.ok(row, JSON.stringify(rows.map(r => r.kind))); assert.ok(row.maxInFlight >= 1 && row.maxInFlight <= bound, `measured ${row.maxInFlight} against the structural bound ${bound}`);
 });
 
 // ---- Codex presend review of packet 1 v1, Must 2 (observer side) ----
@@ -286,4 +298,47 @@ test('the CLI refuses a tree whose firebase-admin is not the pinned version befo
     const small = spawnSync(process.execPath, argv('small'), { encoding: 'utf8', env: { PATH: process.env.PATH } });
     assert.doesNotMatch(small.stderr, /firebase-admin/, 'the small suite does not look at the Admin SDK');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- Opus presend review of packet 1 v1, Should 3: a REVOKED line names the run ----
+test('checkApproval refuses a run that a later REVOKED line names (topic or envelope), and ignores a REVOKED line of another run', () => {
+  const run = 'RTDB-EVENTS-20261104-01', sha = '6154f48257ab2027db21bfb7b646160ab6c5a9ba4f795c546aa6ef1ddb4f745f';
+  const approve = `- 2026-11-04 | RTDB-SMALL-OBSERVER ${run} | decision=APPROVE; scriptSha256=${sha}; directCap=200; adc=1; prefix=/sdkevents20261104; suite=events+admin; basis=2217 | coordinator | review.md`;
+  const want = { runId: run, scriptSha256: sha, directCap: 200, prefix: '/sdkevents20261104', suite: 'events+admin' };
+  const other = `- 2026-11-04 | REVOKED RTDB-SMALL-OBSERVER RTDB-SMALL-20261102-01 | envelopeId=RTDB-SMALL-20261102-01; consumed | coordinator | x`;
+  checkApproval(`${other}\n${approve}\n`, want);
+  for (const revoked of [`- 2026-11-04 | REVOKED RTDB-SMALL-OBSERVER ${run} | envelopeId=${run}; consumed | coordinator | x`, `- 2026-11-04 | REVOKED V ${run} | envelopeId=${run};packetSha256=abc | coordinator | x`, `- 2026-11-04 | REVOKED E ${run} | scoped retirement | coordinator | x`]) {
+    assert.throws(() => checkApproval(`${approve}\n${revoked}\n`, want), /revoked/, revoked);
+    assert.throws(() => checkApproval(`${revoked}\n${approve}\n`, want), /revoked/, 'also when the REVOKED line comes first');
+  }
+  assert.throws(() => checkApproval(`${approve}\n- 2026-11-04 | note | mentions ${run} but REVOKED is only a word here | coordinator | x\n`.replace('note', 'REVOKED note'), want), /revoked/, 'any line whose topic starts with REVOKED and that names the run');
+  checkApproval(`${approve}\n- 2026-11-04 | V ${run} | envelopeId=${run}; REVOKED appears only in the body | coordinator | x\n`, want);
+});
+
+// ---- Opus presend review of packet 1 v1, Should 2: a refused Admin SDK credential is not G13 evidence ----
+test('an admin profile whose startup failed (credential refused) is a credential outcome: its cases are not observed, the run is incomplete', async () => {
+  const profile = suite => async ctx => caseRows(suite, null).map(r => (suite === 'admin' && ctx.profile === 'r1-admin' && r.id === 'startup' ? { id: 'startup', ok: false, error: 'PermissionError: gauth refused' } : r));
+  const h = await harnessWith('events+admin', { events: { ws: profile('events'), lp: profile('events') }, admin: { admin: profile('admin') } }, { continueOnFailure: true });
+  assert.equal(h.exit, 1); assert.equal(h.result.status, 'incomplete');
+  assert.equal(h.result.observed, 52 - 10, 'the ten cases of the refused admin profile do not count');
+  assert.deepEqual(h.result.credentialOutcome, ['r1-admin']); assert.deepEqual(h.result.adminStartup, { 'r1-admin': false, 'r2-admin': true });
+  assert.deepEqual(h.result.cleanup, { prefix: 'verified', rules: 'verified' });
+  const ok = await harnessWith('events+admin', { events: { ws: profile('events'), lp: profile('events') }, admin: { admin: async ctx => caseRows('admin', null) } });
+  assert.equal(ok.exit, 0); assert.equal(ok.result.observed, 52); assert.equal(Object.hasOwn(ok.result, 'credentialOutcome'), false); assert.deepEqual(ok.result.adminStartup, { 'r1-admin': true, 'r2-admin': true });
+  const ev = await harnessWith('events', { events: { ws: profile('events'), lp: profile('events') } });
+  assert.equal(Object.hasOwn(ev.result, 'adminStartup'), false, 'a suite without admin profiles has no admin members');
+});
+
+// ---- the result records the prefix (the read-back needs it) and the CLI has a read-back command ----
+test('the result of the events and admin suites records the prefix; the small result keeps its recorded members', async () => {
+  const h = await harness('events'); assert.equal(h.result.prefix, PREFIX);
+  const key = Object.keys(h.result), small = Object.keys((await import('./observer.mjs')).SUITES.small).length;
+  assert.ok(small > 0 && key.includes('prefix'));
+});
+test('the CLI read-back command: usage is refused before anything else, and it needs the same environment as a production run', () => {
+  const observer = path.join(HERE, 'observer.mjs');
+  const bare = spawnSync(process.execPath, [observer, 'readback'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.equal(bare.status, 2); assert.match(bare.stderr, /usage: readback --run-dir/);
+  const env = spawnSync(process.execPath, ['--max-old-space-size=1024', observer, 'readback', '--run-dir', '/x', '--production-config', '/y', '--out', '/z'], { encoding: 'utf8', env: { PATH: process.env.PATH, FIREBASE_TOKEN: 'x' } });
+  assert.equal(env.status, 2); assert.match(env.stderr, /environment variable set: FIREBASE_TOKEN/);
 });

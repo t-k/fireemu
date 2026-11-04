@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adcVerdict, checkApproval, claim, clip, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
 import { CASE_ORDER, runCases, withTimeout } from './sequence.mjs';
+import { readback } from './readback.mjs';
 import { packetRules } from './rules.mjs';
 import { ADMIN_PROFILES, EVENTS_PROFILES, SUITE_AREAS, suiteRules } from './events-rules.mjs';
 import { EVENT_CASES } from './events-actor.mjs';
@@ -90,23 +91,36 @@ async function wsProfile(ctx) {
   return runCases(actors, { caseMs: ctx.caseMs, onCase: row => ctx.journal.write({ kind: 'case', profile: ctx.profile, ...row }) });
 }
 /**
- * Admission control for the browser transports (Codex presend review of packet 1 v1, Must 1). A long-polling request or a
- * WebSocket the page opens is charged to the counter in a route handler, before it is dispatched; over the cap it is
- * aborted (or closed) without reaching the network and the run is aborted. Requests to other hosts pass untouched.
+ * Browser traffic (long-polling requests and the page's WebSocket) is counted when Chromium reports it, which is after it left.
+ * Nothing is routed. Instead the page is stopped at a fixed margin below the cap: once `direct >= cap - margin` the run is
+ * aborted and the page closed, so only the requests already in flight can still arrive. The margin must cover the most
+ * requests the code can have in flight (BROWSER_MARGIN, bound and measurement in the packet); every request is still
+ * charged with the hard cap, and one over it is recorded in `overflow` (it must stay absent).
  */
-export async function admitBrowserTraffic(page, ctx, isDb) {
-  const note = row => { try { ctx.journal.write({ ...row, profile: ctx.profile }, { optional: true }); } catch { /* journal full: admission goes on */ } };
-  await page.route(url => isDb(url.toString()), async route => {
-    const request = route.request();
-    try { ctx.counter.take('lp-request'); } catch (error) { ctx.abort(error.message); await route.abort('blockedbyclient').catch(() => {}); return; }
+export const BROWSER_MARGIN = 8;
+export function watchBrowserTraffic(page, ctx, isDb, margin = BROWSER_MARGIN) {
+  let inFlight = 0, maxInFlight = 0, stopped = false;
+  const open = () => { inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight); }, shut = () => { inFlight = Math.max(0, inFlight - 1); };
+  const stop = reason => { if (stopped) return; stopped = true; ctx.abort(reason); void page.close().catch(() => {}); };
+  const charge = label => {
+    try { ctx.counter.take(label); } catch (error) { ctx.counter.overflow(); stop(error.message); return; }
+    const { direct } = ctx.counter.used(), cap = ctx.counter.caps().direct;
+    if (direct >= cap - margin) stop(`browser traffic stopped at the margin: direct ${direct} of cap ${cap} (margin ${margin})`);
+  };
+  const note = row => { try { ctx.journal.write({ ...row, profile: ctx.profile }, { optional: true }); } catch { /* journal full: the count is what matters */ } };
+  page.on('request', request => {
+    if (!isDb(request.url())) return;
+    open(); charge('lp-request');
     note({ kind: 'raw-lp-request', method: request.method(), url: request.url(), body: request.postData() ? clip(request.postData()) : null });
-    await route.continue().catch(() => {});
   });
-  await page.routeWebSocket(url => isDb(url.toString()), ws => {
-    try { ctx.counter.take('page-ws'); } catch (error) { ctx.abort(error.message); ws.close(); return; }
-    note({ kind: 'raw-page-ws', url: ws.url() });
-    ws.connectToServer();
+  page.on('requestfinished', request => { if (isDb(request.url())) shut(); });
+  page.on('requestfailed', request => { if (isDb(request.url())) shut(); });
+  page.on('websocket', socket => {   // the events suite's writer connects over WebSocket from the page
+    if (!isDb(socket.url())) return;
+    open(); charge('page-ws'); socket.on('close', shut);
+    note({ kind: 'raw-page-ws', url: socket.url() });
   });
+  return { stats: () => ({ maxInFlight, inFlight, stopped }) };
 }
 const SERVED = { '/page.mjs': 'page.mjs', '/sequence.mjs': 'sequence.mjs', '/actor.mjs': 'actor.mjs' };
 const EVENTS_PAGE = { html: 'events-page.html', served: { '/events-page.mjs': 'events-page.mjs', '/events-sequence.mjs': 'events-sequence.mjs', '/events-actor.mjs': 'events-actor.mjs', '/sequence.mjs': 'sequence.mjs' } };
@@ -128,7 +142,8 @@ export async function lpProfile(ctx, pageFiles = { html: 'page.html', served: SE
     const page = await browser.newPage(); alive();
     await page.exposeFunction('__emit', row => { try { ctx.journal.write({ ...row, profile: ctx.profile }); } catch { /* journal full: the result still comes back */ } });
     page.on('pageerror', error => ctx.journal.write({ kind: 'page-error', profile: ctx.profile, error: clip(String(error), 2000) }));
-    await admitBrowserTraffic(page, ctx, isDb); alive();   // every database request and WebSocket of the page is charged BEFORE it is dispatched
+    const watch = watchBrowserTraffic(page, ctx, isDb, ctx.browserMargin ?? BROWSER_MARGIN); alive();   // counts what the page sends and stops it at the margin below the cap
+    ctx.closers.push(async () => { try { ctx.journal.write({ kind: 'lp-inflight', profile: ctx.profile, ...watch.stats() }, { optional: true }); } catch { /* journal full */ } });
     page.on('response', async response => {
       if (!isDb(response.url())) return;
       const body = await withTimeout(3000, 'lp-body', response.text()).catch(() => null);
@@ -189,7 +204,7 @@ export async function run(opts, deps = {}) {
   const T = o.target, urls = targetUrls(T), production = T.kind === 'production', scriptSha = scriptManifest(HERE).sha256, nonce = randomBytes(16).toString('hex');
   mkdirSync(path.dirname(o.outDir), { recursive: true, mode: 0o700 }); mkdirSync(o.outDir, { mode: 0o700 });
   const journal = d.createJournal(path.join(o.outDir, 'journal.jsonl')), counter = createCounter({ direct: o.directCap, reserve: 12 });
-  const result = { runId: o.runId, ...(suite === 'small' ? {} : { suite }), target: T.kind, scriptSha256: scriptSha, sdk: { ...sdkVersions(), ...(S.parts.includes('admin') ? { firebaseAdmin: adminVersion() } : {}) }, startedAt: new Date().toISOString(), status: 'started', cases: [], unverified: [], cleanup: { prefix: 'not-needed', rules: 'not-needed' } };
+  const result = { runId: o.runId, ...(suite === 'small' ? {} : { suite, prefix: o.prefix }), target: T.kind, scriptSha256: scriptSha, sdk: { ...sdkVersions(), ...(S.parts.includes('admin') ? { firebaseAdmin: adminVersion() } : {}) }, startedAt: new Date().toISOString(), status: 'started', cases: [], unverified: [], cleanup: { prefix: 'not-needed', rules: 'not-needed' } };
   const releases = [], pending = new Set(), state = { touched: false, baselineText: null };
   const jw = row => { try { journal.write(row); } catch { /* the journal must not stop the restoration */ } };
   let abortReason = null, abortFn; const aborted = new Promise(r => { abortFn = reason => { if (abortReason) return; abortReason = reason; jw({ kind: 'abort', reason }); r(); }; });
@@ -246,7 +261,14 @@ export async function run(opts, deps = {}) {
       if (rows.some(row => !row.ok) && !o.continueOnFailure) break;
     }
     const partOf = name => S.plan.find(p => p.name === name)?.suite;
-    const observed = result.cases.filter(c => c.ok && (partOf(c.profile) === 'small' ? CASE_ORDER.some(([r, id]) => r === c.role && id === c.id) : SUITE_CASES[partOf(c.profile)]?.includes(c.id))).length;
+    const adminNames = S.plan.filter(p => p.suite === 'admin').map(p => p.name);
+    if (adminNames.length) {   // an Admin SDK profile counts only when its startup read was answered: a refused credential is a credential outcome, not G13 evidence
+      result.adminStartup = Object.fromEntries(adminNames.map(name => [name, result.cases.some(c => c.profile === name && c.id === 'startup' && c.ok === true)]));
+      const refused = adminNames.filter(name => !result.adminStartup[name]);
+      if (refused.length) result.credentialOutcome = refused;
+    }
+    const counted = c => c.ok && !(result.credentialOutcome ?? []).includes(c.profile);
+    const observed = result.cases.filter(c => counted(c) && (partOf(c.profile) === 'small' ? CASE_ORDER.some(([r, id]) => r === c.role && id === c.id) : SUITE_CASES[partOf(c.profile)]?.includes(c.id))).length;
     result.observed = observed; exit = observed === expectedObservations(suite) && !abortReason ? 0 : 1; result.status = exit === 0 ? 'complete' : 'incomplete';
     if (abortReason) result.error = `aborted: ${abortReason}`;
   } catch (error) { fail(state.touched ? 1 : 2, state.touched ? 'failed' : 'refused', error); }   // nothing changed yet: a refusal
@@ -277,14 +299,35 @@ export async function run(opts, deps = {}) {
 }
 
 // ---- command line ----------------------------------------------------------------------------------------------------------------------------
+/** The production target out of the private config file (the same inputs for a run and for the read-back). */
+export function productionTarget(configPath) {
+  const config = productionConfig(JSON.parse(readFileSync(configPath, 'utf8')));
+  const packet = JSON.parse(readFileSync(config.legacyPacket, 'utf8'));
+  const gcloud = JSON.parse(readFileSync(config.runtimeProposal, 'utf8')).gcloudRealPath;   // the legacy packet's gcloud path is stale
+  if (packet.projectId !== PRODUCTION.projectId || typeof gcloud !== 'string' || !gcloud.startsWith('/nix/store/') || !existsSync(gcloud)) throw new Error('packet or gcloud path does not match');
+  return { ...config, projectNumber: String(packet.projectNumber), baselineRulesSha256: packet.baselineRulesSha256, gcloud };
+}
+function productionEnvironment() {
+  const env = ['GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_TOKEN', 'HTTPS_PROXY', 'HTTP_PROXY', 'NODE_OPTIONS', 'FIREBASE_DATABASE_EMULATOR_HOST'].filter(k => process.env[k]);
+  if (env.length) throw new Error(`environment variable set: ${env.join()}`);
+  if (getHeapStatistics().heap_size_limit > 1.3 * 2 ** 30) throw new Error('run with --max-old-space-size=1024');
+}
+/** observer.mjs readback --run-dir <finished run dir> --production-config <file> --out <new dir>: the reviewed read-only A2 (readback.mjs). */
+async function readbackCommand(argv) {
+  const arg = n => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
+  if (!arg('--run-dir') || !arg('--production-config') || !arg('--out')) throw new Error('usage: readback --run-dir <finished run dir> --production-config <file> --out <new dir>');
+  productionEnvironment();
+  const target = productionTarget(arg('--production-config')), ledgerText = readFileSync(target.paths.owner, 'utf8');
+  const { exit, report } = await readback({ runDir: path.resolve(arg('--run-dir')), outDir: path.resolve(arg('--out')), target, ledgerText });
+  console.log(JSON.stringify({ runId: report.runId, verdict: report.verdict, checks: report.checks, counts: report.counts, exit }));
+  return exit;
+}
+
 async function main(argv) {
   const arg = n => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
   if (argv.includes('--print-manifest')) { console.log(JSON.stringify(scriptManifest(HERE))); return 0; }
-  if (arg('--target') === 'production') {
-    const env = ['GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_TOKEN', 'HTTPS_PROXY', 'HTTP_PROXY', 'NODE_OPTIONS', 'FIREBASE_DATABASE_EMULATOR_HOST'].filter(k => process.env[k]);
-    if (env.length) throw new Error(`environment variable set: ${env.join()}`);
-    if (getHeapStatistics().heap_size_limit > 1.3 * 2 ** 30) throw new Error('run with --max-old-space-size=1024');
-  }
+  if (argv[0] === 'readback') return readbackCommand(argv);
+  if (arg('--target') === 'production') productionEnvironment();
   const kind = arg('--target'), runId = arg('--run-id'), prefix = arg('--prefix'), directCap = Number(arg('--direct-cap')), suite = arg('--suite') ?? 'small';
   if (!Object.hasOwn(SUITES, suite)) throw new Error('usage: --suite small|events|admin|events+admin');
   const capMax = SUITES[suite].capMax;
@@ -295,11 +338,7 @@ async function main(argv) {
   const outDir = arg('--out');
   if (!outDir) throw new Error('usage: --out <new dir>');
   if (kind === 'production') {
-    const config = productionConfig(JSON.parse(readFileSync(arg('--production-config') ?? '', 'utf8')));
-    const packet = JSON.parse(readFileSync(config.legacyPacket, 'utf8'));
-    const gcloud = JSON.parse(readFileSync(config.runtimeProposal, 'utf8')).gcloudRealPath;   // the legacy packet's gcloud path is stale
-    if (packet.projectId !== PRODUCTION.projectId || typeof gcloud !== 'string' || !gcloud.startsWith('/nix/store/') || !existsSync(gcloud)) throw new Error('packet or gcloud path does not match');
-    target = { ...config, projectNumber: String(packet.projectNumber), baselineRulesSha256: packet.baselineRulesSha256, gcloud };
+    target = productionTarget(arg('--production-config') ?? '');
   } else {
     if (!/^127\.0\.0\.1:\d+$/.test(process.env.FIREBASE_DATABASE_EMULATOR_HOST ?? '')) throw new Error('FIREBASE_DATABASE_EMULATOR_HOST must be 127.0.0.1:<port> (run under fireemu exec --only database)');
     target = { kind, host: process.env.FIREBASE_DATABASE_EMULATOR_HOST, namespace: 'fireemu-small-observer', projectId: 'demo-small-observer' };
@@ -310,6 +349,6 @@ async function main(argv) {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const suite = process.argv.includes('--suite') ? process.argv[process.argv.indexOf('--suite') + 1] : 'small';
-  setTimeout(() => process.exit(4), backstopMs(suite)).unref();   // hard backstop above runMs plus the bounded cleanup; leaves the claims in place
+  setTimeout(() => process.exit(4), process.argv[2] === 'readback' ? 5 * 60 * 1000 : backstopMs(suite)).unref();   // hard backstop above runMs plus the bounded cleanup; leaves the claims in place
   main(process.argv.slice(2)).then(code => process.exit(code), error => { console.error(String(error?.message)); process.exit(2); });
 }

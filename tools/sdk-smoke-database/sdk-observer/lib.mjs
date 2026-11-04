@@ -73,6 +73,7 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
 // `- <date> | RTDB-SMALL-OBSERVER <runId> | decision=APPROVE; scriptSha256=..; directCap=..; adc=1; prefix=..; basis=2196 | coordinator | <source>`: exactly one such line, every field equal.
 // The events and admin suites (packet 1 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin>` and carry basis=2217.
 export function checkApproval(ledgerText, want) {
+  if (ledgerText.split('\n').some(l => /^REVOKED\b/.test(l.split(' | ')[1] ?? '') && l.includes(want.runId))) throw new Error(`approval revoked: a REVOKED line names ${want.runId}`);   // a consumed or withdrawn line never approves again
   const lines = ledgerText.split('\n').filter(l => l.includes(`| RTDB-SMALL-OBSERVER ${want.runId} |`));
   if (lines.length !== 1) throw new Error(`approval lines for ${want.runId}: ${lines.length}`);
   const parts = lines[0].split(' | ');

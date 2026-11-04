@@ -183,14 +183,25 @@ test('r1.3 every WebSocket the SDK creates is counted when it is created; over t
   const { default: Ws } = await import('faye-websocket'), dial = () => { const c = new Ws.Client('ws://127.0.0.1:1/.ws'); c.on('error', () => {}); return c; };
   dial().close(); dial().close(); assert.throws(() => dial(), /direct cap 2/); assert.equal(aborts.length, 1); assert.deepEqual(counter.used(), { direct: 2, reserve: 0, adc: 0 });
 });
-test('r1.3 LP: when the budget is exhausted the abort is raised and nothing is dispatched past the cap', async () => {
-  const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
-  const profile = lpProfile(ctx).catch(() => {});   // the abort stops the run from outside (run() rejects the profile); here the page is left alone until the checks are done
+test('r1.3 LP: the page is stopped at the margin below the cap and the abort names it', async () => {
+  const server = await fakeServer(), counter = createCounter({ direct: 12 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [], browserMargin: 6 };
+  const profile = lpProfile(ctx).catch(() => {});
   try {
     for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
     await new Promise(r => setTimeout(r, 500));
-    assert.match(aborts[0] ?? '', /direct cap 2 reached at lp-request/);
+    assert.match(aborts[0] ?? '', /browser traffic stopped at the margin: direct \d+ of cap 12 \(margin 6\)/);
   } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); server.close(); }
+});
+test('r2.3 LP: after the stop the hard cap still holds: every request the server received was counted and none is overflow', async () => {
+  const server = await fakeServer(), counter = createCounter({ direct: 12 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [], browserMargin: 6 };
+  const profile = lpProfile(ctx).catch(() => {});
+  try {
+    for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
+  } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used(); server.close();
+  assert.ok(received >= 1); assert.ok(used.direct >= 6 && used.direct <= 12, JSON.stringify(used)); assert.equal(used.overflow, undefined); assert.ok(received <= used.direct, JSON.stringify({ used, received }));
 });
 test('r1.5 the cleanup does not depend on the journal: with every journal write failing the restoration still happens', async () => {
   let down = false;

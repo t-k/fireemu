@@ -95,7 +95,7 @@ const completeRun = d => isObject(d?.result) && d.result.status === 'complete' &
 
 /** The whole comparison: a match only when every step of every case of every profile, and every setup, matches. */
 export function summarize(production, local) {
-  const counts = { MATCH: 0, MISMATCH: 0, NEEDS_REVIEW: 0 };
+  const counts = { MATCH: 0, MISMATCH: 0, NEEDS_REVIEW: 0 }, credentialOutcome = [];
   try {
     const problems = [];
     for (const [side, d] of [['production', production], ['local', local]]) {
@@ -103,12 +103,15 @@ export function summarize(production, local) {
       let plan;
       try { plan = profilesOf(d.suite); } catch { problems.push(`${side}: unknown suite ${d.suite}`); continue; }
       if (!Array.isArray(d.profiles) || !same(d.profiles.map(p => (keysAre(p, ['name', 'suite', 'rows']) ? [p.name, p.suite] : null)), plan.map(p => [p.name, p.suite]))) problems.push(`${side}: profiles are not the ${d.suite} profiles`);
-      if (!keysAre(d.result, ['status', 'observed', 'exit', 'cleanup'])) problems.push(`${side}: result is not in the reduced shape`);
+      const outcome = d.result?.credentialOutcome;   // optional: the admin profiles whose Admin SDK credential was refused (startup failed)
+      const outcomeOk = outcome === undefined || (Array.isArray(outcome) && outcome.length > 0 && outcome.every(name => typeof name === 'string' && plan.some(x => x.name === name && x.suite === 'admin')));
+      if (!outcomeOk || !isObject(d.result) || !keysAre({ ...d.result, credentialOutcome: undefined }, ['status', 'observed', 'exit', 'cleanup', 'credentialOutcome'])) problems.push(`${side}: result is not in the reduced shape`);
+      else if (outcome) { credentialOutcome.push(...outcome); problems.push(`${side}: credential outcome: ${outcome.join(', ')}: the Admin SDK did not authenticate; not G13 evidence`); }
       if (!completeRun(d)) problems.push(`${side}: the run is not complete with a verified cleanup`);
       if (!Array.isArray(d.faults) || d.faults.length) problems.push(`${side}: the journal records faults`);
     }
     if (!problems.length && production.suite !== local.suite) problems.push(`suites differ: ${production.suite} and ${local.suite}`);
-    if (problems.length) return { match: false, counts, problems, rows: [], profiles: [] };
+    if (problems.length) return { match: false, counts, problems, rows: [], profiles: [], ...(credentialOutcome.length ? { credentialOutcome: [...new Set(credentialOutcome)] } : {}) };
     const profiles = production.profiles.map((p, i) => judgeProfile(p, local.profiles[i]));
     const rows = profiles.flatMap(p => p.rows);
     for (const r of rows) counts[r.verdict]++;

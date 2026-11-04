@@ -193,3 +193,17 @@ test('step: writer callbacks belong to transaction steps only, also in the case 
   assert.equal(judgeStep(A, copy(A), { kind: 'attach', label: 'attach' }, { observer: ['TA'], writer: ['W', 'txn'] }).verdict, 'NEEDS_REVIEW');
   assert.equal(judgeStep({ ...A, writer: [] }, { ...A, writer: [] }, { kind: 'attach', label: 'attach' }, { observer: ['TA'], writer: ['W', 'txn'] }).verdict, 'MATCH');
 });
+
+test('document: a production run whose Admin SDK credential was refused is a credential outcome, named in the summary, never a match and never G13 evidence', () => {
+  const production = copy(FIXTURE), p = production.profiles.find(x => x.name === 'r1-admin');
+  p.rows = [{ id: 'startup', ok: false, error: 'Error: permission_denied' }, ...p.rows.slice(1).map(r => ({ ...r, ok: true }))];
+  production.result = { status: 'incomplete', observed: 42, exit: 1, cleanup: { prefix: 'verified', rules: 'verified' }, credentialOutcome: ['r1-admin'] };
+  const s = summarize(production, copy(FIXTURE));
+  assert.equal(s.match, false); assert.deepEqual(s.credentialOutcome, ['r1-admin']);
+  assert.ok(s.problems.some(x => /credential outcome: r1-admin: the Admin SDK did not authenticate/.test(x)), JSON.stringify(s.problems));
+  const both = summarize(production, production);
+  assert.equal(both.match, false, 'the same credential outcome on both sides is still not evidence'); assert.deepEqual(both.credentialOutcome, ['r1-admin']);
+  assert.equal(summarize(FIXTURE, copy(FIXTURE)).credentialOutcome, undefined);
+  const bogus = copy(FIXTURE); bogus.result.credentialOutcome = 'r1-admin';
+  assert.equal(summarize(bogus, copy(FIXTURE)).match, false, 'a malformed credentialOutcome member is refused');
+});

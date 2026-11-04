@@ -48,6 +48,6 @@ export function reduceEventsJournal(rows, result) {
     } else if (FAULTS.includes(row.kind)) faults.push({ kind: row.kind, profile: named(row.profile) ? row.profile : null });
     else if (!IGNORED.includes(row.kind)) throw Error(`unknown journal row kind ${row.kind}`);
   }
-  const { status, observed, exit, cleanup } = result;
-  return { kind: KIND, suite: result.suite, result: { status, observed, exit, cleanup }, faults, profiles };
+  const { status, observed, exit, cleanup, credentialOutcome } = result;   // credentialOutcome: the admin profiles whose Admin SDK credential was refused; kept so the judge never reads them as G13 evidence
+  return { kind: KIND, suite: result.suite, result: { status, observed, exit, cleanup, ...(credentialOutcome === undefined ? {} : { credentialOutcome }) }, faults, profiles };
 }

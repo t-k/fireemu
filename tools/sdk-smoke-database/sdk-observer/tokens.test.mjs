@@ -7,7 +7,7 @@ import { createHash, createHmac } from 'node:crypto';
 
 import {
   ADC, CRED, CREDENTIAL_KINDS, GROUPS, HS256_KEY, IDENTITIES, OTHER_PROJECT, TABLE, TOKENS_AREA, TOKENS_CASES, TOKENS_PROFILES, TRANSPORTS,
-  credentials, runTokensProfile, seededBytes, tokensRules,
+  credentialRequest, credentials, runTokensProfile, seededBytes, tokensRules,
 } from './tokens-suite.mjs';
 import { MAX_PROBES } from './rules-suite.mjs';
 import { CapExceeded, Unknown, createAdmin, createCounter } from './lib.mjs';
@@ -243,4 +243,20 @@ test('createAdmin resolveAdc: refused without record and anonymous, without exac
   const none = admin({ adc: null });
   await assert.rejects(none.a.rest('z', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true }), /no ADC value/);
   assert.equal(counter.used().direct + none.counter.used().direct, 0);
+});
+test('credentialRequest: the transport of each identity; the ADC token never as a Bearer', () => {
+  const spec = id => TABLE.find(c => c.id === id);
+  assert.deepEqual(credentialRequest(spec('seed'), undefined), { query: '', options: {} });
+  assert.deepEqual(credentialRequest(spec('ctl-anon-pub'), undefined), { query: '', options: { anonymous: true } });
+  assert.deepEqual(credentialRequest(spec('auth-pct'), 'a b'), { query: 'auth=a%20b', options: { anonymous: true } });
+  assert.deepEqual(credentialRequest(spec('at-random'), 'r'), { query: 'access_token=r', options: { anonymous: true } });
+  assert.deepEqual(credentialRequest(spec('auth-adc'), ADC), { query: `auth=${ADC}`, options: { anonymous: true, resolveAdc: true } });
+  assert.deepEqual(credentialRequest(spec('bearer-null'), 'null'), { query: '', options: { anonymous: true, bearer: 'null' } });
+  assert.throws(() => credentialRequest({ ...spec('bearer-null'), credential: 'adc' }, ADC), /only in auth=/);
+});
+test('createAdmin resolveAdc: the percent-encoded form of the token is masked too', async () => {
+  const ADC_VALUE = 'ya29.adc-secret/+=value', { a, rows } = admin({ adc: ADC_VALUE, answer: u => new Response(`{"raw":"${new URL(u).search}"}`) });
+  const r = await a.rest('adc', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true });
+  assert.equal(r.text, '{"raw":"?auth={adc}"}');
+  assert.equal(JSON.stringify(rows).includes(encodeURIComponent(ADC_VALUE)), false);
 });

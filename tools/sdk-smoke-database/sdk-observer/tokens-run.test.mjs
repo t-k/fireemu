@@ -21,8 +21,8 @@ const BASELINE = '{\n  "rules": {\n    ".read": false,\n    ".write": false\n  }
 const DENIED = '{\n  "error" : "Permission denied"\n}\n';
 
 /** A fake database: the first Rules PUT and the baseline are accepted; ready reads 200 once installed; authreq needs a credential; the answer echoes the query. */
-async function fakeDatabase() {
-  const state = { rules: BASELINE, puts: [], log: [] };
+async function fakeDatabase({ readyAfter = 0 } = {}) {
+  const state = { rules: BASELINE, puts: [], log: [], readyMisses: 0 };
   const server = createServer((req, res) => {
     let body = ''; req.on('data', d => { body += d; });
     req.on('end', () => {
@@ -33,7 +33,7 @@ async function fakeDatabase() {
         return;
       }
       if (u.pathname === `${PREFIX}.json`) { res.writeHead(200).end('null'); return; }
-      if (u.pathname.endsWith('/ready.json')) { res.writeHead(state.rules === state.puts[0] ? 200 : 401).end('null'); return; }
+      if (u.pathname.endsWith('/ready.json')) { const inEffect = state.rules === state.puts[0] && state.readyMisses++ >= readyAfter; res.writeHead(inEffect ? 200 : 401).end('null'); return; }
       const credential = req.headers.authorization || u.searchParams.has('auth') || u.searchParams.has('access_token');
       if (u.pathname.endsWith('/authreq.json') && !credential) { res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' }).end(DENIED); return; }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }).end(JSON.stringify({ q: u.search }));
@@ -69,6 +69,15 @@ test('run --suite tokens: the global Rules installed and restored, 2 x 27 cases,
     assert.equal(rows.filter(r => r.kind === 'probe').length, 2);
     const adcRows = rows.filter(r => r.kind === 'case' && r.id.startsWith('auth-adc'));
     assert.ok(adcRows.every(r => r.body === '{"q":"?ns=ns&auth={adc}"}'), 'the resolved owner token is masked in the answer');
+  } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
+});
+test('run --suite tokens: a ready probe not yet in effect is repeated with the run\'s probe delay, and every extra probe is a counted request', async () => {
+  const db = await fakeDatabase({ readyAfter: 2 }), out = mkdtempSync(path.join(tmpdir(), 'tokens-run-'));
+  try {
+    const started = Date.now();
+    const { exit, result } = await run({ target: local(db.host), runId: 'TEST-TOKENS-02', prefix: PREFIX, directCap: 80, outDir: path.join(out, 'run'), suite: 'tokens', probeDelayMs: 1 });
+    assert.equal(exit, 0, JSON.stringify(result)); assert.equal(result.counts.direct, 62);
+    assert.ok(Date.now() - started < 1400, `the 1 ms probe delay of the run is used, not the 2 s default (${Date.now() - started} ms)`);
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
 test('run --suite tokens: a profile abandoned at its deadline aborts the run: unverified, exit 3, nothing of r2 sent', async () => {

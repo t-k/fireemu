@@ -99,7 +99,7 @@ export function tokensRules(prefix) {
 
 const SCOPE_RE = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/[A-Za-z0-9_-]+$/, PROJECT_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 /** The request options and query of one case: the token in its transport; the ADC token left as its placeholder. */
-function credentialRequest(spec, token) {
+export function credentialRequest(spec, token) {
   if (spec.identity !== 'credential') return { query: spec.query, options: spec.identity === 'anonymous' ? { anonymous: true } : {} };
   if (spec.group === 'bearer') { if (spec.credential === 'adc') throw Error('the ADC token goes only in auth='); return { query: spec.query, options: { anonymous: true, bearer: token } }; }
   const adc = spec.credential === 'adc';

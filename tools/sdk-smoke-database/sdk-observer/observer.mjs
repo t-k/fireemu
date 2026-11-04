@@ -41,12 +41,12 @@ export const SUITES = {
   admin: { parts: ['admin'], basis: '2217', capMax: 250, plan: adminPlan, profileMs: 200000, runMs: 900000 },
   'events+admin': { parts: ['events', 'admin'], basis: '2217', capMax: 250, plan: [...eventsPlan, ...adminPlan], profileMs: 200000, runMs: 900000 },
   rest: { parts: ['rest'], basis: '2217', capMax: 250, plan: restPlan, profileMs: 120000, runMs: 360000 },   // 72 requests per profile, 10 s timeout each, a transport failure stops the profile
-  rules: { parts: ['rules'], basis: '2217', capMax: 250, plan: rulesPlan, profileMs: 180000, runMs: 420000 },   // about 80 requests per profile plus the ready probes (at most 8 per install, 1.5 s apart)
+  rules: { parts: ['rules'], basis: '2217', capMax: 250, plan: rulesPlan, profileMs: 300000, runMs: 720000 },   // about 80 requests per profile plus the ready probes (at most 20 per install, 2 s apart: 5 installs x 19 delays = 190 s worst case)
 };
 const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES, rest: REST_CASES, rules: RULES_CASES };
 const AREAS = { small: 'sdk-next', ...SUITE_AREAS, rest: REST_AREA, rules: RULES_AREA };
 /** The pause between two ready probes of the rules suite: production Rules take effect after a delay, a local emulator at once. */
-export const PROBE_DELAY_MS = { production: 1500, emulator: 100 };
+export const PROBE_DELAY_MS = { production: 2000, emulator: 100 };
 const REST_PARTS = ['rest', 'rules'];   // the plain-HTTP suites: their profiles abort the run at their deadline
 /** The process backstop: above the suite's run deadline plus the bounded cleanup (small: 12 min as before). */
 export const backstopMs = suite => (Object.hasOwn(SUITES, suite) ? SUITES[suite].runMs : SUITES.small.runMs) + 2 * 60 * 1000;

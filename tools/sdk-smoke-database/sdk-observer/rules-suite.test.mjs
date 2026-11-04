@@ -73,7 +73,7 @@ test('one round is 79 requests with one probe per install (77 cases + the start 
   const perRun = RULES_PROFILES.length * perRound + 6;
   assert.equal(perRun, 164);
   assert.equal(Math.ceil(Math.ceil(1.25 * perRun) / 10) * 10, 210);
-  assert.equal(MAX_PROBES, 8);
+  assert.equal(MAX_PROBES, 20);   // the coordinator's ruling: 20 probes, 2 s apart (a slow Rules propagation must not end the run incomplete)
 });
 
 // ---- the Rules ----
@@ -159,12 +159,12 @@ test('runner: an accepted load document (200) is followed by the global reinstal
   const installs = emitted.filter(r => r.kind === 'install').map(r => r.after);
   assert.deepEqual(installs, ['load-ident']);
 });
-test('runner: the ready probe is repeated (with the delay) until 200, at most 8 times; never ready stops the profile', async () => {
+test('runner: the ready probe is repeated (with the delay) until 200, at most 20 times; never ready stops the profile', async () => {
   let n = 0; const sleeps = [];
   const f = fakeSend(label => (label.startsWith('ready-start-') ? (++n < 3 ? { status: 401, text: '{\n  "error" : "Permission denied"\n}\n' } : null) : null));
   const rows = await runner(f, { sleep: async ms => { sleeps.push(ms); } });   // the default delay is the production one
   assert.deepEqual(f.sent.slice(0, 3).map(s => s.label), ['ready-start-1', 'ready-start-2', 'ready-start-3']);
-  assert.deepEqual(sleeps.slice(0, 2), [1500, 1500]);
+  assert.deepEqual(sleeps.slice(0, 2), [2000, 2000]);
   assert.equal(rows.length, RULES_CASES.length);
   const never = fakeSend(label => (label.startsWith('ready-') ? { status: 401, text: 'x' } : null)), emitted = [];
   const stopped = await runner(never, { emit: r => emitted.push(r) });

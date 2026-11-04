@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { RULES_AREA, RULES_CASES, RULES_PROFILES, TABLE, globalRules } from './rules-suite.mjs';
 import { checkApproval, scriptManifest, sha256 } from './lib.mjs';
 import { PROBE_DELAY_MS, SUITES, backstopMs, expectedObservations, run } from './observer.mjs';
+import { MAX_PROBES } from './rules-suite.mjs';
 import { READBACK_SUITES, readback } from './readback.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -72,7 +73,7 @@ test('run --suite rules: a ready probe that is not yet in effect is repeated wit
     const started = Date.now();
     const { exit, result } = await run({ target: local(db.host), runId: 'TEST-RULES-02', prefix: PREFIX, directCap: 210, outDir: path.join(out, 'run'), suite: 'rules', probeDelayMs: 1 });
     assert.equal(exit, 0, JSON.stringify(result)); assert.equal(result.counts.direct, 164);
-    assert.ok(Date.now() - started < 1400, `the 1 ms probe delay of the run is used, not the 1.5 s default (${Date.now() - started} ms)`);
+    assert.ok(Date.now() - started < 1400, `the 1 ms probe delay of the run is used, not the 2 s default (${Date.now() - started} ms)`);
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
 test('run --suite rules: a profile abandoned at its deadline aborts the run: unverified, exit 3, nothing of r2 sent', async () => {
@@ -102,11 +103,15 @@ test('rulesProfile is wired to the profile cancellation: a cancelled context sen
   assert.equal((await rulesProfile(live)).length, 2, 'the start probe and two cases, then nothing');
   assert.equal(n, 3);
 });
-test('the rules suite deadlines: 180 s per profile, 7 minutes per run, the backstop 9 minutes; observations 140; probe delay 1.5 s in production', () => {
-  assert.deepEqual([SUITES.rules.profileMs, SUITES.rules.runMs, backstopMs('rules')], [180000, 420000, 540000]);
+test('the rules suite deadlines: 300 s per profile, 12 minutes per run, the backstop 14 minutes; observations 140; probe delay 2 s in production', () => {
+  assert.deepEqual([SUITES.rules.profileMs, SUITES.rules.runMs, backstopMs('rules')], [300000, 720000, 840000]);
   assert.equal(SUITES.rules.capMax, 250); assert.equal(SUITES.rules.basis, '2217');
   assert.equal(expectedObservations('rules'), 2 * RULES_CASES.length);
-  assert.deepEqual(PROBE_DELAY_MS, { production: 1500, emulator: 100 });
+  assert.deepEqual(PROBE_DELAY_MS, { production: 2000, emulator: 100 });
+  // the worst case the deadlines must cover: every one of the 5 installs of a profile uses all 20 probes (19 delays of 2 s)
+  const worstProbes = 5 * (MAX_PROBES - 1) * PROBE_DELAY_MS.production;
+  assert.ok(worstProbes + 60000 <= SUITES.rules.profileMs, `worst-case probing ${worstProbes} ms plus 60 s of requests fits one profile deadline`);
+  assert.ok(2 * SUITES.rules.profileMs + 60000 <= SUITES.rules.runMs, 'two profile deadlines plus the preflight fit the run deadline');
 });
 test('approval: the rules suite needs suite=rules and basis=2217', () => {
   const line = over => `- 2026-11-05 | RTDB-SMALL-OBSERVER RTDB-RULES-20261105-01 | ${Object.entries({ decision: 'APPROVE', scriptSha256: 'a'.repeat(64), directCap: '210', adc: '1', prefix: '/sdkrules20261105', suite: 'rules', basis: '2217', ...over }).map(([k, v]) => `${k}=${v}`).join('; ')} | coordinator | r.md\n`;
@@ -143,7 +148,7 @@ test('command line: --suite rules takes a cap of 20..250 and is in the usage', (
 });
 
 // ---- production: the anonymous requests carry neither the token nor the user project; the token never reaches the journal ----
-test('production run --suite rules: anonymous requests carry no credential header, the others the ADC token; probes 1.5 s apart by default; token not journalled', async () => {
+test('production run --suite rules: anonymous requests carry no credential header, the others the ADC token; probes 2 s apart by default; token not journalled', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'rules-prod-')), SCRIPT = scriptManifest(HERE).sha256, RUN = 'RULES-PROD-01', P = '/sdkrules20261105', TOKEN = `ya29.${'t'.repeat(40)}`;
   const paths = { owner: path.join(dir, 'owner.md'), lease: path.join(dir, 'lease'), recording: path.join(dir, 'RECORDING') }, state = { rules: BASELINE, first: null }, seen = [];
   writeFileSync(paths.owner, `- 2026-11-05 | RTDB-SMALL-OBSERVER ${RUN} | decision=APPROVE; scriptSha256=${SCRIPT}; directCap=210; adc=1; prefix=${P}; suite=rules; basis=2217 | coordinator | r.md\n`);

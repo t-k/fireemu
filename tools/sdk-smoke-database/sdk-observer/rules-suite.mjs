@@ -28,7 +28,7 @@ export const RULES_AREA = 'sdk-rules';
 export const IDENTITIES = ['admin', 'anonymous', 'override'];
 export const GROUPS = ['seed', 'token', 'index', 'grammar', 'query', 'concat', 'conditional', 'neighbour', 'load'];
 export const OVERRIDE_PARAM = 'auth_variable_override';
-export const MAX_PROBES = 8;
+export const MAX_PROBES = 20;
 /** Request headers a case may set; they are recorded on the case row. */
 export const RECORDED_REQUEST_HEADERS = ['x-firebase-etag', 'if-match'];
 
@@ -206,7 +206,7 @@ const SCOPE_RE = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/[A-Za-z0-9_-]+$/;
  * the observer installed it. Returns the case rows (and a final failure row when the profile stopped on its probe or
  * reinstall); probe and install rows go to `emit` only.
  */
-export async function runRulesProfile({ send, url, scope, installBody, emit = () => {}, cases = RULES_CASES, cancelled = () => false, sleep = ms => new Promise(r => setTimeout(r, ms)), probeDelayMs = 1500, maxProbes = MAX_PROBES }) {
+export async function runRulesProfile({ send, url, scope, installBody, emit = () => {}, cases = RULES_CASES, cancelled = () => false, sleep = ms => new Promise(r => setTimeout(r, ms)), probeDelayMs = 2000, maxProbes = MAX_PROBES }) {
   if (typeof scope !== 'string' || !SCOPE_RE.test(scope)) throw Error('Invalid rules scope');
   if (typeof installBody !== 'string' || installBody.length === 0) throw Error('Invalid install body');
   const rows = [], seen = { etag: null }, mask = text => maskText(text, { scope, pushIds: [] });

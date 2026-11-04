@@ -70,20 +70,30 @@ const BODY_MAX = 65536;
 // UTF-8 validity and the allowlisted response headers, on the admin-res row and in the return value.
 // `anonymous` (the rules suite's case requests only, with `record`): the request carries none of the credential headers
 // (no Authorization, no x-goog-user-project), as an unauthenticated client sends it; the admin-req row says so.
-export function createAdmin({ headers, journal, counter, fetchImpl = fetch, timeoutMs = 10000 }) {
+// `bearer` (the tokens suite only, with `anonymous`): the request carries `Authorization: Bearer <bearer>` and nothing
+// else of the credential; the admin-req row keeps only the token's sha256. `resolveAdc` (the tokens suite only, with
+// `anonymous`): the URL carries the placeholder {adc} exactly once, replaced by the ADC token (`adc`) in the URL that is
+// fetched only; the journal keeps the placeholder, and the token is masked as {adc} in the answer's text and headers.
+export const ADC_PLACEHOLDER = '{adc}';
+export function createAdmin({ headers, journal, counter, fetchImpl = fetch, timeoutMs = 10000, adc }) {
   const unknownMutations = [];   // survives promise settlement: the server may still apply such a request later
   return {
     unknownMutations,
-    async rest(label, method, url, { body, cleanup = false, headers: extra, record = false, anonymous = false } = {}) {
+    async rest(label, method, url, { body, cleanup = false, headers: extra, record = false, anonymous = false, bearer, resolveAdc = false } = {}) {
       if (extra !== undefined && !record) throw new Error('extra request headers need record');
       if (anonymous && (!record || cleanup)) throw new Error('anonymous needs record');
+      if ((bearer !== undefined || resolveAdc) && !(record && anonymous)) throw new Error('a token credential needs record and anonymous');
+      if (bearer !== undefined && (typeof bearer !== 'string' || bearer.length > 8192 || !/^[\x20-\x7e]*$/.test(bearer))) throw new Error('bearer token shape');
+      if (String(url).split(ADC_PLACEHOLDER).length !== (resolveAdc ? 2 : 1)) throw new Error('resolveAdc needs exactly one {adc} placeholder, and only resolveAdc may carry one');
+      if (resolveAdc && (typeof adc !== 'string' || adc.length === 0)) throw new Error('resolveAdc: no ADC value');
       for (const name of Object.keys(extra ?? {})) if (!EXTRA_REQUEST_HEADERS.includes(name) || typeof extra[name] !== 'string') throw new Error(`request header ${name} is not recorded`);   // before the counter: nothing is sent
       counter.take(label, cleanup ? 'reserve' : 'direct');
       const note = row => { try { journal.write(row); } catch (error) { if (!cleanup && row.kind === 'admin-req') throw error; } };   // a cleanup request never depends on the journal; nothing else is sent when the journal is down
-      note({ kind: 'admin-req', label, method, url, body: body === undefined ? null : clip(body), ...(record ? { headers: { ...(extra ?? {}) } } : {}), ...(anonymous ? { anonymous: true } : {}) });
+      note({ kind: 'admin-req', label, method, url, body: body === undefined ? null : clip(body), ...(record ? { headers: { ...(extra ?? {}) } } : {}), ...(anonymous ? { anonymous: true } : {}), ...(bearer !== undefined ? { bearerSha256: sha256(bearer) } : {}), ...(resolveAdc ? { resolveAdc: true } : {}) });
+      const hide = resolveAdc ? t => (typeof t === 'string' ? t.split(adc).join(ADC_PLACEHOLDER).split(encodeURIComponent(adc)).join(ADC_PLACEHOLDER) : t) : t => t;
       let res, text, bytes;
       try {
-        res = await fetchImpl(url, { method, redirect: 'manual', headers: { ...(anonymous ? {} : headers), ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extra ?? {}) }, body, signal: AbortSignal.timeout(timeoutMs) });
+        res = await fetchImpl(resolveAdc ? url.replace(ADC_PLACEHOLDER, encodeURIComponent(adc)) : url, { method, redirect: 'manual', headers: { ...(anonymous ? {} : headers), ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extra ?? {}), ...(bearer !== undefined ? { authorization: `Bearer ${bearer}` } : {}) }, body, signal: AbortSignal.timeout(timeoutMs) });
         if (record) bytes = Buffer.from(await res.arrayBuffer()); else text = clip(await res.text());
       } catch (error) { note({ kind: 'admin-unknown', label, error: String(error?.name) }); if (method !== 'GET') unknownMutations.push(label); throw new Unknown(`${label}: unknown outcome`); }
       if (!record) { note({ kind: 'admin-res', label, status: res.status, body: text }); return { status: res.status, text }; }
@@ -91,8 +101,8 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
       try { decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { /* not UTF-8: recorded as such */ }
       if (decoded === null && method !== 'GET') unknownMutations.push(label);   // an answer to a mutation that cannot be read is no answer: the outcome is unknown (Codex review of packet 2)
       const clipped = decoded !== null && decoded.length > BODY_MAX, answer = {
-        status: res.status, text: decoded === null ? null : decoded.slice(0, BODY_MAX),
-        headers: Object.fromEntries(RECORDED_RESPONSE_HEADERS.flatMap(name => (res.headers.get(name) === null ? [] : [[name, res.headers.get(name)]]))),
+        status: res.status, text: decoded === null ? null : hide(decoded.slice(0, BODY_MAX)),
+        headers: Object.fromEntries(RECORDED_RESPONSE_HEADERS.flatMap(name => (res.headers.get(name) === null ? [] : [[name, hide(res.headers.get(name))]]))),
         bodyBytes: bytes.length, utf8: decoded !== null, clipped,
       };
       note({ kind: 'admin-res', label, status: answer.status, body: answer.text, headers: answer.headers, bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped });
@@ -102,7 +112,7 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
 }
 
 // `- <date> | RTDB-SMALL-OBSERVER <runId> | decision=APPROVE; scriptSha256=..; directCap=..; adc=1; prefix=..; basis=2196 | coordinator | <source>`: exactly one such line, every field equal.
-// The events, admin, rest and rules suites (packets 1 to 3 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin|rest|rules>` and carry basis=2217.
+// The events, admin, rest, rules and tokens suites (packets 1 to 3 and 5 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin|rest|rules|tokens>` and carry basis=2217.
 export function checkApproval(ledgerText, want) {
   if (ledgerText.split('\n').some(l => /^REVOKED\b/.test(l.split(' | ')[1] ?? '') && l.includes(want.runId))) throw new Error(`approval revoked: a REVOKED line names ${want.runId}`);   // a consumed or withdrawn line never approves again
   const lines = ledgerText.split('\n').filter(l => l.includes(`| RTDB-SMALL-OBSERVER ${want.runId} |`));
@@ -113,7 +123,7 @@ export function checkApproval(ledgerText, want) {
   if (new Set(pairs.map(([k]) => k)).size !== pairs.length) throw new Error('approval fields repeated');   // a repeated field would be silently collapsed: "decision=REVOKED; decision=APPROVE" must not pass
   const fields = Object.fromEntries(pairs);
   const suite = want.suite ?? 'small';
-  if (!['small', 'events', 'admin', 'events+admin', 'rest', 'rules'].includes(suite)) throw new Error('approval suite');
+  if (!['small', 'events', 'admin', 'events+admin', 'rest', 'rules', 'tokens'].includes(suite)) throw new Error('approval suite');
   const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: '2217' }) };
   if (Object.keys(fields).sort().join() !== Object.keys(expected).sort().join() || Object.entries(expected).some(([k, v]) => fields[k] !== v)) throw new Error('approval fields differ');
 }

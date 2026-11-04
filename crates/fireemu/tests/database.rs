@@ -1621,3 +1621,137 @@ fn forged_signed_tokens_follow_the_tenant_route_of_unsigned_tokens() {
         assert!(reads.iter().all(|r| *r == reads[0]), "{state}: {reads:?}");
     }
 }
+
+/// A daemon serving the database (and Auth) of `PROJECT` with `config`, and rules that let a user
+/// read their own node.
+fn guard_daemon(dir: &Scratch, name: &str, config: &str) -> Daemon {
+    let firebase_json = dir.join(format!("{name}.firebase.json"));
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[{"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}}}}"#,
+    )
+    .unwrap();
+    let config_path = dir.join(format!("{name}.json"));
+    std::fs::write(&config_path, config).unwrap();
+    Daemon::start(&[
+        "--firebase-json",
+        firebase_json.to_str().unwrap(),
+        "--config",
+        config_path.to_str().unwrap(),
+        "--only",
+        "database,auth",
+        "--database-port",
+        "0",
+    ])
+}
+
+/// What a token is on a daemon: the status of the read of `/users/u1` (a user's own node) and the
+/// status of a WebSocket `auth` message.
+fn token_on(daemon: &Daemon, token: &str) -> (u16, String) {
+    let ns = "demo-rtdb-default-rtdb";
+    let port = daemon.database_port();
+    let read = request(
+        port,
+        "GET",
+        &format!("/users/u1.json?ns={ns}&auth={token}"),
+        &[],
+        "",
+    )
+    .0;
+    (read, websocket_auth(port, ns, token))
+}
+
+/// The fallback that reads a signed token's claims unverified (G10 rows auth-rs256 and
+/// auth-hs256) is guarded by two conditions of its own: unsigned tokens are admitted, and no
+/// session signer is installed. Each is pinned here on the emulator profile, where strict does not
+/// block the fallback by itself. HS256 is the sensitive case of the signer condition (an RS256
+/// token is refused earlier by a signer's key check).
+#[test]
+fn the_unverified_claims_of_a_signed_token_need_unsigned_admission_and_no_signer() {
+    let dir = Scratch::new("database", "fallback-guards");
+    let claims = format!(r#"{{"aud":"{PROJECT}","sub":"u1","iat":1,"exp":9999999999}}"#);
+    let tokens = [
+        ("RS256", jwt("RS256", "c2ln", &claims)),
+        ("HS256", jwt("HS256", "c2ln", &claims)),
+    ];
+    // The control: the default emulator profile admits both.
+    let control = guard_daemon(
+        &dir,
+        "control",
+        r#"{"schemaVersion":1,"profile":"emulator"}"#,
+    );
+    for (alg, token) in &tokens {
+        assert_eq!(
+            token_on(&control, token),
+            (200, "ok".to_owned()),
+            "control {alg}"
+        );
+    }
+    drop(control);
+    // (a) Unsigned tokens are not admitted: the emulator profile admits no forged token either.
+    let refused = guard_daemon(
+        &dir,
+        "no-unsigned",
+        r#"{"schemaVersion":1,"profile":"emulator","auth":{"allowUnsignedIdTokens":false}}"#,
+    );
+    for (alg, token) in &tokens {
+        assert_eq!(
+            token_on(&refused, token),
+            (401, "invalid_token".to_owned()),
+            "unsigned admission off {alg}"
+        );
+    }
+    drop(refused);
+    // (b) A session signer is installed: a token with another algorithm is not a user.
+    let signing = guard_daemon(
+        &dir,
+        "signer",
+        r#"{"schemaVersion":1,"profile":"emulator","auth":{"idTokenSigning":"session-rsa","allowUnsignedIdTokens":true}}"#,
+    );
+    for (alg, token) in &tokens {
+        assert_eq!(
+            token_on(&signing, token),
+            (401, "invalid_token".to_owned()),
+            "session signer {alg}"
+        );
+    }
+}
+
+/// The claims of a forged token go through the parser, and its depth budget, that an unsigned
+/// token's claims go through: the same nesting is a user for both or for neither, over REST and a
+/// WebSocket `auth` message.
+#[test]
+fn forged_and_unsigned_claims_share_the_depth_budget() {
+    let dir = Scratch::new("database", "claims-depth");
+    let daemon = guard_daemon(&dir, "depth", r#"{"schemaVersion":1,"profile":"emulator"}"#);
+    let nested = |depth: usize| {
+        format!(
+            r#"{{"aud":"{PROJECT}","sub":"u1","iat":1,"exp":9999999999,"x":{}0{}}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        )
+    };
+    for (depth, expected) in [
+        (1, (200, "ok")),
+        (60, (200, "ok")),
+        (65, (401, "invalid_token")),
+        (200, (401, "invalid_token")),
+    ] {
+        for (kind, token) in [
+            ("unsigned", jwt("none", "", &nested(depth))),
+            ("RS256", jwt("RS256", "c2ln", &nested(depth))),
+            ("HS256", jwt("HS256", "c2ln", &nested(depth))),
+        ] {
+            assert_eq!(
+                token_on(&daemon, &token),
+                (expected.0, expected.1.to_owned()),
+                "{kind} nested {depth}"
+            );
+        }
+    }
+}

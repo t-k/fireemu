@@ -754,3 +754,32 @@ test("a deploy write that could not be journaled keeps the function unconfirmed 
     [["function", "cli-write-unjournaled"]],
   );
 });
+
+test("signed query parameters are redacted wherever they stand, in any case, and the replacement says so", () => {
+  for (const line of [
+    "[t] >>> [apiv2][query] PUT https://storage.googleapis.com/b/o.zip X-Goog-Signature=abc123&X-Goog-Credential=cred&Expires=5",
+    "[t] >>> [apiv2][query] PUT https://storage.googleapis.com/b/o.zip googleaccessid=svc%40x&expires=5&signature=abc123",
+  ]) {
+    const out = redactCliText(line);
+    assert.ok(!/abc123|cred|svc/.test(out), out);
+    assert.ok(out.includes("[REDACTED SIGNATURE]"), out);
+    assert.ok(/xpires=5/.test(out), "the parameters that are not signatures stay: " + out);
+  }
+});
+
+test("a project IAM read that fails after the cleanup leaves the inventory incomplete and the run open", async () => {
+  const { result } = await go(
+    {},
+    (send, w) => async (request) =>
+      w.cliRuns.includes("delete") &&
+      request.method === "POST" &&
+      request.url.endsWith(":getIamPolicy") &&
+      request.url.includes("cloudresourcemanager")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.inventory.complete, false);
+  assert.equal(result.inventory.iam.complete, false);
+  assert.equal(result.closureReady, false);
+  assert.equal(result.cleanup.verified, false);
+});

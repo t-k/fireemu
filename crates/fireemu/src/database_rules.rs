@@ -245,6 +245,60 @@ mod tests {
     use super::*;
     use fireemu_adapter_database::rest::{Handled, HttpRequest, RestOptions};
 
+    /// The recorded shape of an unverifiable signed token (G10 rows auth-rs256, auth-hs256), and
+    /// each edge of it: the claims are read only with a non-empty signature, an `exp` strictly
+    /// after now, and an `aud` equal to the project.
+    #[test]
+    fn an_unverifiable_signed_token_is_read_only_in_the_recorded_shape() {
+        use fireemu_core_auth::jwt::base64url_encode;
+        let token = |claims: &str, signature: &str| {
+            format!(
+                "{}.{}.{signature}",
+                base64url_encode(br#"{"alg":"RS256"}"#),
+                base64url_encode(claims.as_bytes())
+            )
+        };
+        let own = r#"{"aud":"p","sub":"u","iat":1,"exp":100}"#;
+        let now = 99_999;
+        assert_eq!(
+            unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", now).as_deref(),
+            Some(own)
+        );
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "HS256", "p", now).is_some());
+        // exp is strictly in the future: now = exp * 1000 is expired.
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", 100_000).is_none());
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", 100_001).is_none());
+        assert!(unverified_signed_claims(&token(own, ""), "RS256", "p", now).is_none());
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "q", now).is_none());
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "ES256", "p", now).is_none());
+        assert!(unverified_signed_claims(&token(own, "c2ln"), "none", "p", now).is_none());
+        assert!(unverified_signed_claims(
+            &token(r#"{"aud":"p","sub":"u","iat":1}"#, "c2ln"),
+            "RS256",
+            "p",
+            now
+        )
+        .is_none());
+        assert!(unverified_signed_claims(
+            &token(r#"{"aud":7,"exp":100}"#, "c2ln"),
+            "RS256",
+            "p",
+            now
+        )
+        .is_none());
+        assert!(unverified_signed_claims(&token("[1]", "c2ln"), "RS256", "p", now).is_none());
+        assert!(unverified_signed_claims("a.b", "RS256", "p", now).is_none());
+        assert!(unverified_signed_claims("a.b.c.d", "RS256", "p", now).is_none());
+        // exp * 1000 must not overflow.
+        assert!(unverified_signed_claims(
+            &token(r#"{"aud":"p","exp":9223372036854775807}"#, "c2ln"),
+            "RS256",
+            "p",
+            now
+        )
+        .is_none());
+    }
+
     fn read(database: &Mutex<Database>, ns: &str) -> u16 {
         let request = HttpRequest {
             method: "GET".to_owned(),

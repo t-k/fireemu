@@ -40,6 +40,7 @@ fn read_rule_at_t(expr: &str) -> RuleSpec {
     t.read = Some(RuleSource::Expr(SourceExpr {
         text: expr.to_owned(),
         positions,
+        second_units: Vec::new(),
     }));
     let mut root = RuleSpec::default();
     root.children.insert("t".to_owned(), t);
@@ -166,7 +167,9 @@ fn every_recorded_pattern_decides_as_the_official_emulator_or_denies() {
     }
     // Refused at load here: a lone escaped surrogate, which has no counterpart in this text
     // (review r5 S13), where the official emulator loads it; and rules both refuse, with
-    // another text or place (a character that is no white space, an unterminated comment).
+    // another place (an expression that spans a line break, an unterminated comment). The
+    // illegal characters, escaped names and Rhino's error texts and places agree since the
+    // rules-load fix of 2026-11-04 and are in the agreeing rows.
     let (refused, corpus): (Vec<serde_json::Value>, Vec<serde_json::Value>) =
         corpus.into_iter().partition(marked("refuses"));
     assert!(refused.len() >= 8);
@@ -314,6 +317,7 @@ fn expr(text: &str) -> RuleSource {
     RuleSource::Expr(SourceExpr {
         text: text.to_owned(),
         positions: (0..=text.chars().count()).map(|i| (1, i + 1)).collect(),
+        second_units: Vec::new(),
     })
 }
 
@@ -447,6 +451,7 @@ fn every_recorded_write_and_expression_error_matches_the_official_emulator() {
                     .map(|i| (1, 20 + i))
                     .collect(),
                 text: expr_text.clone(),
+                second_units: Vec::new(),
             }));
             let got = Rules::compile(&root).map_err(|e| e.to_string());
             let expected = entry["error"]

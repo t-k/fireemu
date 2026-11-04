@@ -205,6 +205,79 @@ fn rules_put_reports_independent_errors_in_input_order_and_preserves_rules() {
     );
 }
 
+/// The two Rules-document answers of production run RTDB-RULES-20261104-01 (case
+/// load-token, 44 bytes, and load-validate-write, 55 bytes) that fireemu answered differently
+/// in both profiles, and the recorded two-path answer that must keep both lines (81 bytes).
+#[test]
+fn rules_put_answers_the_recorded_production_load_bytes() {
+    for (rules, body) in [
+        (
+            r#"{"rules":{".read":"auth # null"}}"#,
+            "{\n  \"error\" : \"1:26: illegal character\\n\"\n}\n",
+        ),
+        (
+            r#"{"rules":{"a":{".validate":"1 +",".write":"baz"}}}"#,
+            "{\n  \"error\" : \"1:32: Unexpected end of expression\\n\"\n}\n",
+        ),
+        (
+            r#"{"rules":{"a":{".read":"foo"},"b":{".write":"bar"}}}"#,
+            "{\n  \"error\" : \"1:25: Unknown variable 'foo'.\\n1:46: Unknown variable 'bar'.\\n\"\n}\n",
+        ),
+    ] {
+        let mut database = db();
+        let (status, answer) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+        assert_eq!((status, answer.as_str()), (400, body), "{rules}");
+    }
+}
+
+/// Every Rules document of the local probe of firebase-database-emulator v4.11.2 (illegal
+/// characters at every position and expression kind, which errors are reported together and in
+/// which order, index names, duplicates) is answered byte for byte as the jar answered it, in
+/// both profiles (production agrees on the recorded rows above).
+#[test]
+fn rules_put_answers_every_probed_document_as_the_official_emulator() {
+    const ROWS: &[(&str, &str, u16, &str)] = include!("fixtures/rules-load-official.rs");
+    // Shapes fireemu still answers otherwise, none recorded in production: `new` and function
+    // literals (which fireemu does not read as JavaScript does), the E4X operators `..` and
+    // `::`, and Jackson's upper-case `\u001F` escape in an error text.
+    const OPEN: [&str; 5] = [
+        "i:new auth",
+        "i:function(){}",
+        "i:auth..x",
+        "i:auth::x",
+        "h-index:\"\\u001f\"",
+    ];
+    for case in OPEN {
+        assert!(
+            ROWS.iter().any(|row| row.0 == case),
+            "{case} is a probed row"
+        );
+    }
+    let mut wrong = Vec::new();
+    for strict in [false, true] {
+        for &(case, rules, status, body) in ROWS.iter().filter(|row| !OPEN.contains(&row.0)) {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let answer = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+            if answer != (status, body.to_owned()) {
+                wrong.push(format!(
+                    "strict={strict} {case}: {answer:?}, the jar {:?}",
+                    (status, body)
+                ));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} rows differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
 fn db() -> Database {
     Database::new(RestOptions::default(), 7)
 }

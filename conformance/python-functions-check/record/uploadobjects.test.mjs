@@ -675,6 +675,34 @@ test("exactly three receipts are not too many", async () => {
   assert.ok(!result.cleanup.uploadReasons.includes("too-many-receipts"));
 });
 
+test("a held receipt repeated after three are held is not a fourth", async () => {
+  const { result } = await withEvents((w) => [
+    receipt(w.upload),
+    put(w.upload),
+    receipt("aaa.zip"),
+    receipt("bbb.zip"),
+    receipt(w.upload),
+    receipt("aaa.zip"),
+  ]);
+  assert.deepEqual(result.cleanup.uploadReasons, [
+    "receipt-unconfirmed:aaa.zip",
+    "receipt-unconfirmed:bbb.zip",
+  ]);
+});
+
+test("the delete's generation is one to twenty digits in the allowlist", () => {
+  const g = createGuard(RUN, NUMBER);
+  g.adoptObject(UPLOADS, "a.zip");
+  const del = (generation) => ({
+    method: "DELETE",
+    url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/a.zip?ifGenerationMatch=${generation}`,
+  });
+  assert.equal(g.allow(del("1")), true);
+  assert.equal(g.allow(del("1".repeat(20))), true);
+  assert.equal(g.allow(del("1".repeat(21))), false);
+  assert.equal(g.allow(del("")), false);
+});
+
 test("the status of an upload to another bucket is not this object's status", async () => {
   const { result } = await withEvents((w) => [
     receipt(w.upload),

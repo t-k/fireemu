@@ -40,6 +40,47 @@ pub struct SourceExpr {
     /// The line and column (both from 1) of each character of `text` in the rules file,
     /// and one more entry for the position just after it.
     pub positions: Vec<(usize, usize)>,
+    /// For a character outside the Basic Multilingual Plane written as a pair of `\u`
+    /// escapes, its index in `text` and the place of its second escape; any other such
+    /// character has its second UTF-16 unit one column after its first.
+    pub second_units: Vec<(usize, (usize, usize))>,
+}
+
+impl SourceExpr {
+    /// The place of `error` in the rules file.
+    fn locate(&self, error: ExprError) -> RulesError {
+        let (line, column) = self
+            .positions
+            .get(error.at)
+            .or(self.positions.last())
+            .copied()
+            .unwrap_or((1, 1));
+        let (line, column) = if error.second_unit {
+            self.second_units
+                .iter()
+                .find(|(at, _)| *at == error.at)
+                .map_or((line, column + 1), |(_, place)| *place)
+        } else {
+            (line, column)
+        };
+        RulesError {
+            line,
+            column,
+            message: error.message,
+        }
+    }
+
+    /// Reads the expression as the official emulator does when it reads the rules file, without
+    /// checking what its names and values are: the syntax error it reports there, if any.
+    ///
+    /// # Errors
+    ///
+    /// The syntax error, where the rules file places it.
+    pub fn check_syntax(&self) -> Result<(), RulesError> {
+        parse::parse_with_diagnostics(&self.text)
+            .map(|_| ())
+            .map_err(|error| self.locate(error))
+    }
 }
 
 /// A rule: a boolean, or an expression.
@@ -128,16 +169,13 @@ impl Rules {
                 .stack_size(COMPILE_STACK_BYTES)
                 .spawn_scoped(scope, || {
                     let mut diagnostics = Vec::new();
-                    let mut checked = 0;
-                    let mut visited = 0;
+                    let mut counts = DiagnosticCounts::default();
                     let truncated = collect_diagnostics(
                         spec,
                         &mut BTreeSet::new(),
                         &mut diagnostics,
-                        &mut checked,
-                        &mut visited,
+                        &mut counts,
                     );
-                    diagnostics.sort_by_key(|error| (error.line, error.column));
                     (diagnostics, truncated)
                 })
                 .map_err(|error| RulesError {
@@ -471,24 +509,13 @@ fn compile_rule(
             Some(&RuleSource::Expr(SourceExpr {
                 text: b.to_string(),
                 positions: vec![(1, 1)],
+                second_units: Vec::new(),
             })),
             kind,
             wildcards,
         ),
         RuleSource::Expr(source) | RuleSource::LocatedExpr(source, _) => {
-            let located = |error: ExprError| {
-                let (line, column) = source
-                    .positions
-                    .get(error.at)
-                    .or(source.positions.last())
-                    .copied()
-                    .unwrap_or((1, 1));
-                RulesError {
-                    line,
-                    column,
-                    message: error.message,
-                }
-            };
+            let located = |error: ExprError| source.locate(error);
             let (mut expr, templates) =
                 parse::parse_with_diagnostics(&source.text).map_err(located)?;
             check::check(&mut expr, kind, wildcards).map_err(located)?;
@@ -522,46 +549,74 @@ fn compile_node(spec: &RuleSpec, wildcards: &BTreeSet<String>) -> Result<RuleNod
     Ok(node)
 }
 
+/// How much of a rules tree the diagnostics have covered, against their bounds.
+#[derive(Default)]
+struct DiagnosticCounts {
+    /// Expressions checked.
+    checked: usize,
+    /// Levels visited.
+    visited: usize,
+    /// Errors found.
+    found: usize,
+}
+
+/// Collects the errors of every expression below `spec` into `errors`, in the official
+/// emulator's order: a level's `.read`, `.write` and `.validate`, then its named children in
+/// the order the file gives them, then its wildcard child. Answers whether a bound stopped it.
 fn collect_diagnostics(
     spec: &RuleSpec,
     wildcards: &mut BTreeSet<String>,
     errors: &mut Vec<RulesError>,
-    checked: &mut usize,
-    visited: &mut usize,
+    counts: &mut DiagnosticCounts,
 ) -> bool {
     const MAX_EXPRESSIONS: usize = 4096;
     const MAX_ERRORS: usize = 64;
     const MAX_NODES: usize = 4096;
-    if *visited == MAX_NODES {
+    if counts.visited == MAX_NODES {
         return true;
     }
-    *visited += 1;
+    counts.visited += 1;
     for (source, kind) in [
         (&spec.read, RuleKind::Read),
         (&spec.write, RuleKind::Write),
         (&spec.validate, RuleKind::Validate),
     ] {
         if source.is_some() {
-            if *checked == MAX_EXPRESSIONS || errors.len() == MAX_ERRORS {
+            if counts.checked == MAX_EXPRESSIONS || counts.found == MAX_ERRORS {
                 return true;
             }
-            *checked += 1;
+            counts.checked += 1;
             if let Err(error) = compile_rule(source.as_ref(), kind, wildcards) {
                 errors.push(error);
+                counts.found += 1;
             }
         }
     }
+    // The tree keeps its children by key; a child's errors all lie within its own text, so
+    // any of them places it among its siblings in the file.
+    let mut named: Vec<Vec<RulesError>> = Vec::new();
+    let mut wildcard = Vec::new();
+    let mut truncated = false;
     for (key, child) in &spec.children {
         let inserted = key.starts_with('$') && wildcards.insert(key.clone());
-        let truncated = collect_diagnostics(child, wildcards, errors, checked, visited);
+        let mut found = Vec::new();
+        truncated = collect_diagnostics(child, wildcards, &mut found, counts);
         if inserted {
             wildcards.remove(key);
         }
+        if key.starts_with('$') {
+            wildcard = found;
+        } else if !found.is_empty() {
+            named.push(found);
+        }
         if truncated {
-            return true;
+            break;
         }
     }
-    false
+    named.sort_by_key(|found| found.first().map(|error| (error.line, error.column)));
+    errors.extend(named.into_iter().flatten());
+    errors.extend(wildcard);
+    truncated
 }
 
 #[cfg(test)]

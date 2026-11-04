@@ -1004,12 +1004,15 @@ test("a cleanup step that fails is recorded with its name and the others still r
 
 test("a 401 during the cleanup stops it and the CLI delete is not run a second time", async () => {
   let cleanupStarted = false;
+  let lists = 0;
   const { result, world } = await go({}, {}, (send) => async (request) => {
     if (request.method === "DELETE" && request.url.includes("/documents/")) cleanupStarted = true;
+    // The first function list of the cleanup belongs to the invoker step, before the CLI delete; the second one comes after it.
     if (
       cleanupStarted &&
       request.url.includes("/locations/-/functions") &&
-      request.method === "GET"
+      request.method === "GET" &&
+      ++lists === 2
     )
       return error(401, "UNAUTHENTICATED");
     return send(request);

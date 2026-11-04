@@ -8,7 +8,7 @@
 // One row per case: id, method, the path with the scope masked as {scope}, the query string, the selected request
 // headers, the request body, the outcome, status, the allowlisted response headers, the body (scope and generated push
 // ids masked; a push id is masked only after its 20-character shape is checked, `pushIdShapeOk`) and its byte length.
-// Outcomes: answered; unknown-status (a complete answer below 200, 3xx or 5xx to a non-GET: the mutation is unknown);
+// Outcomes: answered; unknown-status (a complete answer below 200, 3xx or 5xx to a non-GET: the mutation is unknown); unknown-body (a non-GET answered with a body that is not UTF-8: unknown too);
 // unknown (the request may have left and no answer was read: the profile stops); not-sent (the cap refused it: the
 // profile stops); blocked (a header value it needs was not in an earlier answer: nothing sent).
 import { CapExceeded, RECORDED_RESPONSE_HEADERS } from './lib.mjs';
@@ -166,9 +166,9 @@ export async function runRestProfile({ send, url, scope, emit = () => {}, cases 
     const shapeOk = name !== null && PUSH_ID.test(name);
     if (shapeOk) pushIds.push(name);
     const isPost = spec.method === 'POST' && !spec.headers?.['x-http-method-override'];
-    const unknown = spec.method !== 'GET' && unknownStatus(answer.status);
+    const unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);   // a body that is not UTF-8 cannot be judged: the mutation's outcome is unknown
     done({
-      id, ok: !unknown, outcome: unknown ? 'unknown-status' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
+      id, ok: !unknown, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
       ...(isPost ? { pushIdShapeOk: shapeOk } : {}), ...(unknown ? { unknown: [id] } : {}),
     });
   }

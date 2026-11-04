@@ -79,6 +79,7 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
       if (!record) { note({ kind: 'admin-res', label, status: res.status, body: text }); return { status: res.status, text }; }
       let decoded = null;
       try { decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { /* not UTF-8: recorded as such */ }
+      if (decoded === null && method !== 'GET') unknownMutations.push(label);   // an answer to a mutation that cannot be read is no answer: the outcome is unknown (Codex review of packet 2)
       const clipped = decoded !== null && decoded.length > BODY_MAX, answer = {
         status: res.status, text: decoded === null ? null : decoded.slice(0, BODY_MAX),
         headers: Object.fromEntries(RECORDED_RESPONSE_HEADERS.flatMap(name => (res.headers.get(name) === null ? [] : [[name, res.headers.get(name)]]))),
@@ -98,7 +99,9 @@ export function checkApproval(ledgerText, want) {
   if (lines.length !== 1) throw new Error(`approval lines for ${want.runId}: ${lines.length}`);
   const parts = lines[0].split(' | ');
   if (parts.length !== 5 || parts[1] !== `RTDB-SMALL-OBSERVER ${want.runId}` || parts[3] !== 'coordinator') throw new Error('approval line shape');
-  const fields = Object.fromEntries(parts[2].split('; ').map(f => { const i = f.indexOf('='); return [f.slice(0, i), f.slice(i + 1)]; }));
+  const pairs = parts[2].split('; ').map(f => { const i = f.indexOf('='); return [f.slice(0, i), f.slice(i + 1)]; });
+  if (new Set(pairs.map(([k]) => k)).size !== pairs.length) throw new Error('approval fields repeated');   // a repeated field would be silently collapsed: "decision=REVOKED; decision=APPROVE" must not pass
+  const fields = Object.fromEntries(pairs);
   const suite = want.suite ?? 'small';
   if (!['small', 'events', 'admin', 'events+admin', 'rest'].includes(suite)) throw new Error('approval suite');
   const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: '2217' }) };

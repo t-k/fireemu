@@ -54,6 +54,7 @@ test('judgeCase: the recorded side fails closed: not answered, unknown, 5xx, not
   const p = row(copy(), 'r1-rest', 'print-pretty-put'), id = 'print-pretty-put';
   const recordedBad = [
     r => { r.outcome = 'unknown-status'; r.ok = false; r.unknown = [id]; },
+    r => { r.outcome = 'unknown-body'; r.ok = false; r.unknown = [id]; r.utf8 = false; },
     r => { r.status = 503; },
     r => { r.utf8 = false; },
     r => { r.clipped = true; },

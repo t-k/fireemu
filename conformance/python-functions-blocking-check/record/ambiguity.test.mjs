@@ -106,6 +106,25 @@ test("every kind of ambiguous deploy write keeps the function unconfirmed: retri
   }
 });
 
+test("an ambiguous write of the delete or dry-run action never makes the function an unconfirmed create", async () => {
+  for (const action of ["delete", "dry-run"]) {
+    const { result } = await go(
+      { failDeploy: true },
+      (send) => send,
+      (cli) => async (args) => ({
+        ...(await cli(args)),
+        ...(args.action === action
+          ? { unknownWrites: [{ method: "POST", host: "cloudfunctions", status: 500 }] }
+          : {}),
+      }),
+    );
+    assert.ok(
+      !result.unconfirmedCreates.some((c) => c.label === "function"),
+      `${action}: the function was not created by that action`,
+    );
+  }
+});
+
 test("the shared parser's unknown writes alone make an unknown write, whichever action reported them", async () => {
   const { result } = await go(
     {},
@@ -255,6 +274,10 @@ test("the other reasons that leave an upload unknown are unconfirmed creates too
     assert.ok(
       result.unconfirmedCreates.some((c) => c.label === "upload-object" && c.class === klass),
       label,
+    );
+    assert.ok(
+      result.unconfirmedCreates.every((c) => c.label !== "upload-object" || c.name === null),
+      `${label}: a reason with no object name leaves the name null, not an empty string`,
     );
   }
   const refused = await go({ uploadLines: "refused" });

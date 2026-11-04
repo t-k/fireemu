@@ -261,8 +261,10 @@ test('an SDK mutation that timed out is carried into the result: unverified, exi
 });
 test('an events or admin profile that is abandoned at its deadline may have mutations in flight: unverified, exit 3', async () => {
   const ok = suite => async ctx => caseRows(suite, null);
-  const h = await harnessWith('events+admin', { events: { ws: ok('events'), lp: async () => new Promise(() => {}) }, admin: { admin: ok('admin') } }, { profileMs: 150, closeMs: 100, continueOnFailure: true });
+  const started = [], track = (suite, fn) => async ctx => { started.push(ctx.profile); return fn(ctx); };
+  const h = await harnessWith('events+admin', { events: { ws: track('events', ok('events')), lp: track('events', async () => new Promise(() => {})) }, admin: { admin: track('admin', ok('admin')) } }, { profileMs: 150, closeMs: 100, continueOnFailure: true });
   assert.equal(h.exit, 3); assert.ok(h.result.unverified.some(u => /^SDK mutations possibly in flight: profile r1-lp aborted/.test(u)), JSON.stringify(h.result.unverified));
+  assert.ok(started.includes('r2-ws') && started.includes('r1-admin'), `an abandoned SDK profile does not stop the later profiles: ${started.join()}`);   // only a rest profile aborts the run (its requests are plain HTTP and must not overlap)
 });
 test('a clean run has no unverified entry and keeps exit 0', async () => {
   const h = await harness('events+admin'); assert.equal(h.exit, 0); assert.deepEqual(h.result.unverified, []);

@@ -204,7 +204,7 @@ async function adminProfile(ctx) {
   return runAdminProfile({ db, cfg: { scope: ctx.scope, name: ctx.profile, closeMs: ctx.closeMs }, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
 }
 /** One rest profile: the case table through the run's guarded admin REST (ctx.rest), under the profile scope. */
-const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
+export const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
 const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile } };
 
 // ---- the run -----------------------------------------------------------------------------------------------------------------------------------

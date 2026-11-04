@@ -44,7 +44,7 @@ test('a rest profile that hits its deadline stops sending: no case request after
     const afterCleanup = w.log.slice(cleanup + 1).filter(l => l.includes('/sdk-rest/'));
     assert.deepEqual(afterCleanup, [], 'no case request after the cleanup DELETE');
     const firstR2 = w.log.findIndex(l => l.includes('/r2-rest/'));
-    assert.equal(firstR2 === -1 ? 0 : w.log.slice(firstR2).filter(l => l.includes('/r1-rest/')).length, 0, 'no r1 request after r2 began');
+    assert.equal(firstR2, -1, 'the abandoned r1 aborts the run: r2 never starts');
     assert.equal(existsSync(w.paths.lease), true); assert.equal(existsSync(w.paths.recording), true);
   } finally { w.cleanup(); }
 });
@@ -67,20 +67,22 @@ test('the result file, the journal and the read-back report are written complete
   const { createJournal } = await import('./lib.mjs');
   const dir = mkdtempSync(path.join(tmpdir(), 'short-write-')), file = path.join(dir, 'j.jsonl');
   try {
-    const journal = createJournal(file, { write: (fd, buf, off, len) => { const n = Math.min(5, len); return fsWrite(fd, buf, off, n); } });
+    let calls = 0;
+    const journal = createJournal(file, { write: (fd, buf, off, len) => { calls += 1; const n = Math.min(5, len); return fsWrite(fd, buf, off, n); } });
     for (let i = 0; i < 20; i++) journal.write({ kind: 'case', i, text: 'x'.repeat(40) });
     journal.close();
-    const rows = readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)); assert.equal(rows.length, 20); assert.equal(rows[19].i, 19);
+    const rows = readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)); assert.equal(rows.length, 20); assert.equal(rows[19].i, 19); assert.ok(calls > 20 * 5, `the journal used the injected write in chunks (${calls})`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 import { writeSync as fsWrite } from 'node:fs';
 
 test('writeNew (result.json) and the read-back report survive short writes', async () => {
   const { writeNew } = await import('./observer.mjs'), { readback } = await import('./readback.mjs');
-  const dir = mkdtempSync(path.join(tmpdir(), 'short-result-')), short = (fd, buf, off, len) => fsWrite(fd, buf, off, Math.min(7, len));
+  const dir = mkdtempSync(path.join(tmpdir(), 'short-result-')), calls = { n: 0 }, short = (fd, buf, off, len) => { calls.n += 1; return fsWrite(fd, buf, off, Math.min(7, len)); };
   try {
     const text = `${JSON.stringify({ a: 'x'.repeat(300), b: 'é'.repeat(50) }, null, 2)}\n`;
-    writeNew(path.join(dir, 'result.json'), text, short); assert.equal(readFileSync(path.join(dir, 'result.json'), 'utf8'), text);
+    writeNew(path.join(dir, 'result.json'), text, short); assert.equal(readFileSync(path.join(dir, 'result.json'), 'utf8'), text); assert.ok(calls.n > 40, `result.json used the injected write in chunks (${calls.n})`);
+    const before = calls.n;
     assert.throws(() => writeNew(path.join(dir, 'result.json'), text, short), /EEXIST/);
     // the read-back report through the same injection
     const run = path.join(dir, 'run'); (await import('node:fs')).mkdirSync(run);
@@ -89,6 +91,15 @@ test('writeNew (result.json) and the read-back report survive short writes', asy
     const fetchImpl = async url => { const u = new URL(url); if (u.hostname === 'oauth2.googleapis.com') return new Response(JSON.stringify({ scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email', email: 'tester@example.com' })); if (u.hostname === 'firebasedatabase.googleapis.com') return new Response(JSON.stringify({ name: 'projects/1/locations/r/instances/ns', type: 'USER_DATABASE', state: 'ACTIVE' })); if (u.pathname === '/.settings/rules.json') return new Response(BASE); return new Response('null'); };
     const target = { kind: 'production', projectId: 'demo-prod', projectNumber: '1', region: 'r', namespace: 'ns', principalSha256: sha256('tester@example.com'), baselineRulesSha256: sha256(BASE), gcloud: '/x' };
     const out = await readback({ runDir: run, outDir: path.join(dir, 'a2'), target, ledgerText: ledger }, { fetchImpl, mint: () => `ya29.${'t'.repeat(40)}`, now: () => Date.parse('2026-11-04T01:11:00.000Z'), write: short });
-    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'a2', 'readback.json'), 'utf8')), JSON.parse(JSON.stringify(out.report)));
+    assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'a2', 'readback.json'), 'utf8')), JSON.parse(JSON.stringify(out.report))); assert.ok(calls.n - before > 10, 'the report used the injected write in chunks');
+    const { claim } = await import('./lib.mjs'), at = calls.n; claim(path.join(dir, 'lease'), 'x'.repeat(40), short); assert.equal(readFileSync(path.join(dir, 'lease'), 'utf8'), 'x'.repeat(40)); assert.ok(calls.n - at >= 5, 'the claim used the injected write in chunks');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('restProfile is wired to the profile cancellation: a cancelled context sends nothing', async () => {
+  const { restProfile } = await import('./observer.mjs'), sent = [];
+  const ctx = { cancelled: true, scope: 'pfx/sdk-rest/r1-rest', restUrl: (rel, q) => `http://h/${rel}${q ? `?${q}` : ''}`, rest: async (...a) => { sent.push(a); return { status: 200, text: 'null', headers: {}, bodyBytes: 4, utf8: true, clipped: false }; }, journal: { write() {} }, profile: 'r1-rest' };
+  assert.deepEqual(await restProfile(ctx), []); assert.equal(sent.length, 0);
+  const live = { ...ctx, cancelled: false }; let n = 0; live.rest = async (...a) => { n += 1; if (n === 3) live.cancelled = true; return { status: 200, text: 'null', headers: {}, bodyBytes: 4, utf8: true, clipped: false }; };
+  assert.equal((await restProfile(live)).length, 3);
 });

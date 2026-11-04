@@ -114,9 +114,9 @@ export function checkApproval(ledgerText, want) {
 }
 
 // Claim files (project lease, RECORDING): O_EXCL, 0600; released only if still ours.
-export function claim(file, content) {
+export function claim(file, content, write = writeSync) {
   const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { writeAll(fd, content); fsyncSync(fd); } finally { closeSync(fd); }
+  try { writeAll(fd, content, write); fsyncSync(fd); } finally { closeSync(fd); }
   return () => { if (readFileSync(file, 'utf8') === content) unlinkSync(file); };
 }
 

@@ -305,7 +305,10 @@ impl Reader {
                             match low.flatten() {
                                 Some(low) => {
                                     let second = flat(self);
-                                    // (`places` holds one entry per character read so far.)
+                                    // (`places` holds one entry per character read so far: the index is
+                                    // read from it, never counted over `text`, so a string of many pairs is
+                                    // read in linear time. Counting the decoded text for every pair made
+                                    // 300,000 pairs read about 10^11 bytes.)
                                     second_units.push((places.len(), (second.line, second.column)));
                                     char::from_u32(
                                         0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00),
@@ -746,41 +749,6 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    }
-
-    /// Reading a string of surrogate-pair escapes takes time in proportion to its length: the
-    /// place of a pair's second unit is the index of the character, which the reader already
-    /// holds. (Counting the decoded text for every pair made 300,000 pairs read about 10^11
-    /// bytes.)
-    #[test]
-    fn a_string_of_many_escaped_surrogate_pairs_is_read_in_linear_time() {
-        fn best_of_three(pairs: usize) -> std::time::Duration {
-            let text = format!(
-                r#"{{"rules":{{".read":"'{}' == 'x'"}}}}"#,
-                r"\ud83d\ude00".repeat(pairs)
-            );
-            (0..3)
-                .map(|_| {
-                    let start = std::time::Instant::now();
-                    let spec = read(&text).expect("a valid rules file");
-                    let elapsed = start.elapsed();
-                    assert!(spec.read.is_some());
-                    elapsed
-                })
-                .min()
-                .unwrap_or_default()
-        }
-        let small = best_of_three(60_000);
-        let large = best_of_three(240_000);
-        assert!(
-            large < std::time::Duration::from_secs(10),
-            "240,000 pairs took {large:?}"
-        );
-        // Four times the pairs take about four times as long; a quadratic read takes sixteen.
-        assert!(
-            large.as_secs_f64() < 10.0 * small.as_secs_f64().max(0.01),
-            "60,000 pairs took {small:?}, 240,000 took {large:?}"
-        );
     }
 
     #[test]

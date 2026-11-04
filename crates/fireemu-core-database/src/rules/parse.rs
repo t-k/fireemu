@@ -574,11 +574,9 @@ impl Lexer<'_> {
             }
             start = end;
         }
-        ExprError {
-            at: self.chars.len(),
-            second_unit: false,
-            ..error
-        }
+        // (The offset lies before the cursor, so some character holds it; an error that does
+        // not stand on a character of the text stays where it is.)
+        error
     }
 
     /// Whether the character `ahead` places on, format characters skipped, is a digit.

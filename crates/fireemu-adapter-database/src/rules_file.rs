@@ -478,12 +478,8 @@ impl Reader {
         }
         self.bump();
         let mut spec = RuleSpec::default();
-        let mut wildcard: Option<String> = None;
         let mut index_on = false;
-        // The keys read so far, by what tells them apart in Java: the text and the lone
-        // surrogates it could not hold (two of them are two keys, though both read as U+FFFD).
-        let mut seen: std::collections::HashSet<(String, Vec<(usize, u32)>)> =
-            std::collections::HashSet::new();
+        let mut siblings = Siblings::default();
         loop {
             self.space()?;
             match self.peek() {
@@ -539,37 +535,7 @@ impl Reader {
                         line: self.line,
                         column: self.column - 1,
                     };
-                    if let Some(name) = key.strip_prefix('$') {
-                        if !valid_key(name) {
-                            return Err(Self::error_at(end, INVALID_KEY));
-                        }
-                        if let Some(other) = &wildcard {
-                            return Err(Self::error_at(
-                                end,
-                                &format!(
-                                    "Cannot have multiple default rules ('{other}' and '{key}')."
-                                ),
-                            ));
-                        }
-                        wildcard = Some(key.clone());
-                    } else if !valid_key(&key) {
-                        return Err(Self::error_at(end, INVALID_KEY));
-                    }
-                    if !seen.insert((key.clone(), lone_surrogates.clone())) {
-                        return Err(Self::error_at(
-                            end,
-                            &format!("'{key}' occurs multiple times."),
-                        ));
-                    }
-                    // A named child with a lone surrogate in its key matches no path (a path
-                    // holds no surrogate on its own); it is kept under a key no path can
-                    // spell, so its rules are still read and checked, and two of them stay two.
-                    let key = if lone_surrogates.is_empty() || key.starts_with('$') {
-                        key
-                    } else {
-                        format!("{key}\u{0}{}", spec.children.len())
-                    };
-                    spec.children.insert(key, child);
+                    siblings.add(&mut spec, key, &lone_surrogates, child, end)?;
                 }
             }
             // A member is followed by a comma or the closing brace.
@@ -580,6 +546,60 @@ impl Reader {
                 Some(_) => return Err(self.error_here("Expected ',' or '}'.")),
             }
         }
+    }
+}
+
+/// The children of a level read so far.
+#[derive(Default)]
+struct Siblings {
+    /// The wildcard child (`$name`), of which a level has one.
+    wildcard: Option<String>,
+    /// The keys read, by what tells them apart in Java: the text and the lone surrogates it
+    /// could not hold (two of them are two keys, though both read as U+FFFD).
+    seen: std::collections::HashSet<(String, Vec<(usize, u32)>)>,
+}
+
+impl Siblings {
+    /// Adds the child `key` of `spec`, read up to `end` (its closing brace, where its key is
+    /// checked).
+    fn add(
+        &mut self,
+        spec: &mut RuleSpec,
+        key: String,
+        lone_surrogates: &[(usize, u32)],
+        child: RuleSpec,
+        end: Place,
+    ) -> Result<(), RulesError> {
+        if let Some(name) = key.strip_prefix('$') {
+            if !valid_key(name) {
+                return Err(Reader::error_at(end, INVALID_KEY));
+            }
+            if let Some(other) = &self.wildcard {
+                return Err(Reader::error_at(
+                    end,
+                    &format!("Cannot have multiple default rules ('{other}' and '{key}')."),
+                ));
+            }
+            self.wildcard = Some(key.clone());
+        } else if !valid_key(&key) {
+            return Err(Reader::error_at(end, INVALID_KEY));
+        }
+        if !self.seen.insert((key.clone(), lone_surrogates.to_owned())) {
+            return Err(Reader::error_at(
+                end,
+                &format!("'{key}' occurs multiple times."),
+            ));
+        }
+        // A named child with a lone surrogate in its key matches no path (a path holds no
+        // surrogate on its own); it is kept under a key no path can spell, so its rules are
+        // still read and checked, and two of them stay two.
+        let key = if lone_surrogates.is_empty() || key.starts_with('$') {
+            key
+        } else {
+            format!("{key}\u{0}{}", spec.children.len())
+        };
+        spec.children.insert(key, child);
+        Ok(())
     }
 }
 

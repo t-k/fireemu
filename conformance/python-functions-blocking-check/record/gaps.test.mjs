@@ -3,6 +3,7 @@
 // and the command line's messages.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import { createGuard } from "./guard.mjs";
 import { judge } from "./judge.mjs";
 import { FRAME_MARK, PROJECT, functionName, packageIds, sourceBuckets } from "./plan.mjs";
@@ -20,8 +21,7 @@ import { LOCAL_ID, NUMBER, createWorld, productionFrames, reply } from "./world.
 import { READY_MAX_POLLS, READY_POLL_SECONDS } from "./deploy.mjs";
 import { localChecks, main, readApiKey } from "./main.mjs";
 import { SETTLE_MS } from "./readback.mjs";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const RUN = "0123456789abcdef";
@@ -282,7 +282,7 @@ test("a 403 on the reads that observe is data: the repository, the source bucket
       request.url.includes("gcf-v2-sources") ? error(403, "PERMISSION_DENIED") : send(request),
   );
   assert.notEqual(buckets.result.outcome, "pcblock-auth-stop");
-  assert.equal(buckets.result.inventory.sourceObjects.sources, null);
+  assert.equal(buckets.result.stoppedBecause, "source-buckets");
   assert.ok(buckets.result.incompleteReads.some((r) => r.id === "preflight-source-objects"));
   const paged = await go(
     {},
@@ -291,7 +291,7 @@ test("a 403 on the reads that observe is data: the repository, the source bucket
         ? reply(200, { items: [{ name: "a" }], nextPageToken: "t" })
         : send(request),
   );
-  assert.equal(paged.result.inventory.sourceObjects.uploads, null);
+  assert.equal(paged.result.stoppedBecause, "source-buckets");
   assert.equal(paged.result.closureReady, false);
   const none = await go({ withSourceBuckets: false });
   assert.deepEqual(none.result.inventory.sourceObjects, {
@@ -416,7 +416,7 @@ test("each cleanup step that fails is named, the rest run, and the cleanup is no
     ["final-functions-v2", "final-lists", {}],
     ["config-after", "config-after", {}],
     ["accounts-after", "accounts-after", {}],
-    ["inventory-source-objects-uploads", "source-objects", {}],
+    ["inventory-source-objects-uploads", "inventory", {}],
     ["iam-after", "inventory", {}],
   ]) {
     const world = createWorld({ runId: RUN, ...options });
@@ -776,7 +776,7 @@ test("the web config key has a length range of 20 to 64 characters", () => {
 });
 
 test("the read-back's exit codes and messages for a bad project number, a gate and an early run", async () => {
-  const d = mkdtempSync(join(tmpdir(), "pcb-gap-"));
+  const d = tempDir("pcb-gap-");
   const at = Date.parse("2026-11-05T00:00:00Z");
   writeFileSync(
     join(d, `journal-${RUN}.jsonl`),
@@ -993,7 +993,7 @@ test("a single incomplete read, with the cleanup verified, still keeps the run f
   assert.equal(result.outcome, "pcblock-needs-review");
 });
 
-test("a source bucket that could not be read before the run, and can after it, gives no comparison and no cleanup error", async () => {
+test("a source bucket that cannot be read before the run stops it, even if it can be read afterwards", async () => {
   let first = true;
   const { result } = await go({}, (send) => async (request) => {
     if (request.url.includes("gcf-v2-sources") && first) {
@@ -1002,9 +1002,10 @@ test("a source bucket that could not be read before the run, and can after it, g
     }
     return send(request);
   });
-  assert.equal(result.inventory.sourceObjects.sources, null);
+  assert.equal(result.stoppedBecause, "source-buckets");
+  assert.equal(result.outcome, "pcblock-stopped-clean");
   assert.equal(result.cleanup.errors, undefined);
-  assert.ok(result.inventory.sourceObjects.uploads);
+  assert.equal(result.inventory.sourceObjects, undefined);
 });
 
 test("an image list that cannot be read in the preflight stops the run, and a list past five pages is recorded", async () => {
@@ -1138,7 +1139,7 @@ test("the read-back's pages and ids, its two lists, the package names and the ac
 });
 
 test("the read-back refuses to run for a missing journal with exit code 2", async () => {
-  const d = mkdtempSync(join(tmpdir(), "pcb-gap2-"));
+  const d = tempDir("pcb-gap2-");
   const code = await main(
     [
       "readback",

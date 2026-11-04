@@ -6,9 +6,9 @@
 // same, the account count the same). It never settles an unknown CREATE: the command that runs it reads the run's own result
 // for the unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { isGone, summarize } from "./deploy.mjs";
+import { inventoryDifferences, isGone, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
-import { CONFIG_URL, PROJECT, REGION, functionName, packageIds } from "./plan.mjs";
+import { CONFIG_URL, PROJECT, REGION, functionName, packageIds, sourceBuckets } from "./plan.mjs";
 import { configDigest, absent, emptyBlocking } from "./run.mjs";
 import { countAccounts, lookupAccount } from "./script.mjs";
 
@@ -39,6 +39,8 @@ export async function readbackRun({
   uploadObjects = [],
   accountsBefore = null,
   configBeforeDigest = null,
+  baseline = null,
+  carried = [],
   accessToken,
   save,
   send,
@@ -126,6 +128,59 @@ export async function readbackRun({
           .map((item) => String(item.name).split("/").at(-1))
           .filter((id) => ownPackages().includes(id))
       : null;
+    // The inventory the run started from, compared by identity with a fresh one (the closure rule of the recording).
+    const triggers = await list(
+      "list-triggers",
+      `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/-/triggers`,
+      "triggers",
+    );
+    const subs = await list(
+      "list-subscriptions",
+      `https://pubsub.googleapis.com/v1/projects/${PROJECT}/subscriptions?pageSize=1000`,
+      "subscriptions",
+    );
+    const topics = await list(
+      "list-topics",
+      `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics?pageSize=1000`,
+      "topics",
+    );
+    const services = await list(
+      "list-services",
+      `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services?filter=state:ENABLED&pageSize=200`,
+      "services",
+    );
+    const bucketNames = {};
+    for (const [index, name] of sourceBuckets(projectNumber).entries()) {
+      const label = index === 0 ? "uploads" : "sources";
+      const listed = await list(
+        "list-" + label,
+        `https://storage.googleapis.com/storage/v1/b/${name}/o?maxResults=1000`,
+        "items",
+      );
+      bucketNames[label] = listed ? listed.items.map((item) => item.name).toSorted() : null;
+    }
+    const sorted = (listed, key) =>
+      listed ? listed[key].map((item) => item.name).toSorted() : null;
+    out.inventory = baseline
+      ? {
+          baseline: true,
+          ...inventoryDifferences({
+            before: baseline,
+            after: {
+              triggers: sorted(triggers, "triggers"),
+              subscriptions: sorted(subs, "subscriptions"),
+              topics: sorted(topics, "topics"),
+              packages: sorted(packages, "packages"),
+              services: services
+                ? services.services.map((svc) => svc.config?.name).toSorted()
+                : null,
+              sourceObjects: bucketNames,
+            },
+            kinds: ["triggers", "subscriptions", "topics", "packages"],
+          }),
+        }
+      : { baseline: false, complete: false, missing: ["baseline"], differences: [] };
+    out.carried = carried;
     const config = await capture({ id: "read-config", method: "GET", url: CONFIG_URL });
     if (config?.status === 200 && readable(config)) {
       out.config = {
@@ -160,9 +215,14 @@ export async function readbackRun({
     out.lists.packages.length === 0;
   const configSame = out.config?.blockingEmpty === true && out.config?.digestMatches === true;
   const accountsSame = out.accounts.before !== null && out.accounts.after === out.accounts.before;
+  const inventoryClean =
+    out.inventory?.baseline === true &&
+    out.inventory.complete === true &&
+    out.inventory.differences.length === 0;
   out.allAbsent =
     namesGone &&
     listsGone &&
+    inventoryClean &&
     configSame &&
     accountsSame &&
     stop === null &&

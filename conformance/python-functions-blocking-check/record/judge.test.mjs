@@ -156,12 +156,12 @@ const OBSERVED_RULES = [
   [
     "trigger-registered",
     (o) => (o.registration.trigger = { functionUri: "https://elsewhere.example/" }),
-    "uri-is-the-service",
+    "uri-is-the-function-address",
   ],
   [
     "trigger-registered",
     (o) => (o.registration = { trigger: { functionUri: null }, serviceUri: null }),
-    "uri-is-the-service",
+    "uri-is-the-function-address",
   ],
   ["invoker-public", (o) => (o.invoker.allUsersInvoker = false), "all-users-invoker"],
 ];
@@ -318,4 +318,74 @@ test("it never throws on hostile or truncated frames", () => {
         ["as-expected", "differs", "observed", "not-delivered", "not-sent"].includes(c.status),
       );
   }
+});
+
+test("the function's address is its own url or the Cloud Run service's: the trigger and the token audience may name either", () => {
+  const FUNCTION_URL = "https://us-central1-p.cloudfunctions.net/pcblock";
+  for (const [label, registration] of [
+    [
+      "the url",
+      {
+        trigger: { functionUri: FUNCTION_URL },
+        serviceUri: SERVICE_URI,
+        functionUrl: FUNCTION_URL,
+      },
+    ],
+    [
+      "the service address",
+      { trigger: { functionUri: SERVICE_URI }, serviceUri: SERVICE_URI, functionUrl: FUNCTION_URL },
+    ],
+    [
+      "the url with no service address",
+      { trigger: { functionUri: FUNCTION_URL }, serviceUri: null, functionUrl: FUNCTION_URL },
+    ],
+  ]) {
+    const observed = { ...OBSERVED(), registration };
+    const r = judge({ email: EMAIL, localId: LOCAL_ID, frames: base(), observed });
+    assert.equal(r.cases["trigger-registered"].status, "as-expected", label);
+  }
+  for (const [label, registration] of [
+    [
+      "another address",
+      {
+        trigger: { functionUri: "https://elsewhere.example/" },
+        serviceUri: SERVICE_URI,
+        functionUrl: FUNCTION_URL,
+      },
+    ],
+    [
+      "no address known",
+      { trigger: { functionUri: FUNCTION_URL }, serviceUri: null, functionUrl: null },
+    ],
+    [
+      "a non-text address",
+      { trigger: { functionUri: 5 }, serviceUri: SERVICE_URI, functionUrl: FUNCTION_URL },
+    ],
+  ]) {
+    const observed = { ...OBSERVED(), registration };
+    const r = judge({ email: EMAIL, localId: LOCAL_ID, frames: base(), observed });
+    assert.equal(r.cases["trigger-registered"].status, "differs", label);
+  }
+  const audOf = (aud, registration) => {
+    const frames = base();
+    for (const entry of frames)
+      if (entry.frame.request?.token?.claims) entry.frame.request.token.claims.aud = aud;
+    return judge({
+      email: EMAIL,
+      localId: LOCAL_ID,
+      frames,
+      observed: { ...OBSERVED(), registration },
+    });
+  };
+  const both = {
+    trigger: { functionUri: FUNCTION_URL },
+    serviceUri: SERVICE_URI,
+    functionUrl: FUNCTION_URL,
+  };
+  assert.equal(audOf(FUNCTION_URL, both).cases["blocking-claims"].status, "as-expected");
+  assert.equal(audOf(SERVICE_URI, both).cases["blocking-claims"].status, "as-expected");
+  assert.equal(
+    audOf("https://elsewhere.example/", both).cases["blocking-claims"].status,
+    "differs",
+  );
 });

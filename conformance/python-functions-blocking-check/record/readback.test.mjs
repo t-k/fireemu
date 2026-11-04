@@ -39,6 +39,7 @@ const readback = (world, result, over = {}) =>
     clock: () => world.now,
     send: over.send ?? world.send,
     ...baseline(result),
+    baseline: world.baseline,
     ...over.options,
   });
 

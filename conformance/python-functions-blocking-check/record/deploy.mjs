@@ -3,7 +3,7 @@
 // judgement `cliFailed`) is the scheduled-delivery recorder's, unchanged: it runs the pinned firebase-tools once per action
 // and never retries.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
   BLOCKING_EVENT_TYPE,
@@ -257,19 +257,154 @@ export function putClass(statuses) {
   return statuses.length > 0 && statuses.every(definite) ? "refused" : "unknown";
 }
 
+// The mutating requests the CLI sent, from its own `--debug` output: one `>>> [apiv2][query] <METHOD> <url>` line per request
+// and one `<<< [apiv2][status] <METHOD> <url> <code>` line per answer. Reads that use POST and the upload's PUT (settled
+// by its receipt) are not mutations of the project.
+const REQUEST_LINE = /\[apiv2\]\[query\] (POST|PUT|PATCH|DELETE) (https:\/\/\S+)/u;
+const STATUS_LINE = /\[apiv2\]\[status\] (POST|PUT|PATCH|DELETE) (https:\/\/\S+) (\d{3})[ \t]*$/u;
+const READ_ONLY_POST = /:(?:getIamPolicy|testIamPermissions|generateUploadUrl)$|\/entries:list$/u;
+
 /**
- * The CLI result with the upload events of its stdout file (the deploy only). A file that cannot be read gives `null`: the
- * run then cannot tell which object the deploy made and reports it.
+ * Every mutating request in the CLI output with its answers: `{ method, url, requests, statuses, class }`. The class is
+ * "ok" (every request answered 2xx), "unanswered" (fewer answers than requests), "non-2xx" (any other answer) or
+ * "retried" (more than one request to the same method and URL, which only happens after a failed one). Anything but
+ * "ok" is an unknown write for the run (coordinator ruling R1).
  */
-export function withUploadEvents(result, directory) {
-  if (result?.action !== "deploy") return result;
-  let uploadEvents = null;
-  try {
-    uploadEvents = uploadEventsFromCliOutput(
-      readFileSync(join(directory, "cli-deploy-stdout.txt"), "utf8"),
-    );
-  } catch {
-    // no events: reported by the run
+export function cliWritesFromOutput(text) {
+  const writes = new Map();
+  for (const line of String(text).split(/\r?\n/u)) {
+    const request = REQUEST_LINE.exec(line);
+    const status = request ? null : STATUS_LINE.exec(line);
+    const hit = request ?? status;
+    if (!hit) continue;
+    let url;
+    try {
+      const parsed = new URL(hit[2]);
+      url = parsed.host + parsed.pathname;
+    } catch {
+      continue;
+    }
+    if (hit[1] === "POST" && READ_ONLY_POST.test(url)) continue;
+    if (hit[1] === "PUT" && /\.cloudfunctions\.appspot\.com\//u.test(url)) continue;
+    const key = hit[1] + " " + url;
+    if (!writes.has(key))
+      writes.set(key, { method: hit[1], url, requests: 0, statuses: [], class: "ok" });
+    const entry = writes.get(key);
+    if (request) entry.requests += 1;
+    else entry.statuses.push(Number(status[3]));
   }
-  return { ...result, uploadEvents };
+  for (const entry of writes.values()) {
+    entry.class =
+      entry.requests > 1 && !entry.statuses.every((code) => code >= 200 && code < 300)
+        ? "retried"
+        : entry.statuses.length < entry.requests
+          ? "unanswered"
+          : entry.statuses.every((code) => code >= 200 && code < 300)
+            ? "ok"
+            : "non-2xx";
+  }
+  return [...writes.values()];
+}
+
+/** The CLI output without the signed upload URLs and without any API key value the identity configuration carries. */
+export function redactCliText(text) {
+  return String(text)
+    .replace(
+      /https?:\/\/[^\s"'<>]*(?:X-Goog-|Signature=|GoogleAccessId=)[^\s"'<>]*/giu,
+      "[REDACTED UPLOAD URL]",
+    )
+    .replace(/"apiKey"\s*:\s*"[^"]*"/gu, '"apiKey":"[REDACTED]"');
+}
+
+/**
+ * The CLI result with what its output file shows: the upload events (the deploy only) and every mutating request. The
+ * output files are then rewritten without signed URLs and API keys. A file that cannot be read gives `null` for both: the
+ * run then cannot tell what the CLI wrote and reports it.
+ */
+export function withCliLog(result, directory) {
+  if (!result?.action) return result;
+  const read = (name) => {
+    try {
+      return readFileSync(join(directory, name), "utf8");
+    } catch {
+      return null;
+    }
+  };
+  const stdout = read(`cli-${result.action}-stdout.txt`);
+  const stderr = read(`cli-${result.action}-stderr.txt`);
+  for (const [name, text] of [
+    [`cli-${result.action}-stdout.txt`, stdout],
+    [`cli-${result.action}-stderr.txt`, stderr],
+  ])
+    if (text !== null) {
+      try {
+        writeFileSync(join(directory, name), redactCliText(text), { mode: 0o600 });
+      } catch {
+        // the file stays as it was; the run directory is private
+      }
+    }
+  return {
+    ...result,
+    ...(result.action === "deploy"
+      ? { uploadEvents: stdout === null ? null : uploadEventsFromCliOutput(stdout) }
+      : {}),
+    cliWrites: stdout === null ? null : cliWritesFromOutput(stdout),
+  };
+}
+
+// ---- the inventory the closure compares ---------------------------------------------------------------------
+
+const OWN_SOURCE_COPY = new RegExp("^" + FUNCTION + "/function-source\\.zip$", "u");
+
+/**
+ * What differs between the preflight inventory and a later one, by identity and not by count. `before` and `after` carry
+ * name lists for `channels`, `triggers`, `subscriptions`, `topics`, `packages` and `services`, and `sourceObjects` with
+ * `uploads` and `sources` (the two Gen2 buckets). A list that is `null` (not read to its end) makes the comparison
+ * incomplete, which blocks closure like a difference does. `enabled` is the services this run enabled on purpose.
+ * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
+ * (`<function>/function-source.zip`), which stays and is reported.
+ */
+export const INVENTORY_KINDS = Object.freeze([
+  "channels",
+  "triggers",
+  "subscriptions",
+  "topics",
+  "packages",
+]);
+
+export function inventoryDifferences({ before, after, enabled = [], kinds = INVENTORY_KINDS }) {
+  const differences = [];
+  const missing = [];
+  const compare = (kind, b, a, allowedAdded = () => false) => {
+    if (!Array.isArray(b) || !Array.isArray(a)) return void missing.push(kind);
+    const added = a.filter((name) => !b.includes(name));
+    const removed = b.filter((name) => !a.includes(name));
+    const unexpected = added.filter((name) => !allowedAdded(name));
+    if (unexpected.length > 0 || removed.length > 0)
+      differences.push({ kind, added: unexpected.toSorted(), removed: removed.toSorted() });
+  };
+  for (const kind of kinds) compare(kind, before?.[kind], after?.[kind]);
+  compare("services", before?.services, after?.services, (name) => enabled.includes(name));
+  compare("uploadObjects", before?.sourceObjects?.uploads, after?.sourceObjects?.uploads);
+  compare("sourceObjects", before?.sourceObjects?.sources, after?.sourceObjects?.sources, (name) =>
+    OWN_SOURCE_COPY.test(name),
+  );
+  return { complete: missing.length === 0, missing, differences };
+}
+
+/**
+ * Project IAM changes that are not the CLI's service-agent bindings: a removed binding, or an added member that is not a
+ * service account. `changes` is `iamChanges(before, after)` (`role|member` strings), or `null` for an unreadable policy.
+ */
+export function iamUnexpected(changes) {
+  if (!changes) return { complete: false, unexpected: [] };
+  return {
+    complete: true,
+    unexpected: [
+      ...changes.removed.map((key) => "removed " + key),
+      ...changes.added
+        .filter((key) => !key.split("|")[1]?.startsWith("serviceAccount:"))
+        .map((key) => "added " + key),
+    ],
+  };
 }

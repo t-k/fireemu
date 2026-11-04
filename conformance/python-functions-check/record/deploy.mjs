@@ -431,7 +431,9 @@ const OWN_SOURCE_COPY = new RegExp(
  * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
  * (`<function>/function-source.zip`), which stays and is reported.
  */
-export function inventoryDifferences({ before, after, enabled = [] }) {
+export const INVENTORY_KINDS = Object.freeze(["channels", "triggers", "subscriptions", "topics", "packages"]);
+
+export function inventoryDifferences({ before, after, enabled = [], kinds = INVENTORY_KINDS }) {
   const differences = [];
   const missing = [];
   const compare = (kind, b, a, allowedAdded = () => false) => {
@@ -442,8 +444,7 @@ export function inventoryDifferences({ before, after, enabled = [] }) {
     if (unexpected.length > 0 || removed.length > 0)
       differences.push({ kind, added: unexpected.toSorted(), removed: removed.toSorted() });
   };
-  for (const kind of ["channels", "triggers", "subscriptions", "topics", "packages"])
-    compare(kind, before?.[kind], after?.[kind]);
+  for (const kind of kinds) compare(kind, before?.[kind], after?.[kind]);
   compare("services", before?.services, after?.services, (name) => enabled.includes(name));
   compare("uploadObjects", before?.sourceObjects?.uploads, after?.sourceObjects?.uploads);
   compare("sourceObjects", before?.sourceObjects?.sources, after?.sourceObjects?.sources, (name) =>

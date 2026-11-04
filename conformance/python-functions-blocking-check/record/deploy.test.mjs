@@ -1,19 +1,11 @@
 // The deploy helpers: the declaration check of the SDK's own discovery, the readiness summary, the CLI plan, and the refusals
 // of the source copy.
 import assert from "node:assert/strict";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import {
   cliPlan,
   declarationProblems,
@@ -178,7 +170,7 @@ test("the CLI plan refuses an unknown action, a relative path and a missing PATH
 });
 
 test("the source copy needs a full commit SHA", () => {
-  const target = mkdtempSync(join(tmpdir(), "pcb-deploy-"));
+  const target = tempDir("pcb-deploy-");
   for (const bad of ["main", "abc123", "HEAD", "0".repeat(39), "g".repeat(40), "a".repeat(41)])
     assert.throws(
       () => prepareSource({ repoRoot: "/nonexistent", commit: bad, target }),
@@ -191,7 +183,7 @@ test("the source copy needs a full commit SHA", () => {
 });
 
 function repoWithFixture() {
-  const repo = mkdtempSync(join(tmpdir(), "pcb-repo-"));
+  const repo = tempDir("pcb-repo-");
   const env = {
     PATH: process.env.PATH,
     HOME: repo,
@@ -221,8 +213,8 @@ function repoWithFixture() {
 
 test("the source copy takes the tracked files of the check at the commit, links the venv, and nothing else", () => {
   const { repo, sha } = repoWithFixture();
-  const target = join(mkdtempSync(join(tmpdir(), "pcb-target-")), "nested", "source");
-  const venv = mkdtempSync(join(tmpdir(), "pcb-venv-"));
+  const target = join(tempDir("pcb-target-"), "nested", "source");
+  const venv = tempDir("pcb-venv-");
   const { configPath, fixtureDir } = prepareSource({
     repoRoot: repo,
     commit: sha,
@@ -251,7 +243,7 @@ test("the source copy takes the tracked files of the check at the commit, links 
 });
 
 function fakeVenv(script) {
-  const fixture = mkdtempSync(join(tmpdir(), "pcb-fixture-"));
+  const fixture = tempDir("pcb-fixture-");
   mkdirSync(join(fixture, "venv/bin"), { recursive: true });
   writeFileSync(join(fixture, "venv/bin/python"), script);
   chmodSync(join(fixture, "venv/bin/python"), 0o755);
@@ -262,7 +254,7 @@ test("the discovery runs the venv's Python isolated, in the fixture, with the pr
   const fixture = fakeVenv(
     `#!/bin/sh\nprintf '{"first":"%s","pp":"%s","cwd":"%s","fc":%s,"gp":"%s","home":"%s"}' "$1" "$PYTHONPATH" "$(pwd -P)" "$FIREBASE_CONFIG" "$GCLOUD_PROJECT" "$HOME"\n`,
   );
-  const directory = join(mkdtempSync(join(tmpdir(), "pcb-dir-")), "made", "here");
+  const directory = join(tempDir("pcb-dir-"), "made", "here");
   const out = discover({ fixtureDir: fixture, directory });
   assert.equal(out.first, "-I");
   assert.equal(out.pp, fixture);
@@ -293,7 +285,7 @@ test("an offline discovery failure is a problem, not a throw, and keeps only the
   const fixture = fakeVenv(`#!/bin/sh\nprintf '%s' "${"E".repeat(400)}" >&2\nexit 3\n`);
   const [problem] = sourceProblems({
     fixtureDir: fixture,
-    directory: mkdtempSync(join(tmpdir(), "pcb-dir-")),
+    directory: tempDir("pcb-dir-"),
   });
   assert.equal(problem.length, "the SDK discovery of the fixture failed: ".length + 300);
 });

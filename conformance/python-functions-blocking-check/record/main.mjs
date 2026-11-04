@@ -34,7 +34,7 @@ import {
   runCli as realRunCli,
   sdkVersionProblems,
   sourceProblems,
-  withUploadEvents,
+  withCliLog,
 } from "./deploy.mjs";
 import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID, SIGN_UP_URL } from "./plan.mjs";
 import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, uploadObjectEntries } from "./readback.mjs";
@@ -209,6 +209,40 @@ export function lastActivity(path) {
   return last;
 }
 
+/** Writes the whole text to the descriptor: `writeSync` may write less than it was given (a row can be megabytes). */
+export function writeAll(fd, text, write = writeSync) {
+  const bytes = Buffer.from(text, "utf8");
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = write(fd, bytes, offset, bytes.length - offset);
+    if (!Number.isInteger(written) || written <= 0)
+      throw new Error("the journal write made no progress");
+    offset += written;
+  }
+}
+
+/**
+ * A journal row without the API key the Identity Platform configuration carries (`client.apiKey`): the body of a
+ * configuration read is stored with the key replaced, and the row says so. Other rows are unchanged.
+ */
+export function redactRow(row) {
+  if (typeof row?.bodyBase64 !== "string" || !/^(?:config-|read-config)/.test(String(row.id)))
+    return row;
+  let body;
+  try {
+    body = JSON.parse(Buffer.from(row.bodyBase64, "base64").toString("utf8"));
+  } catch {
+    return row;
+  }
+  if (typeof body?.client?.apiKey !== "string") return row;
+  body.client.apiKey = "[REDACTED]";
+  return {
+    ...row,
+    bodyBase64: Buffer.from(JSON.stringify(body)).toString("base64"),
+    bodyRedacted: ["client.apiKey"],
+  };
+}
+
 /** The run's own result file: the creates it left unconfirmed, the account it made, and the baselines the read-back compares with. */
 export function resultOf(path) {
   let result;
@@ -232,6 +266,21 @@ export function resultOf(path) {
     configBeforeDigest:
       typeof result.configBefore?.sha256 === "string" ? result.configBefore.sha256 : null,
     uploadObjects: uploadObjectEntries(result.cleanup?.uploadObjectsDeleted),
+    // What the A2 read-back compares against and the obligations the result leaves open (a read-back that cannot see a
+    // baseline closes nothing).
+    baseline: result.inventory?.before ?? null,
+    carried: [
+      ...(result.cleanup?.uploadReasons ?? []).map((reason) => "upload:" + reason),
+      ...(result.cleanup?.uploadObjectsUnexplained ?? []).map(
+        (item) => "unexplained-upload-object:" + item.name,
+      ),
+      ...(result.inventory?.differences ?? []).map((d) => "inventory:" + JSON.stringify(d)),
+      ...(result.inventory?.complete === false ? ["inventory-incomplete"] : []),
+      ...(Array.isArray(result.cleanup?.configDifference) &&
+      result.cleanup.configDifference.length > 0
+        ? ["config-difference:" + result.cleanup.configDifference.join(",")]
+        : []),
+    ],
   };
 }
 
@@ -279,9 +328,11 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       accountsBefore: judged.ok ? judged.accountsBefore : null,
       configBeforeDigest: judged.ok ? judged.configBeforeDigest : null,
       uploadObjects: judged.ok ? judged.uploadObjects : [],
+      baseline: judged.ok ? judged.baseline : null,
+      carried: judged.ok ? judged.carried : [],
       accessToken: deps.token(),
       save: async (row) => {
-        writeSync(journal, JSON.stringify(row) + "\n");
+        writeAll(journal, JSON.stringify(redactRow(row)) + "\n");
         fsyncSync(journal);
       },
       send: deps.send,
@@ -301,6 +352,8 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
           attempted: result.attempted,
           unknown: result.unknown,
           unconfirmedCreates: unconfirmed,
+          inventory: result.inventory ?? null,
+          carried: judged.ok ? judged.carried : [],
         },
         null,
         2,
@@ -449,7 +502,7 @@ export async function main(
   const configHome = join(runDir, "cli-config");
   mkdirSync(configHome, { recursive: true, mode: 0o700 });
   const runCli = async ({ action }) =>
-    withUploadEvents(
+    withCliLog(
       await deps.runCli({
         action,
         plan: cliPlan(action, {
@@ -472,7 +525,7 @@ export async function main(
       projectNumber: values["project-number"],
       accessToken,
       save: async (row) => {
-        writeSync(journal, JSON.stringify(row) + "\n");
+        writeAll(journal, JSON.stringify(redactRow(row)) + "\n");
         fsyncSync(journal);
       },
       send,

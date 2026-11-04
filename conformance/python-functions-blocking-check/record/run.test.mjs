@@ -13,7 +13,7 @@ import {
   record,
 } from "./run.mjs";
 import { emailOf } from "./script.mjs";
-import { LOCAL_ID, NUMBER, SERVICE_URI, createWorld, reply } from "./world.mjs";
+import { FUNCTION_URL, LOCAL_ID, NUMBER, SERVICE_URI, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
 const error = (code, status, message = "x") => reply(code, { error: { code, message, status } });
@@ -68,7 +68,11 @@ test("a clean run records, cleans up, reads every name back, finds the configura
   assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"]);
   assert.equal(world.functions.size + world.runServices.size + world.packages.size, 0);
   assert.equal(world.accounts.size, 3, "the project has its own accounts again");
-  assert.equal(world.config.blockingFunctions, undefined, "the trigger the CLI registered is gone");
+  assert.deepEqual(
+    world.config.blockingFunctions,
+    { forwardInboundCredentials: {} },
+    "the trigger the CLI registered is gone; what it wrote beside it stays (production)",
+  );
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.cleanup.functionGone, true);
   assert.equal(result.cleanup.listsEmpty, true);
@@ -186,11 +190,23 @@ test("the result carries the readbacks, the baselines and the inventory", async 
     "123456789012-compute@developer.gserviceaccount.com",
   );
   assert.deepEqual(result.readbacks.invoker, { members: ["allUsers"], allUsersInvoker: true });
-  assert.equal(result.readbacks.registration.trigger.functionUri, SERVICE_URI);
+  assert.equal(result.readbacks.function.url, FUNCTION_URL);
+  assert.equal(result.readbacks.registration.trigger.functionUri, FUNCTION_URL);
+  assert.equal(result.readbacks.registration.functionUrl, FUNCTION_URL);
   assert.equal(result.readbacks.registration.serviceUri, SERVICE_URI);
   assert.deepEqual(result.signUp, { class: "2xx", status: 200, localId: LOCAL_ID });
   assert.equal(result.inventory.before.accounts, 3);
-  assert.equal(result.inventory.before.packages, 0);
+  assert.deepEqual(result.inventory.before.packages, []);
+  assert.deepEqual(result.inventory.before.triggers, []);
+  assert.deepEqual(result.inventory.before.subscriptions, []);
+  assert.deepEqual(result.inventory.before.topics, []);
+  assert.ok(result.inventory.before.services.includes("identitytoolkit.googleapis.com"));
+  assert.deepEqual(result.inventory.before.sourceObjects, {
+    uploads: ["old-upload.zip"],
+    sources: [],
+  });
+  assert.deepEqual(result.inventory.differences, []);
+  assert.equal(result.inventory.complete, true);
   assert.equal(
     result.configBefore.sha256,
     configDigest({
@@ -644,6 +660,10 @@ test("a refused sign-up is a known answer: nothing to delete, the run goes on to
   );
   assert.equal(result.signUp.class, "4xx");
   assert.equal(result.signUp.localId, null);
+  assert.deepEqual(result.unconfirmedCreates, [], "a refusal made no account");
+  assert.equal(result.readBackRequired, false);
+  assert.equal(result.outcome, "pcblock-recorded");
+  assert.equal(result.closureReady, true);
   assert.equal(result.judged.cases["signup-allowed"].status, "differs");
   assert.equal(
     count(
@@ -663,11 +683,79 @@ test("a refused sign-up is a known answer: nothing to delete, the run goes on to
   assert.ok(!world.calls.some((c) => c.endsWith("accounts:delete")));
   assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"]);
   assert.equal(result.cleanup.verified, true);
-  assert.deepEqual(
-    result.unconfirmedCreates.map((u) => u.label),
-    ["account"],
-    "a 4xx 200-less answer leaves the account name unconfirmed",
+  assert.deepEqual(result.unconfirmedCreates, [], "a definite refusal leaves nothing unconfirmed");
+});
+
+test("a 2xx sign-up with no account id, or one that is not JSON, leaves the account unknown: it is unconfirmed and blocks the close alone", async () => {
+  for (const [label, answer] of [
+    ["an empty object", () => reply(200, {})],
+    ["no JSON", () => new Response("<html>", { status: 200 })],
+    ["a 201 without an id", () => reply(201, { kind: "x" })],
+  ]) {
+    const { result } = await go(
+      {},
+      (send) => async (request) =>
+        path(request) === "/v1/accounts:signUp" ? answer() : send(request),
+    );
+    assert.deepEqual(
+      result.unconfirmedCreates.map((u) => u.label),
+      ["account"],
+      label,
+    );
+    assert.equal(result.closureReady, false, label);
+    assert.equal(result.readBackRequired, true, label);
+    assert.notEqual(result.outcome, "pcblock-recorded", label);
+  }
+  const only = await go(
+    {},
+    (send) => async (request) =>
+      path(request) === "/v1/accounts:signUp" ? reply(200, {}) : send(request),
   );
+  assert.equal(
+    only.result.unknownMutationList.length,
+    0,
+    "nothing but the unconfirmed create blocks",
+  );
+});
+
+test("a 403 or a 401 on the sign-up (the key's answer) is a refused sign-up: the full cleanup runs", async () => {
+  for (const code of [403, 401]) {
+    const { result, world, journal } = await go(
+      {},
+      (send) => async (request) =>
+        path(request) === "/v1/accounts:signUp" ? error(code, "PERMISSION_DENIED") : send(request),
+    );
+    assert.equal(result.signUp.status, code, String(code));
+    assert.equal(result.signUp.class, "4xx", String(code));
+    assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"], String(code));
+    assert.equal(world.packages.size, 0, "the images are deleted");
+    assert.equal(result.cleanup.uploadObjectsDeleted.length, 1, "the upload object is deleted");
+    assert.ok(
+      journal.some((r) => r.id === "config-after"),
+      "the configuration is read after the cleanup",
+    );
+    assert.ok(result.cleanup.readBack["package-fireemu--oracle--idp__us--central1__pcblock"]);
+    assert.equal(result.cleanup.verified, true, String(code));
+    assert.deepEqual(result.unconfirmedCreates, [], String(code));
+  }
+  const key = await go(
+    {},
+    (send) => async (request) =>
+      path(request) === "/v1/accounts:signUp" ? error(401, "UNAUTHENTICATED") : send(request),
+  );
+  assert.equal(
+    key.result.signUp.keyRefused,
+    true,
+    "a 401 is the key's: it is not a stop of the cleanup",
+  );
+  assert.equal(key.result.closureReady, false, "but the run is not closable");
+  const forbidden = await go(
+    {},
+    (send) => async (request) =>
+      path(request) === "/v1/accounts:signUp" ? error(403, "PERMISSION_DENIED") : send(request),
+  );
+  assert.equal(forbidden.result.signUp.keyRefused, undefined);
+  assert.equal(forbidden.result.outcome, "pcblock-recorded");
 });
 
 test("an unknown answer to the sign-up is never re-sent, cannot be settled, and is deleted by nothing", async () => {
@@ -992,12 +1080,12 @@ test("an ERROR entry and log noise are counted, a log read that fails is incompl
 
 // ---- stops --------------------------------------------------------------------------------------------
 
-test("a 401 stops the run where it is: the CLI delete runs and no further request is sent", async () => {
+test("a 401 on a request of the owner's credential stops the run where it is: the CLI delete runs and no further request is sent", async () => {
   let after = 0;
   let stopped = false;
-  const { result, world } = await go({}, (send) => async (request) => {
+  const { result, world } = await go({}, (send, w) => async (request) => {
     if (stopped) after++;
-    if (path(request) === "/v1/accounts:signUp") {
+    if (!stopped && w.cliRuns.includes("deploy") && request.url.includes("/config")) {
       stopped = true;
       return error(401, "UNAUTHENTICATED");
     }
@@ -1021,7 +1109,7 @@ test("a 401 before anything exists does not run the CLI delete; a 403 on a write
   const write = await go(
     {},
     (send) => async (request) =>
-      path(request) === "/v1/accounts:signUp" ? error(403, "PERMISSION_DENIED") : send(request),
+      path(request).endsWith("accounts:delete") ? error(403, "PERMISSION_DENIED") : send(request),
   );
   assert.equal(write.result.outcome, "pcblock-auth-stop");
 });
@@ -1247,13 +1335,33 @@ test("configDifference names the top-level keys that differ, in order, and is nu
   assert.equal(CONFIG_URL.endsWith("/config"), true);
 });
 
-test("emptyBlocking accepts no section, an empty one and an empty triggers map, and nothing else", () => {
-  for (const ok of [{}, { blockingFunctions: {} }, { blockingFunctions: { triggers: {} } }])
+test("emptyBlocking accepts no section, an empty one, an empty triggers map, and forwarding that forwards nothing, and nothing else", () => {
+  for (const ok of [
+    {},
+    { blockingFunctions: {} },
+    { blockingFunctions: { triggers: {} } },
+    { blockingFunctions: { forwardInboundCredentials: {} } },
+    { blockingFunctions: { triggers: {}, forwardInboundCredentials: {} } },
+    { blockingFunctions: { forwardInboundCredentials: { idToken: false } } },
+    {
+      blockingFunctions: {
+        forwardInboundCredentials: { idToken: false, accessToken: false, refreshToken: false },
+      },
+    },
+  ])
     assert.equal(emptyBlocking(ok), true, JSON.stringify(ok));
   for (const bad of [
     { blockingFunctions: { triggers: { beforeCreate: {} } } },
-    { blockingFunctions: { forwardInboundCredentials: {} } },
+    { blockingFunctions: { forwardInboundCredentials: { idToken: true } } },
+    { blockingFunctions: { forwardInboundCredentials: { idToken: false, refreshToken: true } } },
+    { blockingFunctions: { forwardInboundCredentials: { idToken: 0 } } },
+    { blockingFunctions: { forwardInboundCredentials: null } },
+    { blockingFunctions: { forwardInboundCredentials: [] } },
+    { blockingFunctions: { forwardInboundCredentials: "x" } },
+    { blockingFunctions: { triggers: [] } },
+    { blockingFunctions: { triggers: null } },
     { blockingFunctions: { triggers: {}, other: 1 } },
+    { blockingFunctions: { other: 1 } },
     { blockingFunctions: null },
     { blockingFunctions: [] },
     { blockingFunctions: "x" },

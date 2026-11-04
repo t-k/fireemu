@@ -22,6 +22,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const NUMBER = "123456789012";
 export const START = Date.parse("2026-11-05T00:00:30Z");
 export const SERVICE_ACCOUNT = NUMBER + "-compute@developer.gserviceaccount.com";
+export const FUNCTION_URL = "https://us-central1-" + PROJECT + ".cloudfunctions.net/" + FUNCTION;
 export const SERVICE_URI = "https://" + FUNCTION + "-abc-uc.a.run.app";
 export const LOCAL_ID = "Wd3kJ9xQ2mP7sT4vB8nL5cZ6yH1a";
 export const pretty = (json) => JSON.stringify(json, null, 2) + "\n";
@@ -104,6 +105,10 @@ export function createWorld({
   uploadLines = "normal",
   deleteLeaves = undefined,
   sourcePageSize = 0,
+  forwardInbound = {},
+  registerWith = "url",
+  cliWrites = undefined,
+  foreignSubscriptions = 0,
 } = {}) {
   const w = {
     runId,
@@ -112,6 +117,9 @@ export function createWorld({
     functions: new Map(),
     runServices: new Set(),
     packages: new Set(),
+    triggers: new Set(),
+    subscriptions: new Set(),
+    topics: new Set(),
     accounts: new Map(
       Array.from({ length: preexistingAccounts }, (_, n) => ["old" + n, { localId: "old" + n }]),
     ),
@@ -140,6 +148,32 @@ export function createWorld({
     services: new Set([...REQUIRED, "firebase.googleapis.com"]),
   };
   const log = (entry) => w.entries.push({ insertId: "w" + ++w.insert, ...entry });
+  /** The inventory a recorder would read from this world now, in the shape the closure compares (names, sorted). */
+  w.inventory = () => {
+    const base = "projects/" + PROJECT;
+    const names = (ids, prefix) => [...ids].map((id) => prefix + id).toSorted();
+    const buckets = sourceBuckets(NUMBER);
+    return {
+      triggers: names(w.triggers, base + "/locations/" + REGION + "/triggers/"),
+      subscriptions: [
+        ...Array.from(
+          { length: foreignSubscriptions },
+          (_, n) => `${base}/subscriptions/foreign-${n}`,
+        ),
+        ...names(w.subscriptions, base + "/subscriptions/"),
+      ].toSorted(),
+      topics: names(w.topics, base + "/topics/"),
+      packages: names(
+        w.packages,
+        base + "/locations/" + REGION + "/repositories/gcf-artifacts/packages/",
+      ),
+      services: [...w.services].toSorted(),
+      sourceObjects: {
+        uploads: [...(w.sourceBuckets.get(buckets[0]) ?? [])].toSorted(),
+        sources: [...(w.sourceBuckets.get(buckets[1]) ?? [])].toSorted(),
+      },
+    };
+  };
   w.advance = (ms) => {
     w.now += ms;
   };
@@ -150,12 +184,23 @@ export function createWorld({
       name,
       state: deployState,
       environment: "GEN_2",
+      url: FUNCTION_URL,
       serviceConfig: { uri: SERVICE_URI, serviceAccountEmail: SERVICE_ACCOUNT },
     });
     w.runServices.add(FUNCTION);
     for (const id of packageIds()) w.packages.add(id);
+    // The CLI writes the trigger and, with it, `forwardInboundCredentials` (production: `{}`); on removal it takes the trigger
+    // out and leaves the rest.
     w.config.blockingFunctions = {
-      triggers: { beforeCreate: { functionUri: SERVICE_URI, updateTime: iso(w.now) } },
+      triggers: {
+        beforeCreate: {
+          functionUri: registerWith === "run" ? SERVICE_URI : FUNCTION_URL,
+          updateTime: iso(w.now),
+        },
+      },
+      ...(forwardInbound === undefined
+        ? {}
+        : { forwardInboundCredentials: structuredClone(forwardInbound) }),
     };
     for (const [bucket, items] of w.sourceBuckets) {
       if (bucket.startsWith("gcf-v2-uploads")) {
@@ -181,8 +226,14 @@ export function createWorld({
     }
     if (!leaveTrigger) {
       if (deleteLeaves !== undefined) w.config.blockingFunctions = structuredClone(deleteLeaves);
-      else if (baselineBlocking === undefined) delete w.config.blockingFunctions;
-      else w.config.blockingFunctions = structuredClone(baselineBlocking);
+      else if (baselineBlocking === undefined) {
+        const section = w.config.blockingFunctions;
+        if (section?.triggers) {
+          delete section.triggers.beforeCreate;
+          if (Object.keys(section.triggers).length === 0) delete section.triggers;
+        }
+        if (section && Object.keys(section).length === 0) delete w.config.blockingFunctions;
+      } else w.config.blockingFunctions = structuredClone(baselineBlocking);
     }
   };
 
@@ -198,6 +249,7 @@ export function createWorld({
           error: null,
           errored: 1,
           uploadEvents: [],
+          cliWrites: [],
           durationMs: 1,
         };
       createDeployed();
@@ -233,6 +285,7 @@ export function createWorld({
       errored: 0,
       unknownWrites: [],
       ...(uploadEvents ? { uploadEvents } : {}),
+      cliWrites: cliWrites ?? [],
       durationMs: 1,
     };
   };
@@ -346,6 +399,29 @@ export function createWorld({
         });
       }
     }
+    if (host === "eventarc.googleapis.com" && path.endsWith("/triggers"))
+      return page(
+        [...w.triggers].map((id) => ({
+          name: "projects/" + PROJECT + "/locations/" + REGION + "/triggers/" + id,
+        })),
+        "triggers",
+        url,
+      );
+    if (host === "pubsub.googleapis.com" && path.endsWith("/topics"))
+      return page(
+        [...w.topics].map((id) => ({ name: "projects/" + PROJECT + "/topics/" + id })),
+        "topics",
+        url,
+      );
+    if (host === "pubsub.googleapis.com" && path.endsWith("/subscriptions"))
+      return page(
+        [
+          ...Array.from({ length: foreignSubscriptions }, (_, n) => `foreign-${n}`),
+          ...w.subscriptions,
+        ].map((id) => ({ name: "projects/" + PROJECT + "/subscriptions/" + id })),
+        "subscriptions",
+        url,
+      );
     if (host === "cloudbuild.googleapis.com") return notFound("build");
     if (host === "run.googleapis.com") {
       if (path.endsWith("/services"))
@@ -451,5 +527,6 @@ export function createWorld({
     }
     throw new Error("world: unexpected " + key);
   };
+  w.baseline = w.inventory();
   return w;
 }

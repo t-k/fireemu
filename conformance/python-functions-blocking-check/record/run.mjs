@@ -25,6 +25,8 @@ import {
   READY_POLL_SECONDS,
   cliFailed,
   isActive,
+  iamUnexpected,
+  inventoryDifferences,
   isGone,
   putClass,
   summarize,
@@ -48,6 +50,8 @@ import {
   uploadBucket,
 } from "./plan.mjs";
 import { countAccounts, deleteAccount, emailOf, lookupAccount, signUp } from "./script.mjs";
+
+const BLOCKING_INVENTORY_KINDS = ["triggers", "subscriptions", "topics", "packages"];
 
 export const NORMAL_CEILING = 150;
 export const CLEANUP_CEILING = 100;
@@ -108,16 +112,24 @@ export function configDifference(before, after) {
   return [...keys].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).toSorted();
 }
 
-/** Whether the configuration's blocking section is the empty baseline the preflight requires. */
+/**
+ * Whether the configuration's blocking section is the empty baseline (coordinator ruling R2): absent, `{}`, or a section
+ * with an empty `triggers` map and/or a `forwardInboundCredentials` that forwards nothing (absent, `{}` or all members
+ * false). The CLI writes `forwardInboundCredentials` when it registers its trigger and leaves it when it removes it; none of
+ * these forms changes what the project does. A trigger left, a member set to true, or any other key is not the baseline.
+ */
 export const emptyBlocking = (config) => {
   const section = config?.blockingFunctions;
   if (section === undefined) return true;
+  if (!isObject(section)) return false;
+  if (Object.keys(section).some((key) => key !== "triggers" && key !== "forwardInboundCredentials"))
+    return false;
+  const triggers = section.triggers;
+  if (triggers !== undefined && !(isObject(triggers) && Object.keys(triggers).length === 0))
+    return false;
+  const forward = section.forwardInboundCredentials;
   return (
-    isObject(section) &&
-    (Object.keys(section).length === 0 ||
-      (Object.keys(section).length === 1 &&
-        isObject(section.triggers) &&
-        Object.keys(section.triggers).length === 0))
+    forward === undefined || (isObject(forward) && Object.values(forward).every((v) => v === false))
   );
 };
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -221,7 +233,17 @@ export async function record({
     if (counts().attempted >= normalCeiling && !spec.cleanup)
       throw new BudgetError("the normal request ceiling is reached");
     await prepareRequest?.(spec);
-    return capture(spec);
+    const answer = await capture(spec);
+    // A 200, 201 or 202 whose JSON body does not parse says nothing about the effect: it is an unknown answer. An empty
+    // 204 is a complete answer.
+    if (
+      answer &&
+      !answer.bodyUnknown &&
+      [200, 201, 202].includes(answer.status) &&
+      (answer.json === null || answer.json === undefined)
+    )
+      answer.bodyUnknown = true;
+    return answer;
   };
   const read = async (spec, { observe: observing = false } = {}) => {
     const answer = await normal(observing ? { ...spec, observe: true } : spec);
@@ -279,6 +301,30 @@ export async function record({
     if (why) {
       unknownMutations.push({ id: "cli-" + action, class: why });
       if (action === "deploy") deployUnknown = why;
+    }
+    // Every mutating request the CLI sent (from its --debug output) is journaled; one that was retried, unanswered or not
+    // answered 2xx is an unknown write that only A2 can close (coordinator ruling R1). firebase-tools' own retries are
+    // accepted as CLI behaviour; the at-most-once rule is the recorder's own requests and one CLI call per action.
+    if (action !== "dry-run" || Array.isArray(result?.cliWrites)) {
+      if (!Array.isArray(result?.cliWrites))
+        unknownMutations.push({ id: "cli-" + action, class: "cli-log-unreadable" });
+      else {
+        let n = 0;
+        for (const write of result.cliWrites) {
+          n += 1;
+          try {
+            await save({ id: `cli-${action}-write-${n}`, state: "cli-write", action, ...write });
+          } catch {
+            // the journal is the thing that failed
+          }
+          if (write.class !== "ok")
+            unknownMutations.push({
+              id: `cli-${action}-write-${n}`,
+              class: `cli-write-${write.class}`,
+              request: `${write.method} ${write.url}`,
+            });
+        }
+      }
     }
     return result;
   };
@@ -505,9 +551,40 @@ export async function record({
       REGISTRY + "/packages?pageSize=100",
       "packages",
     );
-    if (!packages) return "lists";
-    out.inventory.before = { accounts: accountsBefore, packages: packages.packages.length };
+    const triggers = await list(
+      "preflight-triggers",
+      `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/-/triggers`,
+      "triggers",
+    );
+    const subs = await list(
+      "preflight-subscriptions",
+      `https://pubsub.googleapis.com/v1/projects/${PROJECT}/subscriptions?pageSize=1000`,
+      "subscriptions",
+    );
+    const topics = await list(
+      "preflight-topics",
+      `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics?pageSize=1000`,
+      "topics",
+    );
+    if (![packages, triggers, subs, topics].every(Boolean)) return "lists";
+    const sortedNames = (listed, key) => listed[key].map((x) => x.name).toSorted();
+    out.inventory.before = {
+      accounts: accountsBefore,
+      packages: sortedNames(packages, "packages"),
+      triggers: sortedNames(triggers, "triggers"),
+      subscriptions: sortedNames(subs, "subscriptions"),
+      topics: sortedNames(topics, "topics"),
+      services: enabledBefore,
+    };
+    // The inventory the closure compares against must be complete: a bucket that cannot be listed to its end stops the run
+    // before anything is created.
     sourceObjectsBefore = await sourceObjects("preflight");
+    if (Object.values(sourceObjectsBefore).some((listed) => !Array.isArray(listed)))
+      return "source-buckets";
+    out.inventory.before.sourceObjects = {
+      uploads: sourceObjectsBefore[sourceBuckets(projectNumber)[0]],
+      sources: sourceObjectsBefore[sourceBuckets(projectNumber)[1]],
+    };
     const summaryBefore = summarize(before);
     if (
       !isGone(summaryBefore) ||
@@ -555,6 +632,7 @@ export async function record({
       out.readbacks.function = {
         state: fn.json.state ?? null,
         uri: serviceUri,
+        url: typeof fn.json.url === "string" ? fn.json.url : null,
         serviceAccount: fn.json.serviceConfig?.serviceAccountEmail ?? null,
         blockingTrigger: isObject(fn.json.eventTrigger) ? fn.json.eventTrigger : null,
       };
@@ -577,11 +655,13 @@ export async function record({
         ? (config.json.blockingFunctions?.triggers?.[BEFORE_CREATE] ?? null)
         : undefined;
     out.readbacks.invoker = invoker;
-    out.readbacks.registration = trigger === undefined ? null : { trigger, serviceUri };
+    const functionUrl = out.readbacks.function?.url ?? null;
+    out.readbacks.registration =
+      trigger === undefined ? null : { trigger, serviceUri, functionUrl };
     return {
       serviceUri,
       invoker,
-      registration: trigger === undefined ? null : { trigger, serviceUri },
+      registration: trigger === undefined ? null : { trigger, serviceUri, functionUrl },
     };
   }
 
@@ -594,24 +674,38 @@ export async function record({
       name: email,
       transport: "rest",
     });
-    const answer = await mutate({ id: "op-sign-up", ...spec });
+    // The sign-up carries only the browser API key. A 403 on it is the key's refusal and a 401 never comes from the owner's
+    // token, so neither is allowed to stop the run before its cleanup: the 403 is data (`observe`), and the 401's stop is
+    // caught here (the run is then not closable, but the cleanup is complete).
+    let answer;
+    let keyRefused = false;
+    try {
+      answer = await mutate({ id: "op-sign-up", ...spec, observe: true });
+    } catch (error) {
+      if (!(error instanceof AuthStop)) throw error;
+      answer = { status: 401, json: null };
+      keyRefused = true;
+    }
     const id = answer?.status === 200 && readable(answer) ? answer.json.localId : null;
     out.signUp = {
       class: answerClass(answer),
       status: answer?.status ?? null,
       localId: typeof id === "string" ? id : null,
+      ...(keyRefused ? { keyRefused: true } : {}),
     };
     if (answerClass(answer) === "2xx" && typeof id === "string") {
       localId = id;
       guard.adopt(id);
       confirmed.add("account");
-    } else
+    } else if (answerClass(answer) !== "4xx") {
+      // No account id came back although the answer was not a refusal: whether an account exists is unknown.
       pendingCreates.set("account", {
         label: "account",
         id: "op-sign-up",
         name: email,
         class: answerClass(answer),
       });
+    }
     return out.signUp;
   }
 
@@ -952,6 +1046,7 @@ export async function record({
           answer?.status === 200 && readable(answer) && (answer.json.users ?? []).length === 0;
       });
     out.cleanup.listsEmpty = false;
+    const finalLists = {};
     await step("final-lists", async () => {
       const fns = await functionLists("final");
       const packages = await list(
@@ -959,6 +1054,26 @@ export async function record({
         REGISTRY + "/packages?pageSize=100",
         "packages",
       );
+      const triggers = await list(
+        "final-triggers",
+        `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/-/triggers`,
+        "triggers",
+      );
+      const subs = await list(
+        "final-subscriptions",
+        `https://pubsub.googleapis.com/v1/projects/${PROJECT}/subscriptions?pageSize=1000`,
+        "subscriptions",
+      );
+      const topics = await list(
+        "final-topics",
+        `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics?pageSize=1000`,
+        "topics",
+      );
+      const sorted = (listed, key) => (listed ? listed[key].map((x) => x.name).toSorted() : null);
+      finalLists.packages = sorted(packages, "packages");
+      finalLists.triggers = sorted(triggers, "triggers");
+      finalLists.subscriptions = sorted(subs, "subscriptions");
+      finalLists.topics = sorted(topics, "topics");
       out.cleanup.listsEmpty =
         Boolean(complete(fns) && packages) &&
         isGone(summarize(fns)) &&
@@ -992,33 +1107,12 @@ export async function record({
       Array.isArray(out.cleanup.configDifference) &&
       out.cleanup.configDifference.length === 0 &&
       out.cleanup.configAfterEmptyBlocking === true;
-    out.cleanup.verified =
-      out.cleanup.listsEmpty &&
-      out.cleanup.uploadObjectsUnexplained.length === 0 &&
-      out.cleanup.uploadReasons.length === 0 &&
-      Object.values(readBack).every((v) => v === true) &&
-      out.cleanup.configRestored &&
-      accountsSame;
-    // Read-only inventory: what the deploy left that this recorder does not delete, and what it changed.
-    await step("source-objects", async () => {
-      const after = await sourceObjects("inventory");
-      out.inventory.sourceObjects = Object.fromEntries(
-        sourceBuckets(projectNumber).map((name, index) => {
-          const before = sourceObjectsBefore?.[name];
-          const now = after[name];
-          return [
-            index === 0 ? "uploads" : "sources",
-            Array.isArray(before) && Array.isArray(now)
-              ? {
-                  added: now.filter((n) => !before.includes(n)),
-                  removed: before.filter((n) => !now.includes(n)),
-                }
-              : null,
-          ];
-        }),
-      );
-    });
+    // The inventory the run started from, compared by identity with a fresh one: the two Gen2 buckets, the Eventarc triggers,
+    // the Pub/Sub topics and subscriptions, the images, the enabled services (none may be added) and the project IAM (only
+    // service-agent additions). Every difference, and every list that could not be read to its end, keeps the cleanup from
+    // being verified.
     await step("inventory", async () => {
+      const afterBuckets = await sourceObjects("inventory");
       const iamAfter = await read({
         id: "iam-after",
         method: "POST",
@@ -1033,15 +1127,64 @@ export async function record({
         url: SERVICES_URL,
         cleanup: true,
       });
-      const names_ = new Set((after?.json?.services ?? []).map((svc) => svc.config?.name));
+      const servicesNow =
+        after?.status === 200 && readable(after)
+          ? (after.json.services ?? []).map((svc) => svc.config?.name).toSorted()
+          : null;
       out.inventory.services =
-        after?.status === 200 && readable(after) && enabledBefore
+        servicesNow && enabledBefore
           ? {
-              added: [...names_].filter((n) => !enabledBefore.includes(n)).toSorted(),
-              removed: enabledBefore.filter((n) => !names_.has(n)),
+              added: servicesNow.filter((n) => !enabledBefore.includes(n)).toSorted(),
+              removed: enabledBefore.filter((n) => !servicesNow.includes(n)),
             }
           : null;
+      out.inventory.sourceObjects = Object.fromEntries(
+        sourceBuckets(projectNumber).map((name, index) => {
+          const before = sourceObjectsBefore?.[name];
+          const now = afterBuckets[name];
+          return [
+            index === 0 ? "uploads" : "sources",
+            Array.isArray(before) && Array.isArray(now)
+              ? {
+                  added: now.filter((n) => !before.includes(n)),
+                  removed: before.filter((n) => !now.includes(n)),
+                }
+              : null,
+          ];
+        }),
+      );
+      const compared = inventoryDifferences({
+        before: out.inventory.before,
+        after: {
+          triggers: finalLists.triggers ?? null,
+          subscriptions: finalLists.subscriptions ?? null,
+          topics: finalLists.topics ?? null,
+          packages: finalLists.packages ?? null,
+          services: servicesNow,
+          sourceObjects: {
+            uploads: afterBuckets[sourceBuckets(projectNumber)[0]],
+            sources: afterBuckets[sourceBuckets(projectNumber)[1]],
+          },
+        },
+        kinds: BLOCKING_INVENTORY_KINDS,
+      });
+      const iam = iamUnexpected(out.inventory.iam);
+      out.inventory.complete = compared.complete && iam.complete;
+      out.inventory.missing = compared.missing;
+      out.inventory.differences = [
+        ...compared.differences,
+        ...iam.unexpected.map((what) => ({ kind: "iam", what })),
+      ];
     });
+    out.cleanup.verified =
+      out.cleanup.listsEmpty &&
+      out.cleanup.uploadObjectsUnexplained.length === 0 &&
+      out.cleanup.uploadReasons.length === 0 &&
+      out.inventory.complete === true &&
+      out.inventory.differences.length === 0 &&
+      Object.values(readBack).every((v) => v === true) &&
+      out.cleanup.configRestored &&
+      accountsSame;
     await step("final-logs", async () => {
       await pause(wait.logDelay);
       await pollLogs("final", { final: true });

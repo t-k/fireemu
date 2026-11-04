@@ -9,6 +9,9 @@
 // `not-sent` (the operation or the read was not made, so there is nothing to judge).
 import { BLOCKING_EVENT, FIREBASE_FUNCTIONS_PY_VERSION, FUNCTION } from "./plan.mjs";
 
+/** The addresses the function answers on: the Cloud Run service's and the function's own url. */
+const addressesOf = (registration) =>
+  [registration.serviceUri, registration.functionUrl].filter((uri) => typeof uri === "string");
 const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 export const REQUIRED_CLAIMS = Object.freeze([
   "aud",
@@ -79,16 +82,19 @@ export function judge({
     ? verdict(
         {
           "trigger-present": isObject(observed.registration.trigger),
-          "uri-is-the-service":
-            observed.registration.trigger?.functionUri === observed.registration.serviceUri &&
-            observed.registration.serviceUri !== null,
+          // The CLI registers the function's own address (`url`, on cloudfunctions.net); the Cloud Run service has another
+          // (`serviceConfig.uri`, run.app). Either is the function's address.
+          "uri-is-the-function-address":
+            typeof observed.registration.trigger?.functionUri === "string" &&
+            addressesOf(observed.registration).includes(observed.registration.trigger.functionUri),
         },
         {
           trigger: observed.registration.trigger ?? null,
           serviceUri: observed.registration.serviceUri ?? null,
+          functionUrl: observed.registration.functionUrl ?? null,
           event: BLOCKING_EVENT,
         },
-        { functionUri: "the Cloud Run service address" },
+        { functionUri: "the function's address (its url, or the Cloud Run service address)" },
       )
     : result("not-sent", null, null, ["config read"]);
 
@@ -157,7 +163,10 @@ export function judge({
               ? {
                   "aud-is-the-function-uri":
                     typeof claims.aud === "string" &&
-                    claims.aud === observed.registration?.serviceUri,
+                    [
+                      ...addressesOf(observed.registration ?? {}),
+                      observed.registration?.trigger?.functionUri,
+                    ].includes(claims.aud),
                 }
               : {}),
             "not-expired-at-issue": isObject(token.timing) && token.timing.exp > token.timing.iat,

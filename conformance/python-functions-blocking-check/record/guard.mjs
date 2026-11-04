@@ -162,6 +162,18 @@ export function rules(runId, projectNumber, state = { localIds: new Set(), objec
       policyWithoutPublicMembers,
       true,
     ],
+    // The project's Eventarc triggers and Pub/Sub topics and subscriptions: read-only inventory (a blocking function has none)
+    read("eventarc.googleapis.com", `^/v1/projects/${P}/locations/(?:${R}|-)/triggers$`, {
+      pageToken: token,
+    }),
+    read("pubsub.googleapis.com", `^/v1/projects/${P}/topics$`, {
+      pageSize: num(1000),
+      pageToken: token,
+    }),
+    read("pubsub.googleapis.com", `^/v1/projects/${P}/subscriptions$`, {
+      pageSize: num(1000),
+      pageToken: token,
+    }),
     // Artifact Registry: the repository, lists, and the deletes of this function's own images
     read(
       "artifactregistry.googleapis.com",

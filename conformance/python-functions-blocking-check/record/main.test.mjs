@@ -8,15 +8,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import {
   PACKET_FILES,
   envProblems,
@@ -54,7 +53,7 @@ const goodDeps = (over = {}) => ({
   readFile: () => JSON.stringify({ projectId: "fireemu-oracle-idp", apiKey: KEY }),
   ...over,
 });
-const dir = () => mkdtempSync(join(tmpdir(), "pcb-main-"));
+const dir = () => tempDir("pcb-main-");
 const args = (d, over = {}) => {
   const values = {
     "run-dir": d,
@@ -658,7 +657,15 @@ test("readback hands the recorded baselines to the read, journals privately and 
   assert.equal(
     out.at(-1),
     JSON.stringify(
-      { runId: RUN, allAbsent: true, attempted: 1, unknown: 0, unconfirmedCreates: [] },
+      {
+        runId: RUN,
+        allAbsent: true,
+        attempted: 1,
+        unknown: 0,
+        unconfirmedCreates: [],
+        inventory: null,
+        carried: [],
+      },
       null,
       2,
     ),
@@ -747,6 +754,8 @@ test("the latest time in a journal wins, and a file that cannot be read has none
     accountsBefore: null,
     configBeforeDigest: null,
     uploadObjects: [],
+    baseline: { accounts: 1.5 },
+    carried: [],
   });
   writeFileSync(file, "{");
   assert.equal(resultOf(file).why, "the run's result file cannot be read (not JSON)");

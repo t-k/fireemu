@@ -56,7 +56,7 @@ export const sourceBuckets = (projectNumber) => [
 /** The one bucket the recorder may delete objects in: the CLI's own source upload slot for the region. */
 export const uploadBucket = (projectNumber) => sourceBuckets(projectNumber)[0];
 
-const UPLOAD_OBJECT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+const UPLOAD_OBJECT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/;
 
 /**
  * Whether a name may be adopted as one of this deployment's upload objects: the upload bucket of the project and a plain

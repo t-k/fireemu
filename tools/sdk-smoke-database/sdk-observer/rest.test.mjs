@@ -281,3 +281,7 @@ test('run --suite rest: after the run is aborted no further case is sent, and th
     assert.notEqual(exit, 0); assert.match(result.error ?? '', /run deadline/);
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
+test('the rest suite deadlines: 120 s per profile, 6 minutes per run, the process backstop 8 minutes (below the local entry\'s 9-minute exec timeout)', async () => {
+  const { backstopMs } = await import('./observer.mjs');
+  assert.deepEqual([SUITES.rest.profileMs, SUITES.rest.runMs, backstopMs('rest')], [120000, 360000, 480000]);
+});

@@ -15,6 +15,14 @@ from cloudevents.http import from_http
 from google.events.cloud import firestore as firestore_events
 
 _NOT_AN_ATTRIBUTE = frozenset({"data", "datacontenttype"})
+# The daemon's strict 2nd gen frame names a `traceparent` for the Node runner's event. Production sends the trace context as an
+# ordinary HTTP header (Cloud Run's), never as a `ce-` attribute, so the Python event has none (sandbox run
+# PYCHECK-EVENTS-20261104-01, the raw twins of the Pub/Sub, Storage and Eventarc events).
+_HTTP_HEADER_ONLY = frozenset({"traceparent"})
+# Eventarc sends `ce-dataschema` with every Firestore event (recorded for `created`; the schema is the same document for the family).
+_FIRESTORE_DATASCHEMA = (
+    "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
+)
 
 
 _WHOLE_SECOND_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(Z|[+-]\d{2}:\d{2})$")
@@ -28,7 +36,7 @@ def _attribute_headers(event: dict) -> dict:
     return {
         f"ce-{name}": value
         for name, value in event.items()
-        if name not in _NOT_AN_ATTRIBUTE and isinstance(value, str)
+        if name not in _NOT_AN_ATTRIBUTE and name not in _HTTP_HEADER_ONLY and isinstance(value, str)
     }
 
 
@@ -107,6 +115,7 @@ def database_cloud_event(event: dict):
 def firestore_cloud_event(event: dict):
     """The `CloudEvent` for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
     headers = _attribute_headers(event)
+    headers.setdefault("ce-dataschema", _FIRESTORE_DATASCHEMA)
     data = event.get("data")
     message = firestore_events.DocumentEventData.from_json(json.dumps(data if isinstance(data, dict) else {}))
     headers["content-type"] = "application/protobuf"

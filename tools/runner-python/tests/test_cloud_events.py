@@ -211,3 +211,21 @@ def test_a_content_type_that_is_not_a_string_is_ignored_for_the_default(adapter,
 
 def test_an_empty_content_type_is_the_default(adapter):
     assert adapter(event(datacontenttype=""))._get_attributes()["datacontenttype"] == "application/json"
+
+
+# Production (recorded 2026-11-04, sandbox run PYCHECK-EVENTS-20261104-01): the raw CloudEvent of a Pub/Sub, Storage and
+# Eventarc delivery has no `traceparent` attribute. The trace context is an ordinary HTTP header of the request there.
+TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+def test_a_traceparent_member_is_not_a_cloudevent_attribute(adapter):
+    attributes = adapter(event(traceparent=TRACEPARENT))._get_attributes()
+    assert "traceparent" not in attributes
+    assert attributes["id"] == "e-1"
+
+
+def test_a_traceparent_member_does_not_change_the_data_or_the_other_attributes(adapter):
+    with_trace = adapter(event(traceparent=TRACEPARENT))
+    without = adapter(event())
+    assert with_trace._get_attributes() == without._get_attributes()
+    assert with_trace.get_data() == without.get_data()

@@ -90,3 +90,25 @@ def test_the_refusal_without_a_specversion_has_this_exact_message():
     with pytest.raises(ValueError) as error:
         firestore_cloud_event(event)
     assert str(error.value) == "the event has no specversion"
+
+
+# Production (recorded 2026-11-04, sandbox run PYCHECK-EVENTS-20261104-01, the raw twin of a created event): Eventarc sends
+# `ce-dataschema` with the Firestore events, and no other attribute beyond the ones the daemon already names.
+DATASCHEMA = "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
+
+
+@pytest.mark.parametrize("kind", ["created", "updated", "deleted", "written"])
+def test_a_firestore_event_carries_the_dataschema_production_sends(kind):
+    attributes = firestore_cloud_event(structured(type=f"google.cloud.firestore.document.v1.{kind}"))._get_attributes()
+    assert attributes["dataschema"] == DATASCHEMA
+
+
+def test_a_dataschema_the_daemon_names_is_kept():
+    attributes = firestore_cloud_event(structured(dataschema="https://example.com/schema"))._get_attributes()
+    assert attributes["dataschema"] == "https://example.com/schema"
+
+
+def test_the_dataschema_is_added_to_nothing_but_the_attributes():
+    event = structured()
+    firestore_cloud_event(event)
+    assert "dataschema" not in event

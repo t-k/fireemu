@@ -1775,6 +1775,52 @@ fn timeout_rounds_and_scales_like_java() {
     }
 }
 
+/// The rounding itself, on the nanoseconds read: the double just below 1.5 ns rounds down and
+/// 1.5 ns up, half up as Java's `Math.round` (the HTTP answers above only say loaded or not).
+#[test]
+fn timeout_nanoseconds_round_half_up() {
+    use fireemu_adapter_database::request::duration_nanos;
+    for (value, nanos) in [
+        ("0.49999999999999994ns", 0),
+        ("0.5ns", 1),
+        ("1.4999999999999998ns", 1),
+        ("1.5ns", 2),
+        ("2.5ns", 3),
+        ("2.4999999999999996ns", 2),
+    ] {
+        assert_eq!(duration_nanos(value), Ok(nanos), "{value}");
+    }
+}
+
+/// A `+` in a query value other than `timeout` stays a plus in both profiles, so
+/// `equalTo="a+b"` finds the key `a+b`. The jar (probed 2026-11-04) decodes it as a space and
+/// answers `{"a b":1}`; production recorded neither, so fireemu keeps its answer (the open
+/// issue on the jar probe's REST leftovers, item 1).
+#[test]
+fn a_plus_in_equal_to_stays_a_plus() {
+    for strict in PROFILES {
+        let mut db = db(strict);
+        assert_eq!(
+            send(&mut db, "PUT", "/pl.json?ns=p", &[], r#"{"a b":1,"a+b":2}"#).status,
+            200
+        );
+        for (query, body) in [
+            ("equalTo=%22a+b%22", r#"{"a+b":2}"#),
+            ("equalTo=%22a%2Bb%22", r#"{"a+b":2}"#),
+            ("equalTo=%22a%20b%22", r#"{"a b":1}"#),
+        ] {
+            assert_eq!(
+                get(
+                    &mut db,
+                    &format!("/pl.json?ns=p&orderBy=%22%24key%22&{query}")
+                ),
+                (200, body.to_owned()),
+                "strict={strict} {query}"
+            );
+        }
+    }
+}
+
 /// Java's `Math.round` for a positive length: half up, decided on the exact fraction.
 fn java_round(value: f64) -> f64 {
     let floor = value.floor();

@@ -197,7 +197,9 @@ fn timeout_follows_the_scala_duration_grammar_of_the_official_emulator() {
         "5%20m",
         "5%09s",
         "%015s",
+        // `+` is a space in this value (the jar decodes it so), `%2B` is the sign.
         "+5s",
+        "%2B5s",
         "05s",
         "1e1s",
         "5.s",
@@ -1679,6 +1681,141 @@ async fn over_http_a_malformed_escape_answers_the_recorded_bytes() {
                 ]
             );
             assert_eq!(body, error("Bad Request"));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Review round 2 (2026-11-04): neighbours probed against the jar, no production recording.
+
+/// The jar decodes `+` in the `timeout` value as a space, which `Duration` then drops; `%2B`
+/// stays a plus.
+#[test]
+fn timeout_reads_a_plus_as_a_space() {
+    let format = error(TIMEOUT_FORMAT);
+    for strict in PROFILES {
+        let mut db = seeded(strict);
+        for value in ["5s+", "1+min", "5+s", "+5s", "+1+min+", "%2B5s"] {
+            assert_eq!(
+                get(&mut db, &format!("/s/mix.json?ns=p&timeout={value}")),
+                (200, MIX_PLAIN.to_owned()),
+                "strict={strict} timeout={value}"
+            );
+        }
+        for value in ["+", "5%2Bs", "-%2B5s", "%2B-5s", "1%2Bmin"] {
+            assert_eq!(
+                get(&mut db, &format!("/s/mix.json?ns=p&timeout={value}")),
+                (400, format.clone()),
+                "strict={strict} timeout={value}"
+            );
+        }
+    }
+}
+
+/// Lengths at the rounding edge (Java's `Math.round`, half up, no `+0.5` error) and
+/// hexadecimal lengths whose mantissa or exponent would overflow a double on the way.
+#[test]
+fn timeout_rounds_and_scales_like_java() {
+    let positive = error("timeout must be positive");
+    let format = error(TIMEOUT_FORMAT);
+    let long_one_second = format!("0x1{}p-1024s", "0".repeat(256));
+    let long_one_second_more = format!("0x1{}p-1200s", "0".repeat(300));
+    let long_tiny = format!("0x1{}p-1201s", "0".repeat(300));
+    for strict in PROFILES {
+        let mut db = seeded(strict);
+        for (value, expected) in [
+            ("0.49999999999999994ns", (400, positive.clone())),
+            ("0.5ns", (200, MIX_PLAIN.to_owned())),
+            ("0.50000000000000006ns", (200, MIX_PLAIN.to_owned())),
+            ("1.4999999999999998ns", (200, MIX_PLAIN.to_owned())),
+            ("0x0p1024s", (400, positive.clone())),
+            ("0x0p1100s", (400, positive.clone())),
+            ("0x0p3000s", (400, positive.clone())),
+            ("-0x0p3000s", (400, positive.clone())),
+            ("0x0p99999999999999999999s", (400, positive.clone())),
+            ("0x1p-99999999999999999999s", (400, positive.clone())),
+            ("0x1p99999999999999999999s", (400, format.clone())),
+            ("0x1p1023s", (400, format.clone())),
+            ("0x1p1024s", (400, format.clone())),
+            ("0x1p-1074s", (400, positive.clone())),
+            ("0x.8p-1ns", (400, positive.clone())),
+            ("0x.7ffffffffffffcp-1ns", (400, positive.clone())),
+            (
+                "0x0.0000000000000000000001p88s",
+                (200, MIX_PLAIN.to_owned()),
+            ),
+            (
+                "0x00000000000000000000000000000001p0s",
+                (200, MIX_PLAIN.to_owned()),
+            ),
+            (long_one_second.as_str(), (200, MIX_PLAIN.to_owned())),
+            (long_one_second_more.as_str(), (200, MIX_PLAIN.to_owned())),
+            (long_tiny.as_str(), (200, MIX_PLAIN.to_owned())),
+        ] {
+            assert_eq!(
+                get(&mut db, &format!("/s/mix.json?ns=p&timeout={value}")),
+                expected,
+                "strict={strict} timeout={value}"
+            );
+        }
+    }
+}
+
+/// Java's `Math.round` for a positive length: half up, decided on the exact fraction.
+fn java_round(value: f64) -> f64 {
+    let floor = value.floor();
+    if value - floor >= 0.5 {
+        floor + 1.0
+    } else {
+        floor
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Nanosecond lengths next to a half: only the exact fraction decides.
+    #[test]
+    fn nanosecond_halves_round_half_up(whole in 0u32..4, step in -3i32..=3) {
+        let mut value = f64::from(whole) + 0.5;
+        for _ in 0..step.unsigned_abs() {
+            value = if step > 0 { value.next_up() } else { value.next_down() };
+        }
+        let expected = if java_round(value) <= 0.0 {
+            (400, error("timeout must be positive"))
+        } else {
+            (200, "1".to_owned())
+        };
+        for strict in PROFILES {
+            let mut db = db(strict);
+            send(&mut db, "PUT", "/t.json?ns=p", &[], "1");
+            prop_assert_eq!(get(&mut db, &format!("/t.json?ns=p&timeout={value:?}ns")), expected.clone(), "{:?}", value);
+        }
+    }
+
+    /// A hexadecimal length is exact whatever its spelling: `1` followed by `zeros` hex
+    /// zeros and the exponent that brings it back to 2^`power` seconds, or a zero mantissa.
+    #[test]
+    fn hexadecimal_lengths_scale_exactly(zeros in 0usize..300, power in -40i32..=40, zero in any::<bool>()) {
+        let digit = if zero { "0" } else { "1" };
+        let exponent = i64::from(power) - 4 * i64::try_from(zeros).unwrap();
+        let text = format!("0x{digit}{}p{exponent}s", "0".repeat(zeros));
+        let nanos = if zero { 0.0 } else { java_round(1e9 * 2f64.powi(power)) };
+        // Beyond 2^63 ns a Scala duration does not hold it: the jar's 500 (0x1p34s, probed).
+        #[allow(clippy::cast_precision_loss)]
+        let expected = if nanos > i64::MAX as f64 {
+            (500, error("Unexpected server error"))
+        } else if nanos <= 0.0 {
+            (400, error("timeout must be positive"))
+        } else if nanos > 900e9 {
+            (400, error("timeout must not be longer than 15 minutes"))
+        } else {
+            (200, "1".to_owned())
+        };
+        for strict in PROFILES {
+            let mut db = db(strict);
+            send(&mut db, "PUT", "/t.json?ns=p", &[], "1");
+            prop_assert_eq!(get(&mut db, &format!("/t.json?ns=p&timeout={text}")), expected.clone(), "{}", text);
         }
     }
 }

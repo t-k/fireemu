@@ -53,7 +53,8 @@ pub enum Location {
 }
 
 /// Splits `target` into its path and decoded query parameters (the last of a repeated
-/// name wins).
+/// name wins). A `+` stays a plus, except in the `timeout` value, which the official emulator
+/// reads with `+` as a space (`%2B` is a plus there too).
 pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let params = query
@@ -61,7 +62,14 @@ pub fn split_target(target: &str) -> (&str, BTreeMap<String, String>) {
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            (percent_decode(name), percent_decode(value))
+            let name = percent_decode(name);
+            let plus = if name == "timeout" {
+                PlusMode::Space
+            } else {
+                PlusMode::Literal
+            };
+            let value = codec::percent_decode(value, plus);
+            (name, value)
         })
         .collect();
     (path, params)
@@ -462,10 +470,17 @@ pub fn duration_nanos(text: &str) -> Result<i64, DurationError> {
         if nanos > limit {
             return Err(DurationError::Range);
         }
-        // The cast saturates, so anything at or below -2^63 ns lands on i64::MIN, where
-        // Scala's durations stop (they hold -(2^63 - 1) ns at most).
+        // Java's `Math.round`: half up, decided on the exact fraction (adding 0.5 first would
+        // round 0.49999999999999994 up). The cast saturates, so anything at or below -2^63 ns
+        // lands on i64::MIN, where Scala's durations stop (they hold -(2^63 - 1) ns at most).
+        let floor = nanos.floor();
+        let half_up = if nanos - floor >= 0.5 {
+            floor + 1.0
+        } else {
+            floor
+        };
         #[allow(clippy::cast_possible_truncation)]
-        let rounded = (nanos + 0.5).floor() as i64;
+        let rounded = half_up as i64;
         if rounded == i64::MIN {
             return Err(DurationError::Range);
         }
@@ -514,10 +529,12 @@ fn decimal_double(body: &str) -> Option<f64> {
     body.parse().ok()
 }
 
+/// A hexadecimal number with its binary exponent, as Java reads it, without overflowing on
+/// the way: the leading zeros go, the first 15 significant digits (60 bits) are kept with a
+/// sticky bit for any non-zero digit after them, and the exponent is applied in steps.
 fn hex_double(hex: &str) -> Option<f64> {
     let (mantissa, exponent) = hex.split_once(['p', 'P'])?;
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    // A digit that is not hexadecimal fails below.
     if whole.is_empty() && fraction.is_empty() {
         return None;
     }
@@ -525,18 +542,50 @@ fn hex_double(hex: &str) -> Option<f64> {
     if exponent_digits.is_empty() || !exponent_digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let mut value = 0.0f64;
-    for digit in whole.chars().chain(fraction.chars()) {
-        value = value * 16.0 + f64::from(digit.to_digit(16)?);
-    }
-    let shift: i64 = exponent.parse().unwrap_or(if exponent.starts_with('-') {
-        i64::MIN
+    // The shared codec reads the digits (pairs of them, so an odd count gets a leading zero);
+    // a character that is not a hexadecimal digit fails it.
+    let text = format!("{whole}{fraction}");
+    let padded = if text.len() % 2 == 1 {
+        format!("0{text}")
     } else {
-        i64::MAX
-    });
-    let fraction_bits = i64::try_from(fraction.len()).ok()?.saturating_mul(4);
-    let power = i32::try_from(shift.saturating_sub(fraction_bits).clamp(-2000, 2000)).ok()?;
-    Some(value * 2f64.powi(power))
+        text.clone()
+    };
+    let mut digits: Vec<u64> = codec::hex_decode(&padded)?
+        .into_iter()
+        .flat_map(|byte| [u64::from(byte >> 4), u64::from(byte & 15)])
+        .collect();
+    if padded.len() != text.len() {
+        digits.remove(0);
+    }
+    let Some(first) = digits.iter().position(|&d| d != 0) else {
+        return Some(0.0);
+    };
+    let significant = &digits[first..];
+    let kept = significant.len().min(15);
+    let mut bits = significant[..kept].iter().fold(0u64, |acc, d| acc * 16 + d);
+    if significant[kept..].iter().any(|&d| d != 0) {
+        bits |= 1;
+    }
+    // Far beyond any double either way: saturate rather than overflow.
+    let shift = exponent_digits
+        .bytes()
+        .fold(0i64, |acc, b| (acc * 10 + i64::from(b - b'0')).min(1 << 40));
+    let shift = if exponent.starts_with('-') {
+        -shift
+    } else {
+        shift
+    };
+    let dropped = i64::try_from(significant.len() - kept).ok()?;
+    let fraction_digits = i64::try_from(fraction.len()).ok()?;
+    let mut power = shift + 4 * (dropped - fraction_digits);
+    #[allow(clippy::cast_precision_loss)]
+    let mut value = bits as f64;
+    while power != 0 && value != 0.0 && value.is_finite() {
+        let step = power.clamp(-1000, 1000);
+        value *= 2f64.powi(i32::try_from(step).ok()?);
+        power -= step;
+    }
+    Some(value)
 }
 
 fn order_by(text: &str) -> Result<OrderBy, Refusal> {

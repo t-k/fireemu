@@ -237,3 +237,15 @@ test('run --suite tokens: a GET answer that cannot be judged is listed as an unk
     assert.equal(result.observed, 2, 'only the ok rows of the case table count');
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
+
+test('run --suite tokens (v1.2): a journal without the secret guard cannot make run() throw after cleanup: the result is returned and result.json is not written', async () => {
+  const { createJournal } = await import('./lib.mjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'tokens-legacy-')), db = await fakeDatabase(), errors = [], original = console.error;
+  console.error = (...a) => { errors.push(a.join(' ')); };
+  try {
+    const legacy = file => { const j = createJournal(file); return { addSecret: j.addSecret, write: j.write, close: j.close }; };
+    const { exit, result } = await run({ target: local(db.host), runId: 'TEST-TOKENS-LEGACY', prefix: PREFIX, directCap: 80, outDir: path.join(dir, 'run'), suite: 'tokens', probeDelayMs: 1 }, { createJournal: legacy });
+    assert.equal(exit, 0); assert.equal(result.status, 'complete'); assert.equal(existsSync(path.join(dir, 'run', 'result.json')), false);
+    assert.ok(errors.some(e => /result\.json not written/.test(e)), errors.join('|'));
+  } finally { console.error = original; db.close(); rmSync(dir, { recursive: true, force: true }); }
+});

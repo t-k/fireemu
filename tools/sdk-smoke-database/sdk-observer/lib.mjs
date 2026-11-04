@@ -32,18 +32,32 @@ export function createCounter({ direct, reserve = 12 }) {
   };
 }
 
+/**
+ * The forms of a secret that a body, a header or an error message can echo, as global regular expressions: the raw text, its
+ * percent-encoded form with the hex digits of every escape in either case (the literal characters stay case-sensitive), and the base64
+ * and base64url forms (unpadded: a padded echo contains them) with the same percent treatment of the base64 form. A partial echo of
+ * the token is outside the guard.
+ */
+export function secretPatterns(secret) {
+  const literal = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), digit = c => (/[a-f]/i.test(c) ? `[${c.toLowerCase()}${c.toUpperCase()}]` : c);
+  const percent = encoded => encoded.split(/(%[0-9A-Fa-f]{2})/).map((part, i) => (i % 2 ? `%${digit(part[1])}${digit(part[2])}` : literal(part))).join('');
+  const b64 = Buffer.from(secret).toString('base64').replace(/=+$/, ''), b64url = Buffer.from(secret).toString('base64url');
+  return [...new Set([literal(secret), percent(encodeURIComponent(secret)), literal(b64), literal(b64url), percent(encodeURIComponent(b64))])].map(source => new RegExp(source, 'g'));
+}
+const hasPattern = (text, patterns) => patterns.some(re => { re.lastIndex = 0; return re.test(text); });
+
 // Append-only JSONL, created O_EXCL, 0600. A row that contains a secret is refused. `optional` rows (raw capture) are dropped once the file passes the soft cap.
 export function createJournal(file, { maxBytes = 16 << 20, softBytes = 12 << 20, write: rawWrite = writeSync } = {}) {
-  const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_NOFOLLOW, 0o600), secrets = new Set(); let bytes = 0;
+  const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_NOFOLLOW, 0o600), secrets = []; let bytes = 0;
   return {
-    addSecret: s => { if (typeof s === 'string' && s.length >= 8) { secrets.add(s); secrets.add(encodeURIComponent(s)); } },   // the raw and the percent-encoded form (a URL or a query echoed in a body)
-    leaks: text => [...secrets].some(s => text.includes(s)),
-    redact: text => [...secrets].reduce((t, s) => t.split(s).join('{secret}'), text),
+    addSecret: s => { if (typeof s === 'string' && s.length >= 8) secrets.push(...secretPatterns(s)); },   // raw, percent-encoded (any hex case), base64 and base64url
+    leaks: text => hasPattern(text, secrets),
+    redact: text => secrets.reduce((t, re) => t.replace(re, '{secret}'), text),
     write(row, { optional = false } = {}) {
       const text = `${JSON.stringify({ t: new Date().toISOString(), ...row })}\n`, size = Buffer.byteLength(text);
       if (optional && bytes + size > softBytes) return false;
       if (bytes + size > maxBytes) throw new Error('Journal cap');
-      for (const s of secrets) if (text.includes(s)) throw new Error('Secret in journal row');
+      if (hasPattern(text, secrets)) throw new Error('Secret in journal row');
       writeAll(fd, text, rawWrite); bytes += size; return true;
     },
     close() { try { fsyncSync(fd); } finally { closeSync(fd); } },
@@ -92,7 +106,7 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
       counter.take(label, cleanup ? 'reserve' : 'direct');
       const note = row => { try { journal.write(row); } catch (error) { if (!cleanup && row.kind === 'admin-req') throw error; } };   // a cleanup request never depends on the journal; nothing else is sent when the journal is down
       note({ kind: 'admin-req', label, method, url, body: body === undefined ? null : clip(body), ...(record ? { headers: { ...(extra ?? {}) } } : {}), ...(anonymous ? { anonymous: true } : {}), ...(bearer !== undefined ? { bearerSha256: sha256(bearer) } : {}), ...(resolveAdc ? { resolveAdc: true } : {}) });
-      const hide = resolveAdc ? t => (typeof t === 'string' ? t.split(adc).join(ADC_PLACEHOLDER).split(encodeURIComponent(adc)).join(ADC_PLACEHOLDER) : t) : t => t;
+      const adcPatterns = resolveAdc ? secretPatterns(adc) : [], hide = resolveAdc ? t => (typeof t === 'string' ? adcPatterns.reduce((u, re) => u.replace(re, ADC_PLACEHOLDER), t) : t) : t => t;
       let res, text, bytes;
       try {
         res = await fetchImpl(resolveAdc ? url.replace(ADC_PLACEHOLDER, encodeURIComponent(adc)) : url, { method, redirect: 'manual', headers: { ...(anonymous ? {} : headers), ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extra ?? {}), ...(bearer !== undefined ? { authorization: `Bearer ${bearer}` } : {}) }, body, signal: AbortSignal.timeout(timeoutMs) });

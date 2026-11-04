@@ -321,9 +321,11 @@ export async function run(opts, deps = {}) {
     else result.claims = 'left in place: cleanup unverified';
     jw({ kind: 'result', ...result, cases: undefined });
     try { journal.close(); } catch { /* disk */ }
-    let resultText = `${JSON.stringify(result, null, 2)}\n`;
-    if (journal.leaks(resultText)) { result.secretRedacted = true; resultText = journal.redact(`${JSON.stringify(result, null, 2)}\n`); }   // result.json passes the journal's secret check (raw and percent-encoded forms); an error message may carry a URL
-    try { writeNew(path.join(o.outDir, 'result.json'), resultText); } catch (error) { console.error(`result.json not written: ${error.message}`); }
+    try {   // the serialisation and the secret check are inside the write's try: a guard failure is reported, it cannot leave run() after the cleanup
+      let resultText = `${JSON.stringify(result, null, 2)}\n`;
+      if (journal.leaks(resultText)) { result.secretRedacted = true; resultText = journal.redact(`${JSON.stringify(result, null, 2)}\n`); }   // result.json passes the journal's secret check; an error message may carry a URL
+      writeNew(path.join(o.outDir, 'result.json'), resultText);
+    } catch (error) { console.error(`result.json not written: ${error.message}`); }
   }
   return { exit, result };
 }

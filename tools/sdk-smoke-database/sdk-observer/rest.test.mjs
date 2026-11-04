@@ -327,3 +327,34 @@ test('admin REST with record: when the token is hidden the clip bound applies to
   const r = await admin.rest('c', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true });
   assert.equal(r.text.length, 5 + 65536 + 20 - token.length); assert.ok(r.text.length < 65536); assert.equal(r.clipped, false, 'nothing was cut off'); assert.equal(r.text.startsWith('{adc}'), true);
 });
+
+// ---- packet 5 v1.2: case-insensitive percent escapes and the base64 forms (Codex r2 Must / Should) ----
+const lowerEscapes = s => encodeURIComponent(s).replace(/%[0-9A-F]{2}/g, e => e.toLowerCase());
+const mixedEscapes = s => { let n = 0; return encodeURIComponent(s).replace(/%[0-9A-F]{2}/g, e => (n++ % 2 ? e.toLowerCase() : e)); };
+const SECRET = `ya29.A0Az/+=Tt${'k'.repeat(20)}~!*'()??>>`;   // its base64 form holds + and / (and differs from the base64url form), and it needs padding
+test('journal guard (v1.2): percent escapes match in any hex case, base64 and base64url forms are secrets too; literal characters stay case-sensitive', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'journal-forms-')), journal = createJournal(path.join(dir, 'j.jsonl'));
+  try {
+    journal.addSecret(SECRET);
+    assert.notEqual(lowerEscapes(SECRET), encodeURIComponent(SECRET)); assert.notEqual(mixedEscapes(SECRET), lowerEscapes(SECRET));
+    const forms = { lower: lowerEscapes(SECRET), mixed: mixedEscapes(SECRET), upper: encodeURIComponent(SECRET), raw: SECRET, base64: Buffer.from(SECRET).toString('base64'), base64nopad: Buffer.from(SECRET).toString('base64').replace(/=+$/, ''), base64url: Buffer.from(SECRET).toString('base64url'), pctBase64: lowerEscapes(Buffer.from(SECRET).toString('base64')) };
+    for (const [name, form] of Object.entries(forms)) {
+      const text = `{"body":"x ${form} y"}`;
+      assert.equal(journal.leaks(text), true, name); assert.throws(() => journal.write({ kind: 'x', body: form }), /Secret in journal row/, name);
+      const red = journal.redact(text); assert.equal(journal.leaks(red), false, name); assert.equal(red.includes('{secret}'), true, name);
+    }
+    // a literal character of the token is case-sensitive: the same text with one letter's case changed is not the secret
+    assert.equal(journal.leaks(SECRET.replace('Tt', 'tt')), false); assert.equal(journal.leaks(lowerEscapes(SECRET).replace('Tt', 'tt')), false);
+    assert.equal(journal.leaks('%2f%2b plain'), false, 'an escape alone is not the token');
+  } finally { journal.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+test('admin REST with record (v1.2): the ADC token is hidden in any percent-escape case and in base64 forms, before the clip', async () => {
+  const token = `ya29.${'Ab/+='.repeat(10)}`, b64 = Buffer.from(token).toString('base64');
+  for (const form of [lowerEscapes(token), mixedEscapes(token), b64, Buffer.from(token).toString('base64url')]) for (const pad of [65536 - 7, 65536 - form.length, 65536 - form.length / 2]) {
+    const body = `${'a'.repeat(Math.floor(pad))}${form}${'b'.repeat(300)}`;
+    const admin = createAdmin({ headers: {}, adc: token, journal: { write() {} }, counter: createCounter({ direct: 5 }), fetchImpl: async () => new Response(Buffer.from(body), { status: 200, headers: { location: `http://h/?auth=${form}` } }) });
+    const r = await admin.rest('c', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true });
+    for (const piece of [token.slice(0, 6), form.slice(0, 8)]) assert.equal(r.text.includes(piece), false, `${form.slice(0, 12)} ${piece}`);
+    assert.equal(JSON.stringify(r.headers).includes(form.slice(0, 8)), false, 'the location header is hidden too');
+  }
+});

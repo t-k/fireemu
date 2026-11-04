@@ -667,3 +667,190 @@ test("a 200, 201 or 202 whose JSON body does not parse is an unknown answer; an 
   );
   assert.equal(object.result.unknownMutationList?.length ?? 0, 0);
 });
+
+// ---- the finer points the mutation run asked for -----------------------------------------------------------------
+
+test("the CLI log parser keeps PUT writes to other hosts, tells methods apart, and draws the 2xx line at 200 and 299", () => {
+  const text = [
+    REQ("PUT", "cloudresourcemanager.googleapis.com/v1/projects/p/x"),
+    STAT("PUT", "cloudresourcemanager.googleapis.com/v1/projects/p/x", 200),
+    REQ(
+      "PUT",
+      "storage.googleapis.com/gcf-v2-uploads-1.us-central1.cloudfunctions.appspot.com/u.zip",
+    ),
+    REQ("POST", "x.appspot.com.example/a"),
+    STAT("POST", "x.appspot.com.example/a", 200),
+    REQ("POST", "iam.example/r"),
+    STAT("POST", "iam.example/r", 299),
+    REQ("DELETE", "iam.example/r"),
+    STAT("DELETE", "iam.example/r", 300),
+    REQ("PATCH", "iam.example/s"),
+    STAT("PATCH", "iam.example/s", 199),
+    REQ("PUT", "iam.example/t"),
+    STAT("PUT", "iam.example/t", 201),
+    REQ("PUT", "iam.example/u"),
+    REQ("PUT", "iam.example/u"),
+    STAT("PUT", "iam.example/u", 503),
+    STAT("PUT", "iam.example/u", 200),
+    REQ("PUT", "iam.example/v"),
+    REQ("PUT", "iam.example/v"),
+    STAT("PUT", "iam.example/v", 200),
+    STAT("PUT", "iam.example/v", 201),
+    REQ("POST", "iam.example/w:getIamPolicy"),
+    REQ("POST", "iam.example/entries:list"),
+    REQ("POST", "iam.example/w:testIamPermissions"),
+    REQ("POST", "iam.example/w:generateUploadUrl"),
+  ].join("\n");
+  const found = Object.fromEntries(
+    cliWritesFromOutput(text).map((w) => [`${w.method} ${w.url}`, w]),
+  );
+  assert.deepEqual(Object.keys(found), [
+    "PUT cloudresourcemanager.googleapis.com/v1/projects/p/x",
+    "POST x.appspot.com.example/a",
+    "POST iam.example/r",
+    "DELETE iam.example/r",
+    "PATCH iam.example/s",
+    "PUT iam.example/t",
+    "PUT iam.example/u",
+    "PUT iam.example/v",
+  ]);
+  assert.equal(found["PUT cloudresourcemanager.googleapis.com/v1/projects/p/x"].class, "ok");
+  assert.equal(found["POST iam.example/r"].class, "ok", "299 is a 2xx answer");
+  assert.equal(found["DELETE iam.example/r"].class, "non-2xx", "300 is not");
+  assert.equal(found["PATCH iam.example/s"].class, "non-2xx", "199 is not");
+  assert.equal(found["PUT iam.example/t"].class, "ok");
+  assert.equal(found["PUT iam.example/u"].class, "retried");
+  assert.equal(found["PUT iam.example/v"].class, "ok", "two good answers to two requests");
+  assert.equal(found["POST iam.example/r"].requests, 1);
+  assert.deepEqual(found["PUT iam.example/u"].statuses, [503, 200]);
+});
+
+test("the CLI write rows are numbered from one per action and a log that cannot be read is named after its action", async () => {
+  const ok = { method: "POST", url: "x.example/a", requests: 1, statuses: [200], class: "ok" };
+  const { journal } = await go({ cliWrites: [ok, { ...ok, url: "x.example/b" }] });
+  const rowIds = journal.filter((r) => r.state === "cli-write").map((r) => r.id);
+  assert.deepEqual(rowIds, [
+    "cli-dry-run-write-1",
+    "cli-dry-run-write-2",
+    "cli-deploy-write-1",
+    "cli-deploy-write-2",
+    "cli-delete-write-1",
+    "cli-delete-write-2",
+  ]);
+  const bad = await go(
+    {},
+    (send) => send,
+    {},
+    (cli) => async (args) => ({
+      ...(await cli(args)),
+      cliWrites: null,
+    }),
+  );
+  assert.deepEqual(
+    bad.result.unknownMutationList.map((m) => m.id),
+    ["cli-deploy", "cli-delete"],
+  );
+  const unknown = await go({ cliWrites: [{ ...ok, class: "unanswered", statuses: [] }] });
+  const row = unknown.result.unknownMutationList.find((m) => m.id === "cli-deploy-write-1");
+  assert.equal(row.request, "POST x.example/a");
+  assert.equal(row.class, "cli-write-unanswered");
+});
+
+test("a clean run records an empty list of missing inventory reads, and the enable is recorded with its class", async () => {
+  const clean = await go();
+  assert.deepEqual(clean.result.inventory.missing, []);
+  assert.equal(clean.result.inventory.complete, true);
+  const enabled = await go({ withoutServices: [SCHEDULER] });
+  assert.deepEqual(enabled.result.enable, { serviceIds: [SCHEDULER], class: "2xx" });
+});
+
+test("the enable's operation is read ten seconds apart and no more once it is done", async () => {
+  const sleeps = [];
+  const { journal } = await go({ withoutServices: [SCHEDULER] }, (send) => send, {
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  assert.equal(ids(journal).filter((id) => id.startsWith("enable-operation-")).length, 2);
+  const at = ids(journal).indexOf("enable-operation-1");
+  assert.ok(sleeps.includes(10_000), JSON.stringify(sleeps));
+  assert.ok(at > 0);
+});
+
+test("a services list that cannot be read after the enable, or an operation read that answers 403, is handled as data", async () => {
+  const unreadable = await go(
+    { withoutServices: [SCHEDULER] },
+    (send, w) => async (request) =>
+      request.url.includes("services?filter") && w.enableRequests.length > 0
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(unreadable.result.stoppedBecause, "enable-services");
+  const forbidden = await go(
+    { withoutServices: [SCHEDULER] },
+    (send) => async (request) =>
+      request.method === "GET" && request.url.includes("/v1/operations/")
+        ? error(403, "PERMISSION_DENIED")
+        : send(request),
+  );
+  assert.notEqual(forbidden.result.outcome, "pycheck-auth-stop");
+  assert.equal(forbidden.result.stoppedBecause, undefined, "the services list settles it");
+  assert.deepEqual(forbidden.result.servicesEnabled, [SCHEDULER]);
+});
+
+// ---- the channel's operation and reads -----------------------------------------------------------------------------
+
+test("the channel delete's operation is read ten seconds apart until it is done, at most twelve times", async () => {
+  for (const [label, doneAfter, reads] of [
+    ["done at the second read", 2, 2],
+    ["never done", Infinity, 12],
+  ]) {
+    let seen = 0;
+    const sleeps = [];
+    const { result, journal } = await go(
+      { seedChannels: [] },
+      (send) => async (request) => {
+        if (
+          request.method === "GET" &&
+          request.url.includes("/locations/us-central1/operations/")
+        ) {
+          seen += 1;
+          return reply(200, {
+            name: "projects/p/locations/us-central1/operations/ch-1",
+            done: seen >= doneAfter,
+          });
+        }
+        return send(request);
+      },
+      { sleep: async (ms) => void sleeps.push(ms) },
+    );
+    assert.equal(
+      ids(journal).filter((id) => id.startsWith("channel-operation-")).length,
+      reads,
+      label,
+    );
+    assert.equal(seen, reads, label);
+    assert.equal(result.cleanup.channel.deleteClass, "2xx", label);
+    assert.ok(sleeps.filter((ms) => ms === 10_000).length >= reads, label);
+  }
+});
+
+test("a channel that is already gone is recorded, and a 403 on its read is data; a run past its ceiling still cleans the channel up", async () => {
+  const gone = await go({ seedChannels: [], failDeploy: true });
+  assert.equal(gone.result.cleanup.channel.absentAlready, true);
+  assert.equal(gone.world.calls.filter((c) => c.startsWith("DELETE eventarc")).length, 0);
+  const forbidden = await go(
+    { seedChannels: [] },
+    (send) => async (request) =>
+      request.method === "GET" && new URL(request.url).pathname.endsWith("/channels/firebase")
+        ? error(403, "PERMISSION_DENIED")
+        : send(request),
+  );
+  assert.notEqual(forbidden.result.outcome, "pycheck-auth-stop");
+  assert.equal(forbidden.world.calls.filter((c) => c.startsWith("DELETE eventarc")).length, 0);
+  const late = await go({ seedChannels: [] }, (send) => send, { normalCeiling: 30 });
+  assert.equal(late.result.cleanup.channel.deleteClass, "2xx");
+  assert.equal(late.result.cleanup.readBack["channel-topic"], true);
+  assert.equal(late.result.cleanup.errors, undefined);
+  assert.equal(late.result.cleanup.verified, true);
+});

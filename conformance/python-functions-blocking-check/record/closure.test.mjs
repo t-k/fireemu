@@ -4,6 +4,13 @@ import assert from "node:assert/strict";
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import {
+  INVENTORY_KINDS,
+  cliWritesFromOutput,
+  iamUnexpected,
+  inventoryDifferences,
+  redactCliText,
+} from "./deploy.mjs";
 import { readbackRun, READBACK_MAX_REQUESTS } from "./readback.mjs";
 import { lastActivity, main, redactRow, resultOf, writeAll } from "./main.mjs";
 import { sourceBuckets } from "./plan.mjs";
@@ -482,4 +489,282 @@ test("writeAll writes everything even when the descriptor takes a few bytes at a
   writeAll(fd, "x".repeat(12 * 1024 * 1024));
   closeSync(fd);
   assert.equal(readFileSync(path, "utf8").length, 12 * 1024 * 1024);
+});
+
+// ---- the pure parts of the closure -----------------------------------------------------------------------------------
+
+const REQ = (m, u, q = "[none]") => `[t] >>> [apiv2][query] ${m} https://${u} ${q}`;
+const STAT = (m, u, c) => `[t] <<< [apiv2][status] ${m} https://${u} ${c}`;
+
+test("the CLI log parser gives every mutating request with its answers, keeps PUTs to other hosts, and draws the 2xx line at 200 and 299", () => {
+  const text = [
+    REQ("PUT", "identitytoolkit.googleapis.com/admin/v2/projects/p/config"),
+    STAT("PUT", "identitytoolkit.googleapis.com/admin/v2/projects/p/config", 200),
+    REQ(
+      "PUT",
+      "storage.googleapis.com/gcf-v2-uploads-1.us-central1.cloudfunctions.appspot.com/u.zip",
+    ),
+    REQ("POST", "x.appspot.com.example/a"),
+    STAT("POST", "x.appspot.com.example/a", 200),
+    REQ("POST", "iam.example/r"),
+    STAT("POST", "iam.example/r", 299),
+    REQ("DELETE", "iam.example/r"),
+    STAT("DELETE", "iam.example/r", 300),
+    REQ("PATCH", "iam.example/s"),
+    STAT("PATCH", "iam.example/s", 199),
+    REQ("PUT", "iam.example/t"),
+    STAT("PUT", "iam.example/t", 201),
+    REQ("PUT", "iam.example/u"),
+    REQ("PUT", "iam.example/u"),
+    STAT("PUT", "iam.example/u", 503),
+    STAT("PUT", "iam.example/u", 200),
+    REQ("PUT", "iam.example/v"),
+    REQ("PUT", "iam.example/v"),
+    STAT("PUT", "iam.example/v", 200),
+    STAT("PUT", "iam.example/v", 201),
+    REQ("POST", "iam.example/w:getIamPolicy"),
+    REQ("POST", "iam.example/entries:list"),
+    REQ("POST", "iam.example/w:testIamPermissions"),
+    REQ("POST", "iam.example/w:generateUploadUrl"),
+    REQ("GET", "iam.example/g"),
+    "not a log line",
+    "[t] >>> [apiv2][query] POST not-a-url x",
+  ].join("\n");
+  const found = Object.fromEntries(
+    cliWritesFromOutput(text).map((w) => [`${w.method} ${w.url}`, w]),
+  );
+  assert.deepEqual(Object.keys(found), [
+    "PUT identitytoolkit.googleapis.com/admin/v2/projects/p/config",
+    "POST x.appspot.com.example/a",
+    "POST iam.example/r",
+    "DELETE iam.example/r",
+    "PATCH iam.example/s",
+    "PUT iam.example/t",
+    "PUT iam.example/u",
+    "PUT iam.example/v",
+  ]);
+  assert.equal(found["POST iam.example/r"].class, "ok");
+  assert.equal(found["DELETE iam.example/r"].class, "non-2xx");
+  assert.equal(found["PATCH iam.example/s"].class, "non-2xx");
+  assert.equal(found["PUT iam.example/t"].class, "ok");
+  assert.equal(found["PUT iam.example/u"].class, "retried");
+  assert.equal(found["PUT iam.example/v"].class, "ok");
+  assert.deepEqual(found["PUT iam.example/u"].statuses, [503, 200]);
+  assert.deepEqual(cliWritesFromOutput(""), []);
+  assert.equal(
+    cliWritesFromOutput(
+      REQ("POST", "x.example/a") +
+        "\n" +
+        REQ("POST", "x.example/a") +
+        "\n" +
+        STAT("POST", "x.example/a", 200),
+    )[0].class,
+    "unanswered",
+  );
+});
+
+test("redactCliText takes signed upload URLs and API key values out and nothing else", () => {
+  const text =
+    'url https://storage.googleapis.com/b/o.zip?X-Goog-Signature=SIGNED&GoogleAccessId=x end\n{"client":{"apiKey" : "SECRET"}}\nkeep https://example.com/a?b=c';
+  const out = redactCliText(text);
+  assert.ok(!/SIGNED|SECRET/.test(out));
+  assert.ok(out.includes("[REDACTED UPLOAD URL]") && out.includes('"apiKey":"[REDACTED]"'));
+  assert.ok(out.includes("keep https://example.com/a?b=c"));
+  assert.equal(redactCliText(5), "5");
+});
+
+test("inventoryDifferences compares by identity and allows only the build's copy and what the run enabled", () => {
+  const before = {
+    triggers: ["t1"],
+    subscriptions: ["s1", "s2"],
+    topics: ["p1"],
+    packages: ["k1"],
+    services: ["a", "b"],
+    sourceObjects: { uploads: ["u1"], sources: ["pcblock/function-source.zip"] },
+  };
+  const kinds = ["triggers", "subscriptions", "topics", "packages"];
+  const same = structuredClone(before);
+  assert.deepEqual(inventoryDifferences({ before, after: same, kinds }), {
+    complete: true,
+    missing: [],
+    differences: [],
+  });
+  assert.deepEqual(
+    inventoryDifferences({ before, after: { ...same, subscriptions: ["s1", "s3"] }, kinds })
+      .differences,
+    [{ kind: "subscriptions", added: ["s3"], removed: ["s2"] }],
+  );
+  assert.equal(
+    inventoryDifferences({ before, after: { ...same, services: ["a", "b", "c"] }, kinds })
+      .differences.length,
+    1,
+  );
+  assert.deepEqual(
+    inventoryDifferences({
+      before,
+      after: { ...same, services: ["a", "b", "c"] },
+      kinds,
+      enabled: ["c"],
+    }).differences,
+    [],
+  );
+  assert.equal(
+    inventoryDifferences({ before, after: { ...same, services: ["a"] }, kinds, enabled: ["a"] })
+      .differences.length,
+    1,
+  );
+  const copies = {
+    ...same,
+    sourceObjects: {
+      uploads: ["u1"],
+      sources: [
+        "pcblock/function-source.zip",
+        "pcblock/function-source.zip".replace("pcblock", "pcblock"),
+      ],
+    },
+  };
+  assert.deepEqual(inventoryDifferences({ before, after: copies, kinds }).differences, []);
+  const odd = {
+    ...same,
+    sourceObjects: {
+      uploads: ["u1"],
+      sources: ["pcblock/function-source.zip", "other/function-source.zip", "pcblock/x.zip"],
+    },
+  };
+  assert.deepEqual(inventoryDifferences({ before, after: odd, kinds }).differences, [
+    { kind: "sourceObjects", added: ["other/function-source.zip", "pcblock/x.zip"], removed: [] },
+  ]);
+  assert.deepEqual(
+    inventoryDifferences({
+      before,
+      after: {
+        ...same,
+        sourceObjects: { uploads: ["u1", "u2"], sources: ["pcblock/function-source.zip"] },
+      },
+      kinds,
+    }).differences,
+    [{ kind: "uploadObjects", added: ["u2"], removed: [] }],
+  );
+  assert.equal(
+    inventoryDifferences({
+      before,
+      after: { ...same, sourceObjects: { uploads: [], sources: [] } },
+      kinds,
+    }).differences.length,
+    2,
+  );
+  for (const key of kinds) {
+    assert.deepEqual(
+      inventoryDifferences({ before, after: { ...same, [key]: null }, kinds }).missing,
+      [key],
+      key,
+    );
+    assert.equal(
+      inventoryDifferences({ before: { ...before, [key]: undefined }, after: same, kinds })
+        .complete,
+      false,
+      key,
+    );
+  }
+  assert.deepEqual(
+    inventoryDifferences({
+      before,
+      after: { ...same, sourceObjects: { uploads: null, sources: null } },
+      kinds,
+    }).missing,
+    ["uploadObjects", "sourceObjects"],
+  );
+  assert.equal(inventoryDifferences({ before: null, after: null, kinds }).complete, false);
+  assert.deepEqual(INVENTORY_KINDS, [
+    "channels",
+    "triggers",
+    "subscriptions",
+    "topics",
+    "packages",
+  ]);
+});
+
+test("iamUnexpected lets service accounts in and nothing else", () => {
+  assert.deepEqual(iamUnexpected(null), { complete: false, unexpected: [] });
+  assert.deepEqual(iamUnexpected({ added: [], removed: [] }), { complete: true, unexpected: [] });
+  assert.deepEqual(
+    iamUnexpected({ added: ["roles/x|serviceAccount:a@b"], removed: [] }).unexpected,
+    [],
+  );
+  assert.deepEqual(
+    iamUnexpected({
+      added: ["roles/x|user:a@b", "roles/y|allUsers"],
+      removed: ["roles/z|user:c@d"],
+    }).unexpected,
+    ["removed roles/z|user:c@d", "added roles/x|user:a@b", "added roles/y|allUsers"],
+  );
+  assert.deepEqual(iamUnexpected({ added: ["roles/x"], removed: [] }).unexpected, [
+    "added roles/x",
+  ]);
+});
+
+test("the CLI write rows are numbered per action, an unreadable log is named after its action, and the inventory records what it could not read", async () => {
+  const ok = { method: "POST", url: "x.example/a", requests: 1, statuses: [200], class: "ok" };
+  const { journal, result } = await go({ cliWrites: [ok, { ...ok, url: "x.example/b" }] });
+  assert.deepEqual(
+    journal.filter((r) => r.state === "cli-write").map((r) => r.id),
+    [
+      "cli-dry-run-write-1",
+      "cli-dry-run-write-2",
+      "cli-deploy-write-1",
+      "cli-deploy-write-2",
+      "cli-delete-write-1",
+      "cli-delete-write-2",
+    ],
+  );
+  assert.deepEqual(result.inventory.missing, []);
+  const bad = await go(
+    {},
+    (send) => send,
+    (cli) => async (args) => ({ ...(await cli(args)), cliWrites: null }),
+  );
+  assert.deepEqual(
+    bad.result.unknownMutationList.map((m) => m.id),
+    ["cli-deploy", "cli-delete"],
+  );
+  const unknown = await go({ cliWrites: [{ ...ok, class: "unanswered", statuses: [] }] });
+  const row = unknown.result.unknownMutationList.find((m) => m.id === "cli-deploy-write-1");
+  assert.equal(row.request, "POST x.example/a");
+  assert.equal(row.class, "cli-write-unanswered");
+});
+
+test("the read-back names its inventory reads and prints exactly what a missing baseline means", async () => {
+  const { world, result } = await go();
+  const ids = [];
+  await a2(world, result, {
+    save: async (row) => void (row.state === "before-send" && ids.push(row.id)),
+  });
+  for (const id of [
+    "list-uploads",
+    "list-sources",
+    "list-triggers",
+    "list-subscriptions",
+    "list-topics",
+    "list-services",
+  ])
+    assert.ok(ids.includes(id), id + " " + ids.join());
+  const none = await a2(world, result, { baseline: null });
+  assert.deepEqual(none.inventory, {
+    baseline: false,
+    complete: false,
+    missing: ["baseline"],
+    differences: [],
+  });
+});
+
+test("writeAll passes the rest of the text and no more to each write", () => {
+  const asked = [];
+  writeAll(1, "abcdefgh", (fd, b, offset, length) => {
+    asked.push([offset, length]);
+    return Math.min(length, 5);
+  });
+  assert.deepEqual(asked, [
+    [0, 8],
+    [5, 3],
+  ]);
 });

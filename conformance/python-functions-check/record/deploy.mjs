@@ -431,7 +431,13 @@ const OWN_SOURCE_COPY = new RegExp(
  * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
  * (`<function>/function-source.zip`), which stays and is reported.
  */
-export const INVENTORY_KINDS = Object.freeze(["channels", "triggers", "subscriptions", "topics", "packages"]);
+export const INVENTORY_KINDS = Object.freeze([
+  "channels",
+  "triggers",
+  "subscriptions",
+  "topics",
+  "packages",
+]);
 
 export function inventoryDifferences({ before, after, enabled = [], kinds = INVENTORY_KINDS }) {
   const differences = [];

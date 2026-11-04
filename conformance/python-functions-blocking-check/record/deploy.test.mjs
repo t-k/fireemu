@@ -180,6 +180,12 @@ test("the source copy needs a full commit SHA", () => {
     () => prepareSource({ repoRoot: "/nonexistent-repo", commit: "a".repeat(40), target }),
     (e) => !/full SHA/.test(e.message),
   );
+  for (const good of ["0".repeat(40), "f".repeat(40), "0123456789abcdef".repeat(2) + "01234567"])
+    assert.throws(
+      () => prepareSource({ repoRoot: "/nonexistent-repo", commit: good, target }),
+      (e) => !/full SHA/.test(e.message),
+      good,
+    );
 });
 
 function repoWithFixture() {

@@ -47,7 +47,13 @@ const [RECEIPT_LINE, PUT_LINE] = RECORDED.trimEnd().split("\n");
 
 test("which names may be adopted: the recorded <uuid>.zip shape in this project's upload bucket, nothing else", () => {
   assert.equal(uploadBucket(NUMBER), UPLOADS);
-  for (const name of [A, B, "514cacbe-3258-46fd-9a02-54b7485b11c1.zip"])
+  for (const name of [
+    A,
+    B,
+    "514cacbe-3258-46fd-9a02-54b7485b11c1.zip",
+    "00000000-0000-0000-0000-000000000000.zip",
+    "ffffffff-ffff-ffff-ffff-ffffffffffff.zip",
+  ])
     assert.equal(isOwnUploadObject(NUMBER, UPLOADS, name), true, name);
   for (const name of [
     "",

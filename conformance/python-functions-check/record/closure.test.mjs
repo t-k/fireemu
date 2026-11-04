@@ -206,6 +206,15 @@ test("writeAll writes everything even when the descriptor takes a few bytes at a
   };
   writeAll(1, "héllo wörld", slow);
   assert.deepEqual(Buffer.concat(taken), Buffer.from("héllo wörld"));
+  const asked = [];
+  writeAll(1, "abcdefgh", (fd, b, offset, length) => {
+    asked.push([offset, length]);
+    return Math.min(length, 5);
+  });
+  assert.deepEqual(asked, [
+    [0, 8],
+    [5, 3],
+  ]);
   const seen = [];
   writeAll(1, "abcdefgh", (fd, b, offset, length) => {
     seen.push(b.subarray(offset, offset + length).toString());
@@ -253,4 +262,48 @@ test("a production-sized journal row and result survive the real write path and 
   } finally {
     rmSync(d, { recursive: true, force: true });
   }
+});
+
+test("the read-back lists the trigger names of the run's functions, names its inventory reads, and a function still listed is not 'all gone'", async () => {
+  const { world, result } = await afterRun();
+  const ids = [];
+  const rb = await a2(world, result, {
+    save: async (row) => {
+      if (row.state === "before-send") ids.push(row.id);
+    },
+  });
+  assert.ok(ids.includes("list-uploads") && ids.includes("list-sources"), ids.join());
+  assert.ok(
+    ids.includes("list-subscriptions") &&
+      ids.includes("list-channels") &&
+      ids.includes("list-services"),
+  );
+  world.triggers.add("pcps-123");
+  world.triggers.add("somebody-elses-1");
+  const left = await a2(world, result);
+  assert.deepEqual(left.lists.triggers, ["pcps-123"]);
+  assert.equal(left.allAbsent, false);
+  assert.equal(rb.allAbsent, true);
+  const seen = await afterRun();
+  seen.world.functions.set(`projects/fireemu-oracle-events/locations/us-central1/functions/pcps`, {
+    name: "projects/fireemu-oracle-events/locations/us-central1/functions/pcps",
+    state: "ACTIVE",
+  });
+  const direct =
+    "GET cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions/pcps";
+  const hidden = await a2(seen.world, seen.result, {
+    baseline: seen.world.baseline,
+    send: async (request) => {
+      const u = new URL(request.url);
+      if (request.method + " " + u.hostname + u.pathname === direct)
+        return reply(404, { error: { code: 404, status: "NOT_FOUND" } });
+      return seen.world.send(request);
+    },
+  });
+  assert.equal(hidden.lists.functionsAndServices, false);
+  assert.equal(
+    hidden.allAbsent,
+    false,
+    "the list still shows the function although its direct read says gone",
+  );
 });

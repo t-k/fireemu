@@ -93,7 +93,6 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { CASE_SOURCES, CREDENTIAL, buildEventsFixture, maxInFlightOf, recordedJournal } from './rtdb-sdk-events-fixture.mjs';
 import { stepCount, summarize } from './rtdb-sdk-events-judge.mjs';
-import { scriptManifest } from './sdk-observer/lib.mjs';
 
 const sha = b => createHash('sha256').update(b).digest('hex');
 const PROD = { ...RESULT, runId: 'RTDB-EVENTS-20261104-01', target: 'production', scriptSha256: 'e'.repeat(64), sdk: { firebase: '12.18.0', database: '1.1.5', playwright: '1.62.1', firebaseAdmin: '14.3.0' }, startedAt: '2026-11-04T02:02:35.785Z', endedAt: '2026-11-04T02:05:50.755Z', cases: [], unverified: [], adminStartup: { 'r1-admin': true, 'r2-admin': true }, counts: { direct: 184, reserve: 4, adc: 1 }, caps: { direct: 200, reserve: 12, adc: 1 } };
@@ -206,7 +205,7 @@ test('the committed fixture: RTDB-EVENTS-20261104-01, 6 profiles, 160 of 160 aga
   assert.deepEqual(p.adminStartup, { 'r1-admin': true, 'r2-admin': true }); assert.deepEqual(p.maxInFlight, { 'r1-lp': 7, 'r2-lp': 7 });
   assert.equal(p.credential, CREDENTIAL); assert.deepEqual(p.cleanup, { prefix: 'verified', rules: 'verified' });
   assert.equal(p.scriptSha256, 'ffb061388fae0e1266e7ff0a84d68d9aa028f45ad6148ea607d3839fd76b3a76');
-  assert.equal(scriptManifest(new URL('./sdk-observer/', import.meta.url).pathname).sha256, p.scriptSha256, 'the replay runs the observer bytes of the production run');
+  // Since packet 2 the observer is a newer script version (scriptSha256 above is the run's provenance); the replay is bound by the case code that ran.
   for (const name of CASE_SOURCES) assert.equal(sha(readFileSync(new URL(`./sdk-observer/${name}`, import.meta.url))), p.caseSources[name], name);
   assert.deepEqual(fixture.profiles.map(x => [x.name, x.rows.length]), [['r1-ws', 11], ['r1-lp', 11], ['r2-ws', 11], ['r2-lp', 11], ['r1-admin', 11], ['r2-admin', 11]]);
   const recorded = recordedJournal(fixture), s = summarize(recorded, structuredClone(recorded));

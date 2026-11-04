@@ -67,7 +67,7 @@ def _json_cloud_event(event: dict):
 
 
 def _strict() -> bool:
-    return os.environ.get("FIREEMU_HTTP_PROFILE", "emulator") == "strict"
+    return os.environ.get("FIREEMU_HTTP_PROFILE") == "strict"
 
 
 def _lenient_time(event: dict) -> dict:

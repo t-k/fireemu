@@ -551,3 +551,33 @@ test("the read-back never reports everything absent while the run carries an obl
   ])
     assert.equal((await a2(world, result, { carried })).allAbsent, false, carried[0]);
 });
+
+test("one failed preflight log poll alone is enough to stop the run before anything is created", async () => {
+  const { world, result } = await go(
+    {},
+    (send) => async (request) =>
+      request.url.includes("entries:list") && /severity/.test(request.body ?? "")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.incompleteReads.length, 1, JSON.stringify(result.incompleteReads));
+  assert.equal(result.stoppedBecause, "preflight-reads");
+  assert.deepEqual(world.cliRuns, []);
+});
+
+test("a deploy write that could not be journaled keeps the function unconfirmed even when the write itself was good", async () => {
+  const ok = { ...FN_POST, requests: 1, statuses: [200], class: "ok" };
+  const { result } = await go(
+    { failDeploy: true },
+    (send) => send,
+    (cli) => async (args) => ({
+      ...(await cli(args)),
+      ...(args.action === "deploy" ? { cliWrites: [ok] } : {}),
+    }),
+    { refuseSave: (row) => row.state === "cli-write" },
+  );
+  assert.deepEqual(
+    result.unconfirmedCreates.map((c) => [c.label, c.class]),
+    [["function", "cli-write-unjournaled"]],
+  );
+});

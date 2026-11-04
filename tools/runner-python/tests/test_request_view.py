@@ -377,3 +377,10 @@ def test_two_attributes_that_differ_only_in_case_give_one_header_the_first_and_t
 def test_a_very_long_value_reaches_the_request_whole(monkeypatch):
     seen = deliver("eventarc", base(subject="x" * 70000), monkeypatch)
     assert seen["headers"]["ce-subject"] == "x" * 70000
+
+
+def test_the_strict_storage_body_keeps_the_number_spelling_the_daemon_framed(monkeypatch):
+    raw = '{"extra":1e20,"kind":"storage#object","size":"1"}'
+    data = json.loads(raw)
+    seen = deliver("storage", base(type="google.cloud.storage.object.v1.finalized", data=data), monkeypatch, "strict", raw=raw)
+    assert seen["body"].decode() == '{\n  "kind": "storage#object",\n  "size": "1",\n  "extra": 1e20\n}\n'

@@ -54,8 +54,6 @@ def raw_event_data(text: str) -> str | None:
             index += 1
             while True:
                 index = _after_whitespace(text, index)
-                if text[index] == "}":
-                    return None
                 key, index = _DECODER.raw_decode(text, index)
                 index = _after_whitespace(text, index)
                 if text[index] != ":" or not isinstance(key, str):

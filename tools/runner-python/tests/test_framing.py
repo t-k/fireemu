@@ -241,6 +241,11 @@ def test_event_data_is_found_after_members_that_hold_braces_quotes_and_the_word_
         "",
         "[]",
         '{"event":{"data":1',
+        '{"event":{}}',
+        '{"event":{1:"x","data":{"a":1}}}',
+        '{"event":{"data" {"a":1}}}',
+        '{"event":{"data":1 x}}',
+        '{"event":{"data":{"a":1}x}}',
     ],
 )
 def test_no_text_is_returned_when_event_data_is_absent_or_the_frame_is_malformed(text):

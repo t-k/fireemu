@@ -198,3 +198,38 @@ test("the policy body can only remove: no public member, no condition, no unknow
   ])
     assert.equal(policyWithoutPublicMembers(bad), false, JSON.stringify(bad));
 });
+
+test("a policy read that answers 4xx, and a read back that answers 4xx, are data and not incomplete reads", async () => {
+  const policy = await go(
+    { publicInvokers: ["pcps"] },
+    (send) => async (request) =>
+      request.method === "GET" && request.url === SERVICE("pcps", "get")
+        ? reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "x" } })
+        : send(request),
+  );
+  assert.deepEqual(policy.result.cleanup.invoker.pcps, { read: "4xx" });
+  assert.ok(!policy.result.incompleteReads.some((r) => r.id === "cleanup-invoker-policy-pcps"));
+  let reads = 0;
+  const back = await go(
+    { publicInvokers: ["pcps"] },
+    (send) => async (request) =>
+      request.method === "GET" && request.url === SERVICE("pcps", "get") && ++reads === 2
+        ? reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "x" } })
+        : send(request),
+  );
+  assert.equal(back.result.cleanup.invoker.pcps.removed, false);
+  assert.ok(!back.result.incompleteReads.some((r) => r.id === "cleanup-invoker-readback-pcps"));
+});
+
+test("no service list, policy or write is requested when the deploy never ran", async () => {
+  const { journal } = await go({}, (send) => send);
+  assert.ok(ids(journal).some((id) => id.startsWith("cleanup-invoker-")));
+  const never = await go(
+    {},
+    (send) => async (request) =>
+      request.url.includes("serviceusage")
+        ? reply(500, { error: { code: 500, status: "INTERNAL", message: "x" } })
+        : send(request),
+  );
+  assert.equal(ids(never.journal).filter((id) => id.includes("invoker")).length, 0);
+});

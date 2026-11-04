@@ -1141,10 +1141,7 @@ export async function record({
         if (!Array.isArray(deployed.uploadEvents)) reasons.push("receipt-log-unreadable");
         for (const event of deployed.uploadEvents ?? []) {
           if (event.type === "receipt") {
-            if (
-              event.bucket !== bucketName ||
-              !isOwnUploadObject(projectNumber, event.bucket, event.object)
-            )
+            if (!isOwnUploadObject(projectNumber, event.bucket, event.object))
               reasons.push("receipt-invalid");
             else if (!receipts.has(event.object) && receipts.size < 3)
               receipts.set(event.object, []);

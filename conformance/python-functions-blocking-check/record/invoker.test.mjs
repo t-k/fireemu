@@ -191,3 +191,25 @@ test("the policy body can only remove: no public member, no condition, no unknow
   ])
     assert.equal(policyWithoutPublicMembers(bad), false, JSON.stringify(bad));
 });
+
+test("a policy read that answers 4xx, and a read back that answers 4xx, are data and not incomplete reads", async () => {
+  const policy = await go(
+    {},
+    (send) => async (request) =>
+      request.method === "GET" && request.url === SERVICE("get") && request.url
+        ? reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "x" } })
+        : send(request),
+  );
+  assert.deepEqual(policy.result.cleanup.invoker, { read: "4xx" });
+  assert.ok(!policy.result.incompleteReads.some((r) => r.id === "cleanup-invoker-policy"));
+  let reads = 0;
+  const back = await go(
+    {},
+    (send) => async (request) =>
+      request.method === "GET" && request.url === SERVICE("get") && ++reads === 3
+        ? reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "x" } })
+        : send(request),
+  );
+  assert.equal(back.result.cleanup.invoker.removed, false);
+  assert.ok(!back.result.incompleteReads.some((r) => r.id === "cleanup-invoker-readback"));
+});

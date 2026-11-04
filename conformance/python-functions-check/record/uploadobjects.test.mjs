@@ -590,3 +590,255 @@ test("a bucket listing of exactly five pages is read to its end and is not flagg
   );
   assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
 });
+
+// ---- the receipt rules, one by one --------------------------------------------------------------------------------------
+
+/** A run whose fake CLI reports the given upload events for the deploy (the world's own are replaced). */
+async function withEvents(
+  events,
+  { worldOptions = {}, patch = {}, wrapSend = (send) => send } = {},
+) {
+  const world = createWorld({ runId: RUN, ...worldOptions });
+  const journal = [];
+  const result = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    save: async (r) => journal.push(r),
+    send: wrapSend(world.send, world),
+    runCli: async (args) => {
+      const r = await world.runCli(args);
+      return args.action === "deploy"
+        ? { ...r, uploadEvents: typeof events === "function" ? events(world) : events, ...patch }
+        : r;
+    },
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+  });
+  return { world, journal, result };
+}
+const receipt = (object, bucket = UPLOADS) => ({ type: "receipt", bucket, object });
+const put = (object, status = 200, bucket = UPLOADS) => ({
+  type: "put-status",
+  bucket,
+  object,
+  status,
+});
+
+test("a receipt for another bucket or with an unusable name is invalid and deletes nothing; the real one still goes", async () => {
+  const { result, world } = await withEvents((w) => [
+    receipt(w.upload),
+    put(w.upload),
+    receipt("x.zip", "another-bucket"),
+    receipt("x/y.zip"),
+    receipt(".hidden"),
+  ]);
+  assert.deepEqual(result.cleanup.uploadReasons, [
+    "receipt-invalid",
+    "receipt-invalid",
+    "receipt-invalid",
+  ]);
+  assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
+  assert.equal(result.cleanup.uploadObjectsDeleted[0].name, world.upload);
+  assert.equal(result.cleanup.verified, false);
+});
+
+test("three receipts are read, a fourth is too many; the same receipt twice is one and keeps its status", async () => {
+  const { result, journal } = await withEvents((w) => [
+    receipt(w.upload),
+    put(w.upload),
+    receipt(w.upload),
+    receipt("aaa.zip"),
+    receipt("bbb.zip"),
+    receipt("ccc.zip"),
+  ]);
+  assert.deepEqual(result.cleanup.uploadReasons, [
+    "too-many-receipts",
+    "receipt-unconfirmed:aaa.zip",
+    "receipt-unconfirmed:bbb.zip",
+  ]);
+  assert.deepEqual(result.cleanup.uploadObjectsDeleted[0].putStatuses, [200]);
+  assert.equal(
+    ids(journal).filter((id) => /^upload-object-\d+-metadata$/.test(id)).length,
+    3,
+    "metadata is read for the three receipts, not for the fourth",
+  );
+});
+
+test("exactly three receipts are not too many", async () => {
+  const { result } = await withEvents((w) => [
+    receipt(w.upload),
+    put(w.upload),
+    receipt("aaa.zip"),
+    receipt("bbb.zip"),
+  ]);
+  assert.ok(!result.cleanup.uploadReasons.includes("too-many-receipts"));
+});
+
+test("the status of an upload to another bucket is not this object's status", async () => {
+  const { result } = await withEvents((w) => [
+    receipt(w.upload),
+    put(w.upload, 200),
+    put(w.upload, 403, "another-bucket"),
+  ]);
+  assert.deepEqual(result.cleanup.uploadObjectsDeleted[0].putStatuses, [200]);
+  assert.deepEqual(result.cleanup.uploadReasons, []);
+});
+
+test("a CLI that ended by itself with no receipt is 'no-receipt' only when it succeeded; any sign of a kill is 'killed-without-receipt'", async () => {
+  for (const [patch, reason] of [
+    [{ exitCode: 0, timedOut: true }, "killed-without-receipt"],
+    [{ exitCode: 0, signal: "SIGTERM" }, "killed-without-receipt"],
+    [{ exitCode: 0, error: "x" }, "killed-without-receipt"],
+    [{ exitCode: null }, "killed-without-receipt"],
+    [{ exitCode: 0 }, "no-receipt"],
+    [{ exitCode: 1 }, null],
+  ]) {
+    const { result } = await withEvents([], { patch, worldOptions: { withSourceBuckets: false } });
+    assert.deepEqual(
+      result.cleanup.uploadReasons,
+      reason === null ? [] : [reason],
+      JSON.stringify(patch),
+    );
+  }
+});
+
+test("a receipt that names an object already in the bucket before the run is never deleted", async () => {
+  const { result, world } = await withEvents([receipt("old-upload.zip"), put("old-upload.zip")]);
+  assert.deepEqual(result.cleanup.uploadReasons, ["receipt-names-baseline-object:old-upload.zip"]);
+  assert.deepEqual(result.cleanup.uploadObjectsDeleted, []);
+  assert.ok(world.sourceBuckets.get(UPLOADS).includes("old-upload.zip"));
+  assert.ok(world.sourceBuckets.get(UPLOADS).includes(world.upload), "the real one is unexplained");
+  assert.equal(result.cleanup.uploadObjectsUnexplained.length, 1);
+});
+
+test("without a readable baseline nothing is deleted and both reasons are reported, with no internal error", async () => {
+  const { result } = await go({}, (send) => {
+    let first = true;
+    return async (request) => {
+      if (request.method === "GET" && request.url.includes("gcf-v2-uploads") && first) {
+        first = false;
+        return error(403, "PERMISSION_DENIED");
+      }
+      return send(request);
+    };
+  });
+  assert.deepEqual(result.cleanup.uploadReasons, [
+    "upload-baseline-unreadable",
+    "upload-list-incomplete",
+  ]);
+  assert.equal(result.cleanup.errors, undefined);
+  assert.deepEqual(result.cleanup.uploadObjectsDeleted, []);
+});
+
+test("a list that cannot be read after the deploy is reported with the baseline known", async () => {
+  const { result } = await go(
+    {},
+    (send, w) => async (request) =>
+      request.method === "GET" &&
+      request.url.includes("gcf-v2-uploads") &&
+      request.url.includes("/o?") &&
+      w.cliRuns.includes("delete")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.ok(result.cleanup.uploadReasons.includes("upload-list-incomplete"));
+  assert.equal(result.cleanup.errors, undefined);
+});
+
+test("a refused upload whose object is there anyway belongs to nobody: it is unexplained, not deleted; a failed delete is not unexplained", async () => {
+  const { result, world } = await go({ uploadLines: "refused" }, (send, w) => async (request) => {
+    if (
+      request.method === "GET" &&
+      request.url.includes("gcf-v2-uploads") &&
+      request.url.includes("/o?") &&
+      w.cliRuns.includes("deploy") &&
+      !w.sourceBuckets.get(UPLOADS).includes(w.upload)
+    )
+      w.sourceBuckets.get(UPLOADS).push(w.upload);
+    return send(request);
+  });
+  assert.deepEqual(result.cleanup.uploadObjectsDeleted, []);
+  assert.deepEqual(result.cleanup.uploadObjectsUnexplained, [
+    { bucket: UPLOADS, name: world.upload },
+  ]);
+  const failed = await go(
+    {},
+    (send) => async (request) =>
+      request.method === "DELETE" && request.url.includes("gcf-v2-uploads")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.deepEqual(failed.result.cleanup.uploadObjectsUnexplained, []);
+  assert.equal(failed.result.cleanup.readBack["upload-object-1"], false);
+});
+
+test("the metadata must be a 200 with a readable body naming this bucket, object and a numeric generation of one to twenty digits", async () => {
+  const metadata = (request) => request.method === "GET" && request.url.includes("?fields=");
+  const nameOf = (request) => decodeURIComponent(request.url.split("/o/")[1].split("?")[0]);
+  const cases = [
+    [
+      "a 503 with a perfect body",
+      (r) => reply(503, { bucket: UPLOADS, name: nameOf(r), generation: "7" }),
+      false,
+    ],
+    ["a 200 that is not JSON", () => new Response("not json", { status: 200 }), false],
+    [
+      "a different bucket",
+      (r) => reply(200, { bucket: SOURCES, name: nameOf(r), generation: "7" }),
+      false,
+    ],
+    [
+      "an empty generation",
+      (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: "" }),
+      false,
+    ],
+    [
+      "a number generation",
+      (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: 7 }),
+      true,
+    ],
+    ["one digit", (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: "7" }), true],
+    [
+      "twenty digits",
+      (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: "1".repeat(20) }),
+      true,
+    ],
+    [
+      "twenty-one digits",
+      (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: "1".repeat(21) }),
+      false,
+    ],
+    ["a letter", (r) => reply(200, { bucket: UPLOADS, name: nameOf(r), generation: "12a" }), false],
+  ];
+  for (const [label, answer, deleted] of cases) {
+    const { result } = await go(
+      {},
+      (send) => async (request) => (metadata(request) ? answer(request) : send(request)),
+    );
+    assert.equal(result.cleanup.uploadObjectsDeleted.length, deleted ? 1 : 0, label);
+    if (!deleted) assert.equal(result.cleanup.uploadReasons.length, 1, label);
+  }
+});
+
+test("a metadata read that answers 404 or 403 is data, not an incomplete read", async () => {
+  for (const code of [404, 403]) {
+    const { result } = await go(
+      {},
+      (send) => async (request) =>
+        request.method === "GET" && request.url.includes("?fields=")
+          ? error(code, code === 404 ? "NOT_FOUND" : "PERMISSION_DENIED")
+          : send(request),
+    );
+    assert.ok(!result.incompleteReads.some((r) => r.id.includes("metadata")), String(code));
+    assert.equal(result.cleanup.uploadObjectsDeleted.length, 0);
+  }
+});
+
+test("every request of the upload step and of the invoker removal is a cleanup request: they run after the normal ceiling is reached", async () => {
+  const { result } = await go({ publicInvokers: ["pcps"] }, (send) => send, { normalCeiling: 30 });
+  assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
+  assert.equal(result.cleanup.invoker.pcps.removed, true);
+  assert.equal(result.cleanup.errors, undefined);
+  assert.equal(result.cleanup.verified, true);
+});

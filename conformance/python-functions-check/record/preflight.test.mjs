@@ -854,3 +854,86 @@ test("a channel that is already gone is recorded, and a 403 on its read is data;
   assert.equal(late.result.cleanup.errors, undefined);
   assert.equal(late.result.cleanup.verified, true);
 });
+
+test("an identity answer that is 200 but not JSON stops the run as an identity problem and does not throw", async () => {
+  const { result, journal } = await go(
+    {},
+    (send) => async (request) =>
+      request.url.endsWith("/v1/projects/fireemu-oracle-events")
+        ? new Response("<html>", { status: 200 })
+        : send(request),
+  );
+  assert.equal(result.stoppedBecause, "identity");
+  assert.deepEqual(ids(journal), ["identity"]);
+});
+
+test("a retried CLI write is retried even when the failing answer is a 300", () => {
+  const found = cliWritesFromOutput(
+    [
+      REQ("POST", "x.example/a"),
+      REQ("POST", "x.example/a"),
+      STAT("POST", "x.example/a", 300),
+      STAT("POST", "x.example/a", 200),
+    ].join("\n"),
+  );
+  assert.equal(found[0].class, "retried");
+  const two = cliWritesFromOutput(
+    [
+      REQ("POST", "x.example/a"),
+      REQ("POST", "x.example/a"),
+      STAT("POST", "x.example/a", 299),
+      STAT("POST", "x.example/a", 200),
+    ].join("\n"),
+  );
+  assert.equal(two[0].class, "ok");
+});
+
+test("a settle read that answers 403 is data, not a stop", async () => {
+  const { result } = await go({}, (send) => async (request) => {
+    if (request.method === "POST" && request.url.includes("/documents/pycheck-src?"))
+      throw new Error("reset");
+    if (request.method === "GET" && request.url.includes("/documents/pycheck-src/"))
+      return error(403, "PERMISSION_DENIED");
+    return send(request);
+  });
+  assert.notEqual(result.outcome, "pycheck-auth-stop");
+  assert.ok(result.unconfirmedCreates.some((c) => c.label === "document"));
+});
+
+test("the channel delete's operation is read only when the answer is a 2xx that names a pending operation; an operation read that answers 403 is data", async () => {
+  const cases = [
+    [
+      "a 409 that looks like an operation",
+      () => reply(409, { name: "projects/p/locations/us-central1/operations/x", done: false }),
+    ],
+    ["a 200 with no name", () => reply(200, {})],
+    ["a 200 with a name that is not text", () => reply(200, { name: 5, done: false })],
+    [
+      "a 200 that is already done",
+      () => reply(200, { name: "projects/p/locations/us-central1/operations/x", done: true }),
+    ],
+  ];
+  for (const [label, answer] of cases) {
+    const { journal } = await go(
+      { seedChannels: [] },
+      (send) => async (request) =>
+        request.method === "DELETE" && request.url.includes("/channels/")
+          ? (await send(request), answer())
+          : send(request),
+    );
+    assert.equal(ids(journal).filter((id) => id.startsWith("channel-operation-")).length, 0, label);
+  }
+  const forbidden = await go(
+    { seedChannels: [] },
+    (send) => async (request) =>
+      request.method === "GET" && request.url.includes("/locations/us-central1/operations/")
+        ? error(403, "PERMISSION_DENIED")
+        : send(request),
+  );
+  assert.notEqual(forbidden.result.outcome, "pycheck-auth-stop");
+  assert.equal(
+    ids(forbidden.journal).filter((id) => id.startsWith("channel-operation-")).length,
+    12,
+    "a 403 never says done",
+  );
+});

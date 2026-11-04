@@ -768,3 +768,24 @@ test("writeAll passes the rest of the text and no more to each write", () => {
     [5, 3],
   ]);
 });
+
+test("a retried CLI write is retried even when the failing answer is a 300, and 299 is still a good answer", () => {
+  const found = cliWritesFromOutput(
+    [
+      REQ("POST", "x.example/a"),
+      REQ("POST", "x.example/a"),
+      STAT("POST", "x.example/a", 300),
+      STAT("POST", "x.example/a", 200),
+    ].join("\n"),
+  );
+  assert.equal(found[0].class, "retried");
+  const two = cliWritesFromOutput(
+    [
+      REQ("POST", "x.example/a"),
+      REQ("POST", "x.example/a"),
+      STAT("POST", "x.example/a", 299),
+      STAT("POST", "x.example/a", 200),
+    ].join("\n"),
+  );
+  assert.equal(two[0].class, "ok");
+});

@@ -106,6 +106,14 @@ test('every load document is safe if production accepts it: no true grant, the r
     if (c.expectValid) assert.equal(doc.rules['.write'], false, `${c.id}: an expected-valid document denies writes at the root`);
   }
 });
+test('the concatenation rules compare with the official emulator\'s text and use no exponent literal', () => {
+  const cc = globalRules(PREFIX).rules.sdkrules20261105[RULES_AREA]['r1-rules'].cc;
+  assert.deepEqual(Object.fromEntries(Object.entries(cc).map(([k, v]) => [k, v['.read']])), { d15: "'a' + 1.5 == 'a1.5'", d1e7: "'a' + 10000000.0 == 'a10000000'", d100: "'a' + 100.0 == 'a100'", dlong: "'a' + 12345678901 == 'a12345678901'", dsmall: "'a' + 0.0001 == 'a1.0E-4'" });
+  const expressions = []; const walk = n => { for (const [k, v] of Object.entries(n)) { if (typeof v === 'string' && k.startsWith('.')) expressions.push(v); else if (v && typeof v === 'object') walk(v); } };
+  walk(globalRules(PREFIX).rules);
+  assert.ok(expressions.length > 40);
+  assert.deepEqual(expressions.filter(e => /\de[-+]?\d/i.test(e.replace(/'[^']*'/g, "''"))), [], 'no exponent literal in an expression of the global document');
+});
 test('the lexing documents carry the exact characters (U+FEFF as whitespace, U+0085 in a name, a trailing lazy +?, an exponent)', () => {
   const body = id => TABLE.find(c => c.id === id).body;
   assert.ok(body('lex-feff').includes('false﻿||﻿false'));

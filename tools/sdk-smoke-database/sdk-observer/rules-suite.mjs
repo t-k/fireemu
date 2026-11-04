@@ -108,7 +108,9 @@ export const TABLE = [
   c('q-end', 'query', 'anonymous', 'GET', '/qe.json', { query: `orderBy=${q('$key')}&endAt=${q('b')}` }),
   c('q-equal', 'query', 'anonymous', 'GET', '/qq.json', { query: `orderBy=${q('$value')}&equalTo=2` }),
   c('q-below', 'query', 'anonymous', 'GET', '/qb.json', { query: `orderBy=${q('$key')}` }),
-  // 5. string concatenation of numbers, compared with the Java Double.toString text
+  // 5. string concatenation of numbers, each compared with the text the official emulator makes (an integral double
+  //    without a fraction, `a10000000`, `a100`; otherwise Java's Double.toString, `a1.0E-4`): 200 there, so a 401 in
+  //    production names a difference. No exponent literal here: an unusual number form is a load case (lex-number).
   c('cc-d15', 'concat', 'anonymous', 'GET', '/cc/d15.json'),
   c('cc-d1e7', 'concat', 'anonymous', 'GET', '/cc/d1e7.json'),
   c('cc-d100', 'concat', 'anonymous', 'GET', '/cc/d100.json'),
@@ -173,8 +175,8 @@ function scopeRules(abs) {
     qb: { child: { '.read': 'query.orderByKey == true' } },
     cc: {
       d15: { '.read': "'a' + 1.5 == 'a1.5'" },
-      d1e7: { '.read': "'a' + 10000000.0 == 'a1.0E7'" },
-      d100: { '.read': "'a' + 100.0 == 'a100.0'" },
+      d1e7: { '.read': "'a' + 10000000.0 == 'a10000000'" },
+      d100: { '.read': "'a' + 100.0 == 'a100'" },
       dlong: { '.read': "'a' + 12345678901 == 'a12345678901'" },
       dsmall: { '.read': "'a' + 0.0001 == 'a1.0E-4'" },
     },

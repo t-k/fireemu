@@ -3267,6 +3267,17 @@ impl FunctionsRuntime {
             status: 400,
             body: body.to_owned(),
         };
+        // The strict profile refuses a `scheduleTime` that is not a timestamp, as the JSON API does for a
+        // malformed `google.protobuf.Timestamp` (UNRECORDED); the emulator profile keeps the official emulator,
+        // which delivers the text unchanged.
+        if self.profile == FunctionsHttpProfile::Strict
+            && task
+                .schedule_time
+                .as_deref()
+                .is_some_and(|text| !crate::tasks::valid_schedule_time(text))
+        {
+            return Err(refuse("scheduleTime must be RFC 3339"));
+        }
         if self.config.honour_task_schedule_time {
             if let Some(text) = task.schedule_time.as_deref() {
                 let at = LogicalInstant::parse_rfc3339(text)

@@ -7,24 +7,32 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
 use fireemu_adapter_functions::http::FunctionsHttpProfile;
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
 use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Value};
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 
 struct Harness {
     runtime: Arc<FunctionsRuntime>,
+    clock: Arc<Mutex<VirtualClock>>,
+    virtual_tasks: bool,
     log: std::path::PathBuf,
     dir: std::path::PathBuf,
 }
 
 async fn start(name: &str, profile: FunctionsHttpProfile) -> Harness {
+    start_with(name, profile, false).await
+}
+
+/// `virtual_tasks` drives task time by the pinned virtual clock, so a task's ETA is exact.
+async fn start_with(name: &str, profile: FunctionsHttpProfile, virtual_tasks: bool) -> Harness {
     let dir =
         std::env::temp_dir().join(format!("fireemu-task-shape-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -70,19 +78,29 @@ async fn start(name: &str, profile: FunctionsHttpProfile) -> Harness {
         FunctionsConfig {
             project: "demo-app".into(),
             functions_host: Some("127.0.0.1:5001".into()),
+            clock_policy: ApplicationClockPolicy {
+                tasks_virtual: virtual_tasks,
+                ..ApplicationClockPolicy::default()
+            },
             ..FunctionsConfig::for_tests(1, "runner-secret".into())
         },
-        clock,
+        clock.clone(),
         profile,
     )
     .expect("one codebase");
     tokio::spawn(runtime.clone().dispatch_loop());
-    Harness { runtime, log, dir }
+    Harness {
+        runtime,
+        clock,
+        virtual_tasks,
+        log,
+        dir,
+    }
 }
 
 impl Harness {
     /// Enqueues one task with `body_text` as its bytes and returns the request the runner saw.
-    async fn dispatched(&self, id: u32, body_text: &str, extra: Value) -> Value {
+    fn task(id: u32, body_text: &str, extra: &Value) -> Value {
         let mut http = json!({"url": "", "body": base64(body_text.as_bytes())});
         if let Some(headers) = extra.get("headers") {
             http["headers"] = headers.clone();
@@ -94,9 +112,26 @@ impl Harness {
         if let Some(schedule) = extra.get("scheduleTime") {
             task["scheduleTime"] = schedule.clone();
         }
+        json!({"task": task})
+    }
+
+    async fn dispatched(&self, id: u32, body_text: &str, extra: Value) -> Value {
         self.runtime
-            .enqueue_task("demo-app", "us-central1", "taskA", &json!({"task": task}))
+            .enqueue_task(
+                "demo-app",
+                "us-central1",
+                "taskA",
+                &Self::task(id, body_text, &extra),
+            )
             .unwrap();
+        if self.virtual_tasks {
+            // Virtual task time moves only when the test moves it; the task was scheduled at the enqueue instant.
+            self.clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(1))
+                .unwrap();
+        }
         tokio::time::timeout(Duration::from_secs(4), async {
             while !self.runtime.is_idle() {
                 self.runtime.idle_notify().notified().await;
@@ -189,4 +224,80 @@ async fn the_emulator_profile_keeps_the_official_emulator_s_task_headers() {
         .unwrap()
         .contains('.'));
     h.stop().await;
+}
+
+#[tokio::test]
+async fn the_strict_eta_is_the_virtual_task_time_with_six_decimals() {
+    let h = start_with("eta-virtual", FunctionsHttpProfile::Strict, true).await;
+    let request = h.dispatched(5, BODY, json!({})).await;
+    // The virtual clock is pinned at START, so the ETA is exactly that instant.
+    assert_eq!(
+        request["headers"]["x-cloudtasks-tasketa"],
+        "1788004860.000000"
+    );
+    h.stop().await;
+}
+
+#[tokio::test]
+async fn the_strict_profile_refuses_a_schedule_time_that_is_not_a_timestamp_and_the_emulator_profile_delivers_it(
+) {
+    let strict = start("schedule-strict", FunctionsHttpProfile::Strict).await;
+    for bad in ["soon", "", "2026-02-01", "2016-12-31T23:59:60Z"] {
+        let refusal = strict
+            .runtime
+            .enqueue_task(
+                "demo-app",
+                "us-central1",
+                "taskA",
+                &Harness::task(9, BODY, &json!({"scheduleTime": bad})),
+            )
+            .expect_err(bad);
+        assert_eq!(refusal.status, 400, "{bad:?}");
+    }
+    assert!(!strict.log.exists(), "nothing was dispatched");
+    // A valid one is accepted.
+    strict
+        .runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &Harness::task(10, BODY, &json!({"scheduleTime": "2026-02-01T00:30:00Z"})),
+        )
+        .unwrap();
+    strict.stop().await;
+    let emulator = start("schedule-emulator", FunctionsHttpProfile::Emulator).await;
+    let request = emulator
+        .dispatched(11, BODY, json!({"scheduleTime": "soon"}))
+        .await;
+    assert_eq!(request["headers"]["x-cloudtasks-tasketa"], "soon");
+    emulator.stop().await;
+}
+
+#[tokio::test]
+async fn the_strict_profile_keeps_the_service_headers_a_task_tries_to_set_and_the_emulator_profile_does_not(
+) {
+    let headers = json!({
+        "headers": {
+            "user-agent": "custom/1",
+            "X-CLOUDTASKS-QUEUENAME": "other",
+            "x-cloudtasks-taskretrycount": "7",
+            "X-Custom": "kept",
+        }
+    });
+    let strict = start("override-strict", FunctionsHttpProfile::Strict).await;
+    let request = strict.dispatched(20, BODY, headers.clone()).await;
+    let got = &request["headers"];
+    assert_eq!(got["user-agent"], "Google-Cloud-Tasks");
+    assert_eq!(got["x-cloudtasks-queuename"], "taskA");
+    assert_eq!(got["x-cloudtasks-taskretrycount"], "0");
+    assert_eq!(got["x-custom"], "kept");
+    strict.stop().await;
+    let emulator = start("override-emulator", FunctionsHttpProfile::Emulator).await;
+    let request = emulator.dispatched(21, BODY, headers).await;
+    let got = &request["headers"];
+    assert_eq!(got["user-agent"], "custom/1");
+    assert_eq!(got["x-cloudtasks-queuename"], "other");
+    assert_eq!(got["x-cloudtasks-taskretrycount"], "7");
+    emulator.stop().await;
 }

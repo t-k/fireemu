@@ -514,3 +514,53 @@ def test_a_cyclic_wrapper_chain_is_not_an_async_handler():
 
     loops.__wrapped__ = loops
     assert is_async_handler(loops) is False
+
+
+def test_the_body_is_read_with_a_bound_one_byte_past_the_limit(client_for, monkeypatch):
+    import http.client
+
+    amounts = []
+    real = http.client.HTTPResponse.read
+
+    def read(self, amt=None):
+        amounts.append(amt)
+        return real(self, amt)
+
+    monkeypatch.setattr(http.client.HTTPResponse, "read", read)
+    server = Scripted(lambda h: answer(h, body=KEYS_BODY))
+    try:
+        assert verifies(client_for(server.url, max_bytes=5000), token())
+        assert amounts == [5001]
+    finally:
+        server.close()
+
+
+def test_the_name_lookup_for_a_named_host_gets_the_servers_port(client_for, monkeypatch):
+    server = JwksServer({KID: EMULATOR_KEY})
+    seen = []
+    real = socket.getaddrinfo
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, *a, **k: seen.append((host, port)) or real(host, port, *a, **k))
+    try:
+        port = server.server.server_port
+        assert verifies(client_for(f"http://localhost:{port}/v1/jwks"), token())
+        assert seen[0] == ("localhost", port)
+    finally:
+        server.close()
+
+
+def fetch_error(reply):
+    server = Scripted(reply)
+    try:
+        with pytest.raises((OSError, ValueError)) as error:
+            appcheck.LoopbackKeyClient(server.url, max_bytes=1000)._fetch()
+        return type(error.value).__name__, str(error.value)
+    finally:
+        server.close()
+
+
+def test_the_exact_reasons_a_fetch_gives_up(client_for):
+    assert fetch_error(lambda h: answer(h, 500, b"{}")) == ("OSError", "the key server answered 500")
+    assert fetch_error(lambda h: answer(h, 302, b"", [("Location", "http://127.0.0.1:1/")])) == ("OSError", "the key server answered 302")
+    assert fetch_error(lambda h: answer(h, body=b" " * 1001)) == ("OSError", "the key set is larger than the bound")
+    assert fetch_error(lambda h: answer(h, body=b"[]")) == ("ValueError", "the key set has no keys list")
+    assert fetch_error(lambda h: answer(h, body=b'{"keys": 3}')) == ("ValueError", "the key set has no keys list")

@@ -98,17 +98,30 @@ DATASCHEMA = "https://github.com/googleapis/google-cloudevents/blob/main/proto/g
 
 
 @pytest.mark.parametrize("kind", ["created", "updated", "deleted", "written"])
-def test_a_firestore_event_carries_the_dataschema_production_sends(kind):
+def test_the_strict_profile_gives_a_firestore_event_the_dataschema_production_sends(monkeypatch, kind):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
     attributes = firestore_cloud_event(structured(type=f"google.cloud.firestore.document.v1.{kind}"))._get_attributes()
     assert attributes["dataschema"] == DATASCHEMA
 
 
-def test_a_dataschema_the_daemon_names_is_kept():
-    attributes = firestore_cloud_event(structured(dataschema="https://example.com/schema"))._get_attributes()
-    assert attributes["dataschema"] == "https://example.com/schema"
+@pytest.mark.parametrize("profile", [None, "emulator", ""])
+def test_the_emulator_profile_keeps_the_official_emulators_attributes_without_a_dataschema(monkeypatch, profile):
+    if profile is None:
+        monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    assert "dataschema" not in firestore_cloud_event(structured())._get_attributes()
 
 
-def test_the_dataschema_is_added_to_nothing_but_the_attributes():
+def test_a_dataschema_the_daemon_names_is_kept_in_both_profiles(monkeypatch):
+    for profile in ("strict", "emulator"):
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+        attributes = firestore_cloud_event(structured(dataschema="https://example.com/schema"))._get_attributes()
+        assert attributes["dataschema"] == "https://example.com/schema", profile
+
+
+def test_the_dataschema_is_added_to_nothing_but_the_attributes(monkeypatch):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
     event = structured()
     firestore_cloud_event(event)
     assert "dataschema" not in event

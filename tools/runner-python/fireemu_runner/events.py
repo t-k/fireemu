@@ -19,7 +19,8 @@ _NOT_AN_ATTRIBUTE = frozenset({"data", "datacontenttype"})
 # ordinary HTTP header (Cloud Run's), never as a `ce-` attribute, so the Python event has none (sandbox run
 # PYCHECK-EVENTS-20261104-01, the raw twins of the Pub/Sub, Storage and Eventarc events).
 _HTTP_HEADER_ONLY = frozenset({"traceparent"})
-# Eventarc sends `ce-dataschema` with every Firestore event (recorded for `created`; the schema is the same document for the family).
+# Eventarc sends `ce-dataschema` with every Firestore event (recorded for `created`; the schema is the same document for the
+# family). The strict profile delivers it; the emulator profile keeps the official emulator's attributes, which have none.
 _FIRESTORE_DATASCHEMA = (
     "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
 )
@@ -65,6 +66,10 @@ def _json_cloud_event(event: dict):
     return from_http(headers, body)
 
 
+def _strict() -> bool:
+    return os.environ.get("FIREEMU_HTTP_PROFILE", "emulator") == "strict"
+
+
 def _lenient_time(event: dict) -> dict:
     """The emulator profile gives a whole-second `time` a fraction.
 
@@ -73,7 +78,7 @@ def _lenient_time(event: dict) -> dict:
     emulator profile must serve; the strict profile delivers the time as production's event has it.
     """
     time = event.get("time")
-    if os.environ.get("FIREEMU_HTTP_PROFILE", "emulator") == "strict" or not isinstance(time, str):
+    if _strict() or not isinstance(time, str):
         return event
     match = _WHOLE_SECOND_TIME.match(time)
     return event if match is None else {**event, "time": f"{match.group(1)}.000{match.group(2)}"}
@@ -115,7 +120,8 @@ def database_cloud_event(event: dict):
 def firestore_cloud_event(event: dict):
     """The `CloudEvent` for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
     headers = _attribute_headers(event)
-    headers.setdefault("ce-dataschema", _FIRESTORE_DATASCHEMA)
+    if _strict():
+        headers.setdefault("ce-dataschema", _FIRESTORE_DATASCHEMA)
     data = event.get("data")
     message = firestore_events.DocumentEventData.from_json(json.dumps(data if isinstance(data, dict) else {}))
     headers["content-type"] = "application/protobuf"

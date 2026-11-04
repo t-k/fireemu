@@ -21,6 +21,7 @@ import {
   jobName,
   packageIds,
   queueName,
+  sourceBuckets,
   runMarker,
   topicName,
 } from "./plan.mjs";
@@ -82,8 +83,10 @@ const REQUIRED = [
   "cloudfunctions.googleapis.com",
   "cloudscheduler.googleapis.com",
   "cloudtasks.googleapis.com",
+  "compute.googleapis.com",
   "eventarc.googleapis.com",
   "eventarcpublishing.googleapis.com",
+  "firebaseextensions.googleapis.com",
   "firestore.googleapis.com",
   "pubsub.googleapis.com",
   "run.googleapis.com",
@@ -107,6 +110,8 @@ export function createWorld({
   seedChannels = ["firebase"],
   silent = [],
   deployState = "ACTIVE",
+  foreignSubscriptions = 0,
+  withSourceBuckets = true,
 } = {}) {
   const w = {
     runId,
@@ -128,6 +133,14 @@ export function createWorld({
       : null,
     appOperationReads: 0,
     cliRuns: [],
+    sourceBuckets: withSourceBuckets
+      ? new Map(
+          sourceBuckets(NUMBER).map((name) => [
+            name,
+            ["old-upload.zip"].slice(name.startsWith("gcf-v2-uploads") ? 0 : 1),
+          ]),
+        )
+      : new Map(),
     deliveries: [],
     insert: 0,
     services: new Set([
@@ -196,6 +209,12 @@ export function createWorld({
       w.queues.set(id, { name: queueName(id), state: "RUNNING", retryConfig: { maxAttempts: 1 } });
     w.topics.add(TOPIC);
     w.channels.add("firebase");
+    for (const [name, items] of w.sourceBuckets)
+      items.push(
+        name.startsWith("gcf-v2-uploads")
+          ? "upload-" + ++w.insert + ".zip"
+          : "pycheck-" + ++w.insert + ".zip",
+      );
   };
   const deleteDeployed = () => {
     for (const fn of ALL_FUNCTIONS) {
@@ -424,7 +443,14 @@ export function createWorld({
           "topics",
           url,
         );
-      if (path.endsWith("/subscriptions")) return page([], "subscriptions", url);
+      if (path.endsWith("/subscriptions"))
+        return page(
+          Array.from({ length: foreignSubscriptions }, (_, n) => ({
+            name: `projects/${PROJECT}/subscriptions/foreign-${n}`,
+          })),
+          "subscriptions",
+          url,
+        );
       const publish = /\/topics\/([^/:]+):publish$/.exec(path);
       if (publish) {
         if (!w.topics.has(publish[1])) return notFound("topic");
@@ -516,6 +542,12 @@ export function createWorld({
         const op = sourceOp(method, request.url, body);
         for (const fn of op?.reaches ?? []) deliver(fn, op.key);
         return reply(200, { name, bucket: BUCKET });
+      }
+      const sourceBucket = /^\/storage\/v1\/b\/([^/]+)\/o$/.exec(path)?.[1];
+      if (sourceBucket && sourceBucket !== BUCKET) {
+        const items = w.sourceBuckets.get(sourceBucket);
+        if (!items) return gcsNotFound(sourceBucket);
+        return reply(200, items.length ? { items: items.map((name) => ({ name })) } : {});
       }
       if (/^\/storage\/v1\/b\/[^/]+$/.test(path)) return reply(200, { name: BUCKET });
       if (path.endsWith("/o"))

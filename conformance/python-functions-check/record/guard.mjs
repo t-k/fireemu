@@ -14,6 +14,7 @@ import {
   TOPIC,
   packageIds,
   runMarker,
+  sourceBuckets,
 } from "./plan.mjs";
 
 const esc = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -291,6 +292,14 @@ export function rules(runId, projectNumber) {
       nothing,
       true,
     ],
+    // The Gen2 source buckets: object lists only (read-only inventory)
+    ...sourceBuckets(projectNumber).map((name) =>
+      read(
+        "storage.googleapis.com",
+        `^/storage/v1/b/${esc(name)}/o$`,
+        q({ maxResults: num(1000), pageToken: token }),
+      ),
+    ),
     // Cloud Storage: the default bucket (read), the objects under the check's prefix (list), and the run's one object
     read("storage.googleapis.com", `^/storage/v1/b/${BUCKET}$`),
     read(

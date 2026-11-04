@@ -59,8 +59,12 @@ export const REQUIRED_SERVICES = Object.freeze([
   "cloudfunctions.googleapis.com",
   "cloudscheduler.googleapis.com",
   "cloudtasks.googleapis.com",
+  // The CLI ensures these for every functions deployment and enables a missing one without asking; the run starts only
+  // when they are already on, so the deploy changes no service (the delivery and blocking recordings did the same).
+  "compute.googleapis.com",
   "eventarc.googleapis.com",
   "eventarcpublishing.googleapis.com",
+  "firebaseextensions.googleapis.com",
   "firestore.googleapis.com",
   "pubsub.googleapis.com",
   "run.googleapis.com",
@@ -78,6 +82,15 @@ export const STEP_GAP_SECONDS = 5;
 export const packageId = (fn) =>
   PROJECT.replaceAll("-", "--") + "__" + REGION.replaceAll("-", "--") + "__" + fn;
 export const packageIds = (fn) => [packageId(fn), packageId(fn) + "%2Fcache"];
+
+/**
+ * The two buckets a Gen2 deployment leaves objects in (the source upload and the build's copy). Their objects are not
+ * deleted by this check; the run reads them before and after and reports what was added.
+ */
+export const sourceBuckets = (projectNumber) => [
+  `gcf-v2-uploads-${projectNumber}.${REGION}.cloudfunctions.appspot.com`,
+  `gcf-v2-sources-${projectNumber}-${REGION}`,
+];
 
 /** Every Scheduler job and Cloud Tasks queue the CLI creates for the run's functions. */
 export const JOB_IDS = Object.freeze(SCHEDULER_FUNCTIONS.map(jobId));

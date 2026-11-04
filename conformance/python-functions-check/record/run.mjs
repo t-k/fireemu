@@ -44,6 +44,7 @@ import {
   QUEUE_IDS,
   REGION,
   REQUIRED_SERVICES,
+  sourceBuckets,
   STEP_GAP_SECONDS,
   TOPIC,
   functionName,
@@ -201,6 +202,7 @@ export async function record({
   let polledUntil = startedAt;
   let iamBefore = null;
   let enabledBefore = null;
+  let sourceObjectsBefore = null;
   let cliDeleteStarted = false;
 
   // ---- request helpers -------------------------------------------------------------------------
@@ -522,7 +524,9 @@ export async function record({
       channels: channels.channels.map((c) => lastSegment(c.name)),
       triggers: triggers.triggers.length,
       packages: packages.packages.length,
+      subscriptions: subs.subscriptions.length,
     };
+    sourceObjectsBefore = await sourceObjects("preflight");
     const ownJobs = jobs.jobs.some((j) => JOB_IDS.includes(lastSegment(j.name)));
     const ownQueues = queues.queues.some((qe) => QUEUE_IDS.includes(lastSegment(qe.name)));
     const ownTopic = topics.topics.some((t) => lastSegment(t.name) === TOPIC);
@@ -545,6 +549,33 @@ export async function record({
       return "namespace";
     await pollLogs("preflight");
     return null;
+  }
+
+  /**
+   * The object names of the two Gen2 source buckets, or null for a bucket that cannot be read to its end. A bucket that
+   * does not exist reads as empty. Read-only; a 403 is data.
+   */
+  async function sourceObjects(prefix) {
+    const found = {};
+    for (const bucketName of sourceBuckets(projectNumber)) {
+      const answer = await read(
+        {
+          id: `${prefix}-source-objects-${bucketName.startsWith("gcf-v2-uploads") ? "uploads" : "sources"}`,
+          method: "GET",
+          url: `https://storage.googleapis.com/storage/v1/b/${bucketName}/o?maxResults=1000`,
+          cleanup: stopped === "cleanup",
+        },
+        { observe: true },
+      );
+      if (absent(answer)) found[bucketName] = [];
+      else if (answer?.status === 200 && readable(answer) && !answer.json.nextPageToken)
+        found[bucketName] = (answer.json.items ?? []).map((item) => item.name).toSorted();
+      else {
+        found[bucketName] = null;
+        incompleteReads.push({ id: `${prefix}-source-objects`, class: answerClass(answer) });
+      }
+    }
+    return found;
   }
 
   /**
@@ -1064,6 +1095,24 @@ export async function record({
     out.cleanup.verified =
       out.cleanup.listsEmpty && Object.values(readBack).every((v) => v === true);
     // Read-only inventory: what the deploy left that this recorder does not delete, and what it changed.
+    await step("source-objects", async () => {
+      const after = await sourceObjects("inventory");
+      out.inventory.sourceObjects = Object.fromEntries(
+        sourceBuckets(projectNumber).map((name, index) => {
+          const before = sourceObjectsBefore?.[name];
+          const now = after[name];
+          return [
+            index === 0 ? "uploads" : "sources",
+            Array.isArray(before) && Array.isArray(now)
+              ? {
+                  added: now.filter((n) => !before.includes(n)),
+                  removed: before.filter((n) => !now.includes(n)),
+                }
+              : null,
+          ];
+        }),
+      );
+    });
     await step("inventory", async () => {
       const channels = await list(
         "inventory-channels",

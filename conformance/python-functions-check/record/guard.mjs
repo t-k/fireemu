@@ -6,6 +6,7 @@ import {
   ALL_FUNCTIONS,
   COLLECTION,
   JOB_IDS,
+  APP_ENGINE_LOCATION,
   OBJECT_PREFIX,
   PROJECT,
   QUEUE_IDS,
@@ -65,6 +66,19 @@ export function rules(runId, projectNumber) {
     ],
     read("firebase.googleapis.com", `^/v1beta1/projects/${P}/adminSdkConfig$`),
     read("appengine.googleapis.com", `^/v1/apps/${P}$`),
+    read("appengine.googleapis.com", `^/v1/apps/${P}/operations/${OPERATION_ID}$`),
+    // The one irreversible change: the project's App Engine app, only when it has none, with exactly this body.
+    [
+      "POST",
+      "appengine.googleapis.com",
+      `^/v1/apps$`,
+      q({}),
+      (json) =>
+        onlyKeys(json, ["id", "locationId"]) &&
+        json.id === PROJECT &&
+        json.locationId === APP_ENGINE_LOCATION,
+      true,
+    ],
     // Cloud Functions: lists, the run's functions, the leftovers' deletes (one at a time, exact names)
     read(
       "cloudfunctions.googleapis.com",

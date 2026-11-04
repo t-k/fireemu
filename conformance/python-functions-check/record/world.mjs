@@ -123,6 +123,10 @@ export function createWorld({
     objects: new Map(),
     channels: new Set(seedChannels),
     entries: [],
+    app: appEngine
+      ? { name: "apps/" + PROJECT, id: PROJECT, locationId: "us-central", servingStatus: "SERVING" }
+      : null,
+    appOperationReads: 0,
     cliRuns: [],
     deliveries: [],
     insert: 0,
@@ -284,10 +288,29 @@ export function createWorld({
     if (path.endsWith(":getIamPolicy")) return reply(200, { version: 1, etag: "e", bindings: [] });
     if (path.endsWith("/adminSdkConfig"))
       return reply(200, { projectId: PROJECT, storageBucket: BUCKET });
-    if (host === "appengine.googleapis.com")
-      return appEngine
-        ? reply(200, { name: "apps/" + PROJECT, locationId: "us-central" })
-        : notFound("app");
+    if (host === "appengine.googleapis.com") {
+      if (method === "POST" && path === "/v1/apps") {
+        if (w.app)
+          return reply(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "exists" } });
+        if (
+          body?.id !== PROJECT ||
+          typeof body?.locationId !== "string" ||
+          Object.keys(body).length !== 2
+        )
+          return badRequest("id and locationId are required");
+        w.app = {
+          name: "apps/" + PROJECT,
+          id: PROJECT,
+          locationId: body.locationId,
+          servingStatus: "SERVING",
+        };
+        w.appOperationReads = 0;
+        return reply(200, { name: `apps/${PROJECT}/operations/op-1`, done: false });
+      }
+      if (path.includes("/operations/"))
+        return reply(200, { name: path.slice(4), done: ++w.appOperationReads >= 2 });
+      return w.app ? reply(200, w.app) : notFound("app");
+    }
     if (host === "cloudfunctions.googleapis.com") {
       if (path.includes("/operations/"))
         return reply(200, { name: path.split("/").slice(-1)[0], done: true });

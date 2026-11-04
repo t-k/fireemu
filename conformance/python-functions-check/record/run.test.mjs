@@ -179,14 +179,6 @@ test("a function whose address cannot be read gets no task, and the run says so"
 // ---- before anything is created -----------------------------------------------------------------------
 
 const noWrites = (world) => assert.deepEqual(mutations(world), []);
-test("a project without an App Engine app stops before anything is created", async () => {
-  const { result, world } = await go({ appEngine: false });
-  assert.equal(result.outcome, "pycheck-stopped-clean");
-  assert.equal(result.stoppedBecause, "appengine");
-  assert.deepEqual(world.cliRuns, []);
-  noWrites(world);
-});
-
 test("a missing required API stops before anything is created", async () => {
   const world = createWorld({ runId: RUN });
   world.services.delete("cloudtasks.googleapis.com");

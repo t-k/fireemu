@@ -316,13 +316,14 @@ test("log noise and ERROR entries are counted, and a log read that fails is inco
 });
 
 test("a stopped run reports the stage it stopped at and an unverified cleanup", async () => {
-  for (const [options, stage] of [[{ appEngine: false }, "preflight"]]) {
-    const { result } = await go(options);
-    assert.equal(result.stage, stage);
-    assert.equal(result.cleanup.verified, false);
-    assert.equal(result.errorsSeen, 0);
-    assert.equal(result.closureReady, false);
-  }
+  const dirty = await go({}, {}, (send, world) => {
+    world.topics.add("pycheck-orders");
+    return send;
+  });
+  assert.equal(dirty.result.stage, "preflight");
+  assert.equal(dirty.result.cleanup.verified, false);
+  assert.equal(dirty.result.errorsSeen, 0);
+  assert.equal(dirty.result.closureReady, false);
   const failed = await go(
     {},
     {},

@@ -31,6 +31,8 @@ export const COLLECTION = "pycheck-src";
 export const EVENT_TYPE = "pycheck.thing.v1.happened";
 export const CHANNEL = "firebase";
 export const OBJECT_PREFIX = "pycheck/";
+/** The App Engine location the check creates the project's app in when there is none (owner ledger 2226; kept afterwards). */
+export const APP_ENGINE_LOCATION = "us-central";
 
 export const RUN_ID = /^[a-f0-9]{16}$/;
 /** The marker every payload of a run carries; the fixture reads it back out of what it was given. */

@@ -34,6 +34,7 @@ import { judge } from "./judge.mjs";
 import { errorFilter, frameFilter, listRequest, parseErrors, parseFrames } from "./logs.mjs";
 import {
   ALL_FUNCTIONS,
+  APP_ENGINE_LOCATION,
   COLLECTION,
   DELIVERY_WINDOW_SECONDS,
   JOB_IDS,
@@ -138,6 +139,8 @@ export async function record({
     gap: STEP_GAP_SECONDS,
     settle: 30,
     busy: 60,
+    appEngine: 10,
+    appEnginePolls: 30,
     ...waits,
   };
   const pause = (seconds) => sleep(seconds * 1000);
@@ -467,9 +470,10 @@ export async function record({
       { observe: true },
     );
     out.appEngine = { status: app?.status ?? null };
-    // Cloud Scheduler needs the project's App Engine app; creating one is an irreversible project change this run
-    // does not make.
-    if (app?.status !== 200) return "appengine";
+    // Cloud Scheduler needs the project's App Engine app. When there is none (an own 404 NOT_FOUND), the run creates it
+    // after every other check has passed (owner ledger 2226): an irreversible change that stays afterwards.
+    if (absent(app)) out.appEngine.missing = true;
+    else if (app?.status !== 200) return "appengine";
     const bucketRead = await read(
       { id: "bucket", method: "GET", url: `https://storage.googleapis.com/storage/v1/b/${bucket}` },
       { observe: true },
@@ -541,6 +545,56 @@ export async function record({
       return "namespace";
     await pollLogs("preflight");
     return null;
+  }
+
+  /**
+   * Creates the project's App Engine app when the preflight found none: one request, never re-sent, then the
+   * operation is read until it is done and the app is read back. The app is not part of the cleanup (it cannot be
+   * deleted and the owner asked to keep it). An unknown answer, or an app that cannot be read afterwards, stays
+   * unconfirmed and keeps the run from closing.
+   */
+  async function ensureAppEngine() {
+    if (!out.appEngine.missing) return true;
+    const url = "https://appengine.googleapis.com/v1/apps";
+    const create = await mutate({
+      id: "create-appengine",
+      method: "POST",
+      url,
+      json: { id: PROJECT, locationId: APP_ENGINE_LOCATION },
+    });
+    out.appEngine.createClass = answerClass(create);
+    if (answerClass(create) === "4xx") return false;
+    pendingCreates.set("appengine", {
+      label: "appengine",
+      id: "create-appengine",
+      name: "apps/" + PROJECT,
+      class: answerClass(create),
+    });
+    const operation = typeof create?.json?.name === "string" ? create.json : null;
+    for (
+      let poll = 1;
+      operation && create.json.done !== true && poll <= wait.appEnginePolls;
+      poll++
+    ) {
+      await pause(wait.appEngine);
+      const op = await read(
+        {
+          id: `appengine-operation-${poll}`,
+          method: "GET",
+          url: `https://appengine.googleapis.com/v1/${operation.name}`,
+        },
+        { observe: true },
+      );
+      if (op?.json?.done === true) break;
+    }
+    const app = await read(
+      { id: "settle-appengine", method: "GET", url: `${url}/${PROJECT}` },
+      { observe: true },
+    );
+    if (app?.status !== 200 || app.json?.locationId !== APP_ENGINE_LOCATION) return false;
+    confirmed.add("appengine");
+    out.appEngine.created = true;
+    return true;
   }
 
   async function setup() {
@@ -1078,6 +1132,12 @@ export async function record({
       out.outcome = "pycheck-stopped-clean";
       out.stoppedBecause = "the CLI dry run failed";
       return summary("dry-run", false);
+    }
+    out.stage = "app-engine";
+    if (!(await ensureAppEngine())) {
+      out.stoppedBecause = "appengine";
+      out.outcome = open().blocked ? "pycheck-needs-review" : "pycheck-stopped-clean";
+      return summary("app-engine", false);
     }
     out.stage = "setup";
     // The topic is created before the topic is used; a failed create is a clean stop only if nothing was created.

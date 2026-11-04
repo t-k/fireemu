@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use fireemu_adapter_database::rest::{Credentials, Database};
 use fireemu_core_auth::jwt::{
-    decode_token, is_unsigned_token, verify_rules_token_for_project, RulesTokenPolicy,
-    TokenAcceptance,
+    base64url_decode, decode_token, is_unsigned_token, verify_rules_token_for_project, JwtError,
+    RulesTokenPolicy, TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthRegistry;
 use fireemu_core_types::time::LogicalInstant;
@@ -77,19 +77,55 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
                 None => registry.store_for(project).unwrap_or(default),
             };
             let store = store.lock().ok()?;
-            let decoded = verify_rules_token_for_project(
+            let decoded = match verify_rules_token_for_project(
                 token,
                 &store,
                 LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
                 policy,
                 project,
-            )
-            .ok()?;
+            ) {
+                Ok(decoded) => decoded,
+                // The official emulator reads the claims of a signed token it cannot verify
+                // (G10 rows auth-rs256 and auth-hs256: jar 200). The emulator profile does the
+                // same when it admits unsigned tokens and issues none of its own signatures;
+                // see `unverified_signed_claims`.
+                Err(JwtError::UnsupportedAlgorithm(alg))
+                    if any_mock_audience && store.signer().is_none() =>
+                {
+                    return unverified_signed_claims(token, &alg, project, now);
+                }
+                Err(_) => return None,
+            };
             // A token of another project is never a user here, whichever store verified it.
             let audience = decoded.payload.get("aud")?.as_str()?;
             (audience == project).then_some(decoded.payload_json)
         })),
     }
+}
+
+/// The claims of an `RS256` or `HS256` token the emulator profile cannot verify, read as the
+/// official emulator reads them (jar 4.11.2, G10 rows auth-rs256 and auth-hs256): unverified.
+/// Kept to the recorded shape: a non-empty signature, a payload that is a JSON object, and an
+/// `aud` that names the instance's own project, and an `exp` still in the future. The result is the claims text, which still has to
+/// name a subject and an issue time to be a user; nothing else is admitted.
+fn unverified_signed_claims(token: &str, alg: &str, project: &str, now: i64) -> Option<String> {
+    if !matches!(alg, "RS256" | "HS256") {
+        return None;
+    }
+    let mut parts = token.split('.');
+    let (Some(_), Some(payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return None;
+    };
+    if signature.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8(base64url_decode(payload).ok()?).ok()?;
+    let claims: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let claims = claims.as_object()?;
+    let live = claims.get("exp")?.as_i64()?.checked_mul(1000)? > now;
+    (live && claims.get("aud")?.as_str()? == project).then_some(text)
 }
 
 /// How often a rules file is looked at for a change.

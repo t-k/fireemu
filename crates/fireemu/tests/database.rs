@@ -1141,6 +1141,92 @@ fn credentials_follow_the_profile_and_bind_tokens_to_the_instance_project() {
             nobody,
             "{name}"
         );
+        // A signed token fireemu cannot verify (G10 rows auth-rs256 and auth-hs256: the official
+        // emulator answered 200 for both). The emulator profile reads its claims unverified, in
+        // the recorded shape only: RS256 or HS256, a non-empty signature, `aud` the instance's
+        // project, `exp` in the future. Strict and productionExact never admit one.
+        let forged = |alg: &str, signature: &str, claims: &str| {
+            format!(
+                "{}.{}.{signature}",
+                segment(&format!(r#"{{"alg":"{alg}","typ":"JWT","kid":"unknown"}}"#))
+                    .trim_end_matches('.'),
+                segment(claims).trim_end_matches('.')
+            )
+        };
+        let own = format!(r#"{{"aud":"{PROJECT}","sub":"u1","iat":1,"exp":9999999999}}"#);
+        let admitted = if strict { 401 } else { 200 };
+        for alg in ["RS256", "HS256"] {
+            let token = forged(alg, "c2ln", &own);
+            assert_eq!(
+                read(default, "/users/u1", &auth(&token), &[]),
+                admitted,
+                "{name}: {alg}"
+            );
+            // It is its user, not anonymous.
+            assert_eq!(
+                read(default, "/anon", &auth(&token), &[]),
+                401,
+                "{name}: {alg}"
+            );
+        }
+        for (what, token) in [
+            ("ES256", forged("ES256", "c2ln", &own)),
+            ("empty signature", forged("RS256", "", &own)),
+            (
+                "another project",
+                forged(
+                    "RS256",
+                    "c2ln",
+                    r#"{"aud":"someone-else","sub":"u1","iat":1,"exp":9999999999}"#,
+                ),
+            ),
+            (
+                "expired",
+                forged(
+                    "RS256",
+                    "c2ln",
+                    &format!(r#"{{"aud":"{PROJECT}","sub":"u1","iat":1,"exp":2}}"#),
+                ),
+            ),
+            (
+                "no exp",
+                forged(
+                    "HS256",
+                    "c2ln",
+                    &format!(r#"{{"aud":"{PROJECT}","sub":"u1","iat":1}}"#),
+                ),
+            ),
+            (
+                "no aud",
+                forged("RS256", "c2ln", r#"{"sub":"u1","iat":1,"exp":9999999999}"#),
+            ),
+        ] {
+            assert_eq!(
+                read(default, "/users/u1", &auth(&token), &[]),
+                401,
+                "{name}: {what}"
+            );
+            assert_eq!(
+                read(default, "/anon", &auth(&token), &[]),
+                nobody,
+                "{name}: {what}"
+            );
+        }
+        let no_subject = forged(
+            "RS256",
+            "c2ln",
+            &format!(r#"{{"aud":"{PROJECT}","iat":1,"exp":9999999999}}"#),
+        );
+        assert_eq!(
+            read(default, "/users/u1", &auth(&no_subject), &[]),
+            401,
+            "{name}: no sub"
+        );
+        assert_eq!(
+            read(default, "/anon", &auth(&no_subject), &[]),
+            nobody,
+            "{name}: no sub"
+        );
         // Access tokens: any one is an administrator under the emulator profile, only `owner`
         // under strict; `auth=owner` names no one.
         let other_bearer = ["Authorization: Bearer ya29.other"];

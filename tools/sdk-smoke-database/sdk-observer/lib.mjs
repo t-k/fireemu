@@ -4,6 +4,11 @@ import { constants, openSync, writeSync, fsyncSync, closeSync, readFileSync, rea
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
+/** Writes all of `data` through `write` (fs.writeSync by default), looping over short writes; a write that makes no progress is an error. */
+export function writeAll(fd, data, write = writeSync) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+  for (let off = 0; off < buf.length;) { const n = write(fd, buf, off, buf.length - off); if (!(n > 0)) throw new Error('short write made no progress'); off += n; }
+}
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const clip = (text, max = 65536) => (text.length > max ? `${text.slice(0, max)}...[clipped ${text.length - max}]` : text);
 export class CapExceeded extends Error {}
@@ -26,7 +31,7 @@ export function createCounter({ direct, reserve = 12 }) {
 }
 
 // Append-only JSONL, created O_EXCL, 0600. A row that contains a secret is refused. `optional` rows (raw capture) are dropped once the file passes the soft cap.
-export function createJournal(file, { maxBytes = 16 << 20, softBytes = 12 << 20 } = {}) {
+export function createJournal(file, { maxBytes = 16 << 20, softBytes = 12 << 20, write: rawWrite = writeSync } = {}) {
   const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_NOFOLLOW, 0o600), secrets = new Set(); let bytes = 0;
   return {
     addSecret: s => { if (typeof s === 'string' && s.length >= 8) secrets.add(s); },
@@ -35,7 +40,7 @@ export function createJournal(file, { maxBytes = 16 << 20, softBytes = 12 << 20 
       if (optional && bytes + size > softBytes) return false;
       if (bytes + size > maxBytes) throw new Error('Journal cap');
       for (const s of secrets) if (text.includes(s)) throw new Error('Secret in journal row');
-      writeSync(fd, text); bytes += size; return true;
+      writeAll(fd, text, rawWrite); bytes += size; return true;
     },
     close() { try { fsyncSync(fd); } finally { closeSync(fd); } },
   };
@@ -111,7 +116,7 @@ export function checkApproval(ledgerText, want) {
 // Claim files (project lease, RECORDING): O_EXCL, 0600; released only if still ours.
 export function claim(file, content) {
   const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try { writeSync(fd, content); fsyncSync(fd); } finally { closeSync(fd); }
+  try { writeAll(fd, content); fsyncSync(fd); } finally { closeSync(fd); }
   return () => { if (readFileSync(file, 'utf8') === content) unlinkSync(file); };
 }
 

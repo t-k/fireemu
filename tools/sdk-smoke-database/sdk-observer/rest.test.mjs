@@ -285,3 +285,8 @@ test('the rest suite deadlines: 120 s per profile, 6 minutes per run, the proces
   const { backstopMs } = await import('./observer.mjs');
   assert.deepEqual([SUITES.rest.profileMs, SUITES.rest.runMs, backstopMs('rest')], [120000, 360000, 480000]);
 });
+
+test('runner: an overridden DELETE answered with a name body is neither masked nor treated as a push', async () => {
+  const f = fakeSend(label => (label === 'override-delete' ? { status: 200, text: '{"name":"-OZzZzZzZzZzZzZzZzZz"}' } : null)), rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
+  const r = rows.find(x => x.id === 'override-delete'); assert.equal(r.body, '{"name":"-OZzZzZzZzZzZzZzZzZz"}'); assert.equal('pushIdShapeOk' in r, false); assert.equal(r.ok, true);
+});

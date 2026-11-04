@@ -138,11 +138,12 @@ const unknownStatus = status => status < 200 || (status >= 300 && status < 400) 
  * One profile: every kept case once, in order. `send(label, method, url, {body, headers, record})` is the observer's
  * admin REST (counted, journalled, never retried); `url(rel, query)` builds the request URL of a path under the scope.
  */
-export async function runRestProfile({ send, url, scope, emit = () => {}, cases = REST_CASES }) {
+export async function runRestProfile({ send, url, scope, emit = () => {}, cases = REST_CASES, cancelled = () => false }) {
   if (typeof scope !== 'string' || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(scope)) throw Error('Invalid rest scope');
   const rows = [], pushIds = [], seen = { etag: null }, mask = text => maskText(text, { scope, pushIds });
   const done = row => { const full = { kind: 'case', suite: 'rest', ...row }; rows.push(full); emit(full); return full; };
   for (const id of cases) {
+    if (cancelled()) return rows;   // the profile was abandoned at its deadline: nothing more is sent and the skipped cases are not recorded
     const spec = TABLE.find(x => x.id === id);
     if (!spec) throw Error(`unknown rest case ${id}`);
     const headers = {}, recorded = {};

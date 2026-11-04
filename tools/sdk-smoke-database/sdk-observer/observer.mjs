@@ -15,7 +15,7 @@ import { getHeapStatistics } from 'node:v8';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adcVerdict, checkApproval, claim, clip, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
+import { adcVerdict, checkApproval, claim, clip, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls, writeAll } from './lib.mjs';
 import { CASE_ORDER, runCases, withTimeout } from './sequence.mjs';
 import { readback } from './readback.mjs';
 import { packetRules } from './rules.mjs';
@@ -54,7 +54,7 @@ export function productionConfig(doc) {
     || !paths || Object.keys(paths).sort().join() !== 'lease,owner,recording' || !Object.values(paths).every(abs)) throw new Error('--production-config: principalSha256, legacyPacket, runtimeProposal, paths {owner, lease, recording}');
   return { ...PRODUCTION, principalSha256: doc.principalSha256, legacyPacket: doc.legacyPacket, runtimeProposal: doc.runtimeProposal, paths: { ...paths } };
 }
-const writeNew = (file, text) => { const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); try { writeSync(fd, text); } finally { closeSync(fd); } };
+export const writeNew = (file, text, write = writeSync) => { const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); try { writeAll(fd, text, write); } finally { closeSync(fd); } };
 const ADMIN_PIN = ['firebase-admin', '14.3.0'];
 /** The installed Admin SDK version (only the admin suites use it; the small result keeps its recorded `sdk` members). */
 export const adminVersion = (modules = MODULES) => JSON.parse(readFileSync(path.join(modules, ADMIN_PIN[0], 'package.json'), 'utf8')).version;
@@ -204,7 +204,7 @@ async function adminProfile(ctx) {
   return runAdminProfile({ db, cfg: { scope: ctx.scope, name: ctx.profile, closeMs: ctx.closeMs }, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
 }
 /** One rest profile: the case table through the run's guarded admin REST (ctx.rest), under the profile scope. */
-const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
+const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
 const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile } };
 
 // ---- the run -----------------------------------------------------------------------------------------------------------------------------------
@@ -264,7 +264,7 @@ export async function run(opts, deps = {}) {
       let rows;
       const profilePromise = (async () => (part === 'small' ? d.profiles[transport](ctx) : d.suiteProfiles[part][transport](ctx)))(), drain = async () => { for (const close of ctx.closers.splice(0).reverse()) await withTimeout(o.closeMs, `close ${profile}`, close()).catch(() => result.unverified.push(`close ${profile}`)); };
       try { rows = await guard(o.profileMs, `profile ${profile}`, profilePromise); }
-      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); if (part !== 'small') result.unverified.push(`${part === 'rest' ? 'REST' : 'SDK'} mutations possibly in flight: profile ${profile} aborted`); }   // an abandoned SDK profile may have sent writes whose outcome is unknown
+      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); if (part !== 'small') result.unverified.push(`${part === 'rest' ? 'REST' : 'SDK'} mutations possibly in flight: profile ${profile} aborted`); if (part === 'rest') abortFn(`rest profile ${profile} hit its deadline`); }   // an abandoned SDK profile may have sent writes whose outcome is unknown
       await drain();   // actors, page, browser stopped and awaited before anything else
       if (ctx.cancelled) { await withTimeout(o.closeMs, `settle ${profile}`, profilePromise.catch(() => {})).catch(() => result.unverified.push(`profile ${profile} did not settle`)); await drain(); }   // a profile still starting up registers more closers when it finishes
       for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${part === 'rest' ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back

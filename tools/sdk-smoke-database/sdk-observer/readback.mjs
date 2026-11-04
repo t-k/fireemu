@@ -6,7 +6,7 @@
 import { mkdirSync, readFileSync, openSync, writeSync, closeSync, constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adcVerdict, checkApproval, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
+import { adcVerdict, checkApproval, createAdmin, writeAll, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest'];
@@ -35,7 +35,7 @@ function finishedRun(runDir) {
  * instance not ACTIVE: a recovery packet, reviewed first), 3 unknown (a read failed or answered outside 200).
  */
 export async function readback({ runDir, outDir, target, ledgerText }, deps = {}) {
-  const d = { fetchImpl: fetch, mint: mintToken, now: () => Date.now(), ...deps };
+  const d = { fetchImpl: fetch, mint: mintToken, now: () => Date.now(), write: undefined, ...deps };
   const result = finishedRun(runDir), script = scriptManifest(HERE).sha256;
   if (result.scriptSha256 !== script) throw new Error('run directory: the run was made by another script version');
   checkApproval(ledgerText, { runId: result.runId, scriptSha256: script, directCap: result.caps.direct, prefix: result.prefix, suite: result.suite });
@@ -60,7 +60,7 @@ export async function readback({ runDir, outDir, target, ledgerText }, deps = {}
     const exit = unknown ? 3 : settled ? 0 : 1;
     const report = { runId: result.runId, suite: result.suite, scriptSha256: script, prefix: result.prefix, endedAt: result.endedAt, readAt: new Date(d.now()).toISOString(), checks, verdict: unknown ? 'unknown' : settled ? 'settled' : 'not-settled', exit, counts: counter.used() };
     const fd = openSync(path.join(outDir, 'readback.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { writeSync(fd, `${JSON.stringify(report, null, 2)}\n`); } finally { closeSync(fd); }
+    try { writeAll(fd, `${JSON.stringify(report, null, 2)}\n`, d.write); } finally { closeSync(fd); }
     return { exit, report };
   } finally { try { journal.close(); } catch { /* disk */ } }
 }

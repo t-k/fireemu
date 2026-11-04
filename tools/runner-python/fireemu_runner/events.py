@@ -36,7 +36,7 @@ def _attribute_headers(event: dict) -> dict:
     if not isinstance(event.get("specversion"), str):
         # Without it `from_http` would read the body as a structured JSON event and fail on the body.
         raise ValueError("the event has no specversion")
-    header_only = _HTTP_HEADER_ONLY if _strict() else frozenset()
+    header_only = _HTTP_HEADER_ONLY if is_strict() else frozenset()
     return {
         f"ce-{name}": value
         for name, value in event.items()
@@ -49,12 +49,12 @@ def _is_json(content_type: str) -> bool:
     return media == "application/json" or media.endswith("+json")
 
 
-def _json_cloud_event(event: dict):
-    """The `CloudEvent` for an event whose data is JSON (or text, with a text content type).
+def _json_request(event: dict) -> tuple[dict, bytes]:
+    """The headers and body of the HTTP request that delivers an event whose data is JSON (or text, with a text content type).
 
     Eventarc delivers these in binary content mode: attributes as `ce-*` headers and the data as the body,
     which functions-framework hands to `cloudevents.http.from_http` (`functions_framework/__init__.py:174-188`).
-    A delivery without a content type is JSON.
+    A delivery without a content type is JSON. The body is the compact text a publisher sends (`JSON.stringify`).
     """
     headers = _attribute_headers(event)
     declared = event.get("datacontenttype")
@@ -65,11 +65,11 @@ def _json_cloud_event(event: dict):
     elif isinstance(event["data"], str) and not _is_json(content_type):
         body = event["data"].encode()
     else:
-        body = json.dumps(event["data"]).encode()
-    return from_http(headers, body)
+        body = json.dumps(event["data"], separators=(",", ":"), ensure_ascii=False).encode()
+    return headers, body
 
 
-def _strict() -> bool:
+def is_strict() -> bool:
     return os.environ.get("FIREEMU_HTTP_PROFILE") == "strict"
 
 
@@ -81,14 +81,14 @@ def _lenient_time(event: dict) -> dict:
     emulator profile must serve; the strict profile delivers the time as production's event has it.
     """
     time = event.get("time")
-    if _strict() or not isinstance(time, str):
+    if is_strict() or not isinstance(time, str):
         return event
     match = _WHOLE_SECOND_TIME.match(time)
     return event if match is None else {**event, "time": f"{match.group(1)}.000{match.group(2)}"}
 
 
-def pubsub_cloud_event(event: dict):
-    """The `CloudEvent` for a Pub/Sub message event.
+def pubsub_request(event: dict) -> tuple[dict, bytes]:
+    """The request for a Pub/Sub message event.
 
     The SDK reads `message_id` and `publish_time` (`pubsub_fn.py:98-160`), the snake-case spellings Pub/Sub's
     push body carries next to `messageId` and `publishTime`. `orderingKey` has no alternative: the SDK pops
@@ -97,35 +97,60 @@ def pubsub_cloud_event(event: dict):
     data = event.get("data")
     message = data.get("message") if isinstance(data, dict) else None
     if not isinstance(message, dict):
-        return _json_cloud_event(event)
+        return _json_request(event)
     message = dict(message)
     for camel, snake in (("messageId", "message_id"), ("publishTime", "publish_time")):
         if snake not in message and camel in message and message[camel] is not None:
             message[snake] = message[camel]
-    return _json_cloud_event({**event, "data": {**data, "message": message}})
+    return _json_request({**event, "data": {**data, "message": message}})
 
 
-def storage_cloud_event(event: dict):
-    """The `CloudEvent` for a Storage object event."""
-    return _json_cloud_event(_lenient_time(event))
+def storage_request(event: dict) -> tuple[dict, bytes]:
+    """The request for a Storage object event."""
+    return _json_request(_lenient_time(event))
 
 
-def eventarc_cloud_event(event: dict):
-    """The `CloudEvent` for a custom Eventarc event."""
-    return _json_cloud_event(_lenient_time(event))
+def eventarc_request(event: dict) -> tuple[dict, bytes]:
+    """The request for a custom Eventarc event."""
+    return _json_request(_lenient_time(event))
 
 
-def database_cloud_event(event: dict):
-    """The `CloudEvent` for a Realtime Database event."""
-    return _json_cloud_event(event)
+def database_request(event: dict) -> tuple[dict, bytes]:
+    """The request for a Realtime Database event."""
+    return _json_request(event)
 
 
-def firestore_cloud_event(event: dict):
-    """The `CloudEvent` for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
+def firestore_request(event: dict) -> tuple[dict, bytes]:
+    """The request for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
     headers = _attribute_headers(event)
-    if _strict():
+    if is_strict():
         headers.setdefault("ce-dataschema", _FIRESTORE_DATASCHEMA)
     data = event.get("data")
     message = firestore_events.DocumentEventData.from_json(json.dumps(data if isinstance(data, dict) else {}))
     headers["content-type"] = "application/protobuf"
-    return from_http(headers, firestore_events.DocumentEventData.serialize(message))
+    return headers, firestore_events.DocumentEventData.serialize(message)
+
+
+def pubsub_cloud_event(event: dict):
+    """The `CloudEvent` for a Pub/Sub message event (see `pubsub_request`)."""
+    return from_http(*pubsub_request(event))
+
+
+def storage_cloud_event(event: dict):
+    """The `CloudEvent` for a Storage object event."""
+    return from_http(*storage_request(event))
+
+
+def eventarc_cloud_event(event: dict):
+    """The `CloudEvent` for a custom Eventarc event."""
+    return from_http(*eventarc_request(event))
+
+
+def database_cloud_event(event: dict):
+    """The `CloudEvent` for a Realtime Database event."""
+    return from_http(*database_request(event))
+
+
+def firestore_cloud_event(event: dict):
+    """The `CloudEvent` for a Firestore event frame (`created`, `updated`, `deleted`, `written`)."""
+    return from_http(*firestore_request(event))

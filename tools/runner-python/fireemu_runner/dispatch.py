@@ -3,13 +3,10 @@
 import os
 import threading
 
-from .events import (
-    database_cloud_event,
-    eventarc_cloud_event,
-    firestore_cloud_event,
-    pubsub_cloud_event,
-    storage_cloud_event,
-)
+from cloudevents.http import from_http
+
+from .events import database_request, eventarc_request, firestore_request, pubsub_request, storage_request
+from .request_view import delivery_request
 from .diagnostics import ASYNC_HANDLER, describe, is_async_handler
 from .environment import EnvironmentGate
 from .framing import FrameWriter
@@ -19,13 +16,14 @@ MAX_ACTIVE_INVOCATIONS = 4096
 _MAX_ERROR_CHARS = 4096
 _MAX_DIAGNOSTIC_CHARS = 256 * 1024
 
-# Trigger types that arrive as an `invoke` frame whose function takes a CloudEvent, and the adapter that builds it.
+# Trigger types that arrive as an `invoke` frame whose function takes a CloudEvent, and the adapter that builds the request
+# (headers and body) that delivers it.
 _CLOUD_EVENTS = {
-    "firestore": firestore_cloud_event,
-    "pubsub": pubsub_cloud_event,
-    "storage": storage_cloud_event,
-    "eventarc": eventarc_cloud_event,
-    "database": database_cloud_event,
+    "firestore": firestore_request,
+    "pubsub": pubsub_request,
+    "storage": storage_request,
+    "eventarc": eventarc_request,
+    "database": database_request,
 }
 # A Gen2 scheduled function is an HTTP function: the SDK wrapper takes the scheduler's request.
 _TRIGGERS = frozenset((*_CLOUD_EVENTS, "schedule"))
@@ -35,7 +33,10 @@ def _deliver(trigger: str, function, event) -> None:
     if trigger == "schedule":
         deliver_schedule(function, event.get("data") if isinstance(event, dict) else None)
     else:
-        function(_CLOUD_EVENTS[trigger](event))
+        headers, body = _CLOUD_EVENTS[trigger](event)
+        # As functions-framework does: the function runs inside the request that delivers the event.
+        with delivery_request(headers, body, event):
+            function(from_http(headers, body))
 
 
 # What `FUNCTION_SIGNATURE_TYPE` says for each (the Node runner's `signatureType`).

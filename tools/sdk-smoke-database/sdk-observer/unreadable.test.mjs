@@ -61,7 +61,11 @@ for (const [id, match] of Object.entries(cases)) {
 }
 test('a GET whose body is not UTF-8 is recorded but is not a mutation: nothing is unknown', async () => {
   const w = await world((m, u) => m === 'GET' && u.pathname.endsWith('/mix.json') && u.searchParams.get('timeout') === '5s');
-  try { assert.equal(w.outcome.result.unverified.length, 0, JSON.stringify(w.outcome.result.unverified)); assert.equal(w.outcome.exit, 0); } finally { w.cleanup(); }
+  try {
+    assert.equal(w.outcome.result.unverified.length, 0, JSON.stringify(w.outcome.result.unverified)); assert.equal(w.outcome.exit, 0);
+    const row = readFileSync(path.join(w.runDir, 'journal.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).find(r => r.kind === 'case' && r.id === 'timeout-5s' && r.profile === 'r1-rest');
+    assert.equal(row.outcome, 'answered'); assert.equal(row.ok, true); assert.equal(row.utf8, false); assert.equal('unknown' in row, false);
+  } finally { w.cleanup(); }
 });
 test('createAdmin: an unreadable answer to a non-GET in record mode is listed in unknownMutations; to a GET, or in text mode, it is not', async () => {
   const run1 = async (method, record) => {

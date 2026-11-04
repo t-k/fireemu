@@ -10,11 +10,12 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { assertPublishable, parseJsonl } from './rtdb-sdk-small-fixture.mjs';
-import { ROW_FIELDS, recordedJournal } from './rtdb-sdk-rules-fixture.mjs';
+import { ROW_FIELDS as RULES_ROW_FIELDS, recordedJournal } from './rtdb-sdk-rules-fixture.mjs';
 import { TOKENS_CASES, TOKENS_PROFILES } from './sdk-observer/tokens-suite.mjs';
 
 export const KIND = 'rtdb-sdk-tokens-journal-v1';
-export { ROW_FIELDS, recordedJournal };
+export const ROW_FIELDS = [...RULES_ROW_FIELDS, 'unknownObservation'];   // a GET whose answer cannot be judged is listed, not counted
+export { recordedJournal };
 const FAULTS = ['abort', 'error', 'profile-error', 'timeout'];
 const IGNORED = ['admin-req', 'admin-res', 'admin-unknown', 'result', 'cleanup'];
 

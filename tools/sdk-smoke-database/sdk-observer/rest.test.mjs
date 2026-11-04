@@ -298,3 +298,32 @@ test('runner: a clipped answer (over 64 KiB) is not ok: outcome clipped, no unkn
   assert.equal(rows.length, 72, 'the profile goes on after a clipped answer');
   assert.equal(rows.find(x => x.id === 'wsl-medium').ok, true);
 });
+
+// ---- redaction before clipping (packet 5 review, Codex Must 2) ----
+test('admin REST with record: the ADC token is hidden before the body is clipped: a token crossing the 64 KiB boundary leaves no prefix of it (raw or percent-encoded)', async () => {
+  const token = `ya29.${'Ab/+='.repeat(10)}`, forms = [token, encodeURIComponent(token)];
+  for (const form of forms) for (const pad of [65536 - 3, 65536 - 20, 65536 - form.length, 65536 - form.length - 1, 65536 - 1]) {
+    const body = `${'a'.repeat(pad)}${form}${'b'.repeat(300)}`, counter = createCounter({ direct: 5 });
+    const admin = createAdmin({ headers: {}, adc: token, journal: { write() {} }, counter, fetchImpl: async () => new Response(Buffer.from(body), { status: 200 }) });
+    const r = await admin.rest('c', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true });
+    for (const piece of [token.slice(0, 6), encodeURIComponent(token).slice(0, 6)]) assert.equal(r.text.includes(piece), false, `pad ${pad}: ${piece}`);
+    assert.equal(r.clipped, true); assert.equal(r.bodyBytes, Buffer.byteLength(body));
+    assert.ok(r.text.length <= 65536, 'the clip bound holds after the replacement');
+  }
+});
+test('journal: a secret is refused in its raw and its percent-encoded form; leaks() and redact() say and hide the same', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'journal-secret-')), journal = createJournal(path.join(dir, 'j.jsonl')), token = `ya29.${'t'.repeat(30)}/+=`;
+  try {
+    journal.addSecret(token);
+    for (const form of [token, encodeURIComponent(token)]) { assert.throws(() => journal.write({ kind: 'x', body: `a ${form} b` }), /Secret in journal row/); assert.equal(journal.leaks(`a ${form} b`), true); assert.equal(journal.redact(`a ${form} b`).includes(form), false); }
+    assert.equal(journal.leaks('nothing'), false); assert.equal(journal.redact('nothing'), 'nothing');
+    assert.equal(journal.redact(`${token}${encodeURIComponent(token)}`).includes('ya29'), false);
+  } finally { journal.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+test('admin REST with record: when the token is hidden the clip bound applies to what is shown, not to the raw body', async () => {
+  const token = `ya29.${'Ab/+='.repeat(10)}`;
+  const body = `${token}${'x'.repeat(65536 + 20 - token.length)}`;   // raw: 65556 characters, over the bound; hidden (the placeholder has 5): 65541 minus the token's 55, under it
+  const admin = createAdmin({ headers: {}, adc: token, journal: { write() {} }, counter: createCounter({ direct: 5 }), fetchImpl: async () => new Response(Buffer.from(body), { status: 200 }) });
+  const r = await admin.rest('c', 'GET', 'http://h/x.json?auth={adc}', { record: true, anonymous: true, resolveAdc: true });
+  assert.equal(r.text.length, 5 + 65536 + 20 - token.length); assert.ok(r.text.length < 65536); assert.equal(r.clipped, false, 'nothing was cut off'); assert.equal(r.text.startsWith('{adc}'), true);
+});

@@ -36,7 +36,9 @@ export function createCounter({ direct, reserve = 12 }) {
 export function createJournal(file, { maxBytes = 16 << 20, softBytes = 12 << 20, write: rawWrite = writeSync } = {}) {
   const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_APPEND | constants.O_NOFOLLOW, 0o600), secrets = new Set(); let bytes = 0;
   return {
-    addSecret: s => { if (typeof s === 'string' && s.length >= 8) secrets.add(s); },
+    addSecret: s => { if (typeof s === 'string' && s.length >= 8) { secrets.add(s); secrets.add(encodeURIComponent(s)); } },   // the raw and the percent-encoded form (a URL or a query echoed in a body)
+    leaks: text => [...secrets].some(s => text.includes(s)),
+    redact: text => [...secrets].reduce((t, s) => t.split(s).join('{secret}'), text),
     write(row, { optional = false } = {}) {
       const text = `${JSON.stringify({ t: new Date().toISOString(), ...row })}\n`, size = Buffer.byteLength(text);
       if (optional && bytes + size > softBytes) return false;
@@ -100,8 +102,8 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
       let decoded = null;
       try { decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { /* not UTF-8: recorded as such */ }
       if (decoded === null && method !== 'GET') unknownMutations.push(label);   // an answer to a mutation that cannot be read is no answer: the outcome is unknown (Codex review of packet 2)
-      const clipped = decoded !== null && decoded.length > BODY_MAX, answer = {
-        status: res.status, text: decoded === null ? null : hide(decoded.slice(0, BODY_MAX)),
+      const shown = decoded === null ? null : hide(decoded), clipped = shown !== null && shown.length > BODY_MAX, answer = {   // hidden BEFORE clipped: a token crossing the boundary must not leave a prefix of itself
+        status: res.status, text: decoded === null ? null : shown.slice(0, BODY_MAX),
         headers: Object.fromEntries(RECORDED_RESPONSE_HEADERS.flatMap(name => (res.headers.get(name) === null ? [] : [[name, hide(res.headers.get(name))]]))),
         bodyBytes: bytes.length, utf8: decoded !== null, clipped,
       };

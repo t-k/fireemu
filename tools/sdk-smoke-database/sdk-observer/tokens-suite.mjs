@@ -6,7 +6,7 @@
 // each under its own scope `<prefix>/sdk-tokens/<profile>`, through the observer's admin REST path.
 //
 // One global Rules document (tokensRules), installed once by the observer: the root denied, `<prefix>/sdk-tokens/ready`
-// readable, and in each profile scope `pub` (read and write true), `deny` (read false) and `authreq` (`auth != null`).
+// readable, and in each profile scope `pub` (read true), `deny` (read false) and `authreq` (`auth != null`).
 // Each profile starts with the ready probe of the rules suite (an anonymous GET of the ready path, at most MAX_PROBES
 // times, `probeDelayMs` apart, until it reads 200), then the seed (one admin PUT) and the GETs of the table.
 //
@@ -14,7 +14,7 @@
 // header; the case's token as `auth=`, `access_token=` or `Authorization: Bearer`). The rows record the request as a
 // template (`auth={cred}`, `Bearer {cred}`): the token is fixed by the case id and this file (pinned by the manifest).
 // One row per case in the rules suite's form. Outcomes: answered; clipped; unknown-status and unknown-body (the seed
-// PUT only); unknown (no answer was read: the profile stops); not-sent (the cap refused it: the profile stops).
+// PUT is an unknown mutation; a GET is an unknown observation, not ok); unknown (no answer was read: the profile stops); not-sent (the cap refused it: the profile stops).
 import { createHash, createHmac } from 'node:crypto';
 import { CapExceeded, unknownStatus } from './lib.mjs';
 import { FIXED_REQUEST_HEADERS, maskText } from './rest-suite.mjs';
@@ -93,7 +93,7 @@ export function tokensRules(prefix) {
   if (prefix.slice(1).split('/').some(p => ['__proto__', 'constructor', 'prototype'].includes(p))) throw Error('Invalid rules prefix');
   const rules = { '.read': false, '.write': false }; let target = rules;
   for (const p of prefix.slice(1).split('/')) target = target[p] = {};
-  target[TOKENS_AREA] = { ready: { '.read': true }, ...Object.fromEntries(TOKENS_PROFILES.map(name => [name, { pub: { '.read': true, '.write': true }, deny: { '.read': false }, authreq: { '.read': 'auth != null' } }])) };
+  target[TOKENS_AREA] = { ready: { '.read': true }, ...Object.fromEntries(TOKENS_PROFILES.map(name => [name, { pub: { '.read': true }, deny: { '.read': false }, authreq: { '.read': 'auth != null' } }])) };
   return { rules };
 }
 
@@ -137,13 +137,15 @@ export async function runTokensProfile({ send, url, scope, projectId, emit = () 
     try { answer = await send(id, spec.method, url(`${scope}${spec.path}`, query), { ...(spec.body === undefined ? {} : { body: spec.body }), headers: { ...FIXED_REQUEST_HEADERS }, record: true, ...options }); }
     catch (error) {
       const notSent = error instanceof CapExceeded;
-      done({ ...head, ok: false, outcome: notSent ? 'not-sent' : 'unknown', ...request, error: `${error?.name}: ${String(error?.message).slice(0, 200)}`, ...(!notSent && spec.method !== 'GET' ? { unknown: [id] } : {}) });
+      done({ ...head, ok: false, outcome: notSent ? 'not-sent' : 'unknown', ...request, error: `${error?.name}: ${String(error?.message).slice(0, 200)}`, ...(!notSent ? (spec.method !== 'GET' ? { unknown: [id] } : { unknownObservation: [id] }) : {}) });
       return rows;   // transport uncertainty or the cap: nothing more is sent from this profile
     }
-    const clipped = answer.clipped === true, unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);
+    // A status the case cannot judge (5xx, 3xx, below 200) or a body that is not UTF-8 is no observation. For the seed (a mutation) its outcome is
+    // unknown (exit 3, A2); for a GET nothing changed, so the case is only not ok and listed as an unknown observation (it never counts toward the 54).
+    const clipped = answer.clipped === true, mutation = spec.method !== 'GET', unreadable = answer.utf8 === false, unjudgeable = unknownStatus(answer.status) || unreadable;
     done({
-      ...head, ok: !unknown && !clipped, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : clipped ? 'clipped' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
-      ...(unknown ? { unknown: [id] } : {}),
+      ...head, ok: !unjudgeable && !clipped, outcome: unreadable ? 'unknown-body' : unjudgeable ? 'unknown-status' : clipped ? 'clipped' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
+      ...(unjudgeable ? (mutation ? { unknown: [id] } : { unknownObservation: [id] }) : {}),
     });
   }
   return rows;

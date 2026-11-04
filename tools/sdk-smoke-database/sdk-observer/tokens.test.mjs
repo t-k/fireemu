@@ -116,15 +116,15 @@ test('one round is 28 requests (27 cases + the start probe); one production run 
 });
 
 // ---- the Rules ----
-test('global Rules: root denied, the ready path readable, each profile scope with pub (read/write true), deny (read false) and authreq (auth != null)', () => {
+test('global Rules: root denied, the ready path readable, each profile scope with pub (read only: no case writes as a client), deny (read false) and authreq (auth != null)', () => {
   const doc = tokensRules(PREFIX), area = doc.rules.sdktokens20261105[TOKENS_AREA];
   assert.deepEqual(Object.keys(doc.rules), ['.read', '.write', 'sdktokens20261105']);
   assert.equal(doc.rules['.read'], false); assert.equal(doc.rules['.write'], false);
   assert.deepEqual(Object.keys(area), ['ready', ...TOKENS_PROFILES]);
   assert.deepEqual(area.ready, { '.read': true });
-  for (const p of TOKENS_PROFILES) assert.deepEqual(area[p], { pub: { '.read': true, '.write': true }, deny: { '.read': false }, authreq: { '.read': 'auth != null' } });
+  for (const p of TOKENS_PROFILES) assert.deepEqual(area[p], { pub: { '.read': true }, deny: { '.read': false }, authreq: { '.read': 'auth != null' } });
   for (const bad of ['x', '/a/__proto__', '/a b', '', '/a//b', 7, `/${'a'.repeat(300)}`]) assert.throws(() => tokensRules(bad), /Invalid rules prefix/);
-  assert.equal(createHash('sha256').update(JSON.stringify(tokensRules('/p'))).digest('hex'), '54ceaead5e047a190e5382e3b8c0ed8746b068e4e97517c9edd47bd7bdca79a3');
+  assert.equal(createHash('sha256').update(JSON.stringify(tokensRules('/p'))).digest('hex'), 'de22f6848257532e3f264dc30c26c105818ea00ca5bcbf00c065f3fbfe548800');
 });
 
 // ---- the runner ----
@@ -163,14 +163,18 @@ test('runner: the ready probe is repeated (with the delay) until 200, at most 20
     assert.deepEqual(await runner(g), [{ id: 'ready-start', ok: false, outcome }]); assert.equal(g.sent.length, 1);
   }
 });
-test('runner: the seed answered 5xx, 3xx, below 200 or unreadable is an unknown mutation; a GET answered 5xx or unreadable is only recorded', async () => {
+test('runner: the seed answered 5xx, 3xx, below 200 or unreadable is an unknown mutation; a GET answered 5xx, 3xx, below 200 or unreadable is an unknown observation (not ok, not a mutation)', async () => {
   for (const [answer, outcome] of [[{ status: 503, text: 'x' }, 'unknown-status'], [{ status: 304, text: '' }, 'unknown-status'], [{ status: 101, text: '' }, 'unknown-status'], [{ status: 200, text: null, utf8: false }, 'unknown-body']]) {
-    const f = fakeSend(label => (label === 'seed' ? answer : label === 'auth-null' ? { status: 500, text: 'e' } : label === 'auth-pct' ? { status: 200, text: null, utf8: false } : null));
+    const f = fakeSend(label => (label === 'seed' ? answer : label === 'auth-null' ? { status: 500, text: 'e' } : label === 'auth-pct' ? { status: 200, text: null, utf8: false } : label === 'bearer-null' ? { status: 302, text: '' } : null));
     const rows = await runner(f), seed = rows.find(r => r.id === 'seed');
-    assert.equal(seed.outcome, outcome); assert.deepEqual(seed.unknown, ['seed']); assert.equal(seed.ok, false);
+    assert.equal(seed.outcome, outcome); assert.deepEqual(seed.unknown, ['seed']); assert.equal(seed.ok, false); assert.equal('unknownObservation' in seed, false);
     assert.equal(rows.length, TOKENS_CASES.length, 'the profile goes on');
-    assert.equal(rows.find(r => r.id === 'auth-null').outcome, 'answered'); assert.equal('unknown' in rows.find(r => r.id === 'auth-null'), false);
-    assert.equal(rows.find(r => r.id === 'auth-pct').outcome, 'answered'); assert.equal(rows.find(r => r.id === 'auth-pct').utf8, false);
+    for (const [id, want] of [['auth-null', 'unknown-status'], ['auth-pct', 'unknown-body'], ['bearer-null', 'unknown-status']]) {
+      const r = rows.find(x => x.id === id);
+      assert.equal(r.ok, false, id); assert.equal(r.outcome, want, id); assert.deepEqual(r.unknownObservation, [id], id); assert.equal('unknown' in r, false, `${id}: a GET is no mutation`);
+    }
+    assert.equal(rows.find(r => r.id === 'auth-pct').utf8, false);
+    assert.equal(rows.filter(r => r.ok).length, TOKENS_CASES.length - 4, 'only the seed and the three unknown GET answers are not ok');
   }
   const g = fakeSend(label => (label === 'seed' ? { status: 400, text: '{"error":"x"}' } : null));
   assert.equal((await runner(g)).find(r => r.id === 'seed').outcome, 'answered', 'a 4xx is a known answer');
@@ -180,6 +184,7 @@ test('runner: a transport failure stops the profile (the seed is unknown, a GET 
     const f = fakeSend(l => (l === label ? new Unknown(`${l}: unknown outcome`) : null)), rows = await runner(f);
     assert.equal(f.sent.at(-1).label, label); assert.equal(rows.at(-1).outcome, 'unknown');
     assert.deepEqual(rows.at(-1).unknown ?? [], unknown ? [label] : []);
+    assert.deepEqual(rows.at(-1).unknownObservation ?? [], unknown ? [] : [label], 'a GET with no answer is an unknown observation, a mutation an unknown mutation');
   }
   const f = fakeSend(l => (l === 'at-rs256' ? new CapExceeded('direct cap reached') : null)), rows = await runner(f);
   assert.equal(rows.at(-1).outcome, 'not-sent'); assert.equal('unknown' in rows.at(-1), false); assert.equal(f.sent.at(-1).label, 'at-rs256');

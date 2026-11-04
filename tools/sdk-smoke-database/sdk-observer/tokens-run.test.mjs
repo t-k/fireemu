@@ -204,3 +204,36 @@ test('production run --suite tokens: credential requests carry no admin header; 
     assert.equal(existsSync(paths.lease), false);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('production run --suite tokens: result.json passes the journal\'s secret check: a profile error carrying the ADC token is redacted there too (packet 5 review, Opus Should 4)', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'tokens-leak-')), SCRIPT = scriptManifest(HERE).sha256, RUN = 'TOKENS-LEAK-01', P = '/sdktokens20261105', TOKEN = `ya29.${'t'.repeat(40)}/+=`;
+  const paths = { owner: path.join(dir, 'owner.md'), lease: path.join(dir, 'lease'), recording: path.join(dir, 'RECORDING') }, state = { rules: BASELINE };
+  writeFileSync(paths.owner, `- 2026-11-05 | RTDB-SMALL-OBSERVER ${RUN} | decision=APPROVE; scriptSha256=${SCRIPT}; directCap=80; adc=1; prefix=${P}; suite=tokens; basis=2217 | coordinator | r.md\n`);
+  const fetchImpl = async (url, init = {}) => {
+    const u = new URL(url), method = init.method ?? 'GET';
+    if (u.hostname === 'oauth2.googleapis.com') return new Response(JSON.stringify({ scope: 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email', email: 'tester@example.com' }));
+    if (u.hostname === 'firebasedatabase.googleapis.com') return new Response(JSON.stringify({ name: 'projects/1/locations/r/instances/ns', type: 'USER_DATABASE', state: 'ACTIVE' }));
+    if (u.pathname === '/.settings/rules.json') { if (method === 'PUT') { state.rules = init.body; return new Response('{"status":"ok"}'); } return new Response(state.rules); }
+    return new Response('null');
+  };
+  const target = { kind: 'production', projectId: 'fireemu-oracle-query', projectNumber: '1', region: 'r', namespace: 'ns', principalSha256: sha256('tester@example.com'), baselineRulesSha256: sha256(BASELINE), gcloud: '/x', paths };
+  const boom = { tokens: async () => { throw new Error(`boom auth=${encodeURIComponent(TOKEN)} and ${TOKEN}`); } };
+  try {
+    const { result } = await run({ target, runId: RUN, prefix: P, directCap: 80, suite: 'tokens', outDir: path.join(dir, 'run') }, { fetchImpl, mint: () => TOKEN, suiteProfiles: { tokens: boom } });
+    const text = readFileSync(path.join(dir, 'run', 'result.json'), 'utf8'), journal = readFileSync(path.join(dir, 'run', 'journal.jsonl'), 'utf8');
+    for (const form of [TOKEN, encodeURIComponent(TOKEN)]) { assert.equal(text.includes(form), false, 'result.json'); assert.equal(journal.includes(form), false, 'journal'); }
+    assert.equal(JSON.parse(text).secretRedacted, true); assert.match(text, /boom auth=/);
+    assert.equal(result.secretRedacted, true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('run --suite tokens: a GET answer that cannot be judged is listed as an unknown observation, the run is incomplete (exit 1, not 3) and nothing counts it', async () => {
+  const db = await fakeDatabase(), out = mkdtempSync(path.join(tmpdir(), 'tokens-unk-'));
+  const rows = [{ id: 'auth-null', ok: false, outcome: 'unknown-status', unknownObservation: ['auth-null'] }, { id: 'seed', ok: true, outcome: 'answered' }];
+  try {
+    const { exit, result } = await run({ target: local(db.host), runId: 'TEST-TOKENS-UNK', prefix: PREFIX, directCap: 80, continueOnFailure: true, outDir: path.join(out, 'run'), suite: 'tokens', probeDelayMs: 1 }, { suiteProfiles: { tokens: { tokens: async () => rows } } });
+    assert.equal(exit, 1); assert.equal(result.status, 'incomplete'); assert.deepEqual(result.unverified, []);
+    assert.deepEqual(result.unknownObservations, ['r1-tokens/auth-null', 'r2-tokens/auth-null']);
+    assert.equal(result.observed, 2, 'only the ok rows of the case table count');
+  } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
+});

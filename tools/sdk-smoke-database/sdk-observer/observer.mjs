@@ -284,6 +284,7 @@ export async function run(opts, deps = {}) {
       await drain();   // actors, page, browser stopped and awaited before anything else
       if (ctx.cancelled) { await withTimeout(o.closeMs, `settle ${profile}`, profilePromise.catch(() => {})).catch(() => result.unverified.push(`profile ${profile} did not settle`)); await drain(); }   // a profile still starting up registers more closers when it finishes
       for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${REST_PARTS.includes(part) ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
+      for (const label of rows.flatMap(row => row.unknownObservation ?? [])) (result.unknownObservations ??= []).push(`${profile}/${label}`);   // a GET whose answer cannot be judged: nothing changed, so no A2 read-back, but the case is not ok and is never counted
       result.cases.push(...rows.map(({ value, steps, ...row }) => ({ profile, ...row })));
       if (rows.some(row => !row.ok) && !o.continueOnFailure) break;
     }
@@ -320,7 +321,9 @@ export async function run(opts, deps = {}) {
     else result.claims = 'left in place: cleanup unverified';
     jw({ kind: 'result', ...result, cases: undefined });
     try { journal.close(); } catch { /* disk */ }
-    try { writeNew(path.join(o.outDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`); } catch (error) { console.error(`result.json not written: ${error.message}`); }
+    let resultText = `${JSON.stringify(result, null, 2)}\n`;
+    if (journal.leaks(resultText)) { result.secretRedacted = true; resultText = journal.redact(`${JSON.stringify(result, null, 2)}\n`); }   // result.json passes the journal's secret check (raw and percent-encoded forms); an error message may carry a URL
+    try { writeNew(path.join(o.outDir, 'result.json'), resultText); } catch (error) { console.error(`result.json not written: ${error.message}`); }
   }
   return { exit, result };
 }

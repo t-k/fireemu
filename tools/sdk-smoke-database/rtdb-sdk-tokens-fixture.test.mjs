@@ -27,6 +27,12 @@ test('reduce: per profile the case rows in journal order without kind/suite/prof
   assert.deepEqual(faulted.result.unverified, ['result.json has no unverified list']);
   assert.equal(reduceTokensJournal(raw(), { ...RESULT, prefix: '/p' }).result.prefixLength, 2, 'the length of the run\'s own prefix');
 });
+test('reduce: a GET answered with an unjudgeable status keeps its unknownObservation label in the reduced row (not ok, no mutation label)', () => {
+  const rows = raw(), i = rows.findIndex(r => r.kind === 'case' && r.id === 'auth-null');
+  rows[i] = { ...rows[i], ok: false, outcome: 'unknown-status', status: 503, unknownObservation: ['auth-null'] };
+  const d = reduceTokensJournal(rows, { ...RESULT, status: 'incomplete', observed: 53, exit: 1 }), r = d.profiles[0].rows.find(x => x.id === 'auth-null');
+  assert.deepEqual([r.ok, r.outcome, r.unknownObservation, Object.hasOwn(r, 'unknown')], [false, 'unknown-status', ['auth-null'], false]);
+});
 test('reduce: refuses a row it cannot place', () => {
   const bad = [
     [rows => rows.push({ kind: 'mystery' }), /unknown journal row kind/],

@@ -865,8 +865,10 @@ test("the function is confirmed by a list that shows it, and stays unconfirmed w
   );
   const listNot200 = await go(
     { deployState: "DEPLOYING" },
-    (send) => async (request) =>
-      request.method === "GET" && path(request).endsWith("/locations/-/functions")
+    (send, world) => async (request) =>
+      request.method === "GET" &&
+      path(request).endsWith("/locations/-/functions") &&
+      world.cliRuns.includes("deploy")
         ? reply(202, { functions: [{ name: functionName() }] })
         : hideRead(send)(request),
     { waits: { readyPolls: 1 } },

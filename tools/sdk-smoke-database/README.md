@@ -136,6 +136,19 @@ node tools/sdk-smoke-database/rtdb-sdk-rules.mjs compare <recorded fixture or jo
 
 `rtdb-sdk-rules-judge.mjs` judges each case like the rest judge (exact status, recorded headers and body bytes after the `{scope}` mask; a Rules load answer is judged as bytes, error columns included) and requires on both sides that every probe ended ready and every reinstall followed exactly the load documents answered 200; the number of probe attempts is not compared. The local prefix has the 17-character length of the production form `/sdkrulesYYYYMMDD`. `fixtures/local-sdk-rules.json` is the strict reduction on fireemu v0.43.0; strict and emulator are byte-identical.
 
+## Tokens suite (G10, not yet recorded)
+
+`observer.mjs --suite tokens` asks how the REST endpoint answers credentials that are not valid, as plain HTTP requests, no SDK and no browser. Two profiles (`r1-tokens`, `r2-tokens`) run the same 27-case table of `sdk-observer/tokens-suite.mjs` under `<prefix>/sdk-tokens/<profile>`: one admin seed PUT, three controls (anonymous on the auth-required and the public path, admin on the auth-required path) and 23 credential requests that carry no admin header. The credentials go as `auth=`, `access_token=` or `Authorization: Bearer`: empty, a random non-JWT string, an `alg: none` JWT for another project (a `demo-` id) and for the target's project (exp in the past), an RS256-shaped token with a random signature and kid, an HS256 token signed with a throw-away key, two segments, a payload of a few KB, characters that need percent-encoding, the literal `null`, and the observer's own ADC token as `auth=` (on the auth-required and the denied path). Every token is generated from fixed bytes (`credentials()`, SHA-256 in counter mode), so both sides send identical inputs and none is a secret; the rows record the request as a template (`auth={cred}`, `Bearer {cred}`). The ADC token appears only as the `{adc}` placeholder: the admin REST replaces it in the URL that is fetched and masks it in the answer; locally it is the owner token.
+
+The observer installs one Rules document (`tokensRules`: the root denied, `<prefix>/sdk-tokens/ready` readable, and in each scope `pub` read and write true, `deny` read false, `authreq` `auth != null`) and each profile starts with the rules suite's ready probe. One round is 28 requests (27 cases and the start probe); one production run is 62 direct requests (2 x 28 plus 6 preflight requests) plus 4 cleanup requests; the recommended `--direct-cap` is 80. Answers are masked as `{scope}` and `{project}`; the local target's project, `demo-tokens-observer`, has the production project id's length.
+
+```sh
+node tools/sdk-smoke-database/rtdb-sdk-tokens.mjs local --fireemu <fireemu binary> --out <new dir> [--profile strict|emulator] [--against <fixture or journal.json>]
+node tools/sdk-smoke-database/rtdb-sdk-tokens.mjs compare <recorded fixture or journal.json> <local journal.json>
+```
+
+`rtdb-sdk-tokens-judge.mjs` judges each case with the rules judge's `judgeCase` (exact status, recorded headers and body bytes) and requires one start probe that ended ready on both sides. The local prefix has the 18-character length of the production form `/sdktokensYYYYMMDD`. `fixtures/local-sdk-tokens.json` is the strict reduction on fireemu v0.43.0 and on the parity line (identical): strict answers every credential that is not the owner's with 401 Permission denied. The emulator profile admits unsigned tokens whatever their aud and any Bearer or `access_token` value but an empty Bearer (12 cases per round differ from strict, listed in `rtdb-sdk-tokens.test.mjs`).
+
 ## Production comparisons
 
 Three tools compare a local `fireemu` (strict profile, `fireemu up --only auth,database` on free loopback ports, stopped afterwards) with production recordings committed under `fixtures/`. None of them sends anything to production.

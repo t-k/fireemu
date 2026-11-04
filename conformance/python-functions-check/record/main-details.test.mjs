@@ -14,7 +14,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { PACKET_FILES, lastActivity, localChecks, main, packetDigest, realDeps } from "./main.mjs";
 import { SETTLE_MS } from "./readback.mjs";
@@ -463,7 +464,10 @@ test("the real adapters answer for this machine", () => {
   assert.equal(realDeps.firebaseToolsVersion(join(root, "lib", "bin", "firebase.js")), "15.28.2");
   assert.equal(
     realDeps.gitHead(),
-    execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      cwd: dirname(fileURLToPath(import.meta.url)),
+    }).trim(),
   );
   assert.equal(typeof realDeps.gitDirty(), "boolean");
   assert.match(realDeps.repoRoot(), /^\//);

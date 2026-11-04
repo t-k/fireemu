@@ -106,6 +106,10 @@ test('every load document is safe if production accepts it: no true grant, the r
     if (c.expectValid) assert.equal(doc.rules['.write'], false, `${c.id}: an expected-valid document denies writes at the root`);
   }
 });
+test('the global document is pinned: a changed expression, index or path changes this digest (case code of the production run)', async () => {
+  const { createHash } = await import('node:crypto');
+  assert.equal(createHash('sha256').update(JSON.stringify(globalRules('/p'))).digest('hex'), 'f418ff83a63148f7ad345c973c7df1cb297e2afe561270b0ec92ee3682ef3595');
+});
 test('the concatenation rules compare with the official emulator\'s text and use no exponent literal', () => {
   const cc = globalRules(PREFIX).rules.sdkrules20261105[RULES_AREA]['r1-rules'].cc;
   assert.deepEqual(Object.fromEntries(Object.entries(cc).map(([k, v]) => [k, v['.read']])), { d15: "'a' + 1.5 == 'a1.5'", d1e7: "'a' + 10000000.0 == 'a10000000'", d100: "'a' + 100.0 == 'a100'", dlong: "'a' + 12345678901 == 'a12345678901'", dsmall: "'a' + 0.0001 == 'a1.0E-4'" });
@@ -158,7 +162,7 @@ test('runner: an accepted load document (200) is followed by the global reinstal
 test('runner: the ready probe is repeated (with the delay) until 200, at most 8 times; never ready stops the profile', async () => {
   let n = 0; const sleeps = [];
   const f = fakeSend(label => (label.startsWith('ready-start-') ? (++n < 3 ? { status: 401, text: '{\n  "error" : "Permission denied"\n}\n' } : null) : null));
-  const rows = await runner(f, { sleep: async ms => { sleeps.push(ms); }, probeDelayMs: 1500 });
+  const rows = await runner(f, { sleep: async ms => { sleeps.push(ms); } });   // the default delay is the production one
   assert.deepEqual(f.sent.slice(0, 3).map(s => s.label), ['ready-start-1', 'ready-start-2', 'ready-start-3']);
   assert.deepEqual(sleeps.slice(0, 2), [1500, 1500]);
   assert.equal(rows.length, RULES_CASES.length);

@@ -85,7 +85,7 @@ for (const suite of ['rest', 'rules']) {
         const { exit, result } = w.outcome;
         assert.equal(exit, 3, JSON.stringify(result));
         assert.ok(result.unverified.includes(`unknown mutation outcome: ${id}`), JSON.stringify(result.unverified));
-        assert.ok(result.unverified.some(u => u.includes(`r1-${suite}/${id}`)), JSON.stringify(result.unverified));
+        assert.ok(result.unverified.includes(`unknown REST mutation outcome: r1-${suite}/${id}`), JSON.stringify(result.unverified));
         const row = w.journal().find(r => r.kind === 'case' && r.id === id && r.profile === `r1-${suite}`);
         assert.equal(row.ok, false); assert.equal(row.outcome, 'unknown'); assert.deepEqual(row.unknown, [id]);
         claimsKept(w);

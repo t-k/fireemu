@@ -68,8 +68,8 @@ export function finish(out, recorded = null) {
 }
 const line = s => `${s.counts.MATCH}/${caseCount()} MATCH, ${s.counts.MISMATCH} MISMATCH, ${s.counts.NEEDS_REVIEW} NEEDS_REVIEW, match=${s.match}${s.problems.length ? `; problems: ${s.problems.join('; ')}` : ''}`;
 
-/** Runs the plan in its own process group; the group is ended when the run finishes, times out or we are signalled. */
-function runExec(argv, timeout) {
+/** Runs the plan in its own process group; the group is ended when the run finishes, times out or we are signalled (also the tokens entry's). */
+export function runExec(argv, timeout) {
   return new Promise(resolve => {
     const child = spawn(argv[0], argv.slice(1), { stdio: ['ignore', 'inherit', 'inherit'], detached: true });
     const end = signal => { try { process.kill(-child.pid, signal); } catch { /* group already gone */ } };

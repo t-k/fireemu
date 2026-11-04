@@ -81,7 +81,7 @@ test("the digest is the sha256 of 'name TAB sha256(content) LF' lines in packet 
     packetDigest((name) => contents[name]),
     expected,
   );
-  assert.equal(PACKET_FILES.length, 16);
+  assert.equal(PACKET_FILES.length, 17);
   assert.deepEqual(PACKET_FILES.slice(-3), [
     "fixture/main.py",
     "fixture/requirements.txt",
@@ -472,4 +472,20 @@ test("the real adapters answer for this machine", () => {
   assert.equal(typeof realDeps.gitDirty(), "boolean");
   assert.match(realDeps.repoRoot(), /^\//);
   assert.equal(typeof realDeps.signals, "function");
+});
+
+test("every local module a packet module imports is itself part of the packet", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const listed = new Set(PACKET_FILES.map((name) => join(root, name)));
+  const missing = [];
+  for (const name of PACKET_FILES.filter((n) => n.endsWith(".mjs"))) {
+    const file = join(root, name);
+    const text = readFileSync(file, "utf8");
+    for (const match of text.matchAll(/(?:from|import)\s*\(?\s*"(\.{1,2}\/[^"]+)"/g)) {
+      const target = join(dirname(file), match[1]);
+      if (!listed.has(target)) missing.push(`${name} imports ${match[1]}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+  for (const file of listed) assert.ok(existsSync(file), file);
 });

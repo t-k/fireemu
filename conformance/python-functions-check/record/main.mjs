@@ -55,6 +55,7 @@ export const PACKET_FILES = [
   "record/bin.mjs",
   "../scheduled-delivery/capture.mjs",
   "../scheduled-delivery/record/deploy.mjs",
+  "../scheduled-delivery/record/plan.mjs",
   "../scheduled-delivery/record/token.mjs",
   "fixture/main.py",
   "fixture/requirements.txt",

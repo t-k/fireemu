@@ -100,6 +100,7 @@ export function createWorld({
   withSourceBuckets = true,
   baselineBlocking = undefined,
   publicInvoker = true,
+  deleteLeaves = undefined,
 } = {}) {
   const w = {
     runId,
@@ -163,7 +164,8 @@ export function createWorld({
       w.runServices.delete(FUNCTION);
     }
     if (!leaveTrigger) {
-      if (baselineBlocking === undefined) delete w.config.blockingFunctions;
+      if (deleteLeaves !== undefined) w.config.blockingFunctions = structuredClone(deleteLeaves);
+      else if (baselineBlocking === undefined) delete w.config.blockingFunctions;
       else w.config.blockingFunctions = structuredClone(baselineBlocking);
     }
   };

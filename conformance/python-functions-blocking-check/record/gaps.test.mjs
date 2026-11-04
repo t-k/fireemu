@@ -6,7 +6,15 @@ import test from "node:test";
 import { createGuard } from "./guard.mjs";
 import { judge } from "./judge.mjs";
 import { FRAME_MARK, PROJECT, functionName, packageIds, sourceBuckets } from "./plan.mjs";
-import { CLEANUP_CEILING, LOG_POLL_SECONDS, MAX_REQUESTS, NORMAL_CEILING, record } from "./run.mjs";
+import {
+  CLEANUP_CEILING,
+  LOG_POLL_SECONDS,
+  MAX_REQUESTS,
+  NORMAL_CEILING,
+  configDigest,
+  normalizedConfig,
+  record,
+} from "./run.mjs";
 import { emailOf } from "./script.mjs";
 import { LOCAL_ID, NUMBER, createWorld, productionFrames, reply } from "./world.mjs";
 import { READY_MAX_POLLS, READY_POLL_SECONDS } from "./deploy.mjs";
@@ -1152,4 +1160,58 @@ test("the read-back refuses to run for a missing journal with exit code 2", asyn
     },
   );
   assert.equal(code, 2);
+});
+
+test("an empty blocking section is the same whichever of its three forms the CLI leaves, and the form is recorded", async () => {
+  for (const deleteLeaves of [{}, { triggers: {} }]) {
+    const { result } = await go({ deleteLeaves });
+    assert.deepEqual(result.cleanup.configDifference, [], JSON.stringify(deleteLeaves));
+    assert.equal(result.cleanup.configRestored, true);
+    assert.equal(result.outcome, "pcblock-recorded");
+    assert.deepEqual(result.cleanup.blockingForm, {
+      before: "null",
+      after: JSON.stringify(deleteLeaves),
+    });
+  }
+  const other = await go({
+    deleteLeaves: { triggers: {}, forwardInboundCredentials: { idToken: true } },
+  });
+  assert.deepEqual(other.result.cleanup.configDifference, ["blockingFunctions"]);
+  assert.equal(other.result.outcome, "pcblock-needs-recovery");
+  assert.deepEqual(normalizedConfig({ a: 1, blockingFunctions: {} }), { a: 1 });
+  assert.deepEqual(
+    normalizedConfig({ a: 1, blockingFunctions: { triggers: { beforeCreate: {} } } }),
+    { a: 1, blockingFunctions: { triggers: { beforeCreate: {} } } },
+  );
+  assert.equal(normalizedConfig(null), null);
+  assert.equal(configDigest({ a: 1 }), configDigest({ a: 1, blockingFunctions: {} }));
+  assert.notEqual(
+    configDigest({ a: 1 }),
+    configDigest({ a: 1, blockingFunctions: { triggers: { x: 1 } } }),
+  );
+});
+
+test("a 403 on the account lookup of the cleanup is data, and the raw-only verdict keeps its observation", async () => {
+  const { result } = await go(
+    {},
+    (send) => async (request) =>
+      path(request).endsWith("accounts:lookup") ? error(403, "PERMISSION_DENIED") : send(request),
+  );
+  assert.notEqual(result.outcome, "pcblock-auth-stop");
+  assert.equal(result.cleanup.readBack.account, false);
+  const frames = JSON.parse(
+    JSON.stringify(productionFrames({ runId: RUN, localId: LOCAL_ID })),
+  ).map((frame) => ({ frame }));
+  const raw = judge({
+    email: emailOf(RUN),
+    localId: LOCAL_ID,
+    frames: frames.filter((e) => e.frame.kind === "blocking-raw"),
+    observed: {
+      signUp: { class: "2xx", status: 200, localId: LOCAL_ID },
+      registration: null,
+      invoker: null,
+    },
+    errors: [{ function: "pcblock", text: "t" }],
+  });
+  assert.deepEqual(raw.cases["blocking-sdk"].observed, { rawDelivered: true, errors: 1 });
 });

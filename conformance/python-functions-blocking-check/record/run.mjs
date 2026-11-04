@@ -84,14 +84,25 @@ export function iamChanges(before, after) {
   };
 }
 
-/** The top-level keys of the Identity Platform configuration that differ between two reads, or null when one cannot be compared. */
+/**
+ * The configuration with an empty blocking section (absent, `{}` or an empty `triggers` map) taken out: the CLI may leave
+ * any of the three after it removes its trigger, and they mean the same. Every other difference stays one.
+ */
+export function normalizedConfig(config) {
+  if (!isObject(config)) return config;
+  const copy = { ...config };
+  if (emptyBlocking(copy)) delete copy.blockingFunctions;
+  return copy;
+}
+
+/** The top-level keys of the Identity Platform configuration that differ between two reads (empty blocking sections being equal), or null when one cannot be compared. */
 export function configDifference(before, after) {
   if (!(before?.status === 200 && readable(before) && after?.status === 200 && readable(after)))
     return null;
-  const keys = new Set([...Object.keys(before.json), ...Object.keys(after.json)]);
-  return [...keys]
-    .filter((k) => JSON.stringify(before.json[k]) !== JSON.stringify(after.json[k]))
-    .toSorted();
+  const a = normalizedConfig(before.json);
+  const b = normalizedConfig(after.json);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  return [...keys].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])).toSorted();
 }
 
 /** Whether the configuration's blocking section is the empty baseline the preflight requires. */
@@ -110,7 +121,9 @@ const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
 
 /** A digest of a configuration body (the key order of the API's answer), so that the read-back can compare without keeping the body. */
 export const configDigest = (config) =>
-  createHash("sha256").update(JSON.stringify(config)).digest("hex");
+  createHash("sha256")
+    .update(JSON.stringify(normalizedConfig(config)))
+    .digest("hex");
 
 class BudgetError extends Error {}
 
@@ -779,6 +792,11 @@ export async function record({
       out.cleanup.configDifference = configDifference(configBefore, after);
       out.cleanup.configAfterEmptyBlocking =
         after?.status === 200 && readable(after) ? emptyBlocking(after.json) : null;
+      if (after?.status === 200 && readable(after))
+        out.cleanup.blockingForm = {
+          before: JSON.stringify(configBefore.json.blockingFunctions ?? null),
+          after: JSON.stringify(after.json.blockingFunctions ?? null),
+        };
     });
     await step("accounts-after", async () => {
       const count = await read({ ...countAccounts(), id: "accounts-after", cleanup: true });

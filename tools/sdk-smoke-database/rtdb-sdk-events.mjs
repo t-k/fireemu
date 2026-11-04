@@ -1,16 +1,18 @@
 // Local entry of the events (G6) and admin (G13) suites of the RTDB SDK observer (sdk-observer/ --suite): runs the
-// suite against fireemu, reduces the journal (rtdb-sdk-events-fixture.mjs) and, when given a recorded reduction, judges
-// it (rtdb-sdk-events-judge.mjs). There is no production fixture yet: `--against` takes another local reduction (the
-// strict and emulator profiles are judged against each other), and `compare` judges two reductions.
+// suite against fireemu, reduces the journal (rtdb-sdk-events-fixture.mjs) and judges it (rtdb-sdk-events-judge.mjs)
+// against a recorded reduction: by default, for the combined suite, the committed production fixture
+// fixtures/production-sdk-events.json (run RTDB-EVENTS-20261104-01); `--against` takes that fixture or any reduced
+// journal, and `compare` judges two of them. A fixture's provenance is dropped before judging (recordedJournal).
 //
-//   node rtdb-sdk-events.mjs local --fireemu <bin> --out <new dir> [--profile strict|emulator] [--suite events|admin|events+admin] [--against <journal.json>]
-//   node rtdb-sdk-events.mjs compare <recorded journal.json> <local journal.json>
+//   node rtdb-sdk-events.mjs local --fireemu <bin> --out <new dir> [--profile strict|emulator] [--suite events|admin|events+admin] [--against <fixture or journal.json>] [--modules <node_modules>]
+//   node rtdb-sdk-events.mjs compare <recorded fixture or journal.json> <local journal.json>
 //
 // `local` runs `fireemu exec --only database` (own process group, ended on exit, timeout and signal) with the observer in
 // emulator mode as the command; the observer installs its Rules, runs the profiles and restores everything itself.
 // Outputs in <out>: config.json, observer/ (journal.jsonl, result.json), journal.json and, with --against, comparison.json.
-// The exit status of `local` is the observer's; `compare` exits 0 on a match and 1 otherwise. Not registered in the
-// release replay (no production fixture). The production entry is `sdk-observer/observer.mjs --target production --suite ...`.
+// The exit status of `local` is the observer's; `compare` exits 0 on a match and 1 otherwise. The release replay
+// (conformance/src/rtdb-release-replay.mjs, campaign sdk-events) runs `local` in strict and adjudicates journal.json. The
+// production entry is `sdk-observer/observer.mjs --target production --suite ...` (packet-gated; never used here).
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,11 +20,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseJsonl } from './rtdb-sdk-small-fixture.mjs';
-import { SUITE_PARTS, reduceEventsJournal } from './rtdb-sdk-events-fixture.mjs';
+import { SUITE_PARTS, recordedJournal, reduceEventsJournal } from './rtdb-sdk-events-fixture.mjs';
 import { stepCount, summarize } from './rtdb-sdk-events-judge.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const OBSERVER = path.join(here, 'sdk-observer', 'observer.mjs');
+export const FIXTURE = path.join(here, 'fixtures', 'production-sdk-events.json');
 // Above the observer's own backstop (runMs 15 min + 2 min) so that the observer, not this timer, ends a slow run.
 const EXEC_TIMEOUT_MS = 19 * 60 * 1000;
 
@@ -32,10 +35,13 @@ export function options(argv) {
     if (argv.length !== 3) throw Error('usage: compare <recorded journal.json> <local journal.json>');
     return { mode: 'compare', recorded: path.resolve(argv[1]), local: path.resolve(argv[2]) };
   }
-  const binary = opt('--fireemu'), out = opt('--out'), profile = opt('--profile') ?? 'strict', suite = opt('--suite') ?? 'events+admin', against = opt('--against');
-  if (argv[0] !== 'local' || !binary || !out) throw Error('usage: local --fireemu <bin> --out <new dir> [--profile strict|emulator] [--suite events|admin|events+admin] [--against <journal.json>]');
+  const binary = opt('--fireemu'), out = opt('--out'), profile = opt('--profile') ?? 'strict', suite = opt('--suite') ?? 'events+admin', modules = opt('--modules');
+  if (argv[0] !== 'local' || !binary || !out) throw Error('usage: local --fireemu <bin> --out <new dir> [--profile strict|emulator] [--suite events|admin|events+admin] [--against <fixture or journal.json>] [--modules <node_modules>]');
   if (!['strict', 'emulator'].includes(profile)) throw Error('--profile is strict or emulator');
   if (!Object.hasOwn(SUITE_PARTS, suite)) throw Error('--suite is events, admin or events+admin');
+  // The observer imports the SDKs by package resolution, so only the package's own node_modules can be meant.
+  if (modules !== undefined && path.resolve(modules) !== path.join(here, 'node_modules')) throw Error('--modules must be this package\'s node_modules (the observer resolves the SDKs from there)');
+  const against = opt('--against') ?? (suite === 'events+admin' ? FIXTURE : undefined);   // the production fixture records the combined suite only
   const timeout = Number(opt('--exec-timeout-ms') ?? EXEC_TIMEOUT_MS);
   if (!Number.isSafeInteger(timeout) || timeout <= 0) throw Error('--exec-timeout-ms must be a positive integer');
   return { mode: 'local', binary, out: path.resolve(out), profile, suite, against: against === undefined ? undefined : path.resolve(against), timeout };
@@ -87,11 +93,11 @@ function runExec(argv, timeout) {
 async function main(argv) {
   const o = options(argv);
   if (o.mode === 'compare') {
-    const recorded = JSON.parse(readFileSync(o.recorded, 'utf8')), s = summarize(recorded, JSON.parse(readFileSync(o.local, 'utf8')));
+    const recorded = recordedJournal(JSON.parse(readFileSync(o.recorded, 'utf8'))), s = summarize(recorded, JSON.parse(readFileSync(o.local, 'utf8')));
     console.log(`rtdb-sdk-events compare: ${line(s, recorded.suite)}`);
     return s.match ? 0 : 1;
   }
-  const recorded = o.against === undefined ? null : JSON.parse(readFileSync(o.against, 'utf8'));
+  const recorded = o.against === undefined ? null : recordedJournal(JSON.parse(readFileSync(o.against, 'utf8')));
   mkdirSync(o.out); // refuses an existing directory
   const config = path.join(o.out, 'config.json');
   writeFileSync(config, `${JSON.stringify(daemonConfig(o.profile))}\n`, { flag: 'wx' });

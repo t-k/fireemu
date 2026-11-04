@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { daemonConfig, execPlan, finish, options } from './rtdb-sdk-events.mjs';
+import { FIXTURE as PRODUCTION_FIXTURE, daemonConfig, execPlan, finish, options } from './rtdb-sdk-events.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, 'rtdb-sdk-events.mjs');
@@ -19,7 +19,11 @@ const rawRows = doc => [{ kind: 'admin-req', label: 'rules-before' }, ...doc.pro
 
 test('options: local and compare only; --fireemu and --out required; the two profiles; the three suites', () => {
   const o = options(['local', '--fireemu', '/bin/fireemu', '--out', '/tmp/o']);
-  assert.deepEqual([o.mode, o.binary, o.out, o.profile, o.suite, o.against], ['local', '/bin/fireemu', '/tmp/o', 'strict', 'events+admin', undefined]);
+  assert.deepEqual([o.mode, o.binary, o.out, o.profile, o.suite, o.against], ['local', '/bin/fireemu', '/tmp/o', 'strict', 'events+admin', PRODUCTION_FIXTURE]);
+  assert.equal(PRODUCTION_FIXTURE, path.join(here, 'fixtures', 'production-sdk-events.json'));
+  assert.equal(options(['local', '--fireemu', 'f', '--out', 'o', '--suite', 'admin']).against, undefined, 'a single suite has no production fixture of its own');
+  assert.equal(options(['local', '--fireemu', 'f', '--out', 'o', '--modules', path.join(here, 'node_modules')]).against, PRODUCTION_FIXTURE);
+  assert.throws(() => options(['local', '--fireemu', 'f', '--out', 'o', '--modules', '/elsewhere/node_modules']), /--modules/);
   assert.equal(options(['local', '--fireemu', 'f', '--out', 'o', '--profile', 'emulator', '--suite', 'admin']).suite, 'admin');
   assert.equal(options(['local', '--fireemu', 'f', '--out', 'o', '--against', 'r.json']).against, path.resolve('r.json'));
   assert.deepEqual(options(['compare', 'a.json', 'b.json']), { mode: 'compare', recorded: path.resolve('a.json'), local: path.resolve('b.json') });
@@ -102,5 +106,20 @@ test('the entry refuses an existing --out and fails with the observer status whe
     const h = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir, { hang: true }), '--out', path.join(dir, 'h'), '--exec-timeout-ms', '6000'], { encoding: 'utf8', timeout: 60000 });   // above the fake producer's start-up under load (1.5 s once failed during a mutation run)
     assert.equal(h.status, 3, h.stderr); assert.match(h.stderr, /timed out/);
     for (const pid of JSON.parse(readFileSync(path.join(dir, 'pids'), 'utf8'))) assert.equal(alive(pid), false, String(pid));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('compare and --against take the committed production fixture (its provenance is dropped) as well as a plain reduction', () => {
+  const ok = spawnSync(process.execPath, [script, 'compare', PRODUCTION_FIXTURE, path.join(here, 'fixtures', 'local-sdk-events.json')], { encoding: 'utf8' });
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr); assert.match(ok.stdout, /160\/160 MATCH, 0 MISMATCH, 0 NEEDS_REVIEW, match=true/);
+  const dir = mkdtempSync(path.join(tmpdir(), 'sdk-events-fixture-'));
+  try {
+    const bad = JSON.parse(readFileSync(PRODUCTION_FIXTURE, 'utf8')); bad.provenance.target = 'emulator';
+    writeFileSync(path.join(dir, 'bad.json'), JSON.stringify(bad));
+    const refused = spawnSync(process.execPath, [script, 'compare', path.join(dir, 'bad.json'), path.join(here, 'fixtures', 'local-sdk-events.json')], { encoding: 'utf8' });
+    assert.equal(refused.status, 2); assert.match(refused.stderr, /production/);
+    const out = path.join(dir, 'out'), r = spawnSync(process.execPath, [script, 'local', '--fireemu', fakeFireemu(dir), '--out', out, '--modules', path.join(here, 'node_modules')], { encoding: 'utf8', timeout: 60000 });
+    assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /160\/160 MATCH/);
+    assert.equal(JSON.parse(readFileSync(path.join(out, 'comparison.json'), 'utf8')).match, true, 'the default comparison is with the committed fixture');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

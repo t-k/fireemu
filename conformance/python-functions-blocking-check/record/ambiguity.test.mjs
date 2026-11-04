@@ -296,21 +296,24 @@ test("readBackRequired is true for upload reasons, unexplained objects and inven
   const reasonOnly = await go(
     {},
     (send) => send,
-    (cli) => async (args) => ({
-      ...(await cli(args)),
-      ...(args.action === "deploy"
+    (cli) => async (args) => {
+      const ran = await cli(args);
+      return args.action === "deploy"
         ? {
+            ...ran,
             uploadEvents: [
               { type: "receipt", bucket: "another-bucket", object: "x.zip" },
-              ...(await cli(args)).uploadEvents,
+              ...ran.uploadEvents,
             ],
           }
-        : {}),
-    }),
+        : ran;
+    },
   );
   assert.deepEqual(reasonOnly.result.cleanup.uploadReasons, ["receipt-invalid"]);
   assert.equal(reasonOnly.result.readBackRequired, true);
   assert.equal(reasonOnly.result.unknownMutations, 0);
+  assert.deepEqual(reasonOnly.result.cleanup.uploadObjectsUnexplained, []);
+  assert.deepEqual(reasonOnly.result.inventory.differences, []);
   assert.deepEqual(reasonOnly.result.unconfirmedCreates, []);
   const unexplained = await go({}, (send, w) => async (request) => {
     if (
@@ -328,6 +331,9 @@ test("readBackRequired is true for upload reasons, unexplained objects and inven
     return send(request);
   });
   assert.equal(unexplained.result.cleanup.uploadObjectsUnexplained.length, 1);
+  // The same object is also an inventory difference, so the unexplained-objects disjunct is redundant with the difference one:
+  // the pair is one defence in depth, and the `> 0` of the first cannot be told apart from `> 1` by any run.
+  assert.ok(unexplained.result.inventory.differences.some((d) => d.kind === "uploadObjects"));
   assert.equal(unexplained.result.readBackRequired, true);
   const diff = await go({}, (send, w) => async (request) => {
     if (w.cliRuns.includes("delete")) w.topics.add("stray");

@@ -722,6 +722,29 @@ test("iamPolicyDifferences lets service-account members in and nothing else", ()
     ).unexpected,
     ["removed roles/z|user:c@d", "added roles/x|user:a@b", "added roles/y|allUsers"],
   );
+  const reordered = (condition, audit) => ({
+    bindings: [{ role: "roles/x", members: ["user:a@b"], condition }],
+    auditConfigs: audit,
+  });
+  assert.deepEqual(
+    iamPolicyDifferences(
+      reordered({ title: "t", expression: "e" }, [
+        { service: "s", auditLogConfigs: [{ logType: "L", exemptedMembers: ["m"] }] },
+      ]),
+      reordered({ expression: "e", title: "t" }, [
+        { auditLogConfigs: [{ exemptedMembers: ["m"], logType: "L" }], service: "s" },
+      ]),
+    ),
+    { complete: true, unexpected: [] },
+    "the order of keys inside a condition or an audit configuration is not a difference",
+  );
+  assert.deepEqual(
+    iamPolicyDifferences(
+      reordered({ title: "t", expression: "e" }, undefined),
+      reordered({ title: "t", expression: "other" }, undefined),
+    ).unexpected,
+    ["removed roles/x|user:a@b", "added roles/x|user:a@b"],
+  );
   for (const bad of [
     { bindings: {} },
     { bindings: [null] },

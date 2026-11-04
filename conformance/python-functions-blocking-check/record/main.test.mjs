@@ -885,5 +885,7 @@ test("readback never exits 0 while the run carries an open obligation: a clean A
     const r = await run(rbArgs(f.d), rbDeps(f.at));
     assert.equal(r.code, 3, label);
     assert.match(r.err, /open obligations that a read-back cannot settle/, label);
+    if (label === "an invoker refusal")
+      assert.match(r.err, /invoker-refused:public-member-outside-the-invoker-binding/, label);
   }
 });

@@ -77,7 +77,11 @@ const BUILD = (id) => ({
 });
 test("a Cloud Build read needs a UUID build id, exactly", () => {
   assert.equal(ok(BUILD("01234567-89ab-cdef-0123-456789abcdef")), true);
-  assert.equal(ok(BUILD("00000000-0000-0000-0000-000000000000")), true, "zero is a digit in every group");
+  assert.equal(
+    ok(BUILD("00000000-0000-0000-0000-000000000000")),
+    true,
+    "zero is a digit in every group",
+  );
   assert.equal(ok(BUILD("ffffffff-ffff-ffff-ffff-ffffffffffff")), true);
   for (const bad of [
     "0123456-89ab-cdef-0123-456789abcdef",

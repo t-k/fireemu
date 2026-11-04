@@ -106,6 +106,7 @@ export function createWorld({
   appEngine = true,
   seedChannels = ["firebase"],
   silent = [],
+  deployState = "ACTIVE",
 } = {}) {
   const w = {
     runId,
@@ -161,7 +162,7 @@ export function createWorld({
       const name = functionName(fn);
       w.functions.set(name, {
         name,
-        state: "ACTIVE",
+        state: deployState,
         environment: "GEN_2",
         serviceConfig: { uri: uriOf(fn), serviceAccountEmail: SERVICE_ACCOUNT },
         ...(SCHEDULER_FUNCTIONS.includes(fn) || QUEUE_IDS.includes(fn)

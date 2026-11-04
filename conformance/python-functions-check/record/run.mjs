@@ -675,6 +675,43 @@ export async function record({
     return null;
   }
 
+  const SERVICE_DISABLED = Symbol("service-disabled");
+  /** One read of a list in observe mode: the list, `SERVICE_DISABLED` for a 403 of that reason, or null (recorded as incomplete). */
+  async function listObserved(id, name, url, key) {
+    const items = [];
+    let token = "";
+    for (let page = 0; page < 5; page++) {
+      const answer = await read(
+        {
+          id: name + (page ? "-page-" + (page + 1) : ""),
+          method: "GET",
+          url:
+            url +
+            (token
+              ? (url.includes("?") ? "&" : "?") + "pageToken=" + encodeURIComponent(token)
+              : ""),
+        },
+        { observe: true },
+      );
+      if (
+        answer?.status === 403 &&
+        readable(answer) &&
+        Array.isArray(answer.json.error?.details) &&
+        answer.json.error.details.some((d) => d?.reason === "SERVICE_DISABLED")
+      )
+        return SERVICE_DISABLED;
+      if (!(answer?.status === 200 && readable(answer))) {
+        incompleteReads.push({ id, class: answerClass(answer) });
+        return null;
+      }
+      items.push(...(answer.json[key] ?? []));
+      token = answer.json.nextPageToken ?? "";
+      if (!token) return { [key]: items };
+    }
+    incompleteReads.push({ id, class: "more-than-five-pages" });
+    return null;
+  }
+
   /**
    * A list of an API the run has just enabled, read in observe mode: Google answers a request for an API that is not on
    * (or not yet propagated) with 403 SERVICE_DISABLED, which is data here, not an authorization stop. It is read again
@@ -682,48 +719,9 @@ export async function record({
    */
   async function listAfterEnable(id, url, key) {
     for (let attempt = 1; attempt <= wait.listAttempts; attempt++) {
-      const items = [];
-      let token = "";
-      let disabled = false;
-      let failed = false;
-      for (let page = 0; page < 5; page++) {
-        const answer = await read(
-          {
-            id:
-              id + (attempt > 1 ? "-attempt-" + attempt : "") + (page ? "-page-" + (page + 1) : ""),
-            method: "GET",
-            url:
-              url +
-              (token
-                ? (url.includes("?") ? "&" : "?") + "pageToken=" + encodeURIComponent(token)
-                : ""),
-          },
-          { observe: true },
-        );
-        if (
-          answer?.status === 403 &&
-          readable(answer) &&
-          Array.isArray(answer.json.error?.details) &&
-          answer.json.error.details.some((d) => d?.reason === "SERVICE_DISABLED")
-        ) {
-          disabled = true;
-          break;
-        }
-        if (!(answer?.status === 200 && readable(answer))) {
-          failed = true;
-          incompleteReads.push({ id, class: answerClass(answer) });
-          break;
-        }
-        items.push(...(answer.json[key] ?? []));
-        token = answer.json.nextPageToken ?? "";
-        if (!token) return { [key]: items };
-        if (page === 4) {
-          failed = true;
-          incompleteReads.push({ id, class: "more-than-five-pages" });
-        }
-      }
-      if (failed) return null;
-      if (disabled && attempt < wait.listAttempts) await pause(wait.listRetry);
+      const found = await listObserved(id, attempt > 1 ? id + "-attempt-" + attempt : id, url, key);
+      if (found !== SERVICE_DISABLED) return found;
+      if (attempt < wait.listAttempts) await pause(wait.listRetry);
     }
     incompleteReads.push({ id, class: "service-disabled" });
     return null;

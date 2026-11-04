@@ -9,7 +9,7 @@ import test from "node:test";
 import { redactCliText, withCliLog } from "./deploy.mjs";
 import { withoutPublicMember } from "./guard.mjs";
 import { ALL_FUNCTIONS, JOB_IDS, PROJECT, QUEUE_IDS, REGION, queueName } from "./plan.mjs";
-import { readbackRun } from "./readback.mjs";
+import { readbackAllow, readbackRun } from "./readback.mjs";
 import { record } from "./run.mjs";
 import { tempDir } from "./testtmp.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
@@ -104,7 +104,7 @@ test("a 403 SERVICE_DISABLED that lasts while the enable propagates is read agai
 });
 
 test("lists that stay 403 after the enable stop the run clean, with the services enabled and no CLI run", async () => {
-  const { world, sleeps, result } = await go({
+  const { world, journal, sleeps, result } = await go({
     withoutServices: [SCHEDULER_HOST, TASKS_HOST],
     propagationReads: 1000,
   });
@@ -116,6 +116,13 @@ test("lists that stay 403 after the enable stop the run clean, with the services
   assert.deepEqual(result.servicesEnabled.toSorted(), [SCHEDULER_HOST, TASKS_HOST]);
   assert.ok(result.incompleteReads.some((r) => r.class === "service-disabled"));
   assert.equal(sleeps.filter((ms) => ms === 30_000).length, 9, "ten attempts, nine waits");
+  const ids = requestIds(journal);
+  assert.ok(ids.includes("preflight-jobs-attempt-10"), "the tenth attempt is made");
+  assert.ok(!ids.includes("preflight-jobs-attempt-11"), "and no eleventh");
+  assert.ok(
+    !ids.some((id) => id.startsWith("preflight-queues")),
+    "the Tasks list is not read after the Scheduler list failed",
+  );
 });
 
 test("a stray run queue that is visible only after the enable stops the run on the namespace check, with no CLI run", async () => {
@@ -144,14 +151,89 @@ test("a stray run queue that is visible only after the enable stops the run on t
 });
 
 test("a list that fails for another reason after the enable is not read again", async () => {
-  const { sleeps, result, world } = await go(
+  const { sleeps, result, world, journal } = await go(
     {},
     (send) => async (request) =>
       request.url.includes("/queues?") ? error(500, "INTERNAL") : send(request),
   );
   assert.equal(result.stoppedBecause, "lists-after-enable");
   assert.equal(sleeps.filter((ms) => ms === 30_000).length, 0);
+  assert.ok(!requestIds(journal).includes("preflight-queues-attempt-2"));
+  assert.ok(
+    result.incompleteReads.some(
+      (r) => r.id === "preflight-queues" && r.class !== "service-disabled",
+    ),
+    JSON.stringify(result.incompleteReads),
+  );
   assert.deepEqual(world.cliRuns, []);
+});
+
+test("only a 403 that names SERVICE_DISABLED is read again: another 403, an unreadable 403 and a 200 that mentions it are not", async () => {
+  for (const [label, hook, because] of [
+    [
+      "a 403 for another reason",
+      () =>
+        reply(403, {
+          error: {
+            code: 403,
+            status: "PERMISSION_DENIED",
+            details: [{ reason: "OTHER" }],
+            message: "x",
+          },
+        }),
+      "lists-after-enable",
+    ],
+    [
+      "a 403 with no details",
+      () => reply(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "x" } }),
+      "lists-after-enable",
+    ],
+    ["a 403 that is not JSON", () => new Response("denied", { status: 403 }), "lists-after-enable"],
+    [
+      "a 200 whose body mentions the reason",
+      () => reply(200, { jobs: [], error: { details: [{ reason: "SERVICE_DISABLED" }] } }),
+      undefined,
+    ],
+  ]) {
+    const { sleeps, result } = await go(
+      {},
+      (send) => async (request) => (request.url.includes("/jobs?") ? hook() : send(request)),
+    );
+    assert.equal(result.stoppedBecause, because, label);
+    assert.equal(sleeps.filter((ms) => ms === 30_000).length, 0, label);
+  }
+});
+
+test("a list after the enable may span five pages and no more, and each page and attempt has its own request id", async () => {
+  const foreign = (count) => (send, w) => async (request) => {
+    for (let n = 0; n < count; n++)
+      if (!w.jobs.has("foreign-" + n))
+        w.jobs.set("foreign-" + n, {
+          name: `projects/${PROJECT}/locations/${REGION}/jobs/foreign-${n}`,
+          state: "ENABLED",
+        });
+    return send(request);
+  };
+  const five = await go({ listPageSize: 1 }, foreign(5));
+  assert.notEqual(five.result.stoppedBecause, "lists-after-enable");
+  assert.ok(requestIds(five.journal).includes("preflight-jobs-page-5"));
+  const six = await go({ listPageSize: 1 }, foreign(6));
+  assert.equal(six.result.stoppedBecause, "lists-after-enable");
+  assert.ok(
+    six.result.incompleteReads.some(
+      (r) => r.id === "preflight-jobs" && r.class === "more-than-five-pages",
+    ),
+  );
+  const later = await go(
+    { listPageSize: 1, withoutServices: [SCHEDULER_HOST], propagationReads: 1 },
+    foreign(2),
+  );
+  assert.ok(
+    requestIds(later.journal).includes("preflight-jobs-attempt-2-page-2"),
+    requestIds(later.journal)
+      .filter((id) => /jobs/.test(id))
+      .join(),
+  );
 });
 
 // ---- Must 5: a failed read-only check stops the run before anything is enabled ----------------------------------------
@@ -187,6 +269,19 @@ test("a preflight log poll that gives no entries list stops the run before the e
   assert.deepEqual(world.enableRequests, []);
   assert.deepEqual(world.cliRuns, []);
   assert.equal(result.outcome, "pycheck-stopped-clean");
+});
+
+test("one failed preflight log poll alone is enough to stop the run before the enable", async () => {
+  const { world, result } = await go(
+    { withoutServices: [TASKS_HOST] },
+    (send) => async (request) =>
+      request.url.includes("entries:list") && /severity/.test(request.body ?? "")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.incompleteReads.length, 1, JSON.stringify(result.incompleteReads));
+  assert.equal(result.stoppedBecause, "preflight-reads");
+  assert.deepEqual(world.enableRequests, []);
 });
 
 test("a default-bucket notification list that cannot be read stops the preflight", async () => {
@@ -303,6 +398,30 @@ test("the shared parser's unknown writes are unknown writes whichever action rep
     assert.equal(result.readBackRequired, true, action);
     assert.equal(result.closureReady, false, action);
   }
+  const two = await go(
+    {},
+    (send) => send,
+    (cli) => async (args) => ({
+      ...(await cli(args)),
+      ...(args.action === "delete"
+        ? {
+            unknownWrites: [
+              { method: "POST", host: "cloudfunctions", status: 500 },
+              { method: "DELETE", host: "cloudscheduler", status: 503 },
+            ],
+          }
+        : {}),
+    }),
+  );
+  assert.deepEqual(
+    two.result.unknownMutationList
+      .filter((m) => m.class === "cli-unknown-write")
+      .map((m) => [m.id, m.request]),
+    [
+      ["cli-delete-unknown-write-1", "POST cloudfunctions 500"],
+      ["cli-delete-unknown-write-2", "DELETE cloudscheduler 503"],
+    ],
+  );
 });
 
 test("a deploy write that was ambiguous but whose names later read 2xx is settled; the write stays unknown", async () => {
@@ -344,6 +463,21 @@ test("a cli-write row that could not be journaled is a sticky unknown write: nev
   assert.equal(result.readBackRequired, true);
   assert.ok(result.unknownMutationList.some((m) => m.class === "cli-write-unjournaled"));
   assert.notEqual(result.outcome, "pycheck-recorded");
+});
+
+test("a deploy write that could not be journaled keeps the names the CLI makes unconfirmed even when the write itself was good", async () => {
+  const ok = { ...FN_POST, requests: 1, statuses: [200], class: "ok" };
+  const { result } = await go(
+    { failDeploy: true },
+    (send) => send,
+    (cli) => async (args) => ({
+      ...(await cli(args)),
+      ...(args.action === "deploy" ? { cliWrites: [ok] } : {}),
+    }),
+    { refuseSave: (row) => row.state === "cli-write" },
+  );
+  assert.ok(result.unconfirmedCreates.length > 0);
+  assert.ok(result.unconfirmedCreates.every((c) => c.class === "cli-write-unjournaled"));
 });
 
 // ---- Must 2: an unknown upload stays open ----------------------------------------------------------------------------------
@@ -534,6 +668,19 @@ test("the read-back sends one POST, the project IAM read, and nothing else but G
   );
 });
 
+test("the read-back's allowlist admits the project IAM read and no other POST", () => {
+  const allow = readbackAllow(RUN, NUMBER);
+  const iam = `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`;
+  assert.equal(allow({ method: "POST", url: iam, json: {} }), true);
+  assert.equal(allow({ method: "POST", url: iam.replace(PROJECT, "other"), json: {} }), false);
+  assert.equal(
+    allow({ method: "POST", url: `https://logging.googleapis.com/v2/entries:list`, json: {} }),
+    false,
+  );
+  assert.equal(allow({ method: "POST", url: iam, json: { policy: {} } }), false);
+  assert.equal(allow({ method: "PUT", url: iam, json: {} }), false);
+});
+
 // ---- Should: the default bucket's notification configs ---------------------------------------------------------------------
 
 test("a notification config the run leaves on the default bucket is an inventory difference in the run and in the read-back", async () => {
@@ -601,6 +748,29 @@ test("a policy shape the write could not keep is refused before anything is sent
   assert.equal(finding.refused, "binding-shape");
   assert.equal(finding.removed, false);
   assert.ok(!journal.some((r) => r.id?.startsWith("cleanup-remove-invoker")));
+  for (const [label, policy, why] of [
+    [
+      "a binding field",
+      { bindings: [{ role: "roles/x", members: ["allUsers"], extra: 1 }] },
+      "binding-shape",
+    ],
+    ["members not text", { bindings: [{ role: "roles/x", members: [5] }] }, "binding-shape"],
+    ["a role that is not text", { bindings: [{ role: 5, members: [] }] }, "binding-shape"],
+    ["members missing", { bindings: [{ role: "roles/x" }] }, "binding-shape"],
+    [
+      "allAuthenticatedUsers",
+      { bindings: [{ role: "roles/x", members: ["allUsers", "allAuthenticatedUsers"] }] },
+      "binding-shape",
+    ],
+    [
+      "a condition that is not an object",
+      { bindings: [{ role: "roles/x", members: ["allUsers"], condition: "c" }] },
+      "binding-shape",
+    ],
+    ["a null binding", { bindings: [null] }, "binding-shape"],
+  ])
+    assert.deepEqual(withoutPublicMember(policy), { ok: false, why }, label);
+  assert.deepEqual(withoutPublicMember({}), { ok: true, policy: { bindings: [] } });
   assert.deepEqual(withoutPublicMember([]), { ok: false, why: "policy-not-an-object" });
   assert.deepEqual(withoutPublicMember({ auditConfigs: [] }), { ok: false, why: "policy-fields" });
   assert.deepEqual(withoutPublicMember({ bindings: {} }), {

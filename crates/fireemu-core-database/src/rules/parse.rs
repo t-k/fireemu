@@ -473,18 +473,19 @@ impl Lexer<'_> {
             if in_escape {
                 // Four hex digits after `\u`, each read past format characters.
                 self.at += 1;
-                let mut value = 0;
+                let mut digits = String::with_capacity(4);
                 for _ in 0..4 {
                     self.skip_format();
                     let Some(&digit) = self.chars.get(self.at) else {
                         return Err(ExprError::new(self.at, "invalid Unicode escape sequence"));
                     };
                     self.at += 1;
-                    let Some(digit) = digit.to_digit(16) else {
+                    if !digit.is_ascii_hexdigit() {
                         return Err(ExprError::new(self.at, "invalid Unicode escape sequence"));
-                    };
-                    value = value * 16 + digit;
+                    }
+                    digits.push(digit);
                 }
+                let value = u32::from_str_radix(&digits, 16).unwrap_or(0xfffd);
                 name.push(char::from_u32(value).unwrap_or('\u{fffd}'));
                 in_escape = false;
                 continue;

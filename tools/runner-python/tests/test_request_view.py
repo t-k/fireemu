@@ -224,3 +224,22 @@ def test_a_scheduled_function_still_runs_in_its_own_request(monkeypatch):
         {"data": {"jobName": "projects/p/locations/l/jobs/j", "scheduleTime": "2026-01-01T00:00:00Z"}},
     )
     assert seen == ["j"]
+
+
+def test_a_traceparent_with_a_line_break_reaches_the_strict_request_without_one(monkeypatch):
+    seen = deliver("eventarc", {**base(), "traceparent": "00-a\nb"}, monkeypatch, "strict")
+    assert seen["headers"]["traceparent"] == "00-a b"
+
+
+@pytest.mark.parametrize("value", [None, 5, ["00-a"]])
+def test_a_traceparent_that_is_not_text_is_not_a_header(value, monkeypatch):
+    seen = deliver("eventarc", {**base(), "traceparent": value}, monkeypatch, "strict")
+    assert "traceparent" not in seen["headers"]
+
+
+def test_an_event_without_data_has_an_empty_body(monkeypatch):
+    event = base()
+    del event["data"]
+    seen = deliver("eventarc", event, monkeypatch)
+    assert seen["body"] == b"" and seen["content_length"] in (0, None)
+    assert seen["event"].get_data() in (None, b"")

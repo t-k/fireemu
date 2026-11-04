@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5b5f08bd70913d198528dbe655cfe381bfa545dc91c2c3e6d3fe50b9bb931265 # shrinks to bound = 0, start = false, get = false
+cc c9ae3b2159e2abb1f74dada8eb8e1eeb8dcf2945c71fc5f1ef433ceb3291fb90 # shrinks to keys = [([65533], "�"), ([55296], "\\ud800")]

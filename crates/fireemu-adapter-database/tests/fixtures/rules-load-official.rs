@@ -733,4 +733,20 @@
     ("r2:rawlf-index", "{\"rules\":{\".indexOn\":\"a\nb\"}}", 400, "{\n  \"error\" : \"1:22: Invalid key: a\\nb. Index must be either .value or declared on a valid path\\n\"\n}\n"),
     ("r2:rawlf-ctl-index-err", "{\"rules\":{\".indexOn\":[\"a\nb\",\"c\"]}}", 400, "{\n  \"error\" : \"1:23: Invalid key: a\\nb. Index must be either .value or declared on a valid path\\n\"\n}\n"),
     ("r2:rawlf-then-unknown-var", "{\"rules\":{\".read\":\"true\",\n\"a\":{\".read\":\"x\ny == 1\"}}}", 400, "{\n  \"error\" : \"2:17: Rule expressions may not contain multiple expressions.\\n\"\n}\n"),
+    // Lone surrogates in keys and index names (the rows whose text holds one are in
+    // `rules_put_names_a_lone_surrogate_by_the_replacement_character`).
+    ("r2:k-d800-d801", "{\"rules\":{\"\\ud800\":{},\"\\ud801\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-d800-single", "{\"rules\":{\"\\ud800\":{\".read\":true}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-dc00-dc01", "{\"rules\":{\"\\udc00\":{},\"\\udc01\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-d800-dc00", "{\"rules\":{\"\\ud800\":{},\"\\udc00\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-a-u0061", "{\"rules\":{\"a\":{},\"\\u0061\":{}}}", 400, "{\n  \"error\" : \"1:28: 'a' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-d800-fffd", "{\"rules\":{\"\\ud800\":{},\"\\ufffd\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-fffd-fffd", "{\"rules\":{\"\\ufffd\":{},\"\\ufffd\":{}}}", 400, "{\n  \"error\" : \"1:33: '\u{fffd}' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-d800-nested-d801", "{\"rules\":{\"x\":{\"\\ud800\":{},\"\\ud801\":{}}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-wild-d800-plain", "{\"rules\":{\"$\\ud800\":{},\"b\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-d83d-then-literal-de00", "{\"rules\":{\"\\ud83d\":{},\"\\ud83d\\ude00\":{}}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-d800-d800-read-dup", "{\"rules\":{\"x\":{\".read\":true,\".read\":false}}}", 400, "{\n  \"error\" : \"1:29: Cannot have multiple '.read' rules.\\n\"\n}\n"),
+    ("r2:idx-pair", "{\"rules\":{\".indexOn\":[\"\\ud83d\\ude00\"]}}", 200, "{\"status\":\"ok\"}"),
+    ("r2:k-d800-then-syntax", "{\"rules\":{\"\\ud800\":{\".read\":\"1 +\"},\"\\ud801\":{}}}", 400, "{\n  \"error\" : \"1:33: Unexpected end of expression\\n\"\n}\n"),
+    ("r2:k-d800-d801-err-pos", "{\"rules\":{\"\\ud800\":{},\"\\ud801\":{}, \".read\": \"#\"}}", 400, "{\n  \"error\" : \"1:47: illegal character\\n\"\n}\n"),
 ]

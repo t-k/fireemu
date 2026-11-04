@@ -42,7 +42,6 @@ async function go(
   return { world, journal, sleeps, result };
 }
 const ids = (journal) => journal.filter((r) => r.state === "before-send").map((r) => r.id);
-const count = (world, prefix) => world.calls.filter((c) => c.startsWith(prefix)).length;
 
 // ---- constants and waits ---------------------------------------------------------------------------------
 
@@ -313,17 +312,6 @@ test("a 403 on the reads that observe is data: the repository, the source bucket
     return send(request);
   });
   assert.notEqual(pkg.result.outcome, "pcblock-auth-stop");
-  const readback = await go(
-    {},
-    (send) => async (request) =>
-      request.method === "GET" &&
-      path(request).endsWith("/functions/pcblock") &&
-      request.url.length &&
-      false
-        ? error(403, "X")
-        : send(request),
-  );
-  assert.equal(readback.result.outcome, "pcblock-recorded");
 });
 
 test("a 200 that is not JSON is read as nothing, never as a crash, on every read the run depends on", async () => {

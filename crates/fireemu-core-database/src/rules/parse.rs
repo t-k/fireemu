@@ -526,22 +526,58 @@ impl Lexer<'_> {
         Ok((start, Token::Name(name)))
     }
 
-    /// The offset Rhino's reader reports when it stands at `at`: counted from the start of
-    /// the line it is on (the character after the last line terminator it read), and one less
-    /// while the last character it read is that terminator (`TokenStream.getOffset`).
-    fn line_offset(&self, at: usize) -> usize {
+    /// Where an error of the reader stands in the expression, counted as Rhino's reader counts
+    /// it: from the start of the line it is on (the character after the last line terminator it
+    /// read, a CR LF being one terminator), in UTF-16 units, and one less while the last
+    /// character it read is that terminator (`TokenStream.getOffset`). The rules check places
+    /// that offset from the start of the expression, so the answer is the character (and
+    /// whether its second UTF-16 unit) the offset falls on there.
+    fn on_line(&self, error: ExprError) -> ExprError {
+        let at = error.at.min(self.chars.len());
         let terminator_before = |end: usize| {
             (0..end.min(self.chars.len()))
                 .rev()
                 .find(|&i| is_line_terminator(self.chars[i]))
         };
-        match terminator_before(at) {
-            None => at,
-            Some(last) if last + 1 == at => {
-                let line_start = terminator_before(last).map_or(0, |before| before + 1);
-                at - line_start - 1
+        let Some(last) = terminator_before(at) else {
+            return error;
+        };
+        // The reader has read a character of the new line unless it stands at the second unit
+        // of a character, or right after the terminator.
+        let just_read = !error.second_unit && last + 1 == at;
+        let line_start = if just_read {
+            let sequence_start =
+                if last > 0 && self.chars[last - 1] == '\r' && self.chars[last] == '\n' {
+                    last - 1
+                } else {
+                    last
+                };
+            terminator_before(sequence_start).map_or(0, |before| before + 1)
+        } else {
+            last + 1
+        };
+        let units = |range: std::ops::Range<usize>| -> usize {
+            self.chars[range].iter().map(|c| c.len_utf16()).sum()
+        };
+        let offset =
+            units(line_start..at) + usize::from(error.second_unit) - usize::from(just_read);
+        // The character the offset falls on, counting from the start of the expression.
+        let mut start = 0;
+        for (index, c) in self.chars.iter().enumerate() {
+            let end = start + c.len_utf16();
+            if offset < end {
+                return ExprError {
+                    at: index,
+                    second_unit: offset > start,
+                    ..error
+                };
             }
-            Some(last) => at - (last + 1),
+            start = end;
+        }
+        ExprError {
+            at: self.chars.len(),
+            second_unit: false,
+            ..error
         }
     }
 
@@ -677,7 +713,7 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r7 M17).
-                // (The reader has read the terminator: see `line_offset`.)
+                // (The reader has read the terminator: see `on_line`.)
                 return Err(ExprError::new(self.at, "unterminated string literal"));
             }
             if c != '\\' {
@@ -800,7 +836,7 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r8 M21).
-                // (The reader has read the terminator: see `line_offset`.)
+                // (The reader has read the terminator: see `on_line`.)
                 return Err(ExprError::new(
                     self.at,
                     "unterminated regular expression literal",
@@ -1192,12 +1228,11 @@ impl Parser<'_> {
     /// parsed first (a syntax error anywhere comes first), of which the rules then take
     /// exactly one expression statement.
     fn script(&mut self) -> Result<Expr, ExprError> {
-        let statements = self.statements().map_err(|mut error| {
-            // The reader reports its own errors at an offset in the line it stands on; the
-            // rules check places that offset from the start of the expression.
-            error.at = self.lexer.line_offset(error.at);
-            error
-        })?;
+        // The reader reports its own errors at an offset in the line it stands on; the rules
+        // check places that offset from the start of the expression.
+        let statements = self
+            .statements()
+            .map_err(|error| self.lexer.on_line(error))?;
         let mut statements = statements.into_iter();
         let first = statements.next();
         if let Some(second) = statements.next() {
@@ -2088,5 +2123,87 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// Rhino's `TokenStream.getOffset` after it has read `cursor` UTF-16 units of `units`,
+    /// transcribed from `getChar`: the offset in the line it is on, one less while the last
+    /// character it read is a line terminator (a CR LF is read as one).
+    fn rhino_offset(units: &[u16], cursor: usize) -> usize {
+        let terminator = |c: u16| matches!(c, 0x0A | 0x0D | 0x2028 | 0x2029);
+        let (mut line_start, mut line_end, mut read) = (0, None::<u16>, 0);
+        while read < cursor {
+            let c = units[read];
+            read += 1;
+            if let Some(end) = line_end {
+                if end == 0x0D && c == 0x0A {
+                    line_end = Some(0x0A);
+                    continue;
+                }
+                line_end = None;
+                line_start = read - 1;
+            }
+            if terminator(c) {
+                line_end = Some(c);
+            }
+        }
+        read - line_start - usize::from(line_end.is_some())
+    }
+
+    fn mixed_text() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop::sample::select(vec![
+                'a',
+                ' ',
+                '\t',
+                'é',
+                '\u{1F600}',
+                '\u{10000}',
+                '\n',
+                '\r',
+                '\u{2028}',
+                '\u{2029}',
+            ]),
+            0..24,
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        /// An error of the reader is placed at Rhino's offset in its line, counted in UTF-16
+        /// units from the start of the expression, for every mix of supplementary characters
+        /// and of LF, CR, CR LF, U+2028 and U+2029, at every place and unit of a character.
+        #[test]
+        fn errors_are_placed_at_rhinos_offset_in_utf16_units(
+            chars in mixed_text(),
+            at in 0usize..25,
+            second in any::<bool>(),
+        ) {
+            let at = at.min(chars.len());
+            let second_unit = second && chars.get(at).is_some_and(|c| c.len_utf16() == 2);
+            let lexer = Lexer { chars: &chars, at: 0, newline: false, refusals: Vec::new() };
+            let placed = lexer.on_line(ExprError {
+                second_unit,
+                ..ExprError::new(at, "x")
+            });
+            let units: Vec<u16> = chars.iter().collect::<String>().encode_utf16().collect();
+            let before: usize = chars[..at].iter().map(|c| c.len_utf16()).sum();
+            let cursor = before + usize::from(second_unit);
+            let terminated = chars[..at].iter().any(|&c| is_line_terminator(c));
+            let placed_units = chars[..placed.at.min(chars.len())]
+                .iter()
+                .map(|c| c.len_utf16())
+                .sum::<usize>()
+                + usize::from(placed.second_unit);
+            if terminated {
+                let expected = rhino_offset(&units, cursor).min(units.len());
+                prop_assert_eq!(placed_units, expected);
+                // Past the end of the text, the place is the end (no second unit).
+                prop_assert!(!placed.second_unit || placed.at < chars.len());
+            } else {
+                // No line has ended: the place stays.
+                prop_assert_eq!((placed.at, placed.second_unit), (at, second_unit));
+            }
+        }
     }
 }

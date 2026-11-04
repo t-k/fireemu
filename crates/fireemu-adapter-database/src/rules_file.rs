@@ -110,6 +110,8 @@ struct Reader {
     at: usize,
     line: usize,
     column: usize,
+    /// The UTF-16 units read so far.
+    units: usize,
     /// How many levels the one being read is nested in.
     depth: usize,
 }
@@ -121,6 +123,7 @@ impl Reader {
             at: 0,
             line: 1,
             column: 1,
+            units: 0,
             depth: 0,
         }
     }
@@ -132,6 +135,7 @@ impl Reader {
     fn bump(&mut self) {
         if let Some(c) = self.peek() {
             self.at += 1;
+            self.units += c.len_utf16();
             if c == '\n' {
                 self.line += 1;
                 self.column = 1;
@@ -235,13 +239,23 @@ impl Reader {
     }
 
     /// A JSON string, with the place of each decoded character (and of the closing quote).
+    ///
+    /// The places count along the line the string starts on, whatever the string holds: the
+    /// official emulator places a character of an expression by its distance from the start of
+    /// the string in the file, so a raw line terminator inside the string is one more column
+    /// and does not start a line.
     fn string(&mut self) -> Result<JsonString, RulesError> {
         self.bump();
+        let (line0, column0, units0) = (self.line, self.column, self.units);
+        let flat = |reader: &Self| Place {
+            line: line0,
+            column: column0 + reader.units - units0,
+        };
         let mut text = String::new();
         let mut places = Vec::new();
         let mut second_units = Vec::new();
         loop {
-            let place = self.position();
+            let place = flat(self);
             match self.peek() {
                 None => return Err(self.error_here("Unexpected EOF.")),
                 Some('"') => {
@@ -256,7 +270,7 @@ impl Reader {
                 Some('\\') => {
                     self.bump();
                     // An escaped character is placed where its escape ends.
-                    let mut place = self.position();
+                    let mut place = flat(self);
                     let decoded = match self.peek() {
                         None => return Err(self.error_here("Unexpected EOF.")),
                         Some('n') => '\n',
@@ -266,12 +280,12 @@ impl Reader {
                         Some('f') => '\u{c}',
                         Some('u') => {
                             let high = self.unit_escape()?;
-                            place = self.position();
+                            place = flat(self);
                             // A high surrogate escape followed by a low one is one character
                             // (two UTF-16 units, as Java reads them); its second unit is placed
                             // where the second escape ends.
                             let low = (0xD800..0xDC00).contains(&high).then(|| {
-                                let saved = (self.at, self.line, self.column);
+                                let saved = (self.at, self.line, self.column, self.units);
                                 self.bump();
                                 let low = (self.peek() == Some('\\')
                                     && self.chars.get(self.at + 1) == Some(&'u'))
@@ -282,13 +296,13 @@ impl Reader {
                                 .flatten()
                                 .filter(|low| (0xDC00..0xE000).contains(low));
                                 if low.is_none() {
-                                    (self.at, self.line, self.column) = saved;
+                                    (self.at, self.line, self.column, self.units) = saved;
                                 }
                                 low
                             });
                             match low.flatten() {
                                 Some(low) => {
-                                    let second = self.position();
+                                    let second = flat(self);
                                     second_units
                                         .push((text.chars().count(), (second.line, second.column)));
                                     char::from_u32(

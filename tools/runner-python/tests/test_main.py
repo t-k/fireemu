@@ -162,3 +162,74 @@ def test_the_writer_and_reader_agree_through_the_pipe_used_here():
     out.seek(0)
     assert read_frame(out) == {"type": "shutdown"}
     assert json.loads(out.getvalue().split(b"\n", 1)[1]) == {"type": "shutdown"}
+
+
+def test_the_gate_reaches_both_the_http_server_and_the_dispatcher(discovered, monkeypatch):
+    import urllib.request
+
+    from fireemu_runner.environment import EnvironmentGate
+
+    for name in ("API_KEY", "TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    # A Firestore event builds a client; with the emulator host set it needs no Google credential (the daemon sets it).
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:9")
+    gate = EnvironmentGate({"API_KEY": "key-value", "TOKEN": "token-value"})
+    stdin = Pipe()
+    writer = Collected()
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, gate)), daemon=True)
+    thread.start()
+    hello = writer.wait_for(lambda f: f["type"] == "hello")
+
+    def fetch(function):
+        request = urllib.request.Request(f"http://127.0.0.1:{hello['httpPort']}/demo-proj/us-central1/{function}", headers={"x-fireemu-runner-secret": "s"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.loads(response.read())["env"]
+
+    assert fetch("reads_key") == {"API_KEY": "key-value", "TOKEN": None}
+    assert fetch("reads_nothing") == {"API_KEY": None, "TOKEN": None}
+    path = "secret/s1"
+    document = {"name": f"projects/demo-proj/databases/(default)/documents/{path}", "fields": {}, "createTime": "2026-01-01T00:00:00Z", "updateTime": "2026-01-01T00:00:00Z"}
+    stdin.send({
+        "type": "invoke", "invocationId": "gate-1", "function": "fs_secret", "trigger": "firestore",
+        "event": {"specversion": "1.0", "id": "i", "type": "google.cloud.firestore.document.v1.created", "time": "2026-01-01T00:00:02Z",
+                  "source": "//firestore.googleapis.com/projects/demo-proj/databases/(default)", "subject": f"documents/{path}",
+                  "datacontenttype": "application/json", "location": "nam5", "project": "demo-proj", "namespace": "(default)",
+                  "document": path, "database": "(default)", "data": {"value": document}},
+    })
+    assert writer.wait_for(lambda f: f["type"] == "result" and f["invocationId"] == "gate-1")["ok"] is True
+    entry = [e for e in discovered["fs_secret"].__wrapped__.__globals__["SEEN"] if e["function"] == "fs_secret"][-1]
+    assert entry["env"] == {"API_KEY": "key-value", "TOKEN": None}
+    stdin.send({"type": "shutdown"})
+    thread.join(10)
+    stdin.close()
+    assert result["code"] == 0
+
+
+def test_hello_announces_disabled_consumption_for_callables_only_when_asked(discovered):
+    for verified, expected in ((True, "disabled"), (False, None)):
+        stdin = Pipe()
+        writer = Collected()
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer, None, verified)), daemon=True)
+        thread.start()
+        hello = writer.wait_for(lambda f: f["type"] == "hello")
+        (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]
+        assert entry["trigger"].get("consumeAppCheckToken") == expected
+        stdin.send({"type": "shutdown"})
+        thread.join(10)
+        stdin.close()
+
+
+def test_serve_announces_nothing_about_app_check_unless_told_to(discovered):
+    stdin = Pipe()
+    writer = Collected()
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(code=main.serve(discovered, "cb", "s", stdin.stream, writer)), daemon=True)
+    thread.start()
+    hello = writer.wait_for(lambda f: f["type"] == "hello")
+    (entry,) = [f for f in hello["manifest"]["functions"] if f["name"] == "add"]
+    assert "consumeAppCheckToken" not in entry["trigger"]
+    stdin.send({"type": "shutdown"})
+    thread.join(10)
+    stdin.close()

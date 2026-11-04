@@ -168,13 +168,13 @@ def test_without_a_runner_secret_in_the_environment_no_presented_secret_is_accep
     from harness import read_runner_frame
 
     hello = read_runner_frame(os.fdopen(wiring.read_fd, "rb"))
-    for presented in ("XXXX", "wrong"):
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{hello['httpPort']}/demo-proj/us-central1/only", headers={"x-fireemu-runner-secret": presented}
-        )
+    for presented in (None, "", "XXXX", "wrong"):
+        headers = {} if presented is None else {"x-fireemu-runner-secret": presented}
+        request = urllib.request.Request(f"http://127.0.0.1:{hello['httpPort']}/demo-proj/us-central1/only", headers=headers)
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(request, timeout=10)
-        assert error.value.code == 403
+        # The Node runner answers 500 "FIREEMU_RUNNER_SECRET is required" to every request in this configuration.
+        assert error.value.code == 500
     os.write(pipe_in[1], encode_frame({"type": "shutdown"}))
     thread.join(10)
     os.close(pipe_in[1])
@@ -184,3 +184,37 @@ def test_the_usage_line_names_the_script(capsys):
     with pytest.raises(SystemExit):
         main._parse(["--help"])
     assert capsys.readouterr().out.startswith("usage: runner.py ")
+
+
+def test_local_secrets_that_are_not_json_stop_the_run_with_one_exact_line(monkeypatch, codebase, capsys):
+    code, wiring = run_with(monkeypatch, codebase, b"", env={"FIREEMU_LOCAL_SECRETS_JSON": "{"})
+    assert code == 1
+    assert capsys.readouterr().err == "[functions] the local secrets are not valid JSON\n"
+    assert "FIREEMU_LOCAL_SECRETS_JSON" not in os.environ
+
+
+def test_the_local_secrets_of_the_daemon_reach_the_gate_the_run_serves_with(monkeypatch, codebase):
+    seen = {}
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: seen.update(gate=gate) or 0)
+    monkeypatch.delenv("API_KEY", raising=False)
+    code, _ = run_with(monkeypatch, codebase, b"", env={"FIREEMU_LOCAL_SECRETS_JSON": '{"API_KEY": "from the daemon"}'})
+    assert code == 0
+    with seen["gate"].hold(["API_KEY"]):
+        assert os.environ["API_KEY"] == "from the daemon"
+
+
+def test_the_app_check_hook_is_installed_before_the_codebase_loads_and_its_result_reaches_serve(monkeypatch, codebase):
+    order = []
+    monkeypatch.setattr(main.appcheck, "install_from_environment", lambda environ: order.append("hook") or True)
+    monkeypatch.setattr(main, "load_codebase", lambda source: order.append("load") or {})
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: order.append(("serve", verified)) or 0)
+    code, _ = run_with(monkeypatch, codebase, b"")
+    assert code == 0 and order == ["hook", "load", ("serve", True)]
+
+
+def test_without_an_emulator_jwks_the_run_announces_nothing(monkeypatch, codebase):
+    seen = {}
+    monkeypatch.delenv("FIREEMU_APP_CHECK_JWKS_URL", raising=False)
+    monkeypatch.setattr(main, "serve", lambda functions, name, secret, stdin, writer, gate, verified: seen.update(verified=verified) or 0)
+    code, _ = run_with(monkeypatch, codebase, b"")
+    assert code == 0 and seen == {"verified": False}

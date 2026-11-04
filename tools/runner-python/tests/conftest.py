@@ -35,6 +35,10 @@ def discovered():
     # mutmut runs the suite several times in one process, so the app a previous session made may exist.
     if firebase_admin._DEFAULT_APP_NAME in firebase_admin._apps:
         firebase_admin.delete_app(firebase_admin.get_app())
+    # The fixture declares a secret parameter; a second discovery in the same process would declare it twice.
+    from firebase_functions import params
+
+    params._params.clear()
     previous = os.getcwd()
     os.chdir(FIXTURE)
     try:

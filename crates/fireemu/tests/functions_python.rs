@@ -185,6 +185,12 @@ async fn the_daemons_runner_class_drives_the_real_python_runner() {
         "ea_filtered",
         "db_created",
         "db_literal_glob",
+        "sch_ok",
+        "sch_retry",
+        "tk_echo",
+        "bc_user",
+        "bs_user",
+        "reads_key",
     ] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
@@ -317,8 +323,8 @@ fn a_declared_runtime_that_does_not_match_the_interpreter_is_refused_naming_both
 
 #[test]
 #[ignore = "requires the fixture virtual environment; CI creates it"]
-fn a_python_trigger_family_that_is_planned_fails_discovery_naming_the_function() {
-    let dir = scratch("planned");
+fn a_python_trigger_family_that_is_deferred_fails_discovery_naming_the_function() {
+    let dir = scratch("deferred");
     let source = dir.join("code");
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("requirements.txt"), "firebase-functions\n").unwrap();
@@ -326,18 +332,18 @@ fn a_python_trigger_family_that_is_planned_fails_discovery_naming_the_function()
     std::fs::write(
         source.join("main.py"),
         "from firebase_admin import initialize_app\n\
-         from firebase_functions import tasks_fn\n\
+         from firebase_functions import remote_config_fn\n\
          initialize_app()\n\
-         @tasks_fn.on_task_dispatched()\n\
-         def later(request):\n    pass\n",
+         @remote_config_fn.on_config_updated()\n\
+         def later(event):\n    pass\n",
     )
     .unwrap();
     let firebase = firebase_json(&dir, &source, None);
     let out = exec(&firebase, &[], &["true"]);
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(1), "{err}");
-    assert!(err.contains("later (tasks)"), "{err}");
-    assert!(err.contains("planned"), "{err}");
+    assert!(err.contains("later (remoteConfig)"), "{err}");
+    assert!(err.contains("deferred"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -776,7 +776,7 @@
     "crates/fireemu-proto-pubsub/src/generated/google.pubsub.v1.rs": "bb7a474efec00d8add5c42dbe2a5891fc4d2c3ae11d6a3b23f6d9ee4d06c540e",
     "crates/fireemu-proto-pubsub/src/lib.rs": "f3467825539e57349814f47b8cedeacaa5a4b11dfe40d5756492caa089603cb3",
     "crates/fireemu/Cargo.toml": "1e9c5e7b71042199ab82418d7718dc2d97c94b39086ef3458cef96d1b21d47ae",
-    "crates/fireemu/src/capabilities.json": "82448a0d8a1c7d4e669b51be2d87b7e5ff540d5d70d70613ca1e8bce553f1208",
+    "crates/fireemu/src/capabilities.json": "6f6846fb1a39a1a6957e02366472d7ff224185a0bba39d36456a85fba38965b3",
     "crates/fireemu/src/config.rs": "1b1edad0d7d2267ab8c5ebfbf52ed1c4bb7cc484ebb30a04784ac7e9a0e3b8f8",
     "crates/fireemu/src/config_discovery.rs": "4f54ec4d99b5014142982a4d16f7ef38b8ce716463445e7da5c4040c96d580d2",
     "crates/fireemu/src/config_shape.rs": "3f3a82db6e9bb4c17af7692be242bb2e2900672f1762cabb817a5a47c1a53512",

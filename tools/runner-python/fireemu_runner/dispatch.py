@@ -2,7 +2,6 @@
 
 import os
 import threading
-import traceback
 
 from .events import (
     database_cloud_event,
@@ -11,20 +10,36 @@ from .events import (
     pubsub_cloud_event,
     storage_cloud_event,
 )
+from .diagnostics import ASYNC_HANDLER, describe, is_async_handler
+from .environment import EnvironmentGate
 from .framing import FrameWriter
+from .scheduler import SchedulerFailure, deliver_schedule
 
 MAX_ACTIVE_INVOCATIONS = 4096
 _MAX_ERROR_CHARS = 4096
 _MAX_DIAGNOSTIC_CHARS = 256 * 1024
 
-# Trigger types that arrive as an `invoke` frame, and how each becomes the handler's argument.
-_EVENT_ADAPTERS = {
+# Trigger types that arrive as an `invoke` frame whose function takes a CloudEvent, and the adapter that builds it.
+_CLOUD_EVENTS = {
     "firestore": firestore_cloud_event,
     "pubsub": pubsub_cloud_event,
     "storage": storage_cloud_event,
     "eventarc": eventarc_cloud_event,
     "database": database_cloud_event,
 }
+# A Gen2 scheduled function is an HTTP function: the SDK wrapper takes the scheduler's request.
+_TRIGGERS = frozenset((*_CLOUD_EVENTS, "schedule"))
+
+
+def _deliver(trigger: str, function, event) -> None:
+    if trigger == "schedule":
+        deliver_schedule(function, event.get("data") if isinstance(event, dict) else None)
+    else:
+        function(_CLOUD_EVENTS[trigger](event))
+
+
+# What `FUNCTION_SIGNATURE_TYPE` says for each (the Node runner's `signatureType`).
+_SIGNATURE_TYPES = {"schedule": "http"}
 
 
 def _bound(text: str, limit: int) -> str:
@@ -34,7 +49,8 @@ def _bound(text: str, limit: int) -> str:
 class Dispatcher:
     """Runs `invoke` frames against the functions the manifest serves."""
 
-    def __init__(self, functions: dict, manifest: dict, writer: FrameWriter):
+    def __init__(self, functions: dict, manifest: dict, writer: FrameWriter, gate: EnvironmentGate | None = None):
+        self._gate = gate if gate is not None else EnvironmentGate({})
         self._functions = functions
         self._specs = {spec["name"]: spec for spec in manifest["functions"]}
         self._writer = writer
@@ -48,7 +64,7 @@ class Dispatcher:
         if "entryPoint" in message and message["entryPoint"] != spec["entryPoint"]:
             raise LookupError("entry point does not match the function manifest")
         trigger = spec["trigger"]["type"]
-        if message["trigger"] != trigger or trigger not in _EVENT_ADAPTERS:
+        if message["trigger"] != trigger or trigger not in _TRIGGERS:
             raise LookupError("trigger does not match the function manifest")
         function = self._functions.get(spec["entryPoint"])
         if not callable(function):
@@ -66,22 +82,41 @@ class Dispatcher:
         """Runs one invoke frame on a new thread; the caller has reserved a slot with `reserve`."""
         threading.Thread(target=self._run, args=(message,), daemon=True, name=f"invoke-{message['invocationId']}").start()
 
-    def _run(self, message: dict) -> None:
-        invocation = message["invocationId"]
+    def _deliver_held(self, message: dict) -> tuple[str, str] | None:
+        """Runs the invocation and returns `(diagnostic, text)` of its failure, or None.
+
+        The failure is described here, inside the gate: turning an exception into text can run user code
+        (`__str__`), and after the invocation leaves the gate another invocation's secrets may be present.
+        """
         try:
+            spec, function = self._check(message)
+        except BaseException as error:  # not user code, but a malformed frame: still answered, never raised
+            return describe(error)
+        if is_async_handler(function):
+            return ASYNC_HANDLER, ASYNC_HANDLER
+        with self._gate.hold(spec.get("platformOptions", {}).get("secrets")):
             try:
-                spec, function = self._check(message)
                 # One process serves the whole codebase, so these name the invocation that started most
                 # recently, not a fixed target (the design memo, section 5).
                 os.environ["FUNCTION_TARGET"] = spec["entryPoint"]
-                os.environ["FUNCTION_SIGNATURE_TYPE"] = "cloudevent"
+                os.environ["FUNCTION_SIGNATURE_TYPE"] = _SIGNATURE_TYPES.get(message["trigger"], "cloudevent")
                 os.environ["K_SERVICE"] = spec["name"]
-                function(_EVENT_ADAPTERS[message["trigger"]](message["event"]))
-                result = {"type": "result", "invocationId": invocation, "ok": True}
+                _deliver(message["trigger"], function, message["event"])
             except BaseException as error:  # a SystemExit in user code must still answer the daemon
-                diagnostic = "".join(traceback.format_exception(error))
+                diagnostic, text = describe(error)
+                # A scheduled attempt the SDK wrapper answered 500 has been logged by the SDK; its status is the news.
+                return (str(error) if isinstance(error, SchedulerFailure) else diagnostic), text
+        return None
+
+    def _run(self, message: dict) -> None:
+        invocation = message["invocationId"]
+        try:
+            failure = self._deliver_held(message)
+            if failure is None:
+                result = {"type": "result", "invocationId": invocation, "ok": True}
+            else:
+                diagnostic, text = failure
                 self._send_log("error", f"{message['function']}: {diagnostic}", invocation, message["function"])
-                text = str(error) or type(error).__name__
                 result = {"type": "result", "invocationId": invocation, "ok": False, "error": _bound(text, _MAX_ERROR_CHARS)}
             self._writer.write(result)
         finally:

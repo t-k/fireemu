@@ -10,6 +10,7 @@ under `ignored[]`, never dropped.
 """
 
 import enum
+import math
 from typing import Any
 
 from firebase_functions.params import Expression
@@ -32,7 +33,10 @@ _UNSERVED_PRODUCTS = (
     ("analytics", "analytics", "notPlanned", "not planned: Google Analytics triggers have no local emulator"),
     ("testing", "testLab", "notPlanned", "not planned: Test Lab triggers have no local emulator"),
 )
-_PLANNED = "Python {family} triggers are planned for a later slice and are not served yet"
+_SCHEDULE_RETRY_FIELDS = frozenset(("retryCount", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings"))
+_TASK_RETRY_FIELDS = frozenset(("maxAttempts", "maxRetrySeconds", "minBackoffSeconds", "maxBackoffSeconds", "maxDoublings"))
+_TASK_RATE_FIELDS = frozenset(("maxConcurrentDispatches", "maxDispatchesPerSecond"))
+_BLOCKING_AUTH_EVENTS = ("beforeCreate", "beforeSignIn", "beforeSendEmail", "beforeSendSms")
 
 
 class Unserved(Exception):
@@ -224,7 +228,79 @@ def _event_trigger(event_trigger: dict) -> dict:
     raise Unserved(family, "unsupported", f"event type {event_type} is not recognised")
 
 
-def describe_endpoint(name: str, endpoint) -> dict:
+def _record(value, field: str, family: str) -> dict:
+    """An options record: absent is empty, an object is itself, anything else is an error."""
+    if _unset(value):
+        return {}
+    if not isinstance(value, dict):
+        raise Unserved(family, "unsupported", f"{field} must be an object")
+    return value
+
+
+def _numbers(value, field: str, allowed: frozenset, family: str) -> dict:
+    """The numbers of a retry or rate record. A member the SDK left unset is null on the wire."""
+    record = _record(value, field, family)
+    numbers: dict[str, Any] = {}
+    for key, original in record.items():
+        if key not in allowed:
+            raise Unserved(family, "unsupported", f"{field}.{key} is not supported")
+        resolved = _resolved(original, f"{field}.{key}")
+        if resolved is None:
+            numbers[key] = None
+            continue
+        if isinstance(resolved, bool) or not isinstance(resolved, (int, float)) or not math.isfinite(resolved):
+            raise Unserved(family, "unsupported", f"{field}.{key} did not resolve to a finite number")
+        numbers[key] = resolved
+    return numbers
+
+
+def _schedule_trigger(trigger) -> tuple[dict, bool]:
+    """The canonical trigger of a `scheduleTrigger` and whether the function retries."""
+    record = _record(trigger, "scheduleTrigger", "schedule")
+    schedule = _text(record, "schedule", "scheduleTrigger.schedule", "schedule", required=True, allow_empty=False)
+    time_zone = _text(record, "timeZone", "scheduleTrigger.timeZone", "schedule")
+    # The SDK keeps a deployment expression as braced CEL; this runner resolves values, it does not evaluate CEL.
+    if "{{" in schedule or (time_zone is not None and "{{" in time_zone):
+        raise Unserved("schedule", "unsupported", "scheduleTrigger contains an unresolved deployment expression")
+    retry_config = _numbers(record.get("retryConfig"), "scheduleTrigger.retryConfig", _SCHEDULE_RETRY_FIELDS, "schedule")
+    # A Gen2 job with a retry window and no count is retried until the window ends (run 156715222b86ea44), so a
+    # window alone declares a retry too.
+    retry = (retry_config.get("retryCount") or 0) > 0 or (retry_config.get("maxRetrySeconds") or 0) > 0
+    described: dict[str, Any] = {"type": "schedule", "schedule": schedule}
+    if time_zone is not None:
+        described["timeZone"] = time_zone
+    described["retryConfig"] = retry_config
+    return described, retry
+
+
+def _task_queue_trigger(queue) -> dict:
+    record = _record(queue, "taskQueueTrigger", "tasks")
+    return {
+        "type": "tasks",
+        "retryConfig": _numbers(record.get("retryConfig"), "taskQueueTrigger.retryConfig", _TASK_RETRY_FIELDS, "tasks"),
+        "rateLimits": _numbers(record.get("rateLimits"), "taskQueueTrigger.rateLimits", _TASK_RATE_FIELDS, "tasks"),
+    }
+
+
+def _blocking_trigger(blocking) -> dict:
+    record = _record(blocking, "blockingTrigger", "blocking")
+    event_type = str(_resolved(record.get("eventType"), "blockingTrigger.eventType") or "")
+    if not any(event_type.endswith(event) for event in _BLOCKING_AUTH_EVENTS):
+        for fragment, trigger_type, scope, reason in _UNSERVED_PRODUCTS:
+            if fragment in event_type:
+                raise Unserved(trigger_type, scope, reason)
+        raise Unserved("blocking", "unsupported", f"blocking identity event {event_type} is not served")
+    options = record.get("options") if isinstance(record.get("options"), dict) else {}
+    return {
+        "type": "blockingAuth",
+        "eventType": event_type,
+        "accessToken": options.get("accessToken") is True,
+        "idToken": options.get("idToken") is True,
+        "refreshToken": options.get("refreshToken") is True,
+    }
+
+
+def describe_endpoint(name: str, endpoint, app_check_verified: bool = False) -> dict:
     """The canonical `functions[]` entry of one endpoint, or `Unserved` when it cannot be served."""
     if endpoint.platform != "gcfv2":
         raise Unserved("unknown", "unsupported", "endpoint platform is not recognised")
@@ -242,15 +318,19 @@ def describe_endpoint(name: str, endpoint) -> dict:
     if options:
         described["platformOptions"] = options
     if endpoint.taskQueueTrigger is not None:
-        raise Unserved("tasks", "planned", _PLANNED.format(family="task queue"))
+        described["trigger"] = _task_queue_trigger(endpoint.taskQueueTrigger)
+        return described
     if endpoint.httpsTrigger is not None:
         described["trigger"] = {"type": "http", "callable": False}
     elif endpoint.callableTrigger is not None:
         described["trigger"] = {"type": "http", "callable": True}
+        if app_check_verified:
+            # The SDK verifies the token itself, against the App Check emulator's keys, and never consumes it.
+            described["trigger"]["consumeAppCheckToken"] = "disabled"
     elif endpoint.scheduleTrigger is not None:
-        raise Unserved("schedule", "planned", _PLANNED.format(family="schedule"))
+        described["trigger"], described["retry"] = _schedule_trigger(endpoint.scheduleTrigger)
     elif endpoint.blockingTrigger is not None:
-        raise Unserved("blockingAuth", "planned", _PLANNED.format(family="Auth blocking"))
+        described["trigger"] = _blocking_trigger(endpoint.blockingTrigger)
     elif endpoint.eventTrigger is not None:
         described["trigger"] = _event_trigger(endpoint.eventTrigger)
         retry = _resolved(endpoint.eventTrigger.get("retry"), "eventTrigger.retry")
@@ -262,14 +342,17 @@ def describe_endpoint(name: str, endpoint) -> dict:
     return described
 
 
-def build_manifest(functions: dict) -> dict:
-    """`{"functions": [...], "ignored": [...]}` for the decorated functions of a codebase."""
+def build_manifest(functions: dict, app_check_verified: bool = False) -> dict:
+    """`{"functions": [...], "ignored": [...]}` for the decorated functions of a codebase.
+
+    `app_check_verified` says the Admin SDK verifies App Check tokens against the emulator's keys (`appcheck.py`).
+    """
     served: list[dict] = []
     ignored: list[dict] = []
     for name, function in functions.items():
         endpoint = function.__firebase_endpoint__
         try:
-            served.append(describe_endpoint(name, endpoint))
+            served.append(describe_endpoint(name, endpoint, app_check_verified))
         except Unserved as unserved:
             try:
                 region = _first_region(endpoint) or DEFAULT_REGION

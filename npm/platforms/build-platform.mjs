@@ -35,11 +35,15 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const PYTHON_RUNNER_FILES = [
   "runner.py",
   "fireemu_runner/__init__.py",
+  "fireemu_runner/appcheck.py",
+  "fireemu_runner/diagnostics.py",
   "fireemu_runner/dispatch.py",
+  "fireemu_runner/environment.py",
   "fireemu_runner/events.py",
   "fireemu_runner/framing.py",
   "fireemu_runner/main.py",
   "fireemu_runner/manifest.py",
+  "fireemu_runner/scheduler.py",
   "fireemu_runner/serve.py",
 ];
 

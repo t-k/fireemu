@@ -182,6 +182,7 @@ test('build: property: secret-shaped text and a 12-digit number anywhere in a ke
 test('maxInFlightOf: the largest measurement per long-polling profile, none without rows, refuses a malformed row', () => {
   assert.deepEqual(maxInFlightOf(withInflight()), { 'r1-lp': 6, 'r2-lp': 7 });
   assert.deepEqual(maxInFlightOf(journal()), {});
+  assert.deepEqual(maxInFlightOf([{ kind: 'lp-inflight', profile: 'r2-lp', maxInFlight: 7 }, { kind: 'lp-inflight', profile: 'r2-lp', maxInFlight: 3 }]), { 'r2-lp': 7 }, 'a later, lower measurement does not replace the maximum');
   assert.throws(() => maxInFlightOf([{ kind: 'lp-inflight', profile: 'r1-lp', maxInFlight: '7' }]), /in-flight/);
   assert.throws(() => maxInFlightOf([{ kind: 'lp-inflight', profile: 'r1-ws', maxInFlight: 7 }]), /in-flight/);
 });

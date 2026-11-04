@@ -23,7 +23,7 @@ import { SETTLE_MS } from "./readback.mjs";
 const SHA = "a".repeat(40);
 const RUN = "0123456789abcdef";
 const DIGEST = "d".repeat(64);
-const env = { HOME: "/home/x", PATH: "/usr/bin" };
+const env = { HOME: "/h", PATH: "/usr/bin" };
 const goodDeps = (over = {}) => ({
   nodeVersion: () => "22.22.1",
   firebaseToolsVersion: () => "15.28.2",

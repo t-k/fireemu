@@ -51,7 +51,7 @@ const baseArgs = (dir) => [
   "--firebase-js",
   "/f/lib/bin.js",
 ];
-const env = { HOME: "/home/x", PATH: "/usr/bin" };
+const env = { HOME: "/h", PATH: "/usr/bin" };
 const run = async (argv, deps = goodDeps(), environment = env) => {
   const out = [];
   const err = [];

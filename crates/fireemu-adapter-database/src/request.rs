@@ -459,12 +459,13 @@ pub fn duration_nanos(text: &str) -> Result<i64, DurationError> {
         let nanos = per as f64 * value;
         #[allow(clippy::cast_precision_loss)]
         let limit = i64::MAX as f64;
-        if nanos > limit || nanos < -limit {
+        if nanos > limit {
             return Err(DurationError::Range);
         }
+        // The cast saturates, so anything at or below -2^63 ns lands on i64::MIN, where
+        // Scala's durations stop (they hold -(2^63 - 1) ns at most).
         #[allow(clippy::cast_possible_truncation)]
         let rounded = (nanos + 0.5).floor() as i64;
-        // Scala's durations stop at -(2^63 - 1) ns as well.
         if rounded == i64::MIN {
             return Err(DurationError::Range);
         }
@@ -479,13 +480,10 @@ pub fn duration_nanos(text: &str) -> Result<i64, DurationError> {
     Ok(whole * per)
 }
 
-/// Java's `Long.parseLong`: an optional sign and ASCII digits.
+/// Java's `Long.parseLong` for a text [`java_parse_double`] read: an optional sign and ASCII
+/// digits, as Rust reads an `i64` (a point, an exponent or a hexadecimal text fails both).
 fn java_parse_long(text: &str) -> Option<i64> {
-    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    text.strip_prefix('+').unwrap_or(text).parse().ok()
+    text.parse().ok()
 }
 
 /// Java's `Double.parseDouble` for a text without trailing letters (the unit took them): the
@@ -497,6 +495,10 @@ fn java_parse_double(text: &str) -> Option<f64> {
         Some(rest) => (true, rest),
         None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
     };
+    // One sign only: Rust would read a second one.
+    if body.starts_with(['+', '-']) {
+        return None;
+    }
     let magnitude = if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
         hex_double(hex)?
     } else {
@@ -505,30 +507,18 @@ fn java_parse_double(text: &str) -> Option<f64> {
     Some(if negative { -magnitude } else { magnitude })
 }
 
+/// A decimal number with an optional exponent. Rust's grammar is Java's for the texts that
+/// reach here: the unit took every trailing letter, so neither Rust's `inf` and `nan` nor
+/// Java's `d` and `f` suffixes can occur.
 fn decimal_double(body: &str) -> Option<f64> {
-    let (mantissa, exponent) = match body.find(['e', 'E']) {
-        Some(at) => (&body[..at], Some(&body[at + 1..])),
-        None => (body, None),
-    };
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = |t: &str| t.bytes().all(|b| b.is_ascii_digit());
-    if (whole.is_empty() && fraction.is_empty()) || !digits(whole) || !digits(fraction) {
-        return None;
-    }
-    if let Some(exponent) = exponent {
-        let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-        if exponent_digits.is_empty() || !digits(exponent_digits) {
-            return None;
-        }
-    }
     body.parse().ok()
 }
 
 fn hex_double(hex: &str) -> Option<f64> {
     let (mantissa, exponent) = hex.split_once(['p', 'P'])?;
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let hex_digits = |t: &str| t.bytes().all(|b| b.is_ascii_hexdigit());
-    if (whole.is_empty() && fraction.is_empty()) || !hex_digits(whole) || !hex_digits(fraction) {
+    // A digit that is not hexadecimal fails below.
+    if whole.is_empty() && fraction.is_empty() {
         return None;
     }
     let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);

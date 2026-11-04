@@ -217,6 +217,15 @@ fn timeout_follows_the_scala_duration_grammar_of_the_official_emulator() {
         "1millisecond",
         "1.0e0min",
         "00000000000000000000000000001s",
+        // Java's whitespace (an em space, a unit separator), hexadecimal doubles, the edges.
+        "5%E2%80%83s",
+        "5%1Cs",
+        "0x1p-1s",
+        "0X1P3s",
+        "0x.8p1s",
+        "0x1.8p1s",
+        "0x384p0s",
+        "0x1.c2p9s",
     ];
     let refused = [
         ("1h", &too_long),
@@ -236,6 +245,30 @@ fn timeout_follows_the_scala_duration_grammar_of_the_official_emulator() {
         ("2147483648s", &too_long),
         ("9007199254740993ns", &too_long),
         ("9223372036854775807ns", &too_long),
+        // 2^63 ns exactly, read as a double, is still a duration.
+        ("9223372036.854775807s", &too_long),
+        ("4611686018427387904ns", &too_long),
+        ("9007199254740993%C2%B5s", &too_long),
+        ("0x385p0s", &too_long),
+        ("0x1.c21p9s", &too_long),
+        ("0x1p10s", &too_long),
+        ("-9007199254740993ns", &positive),
+        ("-9223372036854775807ns", &positive),
+        ("-9007199254740993%C2%B5s", &positive),
+        ("-0x1p3s", &positive),
+        ("0x1p-31s", &positive),
+        // A figure space and the no-break spaces are not Java whitespace.
+        ("5%E2%80%87s", &format),
+        ("5%C2%A0s", &format),
+        ("5%C2%85s", &format),
+        ("-%2B5s", &format),
+        ("%2B-5s", &format),
+        ("-1e19s", &format),
+        ("0xp1s", &format),
+        ("0x1ps", &format),
+        ("0x1p1x1s", &format),
+        ("0x1p-1x1s", &format),
+        ("0xgp1s", &format),
         ("-1s", &positive),
         ("-0s", &positive),
         ("0min", &positive),
@@ -291,7 +324,12 @@ fn timeout_follows_the_scala_duration_grammar_of_the_official_emulator() {
             );
         }
         // Beyond the 2^63 - 1 ns a Scala duration holds: the jar's own 500.
-        for value in ["9223372036854775807s", "2147483647min"] {
+        for value in [
+            "9223372036854775807s",
+            "2147483647min",
+            "-9007199254740992d",
+            "-9223372036854775808ns",
+        ] {
             assert_eq!(
                 get(&mut db, &format!("/s/mix.json?ns=p&timeout={value}")),
                 (500, error("Unexpected server error")),

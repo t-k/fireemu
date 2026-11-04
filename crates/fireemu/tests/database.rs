@@ -1442,3 +1442,182 @@ fn a_pinned_start_stands_still_unless_the_clock_follows_real_time() {
         }
     }
 }
+
+/// A JWT with the given header algorithm, signature segment and claims text.
+fn jwt(alg: &str, signature: &str, claims: &str) -> String {
+    format!(
+        "{}.{}.{signature}",
+        segment(&format!(r#"{{"alg":"{alg}","typ":"JWT"}}"#)).trim_end_matches('.'),
+        segment(claims).trim_end_matches('.')
+    )
+}
+
+/// The status of the answer to a Realtime `auth` message (`ok`, `invalid_token`, ...).
+fn websocket_auth(port: u16, ns: &str, cred: &str) -> String {
+    use std::io::Read as _;
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "GET /.ws?v=5&ns={ns} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    )
+    .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+    }
+    let message = format!(r#"{{"t":"d","d":{{"r":1,"a":"auth","b":{{"cred":"{cred}"}}}}}}"#);
+    let bytes = message.as_bytes();
+    let mut frame = vec![0x81, 0xFE]; // a masked text frame with a 16-bit length
+    frame.extend_from_slice(&u16::try_from(bytes.len()).unwrap().to_be_bytes());
+    frame.extend_from_slice(&[0, 0, 0, 0]); // a zero mask key leaves the payload as it is
+    frame.extend_from_slice(bytes);
+    stream.write_all(&frame).unwrap();
+    loop {
+        let mut two = [0u8; 2];
+        stream.read_exact(&mut two).unwrap();
+        let mut length = usize::from(two[1] & 0x7f);
+        if length == 126 {
+            let mut extended = [0u8; 2];
+            stream.read_exact(&mut extended).unwrap();
+            length = usize::from(u16::from_be_bytes(extended));
+        } else if length == 127 {
+            let mut extended = [0u8; 8];
+            stream.read_exact(&mut extended).unwrap();
+            length = usize::try_from(u64::from_be_bytes(extended)).unwrap();
+        }
+        let mut payload = vec![0u8; length];
+        stream.read_exact(&mut payload).unwrap();
+        let text = String::from_utf8_lossy(&payload).into_owned();
+        if text.contains(r#""r":1"#) {
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            return value["d"]["b"]["s"].as_str().unwrap().to_owned();
+        }
+    }
+}
+
+/// A signed token fireemu cannot verify takes the tenant route of an unsigned token (review of the
+/// credential answers): a tenant it names must exist, and one that is missing or deleted leaves
+/// the token nobody. The decision is the same for a REST read, a REST write and a WebSocket
+/// `auth` message, because they share one verifier.
+#[test]
+#[allow(clippy::too_many_lines)] // one matrix: token kind x tenant state x transport
+fn forged_signed_tokens_follow_the_tenant_route_of_unsigned_tokens() {
+    let dir = Scratch::new("database", "forged-tenants");
+    let firebase_json = dir.join("firebase.json");
+    std::fs::write(
+        &firebase_json,
+        r#"{"database":[{"instance":"demo-rtdb-default-rtdb","rules":"database.rules.json"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("database.rules.json"),
+        r#"{"rules":{"users":{"$uid":{".read":"auth != null && auth.uid === $uid"}},
+            "box":{".read":true,".write":"auth != null"}}}"#,
+    )
+    .unwrap();
+    let config = dir.join("emulator.json");
+    std::fs::write(
+        &config,
+        r#"{"schemaVersion":1,"profile":"emulator","auth":{"multiTenant":{"allowTenants":true},"tenants":[{"tenantId":"acme-x7k2q","displayName":"acme","allowPasswordSignup":true}]}}"#,
+    )
+    .unwrap();
+    let daemon = Daemon::start(&[
+        "--firebase-json",
+        firebase_json.to_str().unwrap(),
+        "--config",
+        config.to_str().unwrap(),
+        "--only",
+        "database,auth",
+        "--database-port",
+        "0",
+    ]);
+    let port = daemon.database_port();
+    // A tenant that existed and was deleted.
+    let admin = [
+        "Authorization: Bearer owner",
+        "Content-Type: application/json",
+    ];
+    let (status, body) = request(
+        daemon.auth_port(),
+        "POST",
+        &format!("/identitytoolkit.googleapis.com/v2/projects/{PROJECT}/tenants"),
+        &admin,
+        r#"{"displayName":"gone"}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let deleted = created["name"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, body) = request(
+        daemon.auth_port(),
+        "DELETE",
+        &format!("/identitytoolkit.googleapis.com/v2/projects/{PROJECT}/tenants/{deleted}"),
+        &admin,
+        "",
+    );
+    assert_eq!(status, 200, "{body}");
+    let ns = "demo-rtdb-default-rtdb";
+    let claims = |tenant: &str| {
+        format!(
+            r#"{{"aud":"{PROJECT}","sub":"u1","iat":1,"exp":9999999999,"firebase":{{"tenant":"{tenant}"}}}}"#
+        )
+    };
+    let tokens = |tenant: &str| {
+        [
+            ("unsigned", jwt("none", "", &claims(tenant))),
+            ("RS256", jwt("RS256", "c2ln", &claims(tenant))),
+            ("HS256", jwt("HS256", "c2ln", &claims(tenant))),
+        ]
+    };
+    for (state, tenant, exists) in [
+        ("existing", "acme-x7k2q", true),
+        ("missing", "never-x1y2z", false),
+        ("deleted", deleted.as_str(), false),
+    ] {
+        let mut reads = Vec::new();
+        for (kind, token) in tokens(tenant) {
+            let read = request(
+                port,
+                "GET",
+                &format!("/users/u1.json?ns={ns}&auth={token}"),
+                &[],
+                "",
+            )
+            .0;
+            let write = request(
+                port,
+                "PUT",
+                &format!("/box.json?ns={ns}&auth={token}"),
+                &[],
+                &format!(r#""{kind}-{state}""#),
+            )
+            .0;
+            let stored = request(port, "GET", &format!("/box.json?ns={ns}"), &[], "").1;
+            let socket = websocket_auth(port, ns, &token);
+            // A refused token is nobody: the read of the user's node and the write fail, the
+            // write leaves the data as it was, and the WebSocket does not accept the token.
+            if exists {
+                assert_eq!((read, write), (200, 200), "{kind} {state}");
+                assert_eq!(stored, format!(r#""{kind}-{state}""#), "{kind} {state}");
+                assert_eq!(socket, "ok", "{kind} {state}");
+            } else {
+                assert_eq!((read, write), (401, 401), "{kind} {state}");
+                assert_ne!(stored, format!(r#""{kind}-{state}""#), "{kind} {state}");
+                assert_eq!(socket, "invalid_token", "{kind} {state}");
+            }
+            reads.push((read, write, socket));
+        }
+        // A forged token is routed exactly as the unsigned one is.
+        assert!(reads.iter().all(|r| *r == reads[0]), "{state}: {reads:?}");
+    }
+}

@@ -77,22 +77,29 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
                 None => registry.store_for(project).unwrap_or(default),
             };
             let store = store.lock().ok()?;
-            let decoded = match verify_rules_token_for_project(
+            let verified = verify_rules_token_for_project(
                 token,
                 &store,
                 LogicalInstant::from_nanos(i128::from(now) * 1_000_000),
                 policy,
                 project,
-            ) {
+            );
+            let no_signer = store.signer().is_none();
+            drop(store);
+            let decoded = match verified {
                 Ok(decoded) => decoded,
                 // The official emulator reads the claims of a signed token it cannot verify
                 // (G10 rows auth-rs256 and auth-hs256: jar 200). The emulator profile does the
                 // same when it admits unsigned tokens and issues none of its own signatures;
                 // see `unverified_signed_claims`.
-                Err(JwtError::UnsupportedAlgorithm(alg))
-                    if any_mock_audience && store.signer().is_none() =>
-                {
-                    return unverified_signed_claims(token, &alg, project, now);
+                Err(JwtError::UnsupportedAlgorithm(alg)) if any_mock_audience && no_signer => {
+                    let (claims, tenant) = unverified_signed_claims(token, &alg, project, now)?;
+                    // The token is routed as an unsigned one is: a tenant it names must exist
+                    // (a missing or deleted tenant leaves it nobody).
+                    if let Some(tenant) = tenant {
+                        registry.tenant_store(project, &tenant)?;
+                    }
+                    return Some(claims);
                 }
                 Err(_) => return None,
             };
@@ -105,10 +112,16 @@ pub(crate) fn credentials(cfg: &RuntimeConfig, registry: &Arc<AuthRegistry>) -> 
 
 /// The claims of an `RS256` or `HS256` token the emulator profile cannot verify, read as the
 /// official emulator reads them (jar 4.11.2, G10 rows auth-rs256 and auth-hs256): unverified.
-/// Kept to the recorded shape: a non-empty signature, a payload that is a JSON object, and an
-/// `aud` that names the instance's own project, and an `exp` still in the future. The result is the claims text, which still has to
-/// name a subject and an issue time to be a user; nothing else is admitted.
-fn unverified_signed_claims(token: &str, alg: &str, project: &str, now: i64) -> Option<String> {
+/// Kept to the recorded shape: a non-empty signature, a payload that is a JSON object, an `aud`
+/// that names the instance's own project, and an `exp` still in the future. The answer is the
+/// claims text with the tenant the token names, if any; the claims still have to name a subject
+/// and an issue time to make a user, and the caller routes the tenant. Nothing else is admitted.
+fn unverified_signed_claims(
+    token: &str,
+    alg: &str,
+    project: &str,
+    now: i64,
+) -> Option<(String, Option<String>)> {
     if !matches!(alg, "RS256" | "HS256") {
         return None;
     }
@@ -125,7 +138,15 @@ fn unverified_signed_claims(token: &str, alg: &str, project: &str, now: i64) -> 
     let claims: serde_json::Value = serde_json::from_str(&text).ok()?;
     let claims = claims.as_object()?;
     let live = claims.get("exp")?.as_i64()?.checked_mul(1000)? > now;
-    (live && claims.get("aud")?.as_str()? == project).then_some(text)
+    if !live || claims.get("aud")?.as_str()? != project {
+        return None;
+    }
+    let tenant = claims
+        .get("firebase")
+        .and_then(|firebase| firebase.get("tenant"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Some((text, tenant))
 }
 
 /// How often a rules file is looked at for a change.
@@ -251,48 +272,60 @@ mod tests {
     #[test]
     fn an_unverifiable_signed_token_is_read_only_in_the_recorded_shape() {
         use fireemu_core_auth::jwt::base64url_encode;
-        let token = |claims: &str, signature: &str| {
+        let token = |alg: &str, claims: &str, signature: &str| {
             format!(
                 "{}.{}.{signature}",
-                base64url_encode(br#"{"alg":"RS256"}"#),
+                base64url_encode(format!(r#"{{"alg":"{alg}"}}"#).as_bytes()),
                 base64url_encode(claims.as_bytes())
             )
         };
         let own = r#"{"aud":"p","sub":"u","iat":1,"exp":100}"#;
         let now = 99_999;
+        let read = |alg: &str, claims: &str, signature: &str, project: &str, now: i64| {
+            unverified_signed_claims(&token(alg, claims, signature), alg, project, now)
+        };
+        for alg in ["RS256", "HS256"] {
+            assert_eq!(
+                read(alg, own, "c2ln", "p", now),
+                Some((own.to_owned(), None)),
+                "{alg}"
+            );
+            // exp is strictly in the future: now = exp * 1000 is expired.
+            assert!(read(alg, own, "c2ln", "p", 100_000).is_none(), "{alg}");
+            assert!(read(alg, own, "c2ln", "p", 100_001).is_none(), "{alg}");
+            assert!(read(alg, own, "", "p", now).is_none(), "{alg}");
+            assert!(read(alg, own, "c2ln", "q", now).is_none(), "{alg}");
+        }
+        assert!(read("ES256", own, "c2ln", "p", now).is_none());
+        assert!(read("none", own, "c2ln", "p", now).is_none());
+        // The tenant a token names is handed to the caller, which routes it.
+        let tenanted = r#"{"aud":"p","sub":"u","iat":1,"exp":100,"firebase":{"tenant":"acme"}}"#;
         assert_eq!(
-            unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", now).as_deref(),
-            Some(own)
+            read("HS256", tenanted, "c2ln", "p", now),
+            Some((tenanted.to_owned(), Some("acme".to_owned())))
         );
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "HS256", "p", now).is_some());
-        // exp is strictly in the future: now = exp * 1000 is expired.
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", 100_000).is_none());
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "p", 100_001).is_none());
-        assert!(unverified_signed_claims(&token(own, ""), "RS256", "p", now).is_none());
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "RS256", "q", now).is_none());
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "ES256", "p", now).is_none());
-        assert!(unverified_signed_claims(&token(own, "c2ln"), "none", "p", now).is_none());
-        assert!(unverified_signed_claims(
-            &token(r#"{"aud":"p","sub":"u","iat":1}"#, "c2ln"),
+        let untenanted = r#"{"aud":"p","exp":100,"firebase":{"tenant":7}}"#;
+        assert_eq!(
+            read("RS256", untenanted, "c2ln", "p", now).map(|c| c.1),
+            Some(None)
+        );
+        assert!(read(
             "RS256",
+            r#"{"aud":"p","sub":"u","iat":1}"#,
+            "c2ln",
             "p",
             now
         )
         .is_none());
-        assert!(unverified_signed_claims(
-            &token(r#"{"aud":7,"exp":100}"#, "c2ln"),
-            "RS256",
-            "p",
-            now
-        )
-        .is_none());
-        assert!(unverified_signed_claims(&token("[1]", "c2ln"), "RS256", "p", now).is_none());
+        assert!(read("RS256", r#"{"aud":7,"exp":100}"#, "c2ln", "p", now).is_none());
+        assert!(read("RS256", "[1]", "c2ln", "p", now).is_none());
         assert!(unverified_signed_claims("a.b", "RS256", "p", now).is_none());
         assert!(unverified_signed_claims("a.b.c.d", "RS256", "p", now).is_none());
         // exp * 1000 must not overflow.
-        assert!(unverified_signed_claims(
-            &token(r#"{"aud":"p","exp":9223372036854775807}"#, "c2ln"),
+        assert!(read(
             "RS256",
+            r#"{"aud":"p","exp":9223372036854775807}"#,
+            "c2ln",
             "p",
             now
         )

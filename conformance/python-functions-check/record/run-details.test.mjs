@@ -495,13 +495,14 @@ test("a read that is not 200 and not an observing read leaves the run incomplete
     {},
     {},
     (send) => async (request) =>
-      request.url.includes(`/functions/pcps`) && request.method === "GET"
+      request.url.endsWith(`/functions/pcps`) && request.method === "GET"
         ? error(404, "NOT_FOUND")
         : send(request),
   );
   assert.ok(
     result.incompleteReads.some((r) => r.id === "readback-function-pcps" && r.class === "4xx"),
   );
+  assert.equal(result.incompleteReads.length, 1);
   assert.equal(result.closureReady, false);
   assert.equal(result.readBackRequired, false);
   assert.equal(result.outcome, "pycheck-needs-review");

@@ -1508,7 +1508,8 @@ fn long_bound_parameters_parse_in_linear_time() {
 
 #[test]
 fn a_priority_on_a_node_the_update_empties_is_dropped() {
-    // The official emulator answers 200 (its echo lists `c` first) and stores nothing.
+    // The official emulator and production (RTDB-REST-20261104-01 emptied-patch) answer 200,
+    // the echo in request order, and store nothing.
     let mut db = db();
     call(&mut db, "PUT", "/b.json?ns=u18", r#"{"c":1}"#);
     assert_eq!(
@@ -1518,7 +1519,7 @@ fn a_priority_on_a_node_the_update_empties_is_dropped() {
             "/.json?ns=u18",
             r#"{"b/c":null,"b/.priority":1}"#
         ),
-        (200, r#"{"b":{".priority":1,"c":null}}"#.to_owned())
+        (200, r#"{"b":{"c":null,".priority":1}}"#.to_owned())
     );
     assert_eq!(
         call(&mut db, "GET", "/.json?ns=u18&format=export", ""),

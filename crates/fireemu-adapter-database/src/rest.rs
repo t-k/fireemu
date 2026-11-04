@@ -29,12 +29,13 @@ use crate::access::{Access, LoadedRules, WriteOp};
 pub use crate::access::{Credentials, IdTokenVerifier};
 use crate::json_parse::parse_with_keys;
 use crate::json_text::{
-    output_json, parse, priority_at, render, value_at, written_priority_at, ParseError, Style,
+    output_json, parse, priority_at, render, render_ordered, value_at, written_priority_at,
+    Ordered, ParseError, Style,
 };
 use crate::listen::Listen;
 use crate::namespace::route;
 use crate::on_disconnect::Pending;
-use crate::request::{self, Location, Output, Refusal};
+use crate::request::{self, Location, Output, Refusal, ShallowPage};
 
 /// Where a request comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +170,10 @@ pub struct RestOptions {
     /// Whether `/.inspect/databases.json` answers only the owner credential (strict and a
     /// locked database); the official emulator answers anyone.
     pub inspect_needs_owner: bool,
+    /// The strict profile: where production was recorded answering otherwise than the
+    /// official emulator (the `writeSizeLimit` refusal text, a malformed percent escape in the
+    /// path), answer as production did. The emulator profile answers as the official emulator.
+    pub production_shapes: bool,
 }
 
 impl Default for RestOptions {
@@ -180,6 +185,7 @@ impl Default for RestOptions {
             realtime_message_bytes: 16 * 1024 * 1024,
             credentials: Credentials::default(),
             inspect_needs_owner: false,
+            production_shapes: false,
         }
     }
 }
@@ -708,6 +714,12 @@ impl Database {
                 events: Vec::new(),
             };
         }
+        if !fireemu_core_types::codec::percent_escapes_are_well_formed(&request.target) {
+            return Handled::Response {
+                response: malformed_escape(&request.target, self.options.production_shapes),
+                events: Vec::new(),
+            };
+        }
         match self.dispatch(request, parsed, now_millis) {
             Ok(handled) => handled,
             Err(refusal) => Handled::Response {
@@ -725,7 +737,6 @@ impl Database {
         parsed: Option<ParsedBody>,
         now_millis: i64,
     ) -> Result<Handled, Refusal> {
-        request::check_escapes(&request.target)?;
         let authorization_count = request
             .headers
             .iter()
@@ -761,11 +772,18 @@ impl Database {
             }
             Location::Inspect(name) => return self.inspect(&method, &name, &namespace, &access),
         };
+        if writing {
+            request::check_write_size_limit(&params, self.options.production_shapes)?;
+        }
         request::check_disable_triggers(&params, writing, request.header("Authorization"))?;
         let condition = condition(request, &method)?;
-        let output = request::output(&params)?;
+        let output = request::output(&params, writing)?;
         let read_shape = !writing && (output.shallow || request::has_query(&params));
-        if condition.is_some() && (output.silent || read_shape) {
+        // A silent PUT with if-none-match is answered (204, or 412 with the value); a silent
+        // read or if-match write is refused, as by the official emulator.
+        let silent_refused = output.silent
+            && !(method == "PUT" && matches!(condition, Some(Condition::NoneMatch(_))));
+        if condition.is_some() && (silent_refused || read_shape) {
             return Err(Refusal::bad(
                 "Mixing 'shallow', querying parameters or 'print=silent' and if-match or if-none-match requests is not supported",
             ));
@@ -775,10 +793,16 @@ impl Database {
                 "Querying related parameters not supported on this request type",
             ));
         }
-        let query = if writing {
+        let page = if !writing && output.shallow {
+            request::shallow_page(&params)?
+        } else {
+            None
+        };
+        let query = if writing || output.shallow {
             None
         } else {
-            request::query(&params, output.shallow)?
+            // A conditional read is refused with a query above and ignores `timeout`.
+            request::query(&params, condition.is_none())?
         };
         // An event stream whose query only orders loads all the data, and the official
         // emulator follows it as a plain stream: judged without the query, needing no index.
@@ -814,14 +838,22 @@ impl Database {
                 let tree = &self.namespace(&call.namespace).tree;
                 if let Some(Condition::NoneMatch(tag)) = call.condition {
                     if tag_at(tree, &call.path) == tag {
-                        return Ok(respond(not_modified()));
+                        return Ok(respond(not_modified(&call.output)));
                     }
-                    return Ok(respond(read(tree, &call.path, None, &call.output, true)));
+                    return Ok(respond(read(
+                        tree,
+                        &call.path,
+                        None,
+                        None,
+                        &call.output,
+                        true,
+                    )));
                 }
                 Ok(respond(read(
                     tree,
                     &call.path,
                     query.as_ref(),
+                    page.as_ref(),
                     &call.output,
                     call.want_etag,
                 )))
@@ -897,13 +929,16 @@ impl Database {
         }
         .map_err(|err| change_refusal(&err, || data_refusal(body.text)))?;
         let tree = &self.namespace(&call.namespace).tree;
+        // A write that passed if-none-match answers its ETag, as the official emulator and
+        // production (RTDB-REST-20261104-01 etag-inm-put) do.
+        let want_etag = call.want_etag || matches!(call.condition, Some(Condition::NoneMatch(_)));
         let response = written(
             tree,
             &call.path,
             &value,
             node.as_ref(),
             &call.output,
-            call.want_etag,
+            want_etag,
         );
         let [path] = written_paths;
         let effective = self.effective(&call.namespace, std::slice::from_ref(&path), before)[0];
@@ -965,10 +1000,6 @@ impl Database {
         // The answer echoes the request with its placeholders resolved, read before the
         // update changes what they resolve against.
         let echo = patch_echo(tree, &call.path, &entries, call.context);
-        let ordered_echo = (call.output.style == Style::Compact
-            && !call.output.silent
-            && call.output.callback.is_none())
-        .then(|| ordered_patch_echo(&echo, &entries));
         if call.disable_triggers {
             self.tree_mut(&call.namespace)
                 .update(&call.path, &wire, call.context)
@@ -995,10 +1026,7 @@ impl Database {
                 })
                 .collect(),
         );
-        let mut response = json_response(&echo, &call.output, None);
-        if let Some(ordered_echo) = ordered_echo {
-            response.body = ordered_echo.into_bytes();
-        }
+        let response = ordered_response(&echo.ordered(), &call.output, None);
         let change = Change::Patch {
             base: call.path.clone(),
             entries,
@@ -1902,6 +1930,30 @@ pub(crate) fn refusal_response(refusal: &Refusal) -> HttpResponse {
     }
 }
 
+/// The answer to a target holding a malformed percent escape, before anything else is read.
+/// In the path, the strict profile answers as production (RTDB-REST-20261104-01
+/// malformed-zz: an octet-stream body indented by four, no CORS or cache header); otherwise
+/// the official emulator's JSON answer, without a cache header.
+fn malformed_escape(target: &str, production_shapes: bool) -> HttpResponse {
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    if production_shapes && !fireemu_core_types::codec::percent_escapes_are_well_formed(path) {
+        return HttpResponse {
+            status: 400,
+            headers: vec![header("Content-Type", "application/octet-stream")],
+            body: b"{\n    \"error\" : \"Bad request.\"\n}\n".to_vec(),
+        };
+    }
+    let body = Json::object([("error", Json::String("Bad Request".to_owned()))]);
+    HttpResponse {
+        status: 400,
+        headers: vec![
+            header("Content-Type", "application/json; charset=utf-8"),
+            header("Access-Control-Allow-Origin", "*"),
+        ],
+        body: pretty_text(&body).into_bytes(),
+    }
+}
+
 /// Pretty text as the server writes it: Jackson's layout and a final newline.
 fn pretty_text(json: &Json) -> String {
     let mut text = render(json, Style::Pretty);
@@ -1923,27 +1975,19 @@ fn options_response() -> HttpResponse {
 
 /// A JSON answer with the output options applied; `etag` adds the `ETag` header.
 fn json_response(json: &Json, output: &Output, etag: Option<String>) -> HttpResponse {
-    let mut headers = json_headers();
-    let mut body = match output.style {
-        Style::Compact => render(json, Style::Compact),
-        Style::Pretty => pretty_text(json),
-    };
+    ordered_response(&Ordered::Value(json), output, etag)
+}
+
+/// [`json_response`] for members in a given order.
+fn ordered_response(json: &Ordered<'_>, output: &Output, etag: Option<String>) -> HttpResponse {
+    let mut headers = output_headers(output);
+    let mut body = render_ordered(json, output.style);
+    if output.style == Style::Pretty {
+        body.push('\n');
+    }
     if let Some(callback) = &output.callback {
-        headers[0] = header("Content-Type", "application/javascript; charset=utf-8");
         body = format!("/**/ {callback}({body});");
         headers.push(header("X-Content-Type-Options", "nosniff"));
-    } else if let Some(name) = &output.download {
-        headers[0] = header("Content-Type", "application/octet-stream; charset=utf-8");
-        // The official emulator drops quotes and line breaks from the name; control
-        // characters go too, so the header stays one parameter.
-        let name: String = name
-            .chars()
-            .filter(|c| *c != '"' && !c.is_control())
-            .collect();
-        headers.push(header(
-            "Content-Disposition",
-            &format!("attachment; filename=\"{name}\""),
-        ));
     }
     if let Some(etag) = etag {
         headers.push(header("Access-Control-Expose-Headers", "ETag"));
@@ -1963,10 +2007,32 @@ fn json_response(json: &Json, output: &Output, etag: Option<String>) -> HttpResp
     }
 }
 
+/// The JSON headers with the content type (and attachment name) the output options choose.
+fn output_headers(output: &Output) -> Vec<(String, String)> {
+    let mut headers = json_headers();
+    if output.callback.is_some() {
+        headers[0] = header("Content-Type", "application/javascript; charset=utf-8");
+    } else if let Some(name) = &output.download {
+        headers[0] = header("Content-Type", "application/octet-stream; charset=utf-8");
+        // The official emulator drops quotes and line breaks from the name; control
+        // characters go too, so the header stays one parameter.
+        let name: String = name
+            .chars()
+            .filter(|c| *c != '"' && !c.is_control())
+            .collect();
+        headers.push(header(
+            "Content-Disposition",
+            &format!("attachment; filename=\"{name}\""),
+        ));
+    }
+    headers
+}
+
 fn read(
     tree: &Tree,
     path: &Path,
     query: Option<&QueryParams>,
+    page: Option<&ShallowPage>,
     output: &Output,
     want_etag: bool,
 ) -> HttpResponse {
@@ -1976,14 +2042,88 @@ fn read(
         Format::Plain
     };
     let node = tree.get(path);
-    let json = if path.is_priority() {
-        priority_at(tree, path)
-    } else if output.shallow {
-        shallow(node, format)
-    } else {
-        view(tree, path, query, format)
+    let etag = want_etag.then(|| tag_at(tree, path));
+    if path.is_priority() {
+        return json_response(&priority_at(tree, path), output, etag);
+    }
+    if output.shallow {
+        return match shallow_keys(node, format, page) {
+            // A page past the last key.
+            Some(keys) if keys.is_empty() => json_response(&Json::Null, output, etag),
+            Some(keys) => {
+                let yes = Json::Bool(true);
+                let members = keys
+                    .into_iter()
+                    .map(|key| (key, Ordered::Value(&yes)))
+                    .collect();
+                ordered_response(&Ordered::Members(members), output, etag)
+            }
+            None => json_response(&shallow(node, format), output, etag),
+        };
+    }
+    if let Some(selected) = query.filter(|q| ranged(q)).map(|q| q.run(node)) {
+        if !selected.is_empty() {
+            let values: Vec<Json> = selected
+                .iter()
+                .map(|(_, child)| output_json(Some(child), format))
+                .collect();
+            let keys: Vec<&str> = selected.iter().map(|(key, _)| *key).collect();
+            let members = crate::scala_map::scala_order(&keys, false)
+                .into_iter()
+                .map(|at| (keys[at].to_owned(), Ordered::Value(&values[at])))
+                .collect();
+            return ordered_response(&Ordered::Members(members), output, etag);
+        }
+    }
+    json_response(&view(tree, path, query, format), output, etag)
+}
+
+/// Whether a query's answer comes in query order, as the official emulator's does (a Scala
+/// map filled in that order): a range without a limit. A `startAt(null)` alone selects
+/// everything and answers like a query that only orders; a limit answers in key order.
+fn ranged(query: &QueryParams) -> bool {
+    let everything = |bound: &fireemu_core_database::query::Bound| {
+        bound.inclusive
+            && bound.value == Json::Null
+            && bound.key == fireemu_core_database::query::BoundKey::Min
     };
-    json_response(&json, output, want_etag.then(|| tag_at(tree, path)))
+    query.limit.is_none()
+        && (query.end.is_some() || query.start.as_ref().is_some_and(|b| !everything(b)))
+}
+
+/// The keys of a shallow read of an object, in the order the official emulator writes them
+/// (a Scala map; RTDB-REST-20261104-01 shallow-limit for the page): the children in key
+/// order, the export format's `.priority` first; a page sorts them as text, keeps those after
+/// `startAfter` and the first `limitToFirst` (none past the last key). `None` for a leaf or a
+/// missing location.
+fn shallow_keys(
+    node: Option<&Node>,
+    format: Format,
+    page: Option<&ShallowPage>,
+) -> Option<Vec<String>> {
+    let Some(Node {
+        content: Content::Children(children),
+        priority,
+    }) = node
+    else {
+        return None;
+    };
+    let mut keys: Vec<String> = children.keys().cloned().collect();
+    keys.sort_by(|a, b| fireemu_core_database::key::name_compare(a, b));
+    if format == Format::Export && priority.is_some() {
+        keys.insert(0, PRIORITY_KEY.to_owned());
+    }
+    if let Some(page) = page {
+        keys.sort_by(|a, b| fireemu_core_database::key::utf16_cmp(a, b));
+        if let Some(after) = &page.start_after {
+            keys.retain(|key| fireemu_core_database::key::utf16_cmp(key, after).is_gt());
+        }
+        if let Some(limit) = page.limit {
+            keys.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        }
+    }
+    let order = crate::scala_map::scala_order(&keys, false);
+    Some(order.into_iter().map(|at| keys[at].clone()).collect())
 }
 
 /// The `ETag` of a location; for `<location>/.priority`, of its priority as a leaf (the
@@ -2042,15 +2182,24 @@ fn view(tree: &Tree, path: &Path, query: Option<&QueryParams>, format: Format) -
 /// conditional request is never silent, so the body is always sent.
 fn precondition_failed(current: Option<&Node>, output: &Output, with_etag: bool) -> HttpResponse {
     let tag = with_etag.then(|| etag(current));
-    let mut response = json_response(&output_json(current, Format::Plain), output, tag);
+    // A silent PUT with if-none-match gets the value too (the official emulator).
+    let spoken = Output {
+        silent: false,
+        ..output.clone()
+    };
+    let mut response = json_response(&output_json(current, Format::Plain), &spoken, tag);
     response.status = 412;
     response
 }
 
-fn not_modified() -> HttpResponse {
+/// The 304 answer: the output's content type, an explicit zero length (production and the
+/// official emulator, RTDB-REST-20261104-01 etag-inm-match) and no body.
+fn not_modified(output: &Output) -> HttpResponse {
+    let mut headers = output_headers(output);
+    headers.push(header("Content-Length", "0"));
     HttpResponse {
         status: 304,
-        headers: json_headers(),
+        headers,
         body: Vec::new(),
     }
 }
@@ -2152,67 +2301,56 @@ fn patch_entries(
 
 /// The answer to a `PATCH`: its entries as one nested object, as the official emulator
 /// echoes them (the requested values with placeholders resolved, nulls kept).
+/// The answer to a `PATCH`: each entry's value with its placeholders resolved, and the tree
+/// the entries make.
+struct PatchEcho {
+    values: Vec<Json>,
+    tree: crate::scala_map::WriteTree,
+}
+
+impl PatchEcho {
+    /// The echo as the official emulator and production write it (RTDB-REST-20261104-01
+    /// emptied-patch): the entries gathered by path in the order of a Scala map at each
+    /// level, each value in the server's own order.
+    fn ordered(&self) -> Ordered<'_> {
+        fn node<'a>(tree: &crate::scala_map::WriteTree, values: &'a [Json]) -> Ordered<'a> {
+            match tree.leaf {
+                Some(at) => Ordered::Value(&values[at]),
+                None => Ordered::Members(
+                    tree.children
+                        .iter()
+                        .map(|(key, child)| (key.clone(), node(child, values)))
+                        .collect(),
+                ),
+            }
+        }
+        node(&self.tree, &self.values)
+    }
+}
+
 fn patch_echo(
     tree: &Tree,
     base: &Path,
     entries: &[PatchEntry],
     context: ServerValueContext,
-) -> Json {
-    let mut echo = Json::Object(BTreeMap::new());
-    for entry in entries {
-        let target = base.join(&entry.path);
-        let stored = if target.is_priority() {
-            stored_priority(tree.get(&target.parent().unwrap_or_default()))
-        } else {
-            tree.get(&target).cloned()
-        };
-        let value = resolve(&entry.value, stored.as_ref(), context).unwrap_or(Json::Null);
-        insert_at(&mut echo, entry.path.keys(), value);
-    }
-    echo
-}
-
-// The recorded PATCH response follows request order for its two root members.
-// The behavior for other shapes remains unobserved in production.
-fn ordered_patch_echo(echo: &Json, entries: &[PatchEntry]) -> String {
-    let Json::Object(map) = echo else {
-        return render(echo, Style::Compact);
-    };
-    let mut keys = std::collections::BTreeSet::new();
-    let mut parts = Vec::new();
-    for entry in entries {
-        let Some(key) = entry.path.keys().first() else {
-            continue;
-        };
-        if !keys.insert(key) {
-            continue;
-        }
-        if let Some(value) = map.get(key) {
-            parts.push(format!(
-                "{}:{}",
-                serde_json::to_string(key).unwrap_or_default(),
-                render(value, Style::Compact)
-            ));
-        }
-    }
-    format!("{{{}}}", parts.join(","))
-}
-
-fn insert_at(target: &mut Json, keys: &[String], value: Json) {
-    let Json::Object(map) = target else {
-        return;
-    };
-    match keys {
-        [] => {}
-        [last] => {
-            map.insert(last.clone(), value);
-        }
-        [first, rest @ ..] => {
-            let child = map
-                .entry(first.clone())
-                .or_insert_with(|| Json::Object(BTreeMap::new()));
-            insert_at(child, rest, value);
-        }
+) -> PatchEcho {
+    let values = entries
+        .iter()
+        .map(|entry| {
+            let target = base.join(&entry.path);
+            let stored = if target.is_priority() {
+                stored_priority(tree.get(&target.parent().unwrap_or_default()))
+            } else {
+                tree.get(&target).cloned()
+            };
+            resolve(&entry.value, stored.as_ref(), context).unwrap_or(Json::Null)
+        })
+        .collect();
+    let raw: Vec<String> = entries.iter().map(|entry| entry.key.clone()).collect();
+    let paths: Vec<Vec<String>> = entries.iter().map(|e| e.path.keys().to_vec()).collect();
+    PatchEcho {
+        values,
+        tree: crate::scala_map::write_tree(&raw, &paths),
     }
 }
 

@@ -415,6 +415,18 @@ fn with_headers(status: u16, headers: Vec<(String, String)>, body: Body) -> Resp
 }
 
 fn full(response: HttpResponse) -> Response<Body> {
+    // hyper drops the Content-Length of a 304 whose body it knows is empty; the REST layer
+    // asks for `content-length: 0` there (production and the official emulator write it), so
+    // that empty body goes as a stream of unknown length, which keeps the header.
+    let explicit_length = response
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("Content-Length"));
+    if response.status == 304 && explicit_length {
+        let body =
+            StreamBody::new(tokio_stream::empty::<Result<Frame<Bytes>, Infallible>>()).boxed();
+        return with_headers(response.status, response.headers, body);
+    }
     let body = Full::new(Bytes::from(response.body)).boxed();
     with_headers(response.status, response.headers, body)
 }

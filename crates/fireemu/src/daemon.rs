@@ -591,6 +591,8 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             // The owner credential is required under strict or with locked database default access (review RTDB-04 S1); otherwise the emulator profile answers anyone, as the official emulator.
             inspect_needs_owner: cfg.profile == crate::config::CompatibilityProfile::Strict
                 || cfg.database_default_access == crate::config::DatabaseDefaultAccess::Locked,
+            // Strict answers the REST shapes production was recorded answering where the official emulator differs.
+            production_shapes: cfg.profile == crate::config::CompatibilityProfile::Strict,
             ..fireemu_adapter_database::rest::RestOptions::default()
         },
         cfg.seed ^ 0x5254_4442,

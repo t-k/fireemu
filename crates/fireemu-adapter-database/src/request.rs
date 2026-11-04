@@ -193,23 +193,25 @@ pub fn check_disable_triggers(
     Ok(())
 }
 
-/// Reads the output options and checks `format` and `writeSizeLimit`.
-pub fn output(params: &BTreeMap<String, String>) -> Result<Output, Refusal> {
-    let export = match params.get("format").map(String::as_str) {
-        None => false,
-        Some("export") => true,
-        Some(_) => return Err(Refusal::bad("Export format must be export if present")),
-    };
-    if let Some(limit) = params.get("writeSizeLimit") {
-        if !matches!(
-            limit.as_str(),
-            "tiny" | "small" | "medium" | "large" | "unlimited"
-        ) {
-            return Err(Refusal::bad(
-                "writeSizeLimit should be one of {medium, tiny, large, unlimited, small}",
-            ));
+/// The `writeSizeLimit` refusal: the official emulator lists the values in one order,
+/// production (recorded in RTDB-REST-20261104-01) in another.
+const WRITE_SIZE_LIMIT_EMULATOR: &str =
+    "writeSizeLimit should be one of {medium, tiny, large, unlimited, small}";
+const WRITE_SIZE_LIMIT_PRODUCTION: &str =
+    "writeSizeLimit should be one of {tiny, large, small, medium, unlimited}";
+
+/// Reads the output options. A write ignores `format`; a read checks `format` and
+/// ignores `writeSizeLimit` ([`check_write_size_limit`]).
+pub fn output(params: &BTreeMap<String, String>, writing: bool) -> Result<Output, Refusal> {
+    let export = if writing {
+        false
+    } else {
+        match params.get("format").map(String::as_str) {
+            None => false,
+            Some("export") => true,
+            Some(_) => return Err(Refusal::bad("Export format must be export if present")),
         }
-    }
+    };
     let print = params.get("print").map(String::as_str);
     Ok(Output {
         style: if print == Some("pretty") {
@@ -219,10 +221,35 @@ pub fn output(params: &BTreeMap<String, String>) -> Result<Output, Refusal> {
         },
         silent: print == Some("silent"),
         export,
-        shallow: params.get("shallow").map(String::as_str) == Some("true"),
+        // The official emulator reads `true` in any case.
+        shallow: params
+            .get("shallow")
+            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
         callback: params.get("callback").cloned(),
         download: params.get("download").cloned(),
     })
+}
+
+/// Checks `writeSizeLimit` on a write, before anything else of the write's own (the official
+/// emulator's order); a read ignores it. `production_shapes` picks production's text.
+pub fn check_write_size_limit(
+    params: &BTreeMap<String, String>,
+    production_shapes: bool,
+) -> Result<(), Refusal> {
+    let Some(limit) = params.get("writeSizeLimit") else {
+        return Ok(());
+    };
+    if matches!(
+        limit.as_str(),
+        "tiny" | "small" | "medium" | "large" | "unlimited"
+    ) {
+        return Ok(());
+    }
+    Err(Refusal::bad(if production_shapes {
+        WRITE_SIZE_LIMIT_PRODUCTION
+    } else {
+        WRITE_SIZE_LIMIT_EMULATOR
+    }))
 }
 
 const QUERY_PARAMS: [&str; 8] = [
@@ -241,12 +268,17 @@ pub fn has_query(params: &BTreeMap<String, String>) -> bool {
     QUERY_PARAMS.iter().any(|name| params.contains_key(*name))
 }
 
-/// Reads the query of a `GET`, in the order the official emulator checks it.
+/// Reads the query of a `GET` that is not shallow, in the order the official emulator checks
+/// it: the order, the pairs that exclude each other, the bounds, then (`check_timeout`, a
+/// plain read) the `timeout`, then the limits.
 pub fn query(
     params: &BTreeMap<String, String>,
-    shallow: bool,
+    check_timeout: bool,
 ) -> Result<Option<QueryParams>, Refusal> {
     if !has_query(params) {
+        if check_timeout {
+            timeout(params)?;
+        }
         return Ok(None);
     }
     let Some(order_text) = params.get("orderBy") else {
@@ -273,19 +305,7 @@ pub fn query(
             "equalTo cannot be specified in addition to startAfter, startAt, endAt, or endBefore",
         ));
     }
-    let first = limit(params, "limitToFirst")?;
-    let last = limit(params, "limitToLast")?;
     let mut query = QueryParams::ordered_by(order_by);
-    query.limit = match (first, last) {
-        (Some(_), Some(_)) => {
-            return Err(Refusal::bad(
-                "Only one of limitToFirst and limitToLast may be specified",
-            ))
-        }
-        (Some(n), None) => Some(Limit::First(n)),
-        (None, Some(n)) => Some(Limit::Last(n)),
-        (None, None) => None,
-    };
     let key_order = query.order_by == OrderBy::Key;
     let bound = |name: &str| -> Result<Option<(Json, Option<String>)>, Refusal> {
         params
@@ -308,12 +328,225 @@ pub fn query(
     if let Some((value, key)) = bound("endBefore")? {
         query = query.end_before(value, key.as_deref());
     }
-    if shallow {
-        return Err(Refusal::bad(
-            "orderBy not supported for with shallow GET, keys are returned in lexicographical order",
-        ));
+    if check_timeout {
+        timeout(params)?;
     }
+    let first = limit(params, "limitToFirst")?;
+    let last = limit(params, "limitToLast")?;
+    query.limit = match (first, last) {
+        (Some(_), Some(_)) => {
+            return Err(Refusal::bad(
+                "Only one of limitToFirst and limitToLast may be specified",
+            ))
+        }
+        (Some(n), None) => Some(Limit::First(n)),
+        (None, Some(n)) => Some(Limit::Last(n)),
+        (None, None) => None,
+    };
     Ok(Some(query))
+}
+
+/// A page of the keys of a shallow read: the keys after `start_after` (compared as text),
+/// the first `limit` of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShallowPage {
+    /// `startAfter`, as written (not JSON).
+    pub start_after: Option<String>,
+    /// `limitToFirst`.
+    pub limit: Option<u32>,
+}
+
+/// Reads the query of a shallow `GET`, in the official emulator's order: `limitToFirst`, then
+/// the parameters a shallow read refuses. `equalTo`, `endBefore` and `timeout` are ignored.
+pub fn shallow_page(params: &BTreeMap<String, String>) -> Result<Option<ShallowPage>, Refusal> {
+    let limit = limit(params, "limitToFirst")?;
+    for (name, message) in [
+        ("limitToLast", "limitToLast not supported for with shallow GET"),
+        (
+            "startAt",
+            "startAt not supported for with shallow GET, use startAfter",
+        ),
+        (
+            "endAt",
+            "endAt not supported for with shallow GET, use limitToFirst",
+        ),
+        (
+            "orderBy",
+            "orderBy not supported for with shallow GET, keys are returned in lexicographical order",
+        ),
+    ] {
+        if params.contains_key(name) {
+            return Err(Refusal::bad(message));
+        }
+    }
+    let start_after = params.get("startAfter").cloned();
+    Ok((limit.is_some() || start_after.is_some()).then_some(ShallowPage { start_after, limit }))
+}
+
+const TIMEOUT_FORMAT: &str =
+    "timeout must contain length and unit (s/seconds/min/minutes), such as 1s, 2seconds, or 3min";
+
+/// The longest `timeout` a read accepts, in nanoseconds (15 minutes).
+const TIMEOUT_MAX_NANOS: i64 = 900_000_000_000;
+
+/// Checks `timeout` as the official emulator does: Scala's `Duration(text)` (whitespace
+/// dropped, a number and a unit of its table) that is positive and at most 15 minutes. A
+/// duration beyond what Scala holds (2^63 - 1 ns) is its 500.
+pub fn timeout(params: &BTreeMap<String, String>) -> Result<(), Refusal> {
+    let Some(text) = params.get("timeout") else {
+        return Ok(());
+    };
+    match duration_nanos(text) {
+        Err(DurationError::Format) => Err(Refusal::bad(TIMEOUT_FORMAT)),
+        Err(DurationError::Range) => Err(Refusal::new(500, "Unexpected server error")),
+        Ok(nanos) if nanos <= 0 => Err(Refusal::bad("timeout must be positive")),
+        Ok(nanos) if nanos > TIMEOUT_MAX_NANOS => {
+            Err(Refusal::bad("timeout must not be longer than 15 minutes"))
+        }
+        Ok(_) => Ok(()),
+    }
+}
+
+/// Why a duration text did not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurationError {
+    /// Not a number and a unit (Scala's `NumberFormatException`).
+    Format,
+    /// Outside what a Scala duration holds (its `IllegalArgumentException`).
+    Range,
+}
+
+/// The nanoseconds of a duration unit Scala's `Duration` knows.
+fn unit_nanos(unit: &str) -> Option<i64> {
+    Some(match unit {
+        "d" | "day" | "days" => 86_400_000_000_000,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3_600_000_000_000,
+        "m" | "min" | "mins" | "minute" | "minutes" => 60_000_000_000,
+        "s" | "sec" | "secs" | "second" | "seconds" => 1_000_000_000,
+        "ms" | "milli" | "millis" | "millisecond" | "milliseconds" => 1_000_000,
+        "\u{b5}s" | "micro" | "micros" | "microsecond" | "microseconds" => 1_000,
+        "ns" | "nano" | "nanos" | "nanosecond" | "nanoseconds" => 1,
+        _ => return None,
+    })
+}
+
+/// Java's `Character.isWhitespace`: the Unicode space, line and paragraph separators but the
+/// no-break spaces, and the ASCII controls tab to carriage return and file to unit separator.
+fn java_whitespace(c: char) -> bool {
+    matches!(c, '\t'..='\r' | '\u{1c}'..='\u{1f}' | ' ' | '\u{1680}' | '\u{2028}' | '\u{2029}' | '\u{205f}' | '\u{3000}')
+        || (('\u{2000}'..='\u{200a}').contains(&c) && c != '\u{2007}')
+}
+
+/// The largest magnitude a double reads exactly (2^53); Scala reads a longer length as a long.
+const MAX_PRECISE_DOUBLE: f64 = 9_007_199_254_740_992.0;
+
+/// The nanoseconds of `text` as Scala 2.12's `Duration.apply(String)` reads it, without its
+/// `Inf` spellings (the official emulator refuses them as a format error).
+pub fn duration_nanos(text: &str) -> Result<i64, DurationError> {
+    let compact: String = text.chars().filter(|c| !java_whitespace(*c)).collect();
+    let unit_start = compact
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphabetic())
+        .last()
+        .map_or(compact.len(), |(at, _)| at);
+    let (length, unit) = compact.split_at(unit_start);
+    let per = unit_nanos(unit).ok_or(DurationError::Format)?;
+    let value = java_parse_double(length).ok_or(DurationError::Format)?;
+    if (-MAX_PRECISE_DOUBLE..=MAX_PRECISE_DOUBLE).contains(&value) {
+        // `fromNanos(unit.toNanos(1) * length)`: rounded half up, refused beyond a long.
+        #[allow(clippy::cast_precision_loss)]
+        let nanos = per as f64 * value;
+        #[allow(clippy::cast_precision_loss)]
+        let limit = i64::MAX as f64;
+        if nanos > limit || nanos < -limit {
+            return Err(DurationError::Range);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let rounded = (nanos + 0.5).floor() as i64;
+        // Scala's durations stop at -(2^63 - 1) ns as well.
+        if rounded == i64::MIN {
+            return Err(DurationError::Range);
+        }
+        return Ok(rounded);
+    }
+    // A long length: `new FiniteDuration(length, unit)`, bounded by 2^63 - 1 ns.
+    let whole = java_parse_long(length).ok_or(DurationError::Format)?;
+    let bound = i64::MAX / per;
+    if whole > bound || whole < -bound {
+        return Err(DurationError::Range);
+    }
+    Ok(whole * per)
+}
+
+/// Java's `Long.parseLong`: an optional sign and ASCII digits.
+fn java_parse_long(text: &str) -> Option<i64> {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.strip_prefix('+').unwrap_or(text).parse().ok()
+}
+
+/// Java's `Double.parseDouble` for a text without trailing letters (the unit took them): the
+/// text trimmed of characters up to U+0020, an optional sign, then a decimal number with an
+/// optional exponent, or a hexadecimal one with its binary exponent.
+fn java_parse_double(text: &str) -> Option<f64> {
+    let trimmed = text.trim_matches(|c: char| c <= ' ');
+    let (negative, body) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let magnitude = if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+        hex_double(hex)?
+    } else {
+        decimal_double(body)?
+    };
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+fn decimal_double(body: &str) -> Option<f64> {
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(at) => (&body[..at], Some(&body[at + 1..])),
+        None => (body, None),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = |t: &str| t.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && fraction.is_empty()) || !digits(whole) || !digits(fraction) {
+        return None;
+    }
+    if let Some(exponent) = exponent {
+        let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        if exponent_digits.is_empty() || !digits(exponent_digits) {
+            return None;
+        }
+    }
+    body.parse().ok()
+}
+
+fn hex_double(hex: &str) -> Option<f64> {
+    let (mantissa, exponent) = hex.split_once(['p', 'P'])?;
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let hex_digits = |t: &str| t.bytes().all(|b| b.is_ascii_hexdigit());
+    if (whole.is_empty() && fraction.is_empty()) || !hex_digits(whole) || !hex_digits(fraction) {
+        return None;
+    }
+    let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+    if exponent_digits.is_empty() || !exponent_digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut value = 0.0f64;
+    for digit in whole.chars().chain(fraction.chars()) {
+        value = value * 16.0 + f64::from(digit.to_digit(16)?);
+    }
+    let shift: i64 = exponent.parse().unwrap_or(if exponent.starts_with('-') {
+        i64::MIN
+    } else {
+        i64::MAX
+    });
+    let fraction_bits = i64::try_from(fraction.len()).ok()?.saturating_mul(4);
+    let power = i32::try_from(shift.saturating_sub(fraction_bits).clamp(-2000, 2000)).ok()?;
+    Some(value * 2f64.powi(power))
 }
 
 fn order_by(text: &str) -> Result<OrderBy, Refusal> {

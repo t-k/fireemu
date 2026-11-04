@@ -91,6 +91,49 @@ pub(crate) fn write_order(raw: &[String], paths: &[Vec<String>]) -> Vec<usize> {
     out
 }
 
+/// A multi-path write gathered into a tree as [`write_order`] gathers it: each node's
+/// children in the order of a Scala map, and the index of the entry ending at it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct WriteTree {
+    /// The children, in map order.
+    pub children: Vec<(String, WriteTree)>,
+    /// The entry ending here.
+    pub leaf: Option<usize>,
+}
+
+/// The tree of one multi-path write whose keys as sent are `raw` and whose paths are `paths`.
+pub(crate) fn write_tree(raw: &[String], paths: &[Vec<String>]) -> WriteTree {
+    let mut root = Node::default();
+    for index in scala_order(raw, false) {
+        let mut node = &mut root;
+        for key in &paths[index] {
+            let at = if let Some(at) = node.children.iter().position(|(name, _)| name == key) {
+                at
+            } else {
+                node.children.push((key.clone(), Node::default()));
+                node.children.len() - 1
+            };
+            node = &mut node.children[at].1;
+        }
+        node.leaf.get_or_insert(index);
+    }
+    ordered(root)
+}
+
+fn ordered(node: Node) -> WriteTree {
+    let names: Vec<String> = node.children.iter().map(|(name, _)| name.clone()).collect();
+    let mut slots: Vec<Option<(String, Node)>> = node.children.into_iter().map(Some).collect();
+    let children = scala_order(&names, false)
+        .into_iter()
+        .filter_map(|at| slots[at].take())
+        .map(|(name, child)| (name, ordered(child)))
+        .collect();
+    WriteTree {
+        children,
+        leaf: node.leaf,
+    }
+}
+
 fn walk(node: &Node, out: &mut Vec<usize>) {
     out.extend(node.leaf);
     let names: Vec<&str> = node

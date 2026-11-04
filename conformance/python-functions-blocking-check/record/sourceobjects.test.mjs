@@ -263,17 +263,22 @@ test("buckets that cannot be read before the run give nothing to delete; paging 
   assert.equal(paged.cleanup.sourceObjectsDeleted.length, 2);
   const w2 = createWorld({ runId: RUN, sourcePageSize: 1 });
   for (let i = 0; i < 7; i++) w2.sourceBuckets.get(UPLOADS).push(`older-${i}.zip`);
+  const w2Journal = [];
   const endless = await record({
     runId: RUN,
     projectNumber: NUMBER,
     accessToken: "tok-abcdefgh",
-    save: async () => {},
+    save: async (r) => w2Journal.push(r),
     send: w2.send,
     runCli: w2.runCli,
     clock: () => w2.now,
     sleep: async (ms) => w2.advance(ms),
   });
   assert.ok(endless.incompleteReads.some((r) => r.class === "more-than-five-pages"));
+  assert.ok(
+    !w2Journal.some((r) => r.state === "before-send" && r.id.endsWith("-page-6")),
+    "a sixth page is never asked for",
+  );
   assert.equal(endless.closureReady, false);
   assert.equal(endless.cleanup.sourceObjectsDeleted.filter((d) => d.bucket === UPLOADS).length, 0);
   const none = await go({ withSourceBuckets: false });

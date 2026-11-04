@@ -1588,6 +1588,41 @@ fn query_params(query: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Every decoded `(name, value)` of the query, repeats included, in query order. `query_params`
+/// keeps one occurrence per name; the strict profile's signed-URL checks read all of them.
+fn query_occurrences(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .map(|kv| {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            (form_decode(k), form_decode(v))
+        })
+        .collect()
+}
+
+/// The strict profile refuses a signed URL whose date or lifetime is given twice with different
+/// values: the query map keeps only one of the occurrences, so the verdict would depend on which
+/// (UNRECORDED: production's answer to a repeated signing parameter was not observed). The
+/// emulator profile reads the map as it always did.
+fn refuse_conflicting_signing_parameter(
+    state: &StorageState,
+    req: &StorageRequest,
+) -> Result<(), StorageResponse> {
+    if !state.is_strict() {
+        return Ok(());
+    }
+    match crate::storage_xml::conflicting_signing_parameter(&query_occurrences(&req.query)) {
+        Some(_) => Err(xml_error(
+            400,
+            "InvalidArgument",
+            "Invalid argument.",
+            Some("A signed URL parameter is given more than once with different values."),
+        )),
+        None => Ok(()),
+    }
+}
+
 fn encode_segment(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
@@ -6921,6 +6956,7 @@ fn xml_read_admission(
     params: &BTreeMap<String, String>,
 ) -> Result<(), StorageResponse> {
     use crate::storage_xml::{check_signed_url, SignedUrl};
+    refuse_conflicting_signing_parameter(state, req)?;
     match check_signed_url(params, now_unix_seconds(state)) {
         SignedUrl::Valid => return Ok(()),
         SignedUrl::Expired => {
@@ -6969,6 +7005,7 @@ fn xml_style_put(
     use crate::storage_xml::{
         check_signed_url, v4_expiry_details, v4_signature_missing, SignedUrl,
     };
+    refuse_conflicting_signing_parameter(state, &req)?;
     match check_signed_url(params, now_unix_seconds(state)) {
         SignedUrl::Expired => {
             return Err(xml_error(
@@ -7082,7 +7119,7 @@ fn check_signed_headers(
 ) -> Result<(), StorageResponse> {
     use crate::storage_xml::{canonical_signed_header_list, signed_header_lists};
     let lists = if state.is_strict() {
-        signed_header_lists(params)
+        signed_header_lists(&query_occurrences(&req.query))
     } else {
         canonical_signed_header_list(params).into_iter().collect()
     };

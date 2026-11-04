@@ -102,16 +102,42 @@ fn split_signed_headers(value: &str) -> Vec<String> {
     value.split(';').map(str::to_owned).collect()
 }
 
-/// Every list the query gives under any spelling of `X-Goog-SignedHeaders`, in the byte order of
-/// the parameter names. The strict profile holds a request to all of them: a second spelling
-/// next to the canonical one must not hide a header the canonical list requires.
+/// Every list the query gives under any spelling of `X-Goog-SignedHeaders`, from every
+/// occurrence of the parameter: `occurrences` holds the decoded `(name, value)` pairs in query
+/// order. Lists come in the byte order of the names and the query order within one name. The
+/// strict profile holds a request to all of them: a second spelling, a repeat or a
+/// percent-encoded respelling next to the canonical one must not hide a header the canonical
+/// list requires.
 #[must_use]
-pub fn signed_header_lists(params: &BTreeMap<String, String>) -> Vec<Vec<String>> {
-    params
+pub fn signed_header_lists(occurrences: &[(String, String)]) -> Vec<Vec<String>> {
+    let mut found: Vec<&(String, String)> = occurrences
         .iter()
         .filter(|(k, _)| k.eq_ignore_ascii_case("x-goog-signedheaders"))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+        .into_iter()
         .map(|(_, v)| split_signed_headers(v))
         .collect()
+}
+
+/// The signing parameters whose value decides whether a signed URL is still valid. When the query
+/// gives one of them twice with different values (the same name repeated, two spellings, or a
+/// percent-encoded key), the query map keeps only one occurrence and which one it keeps decides
+/// the verdict, so the strict profile refuses the request instead. Returns the lowercase name.
+#[must_use]
+pub fn conflicting_signing_parameter(occurrences: &[(String, String)]) -> Option<&'static str> {
+    ["x-goog-date", "x-goog-expires", "expires"]
+        .into_iter()
+        .find(|name| {
+            let mut values = occurrences
+                .iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str());
+            values
+                .next()
+                .is_some_and(|first| values.any(|other| other != first))
+        })
 }
 
 /// The list under the canonical spelling `X-Goog-SignedHeaders` only: what the emulator profile
@@ -808,11 +834,18 @@ mod tests {
         items.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
     #[test]
     fn signed_header_lists_keep_the_url_order_and_empty_segments() {
-        assert!(signed_header_lists(&params(&[])).is_empty());
+        assert!(signed_header_lists(&pairs(&[])).is_empty());
         assert_eq!(
-            signed_header_lists(&params(&[(
+            signed_header_lists(&pairs(&[(
                 "X-Goog-SignedHeaders",
                 "content-type;host;x-goog-content-length-range"
             )])),
@@ -823,40 +856,84 @@ mod tests {
             ])]
         );
         assert_eq!(
-            signed_header_lists(&params(&[("x-goog-signedheaders", "a;;b")])),
+            signed_header_lists(&pairs(&[("x-goog-signedheaders", "a;;b")])),
             vec![names(&["a", "", "b"])]
         );
         assert_eq!(
-            signed_header_lists(&params(&[("X-Goog-SignedHeaders", "")])),
+            signed_header_lists(&pairs(&[("X-Goog-SignedHeaders", "")])),
             vec![names(&[""])]
         );
     }
 
     #[test]
-    fn every_spelling_of_the_parameter_gives_its_own_list_and_the_canonical_one_is_found_apart() {
-        let both = params(&[
+    fn every_occurrence_of_the_parameter_gives_its_own_list_in_name_then_query_order() {
+        let all = pairs(&[
             ("X-Goog-SignedHeaders", "content-type;host"),
             ("X-Goog-SIGNEDHEADERS", "host"),
             ("x-goog-signedheaders", ""),
             ("X-Goog-Date", "20260829T110000Z"),
+            ("X-Goog-SignedHeaders", "a"),
         ]);
-        // Byte order of the parameter names: the upper-case spelling, the canonical one, then the
-        // lowercase one.
         assert_eq!(
-            signed_header_lists(&both),
+            signed_header_lists(&all),
             vec![
                 names(&["host"]),
                 names(&["content-type", "host"]),
+                names(&["a"]),
                 names(&[""])
             ]
         );
+        let lower = pairs(&[("x-goog-signedheaders", "host")]);
+        assert_eq!(signed_header_lists(&lower), vec![names(&["host"])]);
+    }
+
+    #[test]
+    fn the_canonical_list_is_the_last_occurrence_of_the_canonical_name_only() {
+        let both = params(&[
+            ("X-Goog-SignedHeaders", "content-type;host"),
+            ("X-Goog-SIGNEDHEADERS", "host"),
+            ("x-goog-signedheaders", ""),
+        ]);
         assert_eq!(
             canonical_signed_header_list(&both),
             Some(names(&["content-type", "host"]))
         );
         let lower = params(&[("x-goog-signedheaders", "host")]);
         assert_eq!(canonical_signed_header_list(&lower), None);
-        assert_eq!(signed_header_lists(&lower), vec![names(&["host"])]);
         assert_eq!(canonical_signed_header_list(&params(&[])), None);
+    }
+
+    #[test]
+    fn a_signing_parameter_that_differs_between_occurrences_is_a_conflict() {
+        let conflict = |items: &[(&str, &str)]| conflicting_signing_parameter(&pairs(items));
+        assert_eq!(conflict(&[]), None);
+        assert_eq!(conflict(&[("X-Goog-Expires", "60")]), None);
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Expires", "60")]),
+            None,
+            "identical repeats agree"
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Expires", "61")]),
+            Some("x-goog-expires")
+        );
+        assert_eq!(
+            conflict(&[("x-goog-date", "a"), ("X-Goog-Date", "b")]),
+            Some("x-goog-date")
+        );
+        assert_eq!(
+            conflict(&[("Expires", "1"), ("expires", "2")]),
+            Some("expires")
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Expires", "60"), ("X-Goog-Date", "d")]),
+            None,
+            "different parameters never conflict"
+        );
+        assert_eq!(
+            conflict(&[("X-Goog-Signature", "a"), ("X-Goog-Signature", "b")]),
+            None,
+            "the signature is only checked for presence"
+        );
     }
 }

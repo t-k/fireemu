@@ -10140,6 +10140,8 @@ fn signed_xml_put_success_carries_the_production_headers() {
 const CANONICAL: &str = "X-Goog-SignedHeaders";
 const LOWER: &str = "x-goog-signedheaders";
 const MIXED: &str = "X-Goog-SIGNEDHEADERS";
+/// The canonical name with its first letter percent-encoded: it decodes to the canonical name.
+const ENCODED: &str = "%58-Goog-SignedHeaders";
 const NAMES: &str = "content-type;host";
 
 fn spelled(spelling: &str) -> Vec<(&'static str, &'static str)> {
@@ -10153,6 +10155,12 @@ fn spelled(spelling: &str) -> Vec<(&'static str, &'static str)> {
         "canonical-empty" => vec![(CANONICAL, "")],
         "canonical-host+lower-empty" => vec![(CANONICAL, "host"), (LOWER, "")],
         "mixed-empty" => vec![(MIXED, "")],
+        // The same name twice, or spelled with a percent-encoded character: a query map keeps
+        // one of them; the strict profile holds the request to every one.
+        "repeat-names-then-host" => vec![(CANONICAL, NAMES), (CANONICAL, "host")],
+        "repeat-host-then-names" => vec![(CANONICAL, "host"), (CANONICAL, NAMES)],
+        "encoded-key-host-after-names" => vec![(CANONICAL, NAMES), (ENCODED, "host")],
+        "encoded-key-names-after-host" => vec![(CANONICAL, "host"), (ENCODED, NAMES)],
         // Two lists that both refuse, for different headers: the first in byte order is named.
         "canonical-names+lower-range" => vec![
             (CANONICAL, NAMES),
@@ -10163,6 +10171,23 @@ fn spelled(spelling: &str) -> Vec<(&'static str, &'static str)> {
 }
 
 type Refusal = (u16, &'static str, Option<&'static str>);
+
+fn decode_key(key: &str) -> String {
+    let bytes = key.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap();
+            out.push(u8::from_str_radix(hex, 16).unwrap());
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
 
 /// What the signed-header lists of a request decide, written as a rule list: the strict profile
 /// holds the request to every spelling's list, the emulator profile to the canonical spelling's
@@ -10176,13 +10201,25 @@ fn signed_header_verdict(
     content_type: bool,
     range_sent: bool,
 ) -> Option<Refusal> {
-    let mut lists: Vec<(&str, &str)> = spelling.to_vec();
-    lists.sort_by(|a, b| a.0.cmp(b.0));
-    let considered: Vec<&str> = lists
+    // The query map decodes the keys and keeps the last of the occurrences of one key (the
+    // emulator profile reads that map); the strict profile reads every occurrence, in the byte
+    // order of the decoded names and the query order within one name.
+    let mut lists: Vec<(String, &str)> = spelling
         .iter()
-        .filter(|(key, _)| strict || *key == CANONICAL)
-        .map(|(_, value)| *value)
+        .map(|(key, value)| (decode_key(key), *value))
         .collect();
+    lists.sort_by(|a, b| a.0.cmp(&b.0));
+    let considered: Vec<&str> = if strict {
+        lists.iter().map(|(_, value)| *value).collect()
+    } else {
+        lists
+            .iter()
+            .rev()
+            .find(|(key, _)| key == CANONICAL)
+            .map(|(_, value)| *value)
+            .into_iter()
+            .collect()
+    };
     for list in &considered {
         for name in list.split(';') {
             if name.is_empty() {
@@ -10338,10 +10375,11 @@ fn url_verdict(strict: bool, url: &str) -> Option<Refusal> {
 /// canonical spelling only (M2: a lowercase spelling, even an empty one, was ignored there and
 /// stays ignored).
 #[test]
+#[allow(clippy::too_many_lines)]
 fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator() {
     let refused_malformed: Refusal = (400, "MalformedSecurityHeader", Some("content-type"));
     let empty: Refusal = (400, "InvalidArgument", None);
-    let cases: [(&str, bool, &str, bool, Option<Refusal>); 12] = [
+    let cases: [(&str, bool, &str, bool, Option<Refusal>); 20] = [
         // M1: the canonical list needs content-type, a second spelling signs only host.
         (
             "canonical-names+mixed-host",
@@ -10362,6 +10400,52 @@ fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator()
         (
             "canonical-host+lower-names",
             true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        // The same name twice, and a percent-encoded spelling of it: the query map keeps one
+        // occurrence, which is all the emulator profile reads; strict holds the request to all.
+        (
+            "repeat-names-then-host",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        ("repeat-names-then-host", false, "valid", false, None),
+        (
+            "repeat-host-then-names",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        (
+            "repeat-host-then-names",
+            false,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        (
+            "encoded-key-host-after-names",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        ("encoded-key-host-after-names", false, "valid", false, None),
+        (
+            "encoded-key-names-after-host",
+            true,
+            "valid",
+            false,
+            Some(refused_malformed),
+        ),
+        (
+            "encoded-key-names-after-host",
+            false,
             "valid",
             false,
             Some(refused_malformed),
@@ -10401,6 +10485,226 @@ fn signed_xml_put_header_spellings_never_loosen_strict_or_tighten_the_emulator()
             false,
             expected.unwrap_or((200, "", None)),
         );
+    }
+}
+
+/// Signing parameters that collide: the same name twice, two spellings, a percent-encoded key.
+/// The strict profile refuses a value of `X-Goog-Date`, `X-Goog-Expires` or the legacy `Expires`
+/// that differs between occurrences (the query map keeps one of them, which may be the more
+/// permissive one); identical repeats are accepted. The signature is only checked for presence,
+/// so repeating or respelling it changes nothing. The emulator profile answers as before.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn signed_xml_put_colliding_signing_parameters_are_refused_in_strict_only() {
+    let base = "X-Goog-Algorithm=GOOG4-RSA-SHA256\
+        &X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request\
+        &X-Goog-SignedHeaders=content-type%3Bhost";
+    let old = "X-Goog-Date=20260829T090000Z";
+    let fresh = "X-Goog-Date=20260829T120000Z";
+    let day = "X-Goog-Date=20260829T110000Z";
+    let sig = "X-Goog-Signature=ab";
+    let conflict = "InvalidArgument";
+    // (label, query, strict answer, emulator answer): "ok", or the code of the refusal.
+    let cases: Vec<(&str, String, &str, &str)> = vec![
+        (
+            "baseline",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&{sig}"),
+            "ok",
+            "ok",
+        ),
+        (
+            "identical repeat",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&X-Goog-Expires=3600&{sig}"),
+            "ok",
+            "ok",
+        ),
+        (
+            "expires, short then long",
+            format!("{base}&{day}&X-Goog-Expires=1&X-Goog-Expires=7200&{sig}"),
+            conflict,
+            "ok",
+        ),
+        (
+            "expires, long then short",
+            format!("{base}&{day}&X-Goog-Expires=7200&X-Goog-Expires=1&{sig}"),
+            conflict,
+            "ExpiredToken",
+        ),
+        (
+            "expires, two spellings, short first",
+            format!("{base}&{day}&X-Goog-Expires=1&x-goog-expires=7200&{sig}"),
+            conflict,
+            "ok",
+        ),
+        (
+            "expires, two spellings, short last",
+            format!("{base}&{day}&x-goog-expires=1&X-Goog-Expires=7200&{sig}"),
+            conflict,
+            "ExpiredToken",
+        ),
+        (
+            "expires, encoded key",
+            format!("{base}&{day}&X-Goog-Expires=7200&%58-Goog-Expires=1&{sig}"),
+            conflict,
+            "ExpiredToken",
+        ),
+        (
+            "date, old then fresh",
+            format!("{base}&{old}&{fresh}&X-Goog-Expires=7200&{sig}"),
+            conflict,
+            "ok",
+        ),
+        (
+            "date, fresh then old",
+            format!("{base}&{fresh}&{old}&X-Goog-Expires=7200&{sig}"),
+            conflict,
+            "ExpiredToken",
+        ),
+        (
+            "date, two spellings",
+            format!("{base}&{old}&x-goog-date=20260829T120000Z&X-Goog-Expires=7200&{sig}"),
+            conflict,
+            "ok",
+        ),
+        (
+            "signature twice",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&{sig}&X-Goog-Signature=cd"),
+            "ok",
+            "ok",
+        ),
+        (
+            "signature lowercase",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&x-goog-signature=ab"),
+            "ok",
+            "ok",
+        ),
+        (
+            "signature encoded key",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&%58-Goog-Signature=ab"),
+            "ok",
+            "ok",
+        ),
+        (
+            "signature empty",
+            format!("{base}&{fresh}&X-Goog-Expires=3600&X-Goog-Signature="),
+            "ok",
+            "ok",
+        ),
+        (
+            "legacy expires, past then future",
+            "GoogleAccessId=signer&Signature=ab&Expires=1000000000&Expires=4000000000".to_owned(),
+            conflict,
+            "ok",
+        ),
+        (
+            "legacy expires, future then past",
+            "GoogleAccessId=signer&Signature=ab&Expires=4000000000&Expires=1000000000".to_owned(),
+            conflict,
+            "ExpiredToken",
+        ),
+    ];
+    for (label, query, strict_answer, emulator_answer) in cases {
+        for (strict, expected) in [(true, strict_answer), (false, emulator_answer)] {
+            let s = state_with(
+                None,
+                if strict {
+                    TokenAcceptance::Verified
+                } else {
+                    TokenAcceptance::EmulatorMock
+                },
+            );
+            let object = format!("/{BUCKET}/obj.png");
+            // The existing object is put through the plain valid URL of the strict profile.
+            let seed = format!(
+                "{object}?{}",
+                spelled_query("valid", &spelled("canonical-names"))
+            );
+            assert_eq!(
+                handle(
+                    &s,
+                    req("PUT", &seed, &[("content-type", "image/png")], b"old")
+                )
+                .status,
+                200,
+                "{label}: seed"
+            );
+            let response = handle(
+                &s,
+                req(
+                    "PUT",
+                    &format!("{object}?{query}"),
+                    &[("content-type", "image/png")],
+                    b"new!",
+                ),
+            );
+            let text = String::from_utf8_lossy(&response.body).into_owned();
+            let who = format!("{label} strict={strict}: {text}");
+            if expected == "ok" {
+                assert_eq!(response.status, 200, "{who}");
+            } else {
+                assert_eq!(response.status, 400, "{who}");
+                assert!(text.contains(&format!("<Code>{expected}</Code>")), "{who}");
+            }
+            let stored = handle(
+                &s,
+                req("GET", &object, &[("authorization", "Bearer owner")], &[]),
+            );
+            assert_eq!(
+                stored.body.as_ref(),
+                if expected == "ok" {
+                    b"new!".as_slice()
+                } else {
+                    b"old"
+                },
+                "{who}: the object holds the new bytes exactly when the request was accepted"
+            );
+        }
+    }
+}
+
+/// The signed GET reads the same signing parameters: strict refuses a repeated lifetime with
+/// differing values, the emulator profile reads the query map as before.
+#[test]
+fn signed_xml_get_with_a_repeated_lifetime_is_refused_in_strict_only() {
+    let query = "X-Goog-Algorithm=GOOG4-RSA-SHA256\
+        &X-Goog-Credential=signer%40demo-app.iam.gserviceaccount.com%2F20260829%2Fauto%2Fstorage%2Fgoog4_request\
+        &X-Goog-SignedHeaders=host&X-Goog-Date=20260829T110000Z\
+        &X-Goog-Expires=1&X-Goog-Expires=7200&X-Goog-Signature=ab";
+    for (strict, status) in [(true, 400), (false, 200)] {
+        let s = state_with(
+            None,
+            if strict {
+                TokenAcceptance::Verified
+            } else {
+                TokenAcceptance::EmulatorMock
+            },
+        );
+        let object = format!("/{BUCKET}/get.png");
+        assert_eq!(
+            handle(
+                &s,
+                req(
+                    "PUT",
+                    &format!(
+                        "{object}?{}",
+                        spelled_query("valid", &spelled("canonical-names"))
+                    ),
+                    &[("content-type", "image/png")],
+                    b"data"
+                )
+            )
+            .status,
+            200
+        );
+        let response = handle(&s, req("GET", &format!("{object}?{query}"), &[], &[]));
+        assert_eq!(response.status, status, "strict={strict}");
+        if strict {
+            assert!(
+                String::from_utf8_lossy(&response.body).contains("<Code>InvalidArgument</Code>")
+            );
+        } else {
+            assert_eq!(response.body.as_ref(), b"data");
+        }
     }
 }
 
@@ -10471,6 +10775,69 @@ fn signed_xml_put_header_spelling_pict_cases() {
             "absent",
         ),
         (
+            "strict",
+            "valid",
+            "repeat-names-then-host",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "valid",
+            "repeat-names-then-host",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "repeat-host-then-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "valid",
+            "repeat-host-then-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "encoded-key-host-after-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "valid",
+            "encoded-key-host-after-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "encoded-key-names-after-host",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "valid",
+            "encoded-key-names-after-host",
+            "absent",
+            "absent",
+        ),
+        (
+            "strict",
+            "valid",
+            "repeat-names-then-host",
+            "present",
+            "sent",
+        ),
+        (
             "emulator",
             "no-signature",
             "canonical-host+lower-names",
@@ -10478,46 +10845,12 @@ fn signed_xml_put_header_spelling_pict_cases() {
             "sent",
         ),
         (
-            "emulator",
-            "expired",
-            "canonical-names+lower-range",
-            "present",
-            "sent",
-        ),
-        ("strict", "no-signature", "lower-empty", "absent", "sent"),
-        ("strict", "valid", "mixed-empty", "present", "absent"),
-        ("strict", "expired", "canonical-empty", "absent", "sent"),
-        (
-            "strict",
-            "valid",
-            "canonical-host+lower-empty",
-            "absent",
-            "absent",
-        ),
-        ("emulator", "expired", "lower-names", "present", "sent"),
-        ("emulator", "no-signature", "mixed-empty", "absent", "sent"),
-        (
-            "emulator",
-            "no-signature",
-            "canonical-names",
-            "absent",
-            "absent",
-        ),
-        (
             "strict",
             "no-signature",
-            "canonical-names+lower-range",
+            "repeat-names-then-host",
             "absent",
             "sent",
         ),
-        (
-            "emulator",
-            "no-signature",
-            "canonical-names+mixed-host",
-            "present",
-            "sent",
-        ),
-        ("strict", "expired", "mixed-names", "present", "sent"),
         (
             "strict",
             "no-signature",
@@ -10525,33 +10858,129 @@ fn signed_xml_put_header_spelling_pict_cases() {
             "absent",
             "sent",
         ),
-        ("strict", "expired", "lower-empty", "absent", "absent"),
+        (
+            "emulator",
+            "no-signature",
+            "canonical-names+lower-range",
+            "present",
+            "sent",
+        ),
+        ("strict", "no-signature", "mixed-empty", "present", "absent"),
+        (
+            "emulator",
+            "no-signature",
+            "canonical-names+mixed-host",
+            "present",
+            "sent",
+        ),
         (
             "emulator",
             "no-signature",
             "canonical-host+lower-empty",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "expired", "canonical-empty", "present", "sent"),
+        (
+            "emulator",
+            "no-signature",
+            "encoded-key-names-after-host",
+            "present",
+            "sent",
+        ),
+        ("emulator", "expired", "lower-names", "absent", "sent"),
+        (
+            "emulator",
+            "expired",
+            "repeat-host-then-names",
             "present",
             "sent",
         ),
         (
-            "strict",
-            "expired",
-            "canonical-host+lower-empty",
-            "absent",
+            "emulator",
+            "no-signature",
+            "encoded-key-host-after-names",
+            "present",
             "sent",
         ),
-        ("strict", "expired", "mixed-empty", "present", "absent"),
         (
-            "strict",
+            "emulator",
             "expired",
             "canonical-host+lower-names",
             "present",
+            "absent",
+        ),
+        (
+            "strict",
+            "expired",
+            "encoded-key-names-after-host",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "expired",
+            "encoded-key-host-after-names",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "valid", "mixed-empty", "absent", "sent"),
+        ("strict", "no-signature", "lower-empty", "absent", "sent"),
+        (
+            "strict",
+            "valid",
+            "canonical-host+lower-empty",
+            "present",
             "sent",
         ),
-        ("emulator", "expired", "canonical-names", "present", "sent"),
-        ("strict", "no-signature", "mixed-names", "absent", "sent"),
+        ("strict", "expired", "mixed-names", "present", "sent"),
+        (
+            "strict",
+            "expired",
+            "repeat-names-then-host",
+            "present",
+            "sent",
+        ),
+        (
+            "strict",
+            "no-signature",
+            "canonical-names",
+            "absent",
+            "absent",
+        ),
+        (
+            "emulator",
+            "expired",
+            "canonical-host+lower-empty",
+            "absent",
+            "absent",
+        ),
+        ("strict", "expired", "canonical-names", "present", "sent"),
+        ("strict", "expired", "lower-empty", "absent", "sent"),
+        (
+            "emulator",
+            "no-signature",
+            "repeat-host-then-names",
+            "absent",
+            "absent",
+        ),
+        ("emulator", "expired", "mixed-empty", "present", "sent"),
+        (
+            "strict",
+            "expired",
+            "canonical-names+lower-range",
+            "present",
+            "sent",
+        ),
+        (
+            "emulator",
+            "no-signature",
+            "mixed-names",
+            "absent",
+            "absent",
+        ),
     ];
-    assert_eq!(cases.len(), 36);
+    assert_eq!(cases.len(), 53);
     for (profile, url, spelling, content_type, range) in cases {
         let strict = profile == "strict";
         let pairs = spelled(spelling);

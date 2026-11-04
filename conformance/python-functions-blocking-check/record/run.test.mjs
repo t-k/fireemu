@@ -9,7 +9,7 @@ import {
   configDifference,
   configDigest,
   emptyBlocking,
-  iamChanges,
+  iamPolicyOf,
   record,
 } from "./run.mjs";
 import { emailOf } from "./script.mjs";
@@ -222,7 +222,7 @@ test("the result carries the readbacks, the baselines and the inventory", async 
     removed: [],
   });
   assert.equal(result.cleanup.uploadObjectsDeleted.length, 1);
-  assert.deepEqual(result.inventory.iam, { added: [], removed: [] });
+  assert.deepEqual(result.inventory.iam, { complete: true, unexpected: [] });
   assert.deepEqual(result.inventory.services, { added: [], removed: [] });
   assert.deepEqual(result.frames, { "blocking-raw": 1, "blocking-sdk": 1 });
   assert.equal(result.errorsSeen, 0);
@@ -1307,17 +1307,21 @@ test("absent accepts only a readable 404 NOT_FOUND, in the Google or the Storage
   assert.equal(absent(null), false);
 });
 
-test("iamChanges lists additions and removals, and nothing when a read failed", () => {
-  const policy = (...pairs) => ({
-    status: 200,
-    json: { bindings: pairs.map(([role, member]) => ({ role, members: [member] })) },
+test("iamPolicyOf keeps the whole policy without its etag and version, and is null when the read is not a policy it can compare", () => {
+  const policy = {
+    version: 3,
+    etag: "e",
+    bindings: [{ role: "r", members: ["u"], condition: { title: "t" } }],
+    auditConfigs: [{ service: "allServices" }],
+  };
+  assert.deepEqual(iamPolicyOf({ status: 200, json: policy }), {
+    bindings: policy.bindings,
+    auditConfigs: policy.auditConfigs,
   });
-  assert.deepEqual(iamChanges(policy(["a", "x"], ["b", "y"]), policy(["b", "y"], ["c", "z"])), {
-    added: ["c|z"],
-    removed: ["a|x"],
-  });
-  assert.equal(iamChanges({ status: 403, json: {} }, policy()), null);
-  assert.equal(iamChanges(policy(), null), null);
+  assert.deepEqual(iamPolicyOf({ status: 200, json: {} }), {});
+  assert.equal(iamPolicyOf({ status: 403, json: {} }), null);
+  assert.equal(iamPolicyOf(null), null);
+  assert.equal(iamPolicyOf({ status: 200, json: { bindings: "x" } }), null);
 });
 
 test("configDifference names the top-level keys that differ, in order, and is null when a read failed", () => {

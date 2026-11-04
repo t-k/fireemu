@@ -398,19 +398,86 @@ export function inventoryDifferences({ before, after, enabled = [], kinds = INVE
   return { complete: missing.length === 0, missing, differences };
 }
 
+const sortKeys = (value) =>
+  Array.isArray(value)
+    ? value.map(sortKeys)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.keys(value)
+            .toSorted()
+            .map((key) => [key, sortKeys(value[key])]),
+        )
+      : value;
+const stable = (value) => JSON.stringify(sortKeys(value));
+const isPlainObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const POLICY_META = ["bindings", "etag", "version"];
+
 /**
- * Project IAM changes that are not the CLI's service-agent bindings: a removed binding, or an added member that is not a
- * service account. `changes` is `iamChanges(before, after)` (`role|member` strings), or `null` for an unreadable policy.
+ * The bindings of a project IAM policy grouped by everything but their members (role, condition and any other field),
+ * or `null` when the policy has a shape this does not know: bindings that are not a list of objects with a text role and
+ * a list of text members.
  */
-export function iamUnexpected(changes) {
-  if (!changes) return { complete: false, unexpected: [] };
-  return {
-    complete: true,
-    unexpected: [
-      ...changes.removed.map((key) => "removed " + key),
-      ...changes.added
-        .filter((key) => !key.split("|")[1]?.startsWith("serviceAccount:"))
-        .map((key) => "added " + key),
-    ],
-  };
+function bindingGroups(policy) {
+  if (!isPlainObject(policy)) return null;
+  const bindings = policy.bindings ?? [];
+  if (!Array.isArray(bindings)) return null;
+  const groups = new Map();
+  for (const binding of bindings) {
+    if (
+      !isPlainObject(binding) ||
+      typeof binding.role !== "string" ||
+      !Array.isArray(binding.members) ||
+      binding.members.some((m) => typeof m !== "string")
+    )
+      return null;
+    const { members, ...rest } = binding;
+    const key = stable(rest);
+    const entry = groups.get(key) ?? {
+      role: binding.role,
+      plain: Object.keys(rest).length === 1,
+      members: new Set(),
+    };
+    for (const member of members) entry.members.add(member);
+    groups.set(key, entry);
+  }
+  return groups;
+}
+
+/** True when the policy has a shape `iamPolicyDifferences` can compare. */
+export const supportedIamPolicy = (policy) => bindingGroups(policy) !== null;
+
+/**
+ * What differs between two project IAM policies (read without `etag` and `version`), judged as the packet's rule: the only
+ * change allowed is a service-account member added to a binding (the CLI's service-agent step). A removed member or
+ * binding, a changed condition or other binding field, any member that is not a service account, and any other policy
+ * field changed (audit configuration among them) is a difference. A policy of a shape this does not know, or a missing
+ * one, makes the comparison incomplete.
+ */
+export function iamPolicyDifferences(before, after) {
+  const was = bindingGroups(before);
+  const now = bindingGroups(after);
+  if (!was || !now) return { complete: false, unexpected: [] };
+  const unexpected = [];
+  const fieldsOf = (policy) =>
+    Object.fromEntries(Object.entries(policy).filter(([key]) => !POLICY_META.includes(key)));
+  const fieldsBefore = fieldsOf(before);
+  const fieldsAfter = fieldsOf(after);
+  for (const key of [
+    ...new Set([...Object.keys(fieldsBefore), ...Object.keys(fieldsAfter)]),
+  ].toSorted())
+    if (stable(fieldsBefore[key]) !== stable(fieldsAfter[key])) unexpected.push("changed " + key);
+  for (const [key, group] of was)
+    for (const member of [...group.members].toSorted())
+      if (!now.get(key)?.members.has(member)) unexpected.push(`removed ${group.role}|${member}`);
+  for (const [key, group] of now)
+    for (const member of [...group.members].toSorted()) {
+      if (was.get(key)?.members.has(member)) continue;
+      if (!member.startsWith("serviceAccount:")) unexpected.push(`added ${group.role}|${member}`);
+      else if (!was.has(key) && !group.plain)
+        unexpected.push(
+          `added ${group.role}|${member} in a binding with a condition or other fields`,
+        );
+    }
+  return { complete: true, unexpected };
 }

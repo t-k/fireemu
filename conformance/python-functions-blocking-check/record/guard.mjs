@@ -299,10 +299,12 @@ export function createGuard(runId, projectNumber) {
 }
 
 /**
- * The policy to write back after taking `allUsers` out of a service's policy: every other binding verbatim (conditions
- * and all), only the one member removed, a binding left with no member dropped. A policy of a shape this does not know
- * (a field beyond `version`, `etag` and `bindings`, a binding field beyond `role`, `members` and `condition`, members that
- * are not text, `allAuthenticatedUsers`) is refused, so that nothing the write would silently drop is dropped.
+ * The policy to write back after taking `allUsers` out of a service's policy: only the `roles/run.invoker` binding that has
+ * no condition loses that one member (a binding left with no member is dropped); every other binding stays verbatim. A
+ * policy of a shape this does not know (a field beyond `version`, `etag` and `bindings`, a binding field beyond `role`,
+ * `members` and `condition`, members that are not text, `allAuthenticatedUsers`) is refused, and so is a policy that
+ * holds `allUsers` anywhere else (another role, or a conditional binding): the write would have to change what the
+ * check never granted, so it is reported as a finding and nothing is sent.
  */
 export function withoutPublicMember(policy) {
   if (!isObject(policy)) return { ok: false, why: "policy-not-an-object" };
@@ -325,6 +327,8 @@ export function withoutPublicMember(policy) {
       kept.push(structuredClone(binding));
       continue;
     }
+    if (binding.role !== "roles/run.invoker" || binding.condition !== undefined)
+      return { ok: false, why: "public-member-outside-the-invoker-binding" };
     const members = binding.members.filter((m) => m !== "allUsers");
     if (members.length > 0) kept.push({ ...structuredClone(binding), members });
   }

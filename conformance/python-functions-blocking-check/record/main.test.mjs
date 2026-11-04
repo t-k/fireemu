@@ -876,6 +876,10 @@ test("readback never exits 0 while the run carries an open obligation: a clean A
       { inventory: { before: { accounts: 3 }, complete: false, differences: [] } },
     ],
     ["a configuration difference", { cleanup: { configDifference: ["blockingFunctions"] } }],
+    [
+      "an invoker refusal",
+      { cleanup: { invoker: { refused: "public-member-outside-the-invoker-binding" } } },
+    ],
   ]) {
     const f = finishedRun({ ...base, ...patch });
     const r = await run(rbArgs(f.d), rbDeps(f.at));

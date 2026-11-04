@@ -7,7 +7,7 @@ import test from "node:test";
 import {
   INVENTORY_KINDS,
   cliWritesFromOutput,
-  iamUnexpected,
+  iamPolicyDifferences,
   inventoryDifferences,
   redactCliText,
 } from "./deploy.mjs";
@@ -688,23 +688,49 @@ test("inventoryDifferences compares by identity and allows only the build's copy
   ]);
 });
 
-test("iamUnexpected lets service accounts in and nothing else", () => {
-  assert.deepEqual(iamUnexpected(null), { complete: false, unexpected: [] });
-  assert.deepEqual(iamUnexpected({ added: [], removed: [] }), { complete: true, unexpected: [] });
+test("iamPolicyDifferences lets service-account members in and nothing else", () => {
+  const policy = (...bindings) => ({ bindings });
+  const same = policy({ role: "roles/x", members: ["user:a@b"] });
+  assert.deepEqual(iamPolicyDifferences(null, same), { complete: false, unexpected: [] });
+  assert.deepEqual(iamPolicyDifferences(same, null), { complete: false, unexpected: [] });
+  assert.deepEqual(iamPolicyDifferences(same, same), { complete: true, unexpected: [] });
   assert.deepEqual(
-    iamUnexpected({ added: ["roles/x|serviceAccount:a@b"], removed: [] }).unexpected,
+    iamPolicyDifferences(
+      same,
+      policy({ role: "roles/x", members: ["user:a@b", "serviceAccount:a@b"] }),
+    ).unexpected,
     [],
   );
   assert.deepEqual(
-    iamUnexpected({
-      added: ["roles/x|user:a@b", "roles/y|allUsers"],
-      removed: ["roles/z|user:c@d"],
-    }).unexpected,
+    iamPolicyDifferences(
+      same,
+      policy(
+        { role: "roles/x", members: ["user:a@b"] },
+        { role: "roles/y", members: ["serviceAccount:s@t"] },
+      ),
+    ).unexpected,
+    [],
+    "a new binding of service accounts",
+  );
+  assert.deepEqual(
+    iamPolicyDifferences(
+      policy({ role: "roles/z", members: ["user:c@d"] }),
+      policy(
+        { role: "roles/x", members: ["user:a@b"] },
+        { role: "roles/y", members: ["allUsers"] },
+      ),
+    ).unexpected,
     ["removed roles/z|user:c@d", "added roles/x|user:a@b", "added roles/y|allUsers"],
   );
-  assert.deepEqual(iamUnexpected({ added: ["roles/x"], removed: [] }).unexpected, [
-    "added roles/x",
-  ]);
+  for (const bad of [
+    { bindings: {} },
+    { bindings: [null] },
+    { bindings: [{ role: "r" }] },
+    { bindings: [{ role: 5, members: [] }] },
+    { bindings: [{ role: "r", members: [1] }] },
+    [],
+  ])
+    assert.equal(iamPolicyDifferences(same, bad).complete, false, JSON.stringify(bad));
 });
 
 test("the CLI write rows are numbered per action, an unreadable log is named after its action, and the inventory records what it could not read", async () => {

@@ -6,10 +6,10 @@
 // same, the account count the same). It never settles an unknown CREATE: the command that runs it reads the run's own result
 // for the unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { iamUnexpected, inventoryDifferences, isGone, summarize } from "./deploy.mjs";
+import { iamPolicyDifferences, inventoryDifferences, isGone, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
 import { CONFIG_URL, PROJECT, REGION, functionName, packageIds, sourceBuckets } from "./plan.mjs";
-import { absent, configDigest, emptyBlocking, iamKeyChanges, iamKeys } from "./run.mjs";
+import { absent, configDigest, emptyBlocking, iamPolicyOf } from "./run.mjs";
 import { countAccounts, lookupAccount } from "./script.mjs";
 
 export const READBACK_MAX_REQUESTS = 60;
@@ -181,7 +181,7 @@ export async function readbackRun({
         kinds: ["triggers", "subscriptions", "topics", "packages"],
       });
       // Project IAM may only have gained service-account members since the preflight.
-      const iam = iamUnexpected(iamKeyChanges(baseline.iam, iamKeys(iamNow)));
+      const iam = iamPolicyDifferences(baseline.iam, iamPolicyOf(iamNow));
       out.inventory = {
         baseline: true,
         complete: compared.complete && iam.complete,

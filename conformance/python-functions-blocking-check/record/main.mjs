@@ -276,6 +276,9 @@ export function resultOf(path) {
       ),
       ...(result.inventory?.differences ?? []).map((d) => "inventory:" + JSON.stringify(d)),
       ...(result.inventory?.complete === false ? ["inventory-incomplete"] : []),
+      ...(typeof result.cleanup?.invoker?.refused === "string"
+        ? ["invoker-refused:" + result.cleanup.invoker.refused]
+        : []),
       ...(Array.isArray(result.cleanup?.configDifference) &&
       result.cleanup.configDifference.length > 0
         ? ["config-difference:" + result.cleanup.configDifference.join(",")]

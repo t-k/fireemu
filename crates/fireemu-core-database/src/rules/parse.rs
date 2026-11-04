@@ -526,6 +526,25 @@ impl Lexer<'_> {
         Ok((start, Token::Name(name)))
     }
 
+    /// The offset Rhino's reader reports when it stands at `at`: counted from the start of
+    /// the line it is on (the character after the last line terminator it read), and one less
+    /// while the last character it read is that terminator (`TokenStream.getOffset`).
+    fn line_offset(&self, at: usize) -> usize {
+        let terminator_before = |end: usize| {
+            (0..end.min(self.chars.len()))
+                .rev()
+                .find(|&i| is_line_terminator(self.chars[i]))
+        };
+        match terminator_before(at) {
+            None => at,
+            Some(last) if last + 1 == at => {
+                let line_start = terminator_before(last).map_or(0, |before| before + 1);
+                at - line_start - 1
+            }
+            Some(last) => at - (last + 1),
+        }
+    }
+
     /// Whether the character `ahead` places on, format characters skipped, is a digit.
     fn peek_digit(&self, ahead: usize) -> bool {
         let mut at = self.at + ahead;
@@ -658,7 +677,8 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r7 M17).
-                return Err(ExprError::new(self.at - 1, "unterminated string literal"));
+                // (The reader has read the terminator: see `line_offset`.)
+                return Err(ExprError::new(self.at, "unterminated string literal"));
             }
             if c != '\\' {
                 // A format character in the body is kept, as there.
@@ -780,8 +800,9 @@ impl Lexer<'_> {
             }
             if is_line_terminator(c) {
                 // A line ends the literal there (review r8 M21).
+                // (The reader has read the terminator: see `line_offset`.)
                 return Err(ExprError::new(
-                    self.at - 1,
+                    self.at,
                     "unterminated regular expression literal",
                 ));
             }
@@ -1171,10 +1192,12 @@ impl Parser<'_> {
     /// parsed first (a syntax error anywhere comes first), of which the rules then take
     /// exactly one expression statement.
     fn script(&mut self) -> Result<Expr, ExprError> {
-        let mut statements = Vec::new();
-        while !matches!(self.peek()?, (_, Token::End)) {
-            statements.push(self.statement()?);
-        }
+        let statements = self.statements().map_err(|mut error| {
+            // The reader reports its own errors at an offset in the line it stands on; the
+            // rules check places that offset from the start of the expression.
+            error.at = self.lexer.line_offset(error.at);
+            error
+        })?;
         let mut statements = statements.into_iter();
         let first = statements.next();
         if let Some(second) = statements.next() {
@@ -1200,6 +1223,15 @@ impl Parser<'_> {
             Some(refusal) => Err(refusal.error.clone()),
             None => Ok(expr),
         }
+    }
+
+    /// Every statement of the text.
+    fn statements(&mut self) -> Result<Vec<Statement>, ExprError> {
+        let mut statements = Vec::new();
+        while !matches!(self.peek()?, (_, Token::End)) {
+            statements.push(self.statement()?);
+        }
+        Ok(statements)
     }
 
     /// One statement: `;`, a `{ … }` block, a labelled statement (`name: statement`) or an
@@ -1320,11 +1352,12 @@ fn is_assignment(op: &str) -> bool {
     )
 }
 
-/// Whether `operand` is one `++` and `--` may change (the reader refuses any other).
+/// Whether `operand` is one `++` and `--` may change (the reader refuses any other): a
+/// name, member, index or call, in parentheses or not.
 fn assignable(operand: &Expr) -> bool {
     matches!(
         operand.kind,
-        ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..)
+        ExprKind::Name(_) | ExprKind::Member(..) | ExprKind::Index(..) | ExprKind::Call(..)
     )
 }
 
@@ -1378,11 +1411,28 @@ impl Parser<'_> {
     /// read last, which starts at `at`: its end, one further after a token that needs
     /// lookahead to end.
     fn rhino_end(&self, at: usize, token: &Token) -> usize {
+        self.rhino_end_of(at, token, self.last_end)
+    }
+
+    /// Where the reader stands once it has read the next token (peeked already): after an
+    /// operand it has looked at what follows.
+    fn after_next(&mut self) -> Result<usize, ExprError> {
+        self.peek()?;
+        Ok(match &self.peeked {
+            Some(((at, token), _, end)) => self.rhino_end_of(*at, token, *end),
+            None => self.lexer.at,
+        })
+    }
+
+    /// [`Self::rhino_end`] for a token that ends at `end`.
+    fn rhino_end_of(&self, at: usize, token: &Token, end: usize) -> usize {
         let chars = self.lexer.chars;
         match token {
             Token::End => at,
-            Token::Punct(p) if NO_LOOKAHEAD.contains(p) => at + p.len(),
-            Token::Punct(p) => self.lexer.after_lookahead(at + p.len()),
+            // A punctuator or a name ends where the reader stopped reading it (a format
+            // character inside a punctuator, an escape inside a name, is part of it).
+            Token::Punct(p) if NO_LOOKAHEAD.contains(p) => end,
+            Token::Punct(_) | Token::Name(_) => self.lexer.after_lookahead(end),
             Token::Str(_) => {
                 // The closing quote ends it.
                 let quote = chars[at];
@@ -1392,8 +1442,6 @@ impl Parser<'_> {
                 }
                 (end + 1).min(chars.len())
             }
-            // A name ends where the reader stopped reading it (an escape is part of it).
-            Token::Name(_) => self.lexer.after_lookahead(self.last_end),
             Token::Number(_) | Token::Regex(..) => {
                 // A number runs over its digits, point and exponent.
                 let number = matches!(token, Token::Number(_));
@@ -1638,27 +1686,29 @@ impl Parser<'_> {
                 ))
             }
             Token::Punct(op @ ("--" | "++")) => {
-                // The JavaScript reader parses a prefix decrement or increment of a name or
-                // member, which the rules refuse; it refuses any other operand itself
-                // (review r8 M19).
+                // The JavaScript reader parses a prefix decrement or increment of a member
+                // expression (a name, member, index or call), which the rules refuse where the
+                // operator stands; it refuses any other operand itself, once it has read the
+                // token after it (review r8 M19).
                 self.next()?;
-                let operand = self.unary()?;
+                let operand = self.member_expression()?;
                 if !assignable(&operand) {
                     let message = if op == "--" {
                         "Invalid decrement operand."
                     } else {
                         "Invalid increment operand."
                     };
-                    return Err(ExprError::new(at, message));
+                    return Err(ExprError::new(self.after_next()?, message));
                 }
                 self.refuse(
-                    operand.at,
+                    at,
                     operand.end,
                     format!("Rule expressions may not contain '{op}' operator."),
                 );
                 Ok(Self::starting_at(operand, at))
             }
             Token::Punct("~") => self.refused_unary(at, "'~' operator"),
+            Token::Punct("+") => self.refused_unary(at, "'+' operator"),
             Token::Name(name) if matches!(name.as_str(), "typeof" | "void" | "delete") => {
                 self.refused_unary(at, &format!("'{name}' operator"))
             }
@@ -1688,6 +1738,12 @@ impl Parser<'_> {
     }
 
     fn postfix(&mut self) -> Result<Expr, ExprError> {
+        let expr = self.member_expression()?;
+        self.postfix_update(expr)
+    }
+
+    /// An operand and its member, index and call steps.
+    fn member_expression(&mut self) -> Result<Expr, ExprError> {
         let mut expr = self.primary()?;
         // Each step (member, index, call) is a level the evaluator recurses through.
         let mut steps = 0;
@@ -1770,16 +1826,15 @@ impl Parser<'_> {
                 );
             } else {
                 self.depth -= steps;
-                return self.postfix_update(expr);
+                return Ok(expr);
             }
         }
     }
 
-    /// A postfix decrement or increment of `expr` on the same line, refused as there; after a
-    /// call the reader ends the statement instead, which the caller then refuses.
+    /// A postfix decrement or increment of `expr` on the same line, refused as there.
     fn postfix_update(&mut self, expr: Expr) -> Result<Expr, ExprError> {
         if let (_, Token::Punct(op @ ("--" | "++"))) = self.peek()?.clone() {
-            if !matches!(expr.kind, ExprKind::Call(..)) && !self.newline_before_next()? {
+            if !self.newline_before_next()? {
                 self.next()?;
                 if !assignable(&expr) {
                     // An invalid operand is reported where the operator ends.

@@ -186,9 +186,11 @@ test('r1.3 every WebSocket the SDK creates is counted when it is created; over t
 test('r1.3 LP: when the budget is exhausted the abort is raised and nothing is dispatched past the cap', async () => {
   const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
   const profile = lpProfile(ctx).catch(() => {});   // the abort stops the run from outside (run() rejects the profile); here the page is left alone until the checks are done
-  for (let i = 0; i < 200 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
-  await new Promise(r => setTimeout(r, 500));
-  assert.match(aborts[0], /direct cap 2 reached at lp-request/); for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await profile; server.close();
+  try {
+    for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
+    assert.match(aborts[0] ?? '', /direct cap 2 reached at lp-request/);
+  } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); server.close(); }
 });
 test('r1.5 the cleanup does not depend on the journal: with every journal write failing the restoration still happens', async () => {
   let down = false;
@@ -226,11 +228,13 @@ test('r2.2 a profile that never finishes starting keeps the claims', async () =>
 test('r2.3 LP: a request is charged before it is dispatched: the server receives exactly the admitted requests and none is counted after it left', async () => {
   const server = await fakeServer(), counter = createCounter({ direct: 2 }), aborts = [], ctx = { profile: 'r1-lp', scope: 'p/sdk-next/r1-lp', databaseURL: `http://${server.host}?ns=ns`, projectId: 'demo-x', local: true, target: { host: server.host }, journal: { write() {} }, counter, abort: m => aborts.push(m), caseMs: 5000, closeMs: 2000, closers: [] };
   const profile = lpProfile(ctx).catch(() => {});
-  for (let i = 0; i < 200 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
-  await new Promise(r => setTimeout(r, 500));
-  for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await profile; await new Promise(resolve => setTimeout(resolve, 300));
-  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used();
-  assert.ok(received >= 1); assert.equal(used.direct, 2); assert.equal(used.overflow, undefined); assert.equal(received, used.direct, JSON.stringify({ used, received })); server.close();
+  try {
+    for (let i = 0; i < 100 && !aborts.length; i++) await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
+  } finally { for (const close of ctx.closers.splice(0).reverse()) await close().catch(() => {}); await Promise.race([profile, new Promise(r => setTimeout(r, 3000))]); }
+  await new Promise(resolve => setTimeout(resolve, 300));
+  const received = server.state.log.filter(k => k.includes('/.lp')).length, used = counter.used(); server.close();
+  assert.ok(received >= 1); assert.equal(used.direct, 2); assert.equal(used.overflow, undefined); assert.equal(received, used.direct, JSON.stringify({ used, received }));
 });
 
 // ---- repository copy (2026-11-03): private production inputs come from --production-config, output from --out ----

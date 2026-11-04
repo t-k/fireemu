@@ -71,3 +71,8 @@ test('reduce: an unknown SDK mutation outcome of a case row (or of the seed) is 
   assert.deepEqual(r.profiles[0].rows.find(x => x.id === 'seed').unknown, ['seed']);
   assert.equal(Object.hasOwn(r.profiles[1].rows[0], 'unknown'), false);
 });
+
+test('reduce: an empty unknown list is not kept', () => {
+  const rows = journal(); rows.find(r => r.kind === 'case' && r.id === 'get_exists').unknown = [];
+  assert.equal(Object.hasOwn(reduceEventsJournal(rows, RESULT).profiles[0].rows.find(x => x.id === 'get_exists'), 'unknown'), false);
+});

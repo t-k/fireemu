@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, realpathSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import tls from 'node:tls';
 import net from 'node:net';
@@ -209,10 +209,17 @@ test('browser admission: with the cap reached in the middle of a burst of long-p
 test('browser admission: a burst of WebSocket connections from the page is cut at the cap before any upgrade reaches the server', async () => {
   const w = await admissionWorld({ cap: 3 });
   try {
-    await w.page.evaluate(async host => { await Promise.allSettled(Array.from({ length: 12 }, () => new Promise(resolve => { const s = new WebSocket(`ws://${host}/.ws`); s.onerror = s.onclose = () => resolve(); }))); }, w.host);
+    await w.page.evaluate(async host => { await Promise.allSettled(Array.from({ length: 12 }, () => new Promise(resolve => { const s = new WebSocket(`ws://${host}/.ws`); s.onerror = s.onclose = () => resolve(); setTimeout(resolve, 2500); }))); }, w.host);   // a bounded wait: an unconnected socket never closes
     assert.equal(w.hits.upgrades, 3, 'the server saw exactly the admitted upgrades');
     assert.deepEqual(w.counter.used(), { direct: 3, reserve: 0, adc: 0 }); assert.equal(w.counter.used().overflow, undefined);
     assert.match(w.aborts[0], /direct cap 3/); assert.equal(w.rows.filter(r => r.kind === 'raw-page-ws').length, 3);
+  } finally { await w.close(); }
+});
+test('browser admission: a WebSocket to another path is neither counted nor held back', async () => {
+  const w = await admissionWorld({ cap: 1 });
+  try {
+    await w.page.evaluate(async host => { await new Promise(resolve => { const s = new WebSocket(`ws://${host}/other.ws`); s.onerror = s.onclose = () => resolve(); setTimeout(resolve, 2500); }); }, w.host);
+    assert.equal(w.hits.upgrades, 1, 'the unrelated socket reached the server'); assert.deepEqual(w.counter.used(), { direct: 0, reserve: 0, adc: 0 }); assert.deepEqual(w.aborts, []);
   } finally { await w.close(); }
 });
 test('browser admission: requests to other hosts are neither counted nor delayed', async () => {
@@ -266,4 +273,17 @@ test('SDK pins: the installed versions are the pinned ones; the Admin SDK is che
 test('the Admin SDK version is part of the result of the admin suites only', async () => {
   const a = await harness('admin'), s = await harness('events');
   assert.equal(a.result.sdk.firebaseAdmin, '14.3.0'); assert.equal(Object.hasOwn(s.result.sdk, 'firebaseAdmin'), false);
+});
+
+test('the CLI refuses a tree whose firebase-admin is not the pinned version before anything else (admin suites only)', () => {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'cli-pins-'))), tree = (admin) => { for (const [pkg, version] of Object.entries({ firebase: '12.18.0', '@firebase/database': '1.1.5', playwright: '1.62.1', ...(admin ? { 'firebase-admin': admin } : {}) })) { const d = path.join(dir, 'node_modules', pkg); mkdirSync(d, { recursive: true }); writeFileSync(path.join(d, 'package.json'), JSON.stringify({ version })); } };
+  try {
+    cpSync(HERE, path.join(dir, 'sdk-observer'), { recursive: true });
+    tree('14.2.0');
+    const argv = suite => [path.join(dir, 'sdk-observer', 'observer.mjs'), '--target', 'emulator', '--suite', suite, '--run-id', 'CLI-PINS-01', '--prefix', '/clipins', '--direct-cap', '20', '--out', path.join(dir, `out-${suite}`)];
+    const admin = spawnSync(process.execPath, argv('admin'), { encoding: 'utf8', env: { PATH: process.env.PATH } });
+    assert.equal(admin.status, 2); assert.match(admin.stderr, /firebase-admin is not 14\.3\.0/);
+    const small = spawnSync(process.execPath, argv('small'), { encoding: 'utf8', env: { PATH: process.env.PATH } });
+    assert.doesNotMatch(small.stderr, /firebase-admin/, 'the small suite does not look at the Admin SDK');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

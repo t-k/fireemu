@@ -5,9 +5,9 @@ functions-framework serves a CloudEvent function from a Flask view and calls the
 PYCHECK-EVENTS-20261104-01): `POST /` with the binary-mode `ce-*` headers, `content-type`, `content-length` and, in the strict
 profile, constants every recorded frame carries (the sender's user agent, the encodings, the protocol) plus Cloud Run's plain
 `traceparent` header. The body is the text the delivery had, not a re-encoding of the event: the layouts recorded per family are in
-`bodies.py` (strict Pub/Sub and Storage; Eventarc keeps the publisher's text), and the emulator and unset profiles carry the bytes the
-daemon delivered. A Realtime Database body was not recorded. Header policy: a name that is not an HTTP token (or has an underscore) is
-left out of the request, a control character in a value becomes a space, and of two names that differ only in case the first one
+`bodies.py` (strict Pub/Sub and Storage; Eventarc keeps the publisher's text), and the emulator and unset profiles carry the framed JSON value text
+of the data as the daemon sent it (a publisher's surrounding white space is trimmed upstream; a Pub/Sub body is the exception, it gets the SDK's snake-case aliases and is rewritten compactly). A Realtime Database body was not recorded. Header policy: a name that is not an HTTP token (or has an underscore) is
+left out of the request, a control character other than TAB in a value becomes a space, and of two names that differ only in case the first one
 is the header; the event the function receives is never changed by the view. The OIDC `Authorization`, `Forwarded`, `X-Forwarded-For`, `Function-Execution-Id`, `X-Cloud-Trace-Context`,
 `From`, `Accept` and the Cloud Run host have no local source and are not invented.
 """

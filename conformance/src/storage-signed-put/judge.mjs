@@ -82,6 +82,26 @@ export function normalizeHeaders(headers) {
   return out;
 }
 
+/**
+ * The shape of the two volatile headers a successful upload carries, whose values differ per
+ * request and so are not kept: the ETag (`quoted-md5-hex`: a quoted lower case MD5, and
+ * `etagIsMd5` when it equals the MD5 in `x-goog-hash`) and the generation (`digits-16`).
+ */
+export function volatileHeaderShapes(headers) {
+  const lower = {};
+  for (const [key, value] of Object.entries(headers ?? {})) lower[key.toLowerCase()] = value;
+  const etag = lower.etag;
+  const generation = lower["x-goog-generation"];
+  const md5 = /(?:^|, )md5=([A-Za-z0-9+/]{22}==)(?:,|$)/.exec(lower["x-goog-hash"] ?? "")?.[1];
+  const quoted = typeof etag === "string" ? /^"([0-9a-f]{32})"$/.exec(etag) : null;
+  return {
+    etag: etag === undefined ? "absent" : quoted ? "quoted-md5-hex" : "other",
+    etagIsMd5: Boolean(quoted && md5 && Buffer.from(md5, "base64").toString("hex") === quoted[1]),
+    "x-goog-generation":
+      generation === undefined ? "absent" : /^\d{16}$/.test(generation) ? "digits-16" : "other",
+  };
+}
+
 /** Body text with the run's own names masked, so recordings and targets compare. */
 export function normalizeBody(text, masks) {
   let out = redactSignedUrl(text);
@@ -241,12 +261,20 @@ export function compareTargetRecordings(production, local) {
       };
     }
     const fields = NORMALIZED_FIELDS.filter((f) => !sameValue(prod[f], mine[f]));
+    const headers = headerDifferences(prod.headers, mine.headers);
+    for (const name of Object.keys({
+      ...prod.volatileHeaders,
+      ...mine.volatileHeaders,
+    }).toSorted()) {
+      if (prod.volatileHeaders?.[name] !== mine.volatileHeaders?.[name])
+        headers.semantic.push(name);
+    }
     return {
       id: prod.id,
       recording: prod.recording,
       match: fields.length === 0,
       fields,
-      headers: headerDifferences(prod.headers, mine.headers),
+      headers,
     };
   });
 }

@@ -18,6 +18,7 @@ import {
   compareTargetRecordings,
   compareTargets,
   judgePut,
+  volatileHeaderShapes,
   normalizeBody,
   parseXmlError,
 } from "./storage-signed-put/judge.mjs";
@@ -310,6 +311,95 @@ describe("fireemu against the recorded production answers, both recordings and t
         }
       }
     }
+  });
+
+  it("claims the shape of the ETag and the generation, which the headers view drops as volatile", () => {
+    for (const target of [production, fireemu]) {
+      for (const recording of [1, 2]) {
+        for (const id of successIds) {
+          const row = target.rows.find((r) => r.recording === recording && r.id === id);
+          assert.deepEqual(
+            row.volatileHeaders,
+            { etag: "quoted-md5-hex", etagIsMd5: true, "x-goog-generation": "digits-16" },
+            `${id} (recording ${recording})`,
+          );
+        }
+      }
+    }
+    for (const row of [...production.rows, ...fireemu.rows].filter((r) => r.status !== 200)) {
+      assert.deepEqual(
+        row.volatileHeaders,
+        { etag: "absent", etagIsMd5: false, "x-goog-generation": "absent" },
+        `${row.id}: a refusal carries neither`,
+      );
+    }
+  });
+
+  it("classifies the volatile headers, near misses included", () => {
+    const md5 = "O9r1lpKFGIrHVsM59p9ceQ==";
+    const hex = "3bdaf5969285188ac756c339f69f5c79";
+    const shapes = (headers) => volatileHeaderShapes(headers);
+    assert.deepEqual(
+      shapes({
+        etag: `"${hex}"`,
+        "x-goog-generation": "1793720096556627",
+        "x-goog-hash": `crc32c=GHybLA==, md5=${md5}`,
+      }),
+      { etag: "quoted-md5-hex", etagIsMd5: true, "x-goog-generation": "digits-16" },
+    );
+    assert.equal(shapes({ etag: hex }).etag, "other", "unquoted");
+    assert.equal(shapes({ etag: `"${hex.slice(1)}"` }).etag, "other", "31 digits");
+    assert.equal(shapes({ etag: `"${hex.toUpperCase()}"` }).etag, "other", "upper case");
+    assert.equal(shapes({ etag: "CAE=" }).etag, "other", "the JSON API form");
+    assert.equal(
+      shapes({ etag: `"${hex}"`, "x-goog-hash": "crc32c=GHybLA==, md5=AAAAAAAAAAAAAAAAAAAAAA==" })
+        .etagIsMd5,
+      false,
+    );
+    assert.equal(shapes({ etag: `"${hex}"` }).etagIsMd5, false, "no hash header");
+    assert.equal(shapes({ "x-goog-generation": "123" })["x-goog-generation"], "other");
+    assert.equal(
+      shapes({ "x-goog-generation": "17937200965566270" })["x-goog-generation"],
+      "other",
+    );
+    assert.equal(shapes({ "x-goog-generation": "a793720096556627" })["x-goog-generation"], "other");
+    assert.deepEqual(shapes(undefined), {
+      etag: "absent",
+      etagIsMd5: false,
+      "x-goog-generation": "absent",
+    });
+    assert.equal(
+      shapes({ ETag: `"${hex}"` }).etag,
+      "quoted-md5-hex",
+      "header names are case-insensitive",
+    );
+  });
+
+  it("reports a different ETag or generation shape as a semantic header difference", () => {
+    const row = (volatileHeaders) => ({
+      recording: 1,
+      id: "x",
+      status: 200,
+      code: null,
+      shape: "empty",
+      bodyBytes: 0,
+      body: "",
+      bodySha256: "0",
+      headers: {},
+      volatileHeaders,
+    });
+    const good = { etag: "quoted-md5-hex", etagIsMd5: true, "x-goog-generation": "digits-16" };
+    assert.deepEqual(compareTargetRecordings([row(good)], [row(good)])[0].headers.semantic, []);
+    assert.deepEqual(
+      compareTargetRecordings([row(good)], [row({ ...good, etag: "other", etagIsMd5: false })])[0]
+        .headers.semantic,
+      ["etag", "etagIsMd5"],
+    );
+    assert.deepEqual(
+      compareTargetRecordings([row(good)], [row({ ...good, "x-goog-generation": "absent" })])[0]
+        .headers.semantic,
+      ["x-goog-generation"],
+    );
   });
 
   it("tells a semantic header difference from a transport one, and notices a missing header", () => {

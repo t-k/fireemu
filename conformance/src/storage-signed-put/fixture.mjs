@@ -1,6 +1,6 @@
 // Builds the committed record of a signed PUT observation (conformance/storage-signed-put-*.json)
 // from a run directory: the recorded rows with their bodies normalized as the judge normalizes
-// them, the exact byte length and SHA-256 of every body, and the headers that carry meaning.
+// them, the exact byte length and SHA-256 of every body, and the headers that carry meaning (the shape of the volatile ETag and generation too).
 // Nothing here is a secret: signatures and credentials were redacted before anything was stored,
 // and the project, bucket, signer and run id are replaced by placeholders.
 
@@ -8,7 +8,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { judgePut, normalizeHeaders, putRow } from "./judge.mjs";
+import { judgePut, normalizeHeaders, putRow, volatileHeaderShapes } from "./judge.mjs";
 import { CASES } from "./plan.mjs";
 
 /** Reads the raw PUT answers of a run from its journal, keyed by recording and case. */
@@ -50,7 +50,11 @@ export function buildFixture({ header, journalText, source }) {
       if (!answer) throw new Error(`no answer for ${recording}:${testCase.id}`);
       const verdict = judgePut(testCase, answer);
       const row = putRow({ recording, testCase, answer, verdict, masks });
-      rows.push({ ...row, headers: normalizeHeaders(answer.headers) });
+      rows.push({
+        ...row,
+        headers: normalizeHeaders(answer.headers),
+        volatileHeaders: volatileHeaderShapes(answer.headers),
+      });
     }
   }
   return { source, rows };

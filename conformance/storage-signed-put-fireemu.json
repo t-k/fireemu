@@ -27,6 +27,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -50,6 +55,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -72,6 +82,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -90,6 +105,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -108,6 +128,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -126,6 +151,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -148,6 +178,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -170,6 +205,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -188,6 +228,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -210,6 +255,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "2"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -228,6 +278,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -250,6 +305,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -272,6 +332,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -290,6 +355,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -308,6 +378,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -330,6 +405,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -352,6 +432,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -375,6 +460,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -397,6 +487,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -415,6 +510,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -433,6 +533,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -451,6 +556,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -473,6 +583,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "5"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -495,6 +610,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "8"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -513,6 +633,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -535,6 +660,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "2"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -553,6 +683,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -575,6 +710,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -597,6 +737,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     },
     {
@@ -615,6 +760,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -633,6 +783,11 @@
         "content-type": "application/xml; charset=UTF-8",
         "vary": "Origin",
         "x-content-type-options": "nosniff"
+      },
+      "volatileHeaders": {
+        "etag": "absent",
+        "etagIsMd5": false,
+        "x-goog-generation": "absent"
       }
     },
     {
@@ -655,6 +810,11 @@
         "x-goog-metageneration": "1",
         "x-goog-stored-content-encoding": "identity",
         "x-goog-stored-content-length": "4"
+      },
+      "volatileHeaders": {
+        "etag": "quoted-md5-hex",
+        "etagIsMd5": true,
+        "x-goog-generation": "digits-16"
       }
     }
   ]

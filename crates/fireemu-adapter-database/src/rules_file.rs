@@ -317,16 +317,16 @@ impl Reader {
     /// The four hex digits of a JSON `\uXXXX` escape (not a percent escape), the reader on
     /// its `u`; refused at the first one that is not. The reader stops on the last digit.
     fn unit_escape(&mut self) -> Result<u32, RulesError> {
-        let mut value = 0;
+        let mut digits = String::with_capacity(4);
         for _ in 0..4 {
             self.bump();
             let digit = self
                 .peek()
-                .and_then(|c| c.to_digit(16))
+                .filter(char::is_ascii_hexdigit)
                 .ok_or_else(|| self.error_here("Parse error."))?;
-            value = value * 16 + digit;
+            digits.push(digit);
         }
-        Ok(value)
+        u32::from_str_radix(&digits, 16).map_err(|_| self.error_here("Parse error."))
     }
 
     /// A rule value: `true`, `false` or an expression string. Anything else is refused at

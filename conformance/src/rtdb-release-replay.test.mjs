@@ -11,6 +11,7 @@ const paths = [
   "residual",
   "s5",
   "sdk-small",
+  "sdk-events",
   "functions",
   "rest-v033",
 ];
@@ -153,6 +154,7 @@ test("campaign selection pins the actual distinct producer scripts", () => {
     residual: "rtdb-residual.mjs",
     s5: "rtdb-s5.mjs",
     "sdk-small": "rtdb-sdk-small.mjs",
+    "sdk-events": "rtdb-sdk-events.mjs",
     functions: "local-run.mjs",
   };
   for (const [name, script] of Object.entries(expected))
@@ -294,6 +296,7 @@ test("every RTDB campaign binds its recorded fixture and local producer sources"
     "residual",
     "s5",
     "sdk-small",
+    "sdk-events",
     "functions",
     "smoke",
   ]) {
@@ -586,6 +589,124 @@ test("SDK small adjudication needs all 32 rows to match and refuses the v0.41.0 
     const frozen = adjudicate("sdk-small", dir);
     assert.equal(frozen.match, false);
     assert.deepEqual(frozen.result.counts, { MATCH: 24, MISMATCH: 8, NEEDS_REVIEW: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const EVENTS_OBSERVER = [
+  "events-actor.mjs",
+  "events-sequence.mjs",
+  "events-rules.mjs",
+  "events-page.mjs",
+  "events-page.html",
+  "admin-suite.mjs",
+  "lib.mjs",
+  "observer.mjs",
+  "actor.mjs",
+  "sequence.mjs",
+  "rules.mjs",
+  "page.mjs",
+  "page.html",
+  "readback.mjs",
+];
+
+test("the SDK events campaign replays strict with the package SDKs and binds the fixture, judges and observer code", async () => {
+  const { sourceResources, runtimeResources } = await import("./rtdb-release-replay.mjs");
+  const plan = campaignPlan("sdk-events", "/installed/fireemu", "/output");
+  assert.equal(plan.campaign, "sdk-events");
+  assert.ok(plan.argv[1].endsWith("/tools/sdk-smoke-database/rtdb-sdk-events.mjs"));
+  assert.deepEqual(plan.argv.slice(2, 7), [
+    "local",
+    "--fireemu",
+    "/installed/fireemu",
+    "--out",
+    "/output",
+  ]);
+  assert.equal(plan.argv[plan.argv.indexOf("--profile") + 1], "strict");
+  assert.equal(plan.argv.includes("--suite"), false, "the default suite is events+admin");
+  assert.equal(
+    plan.argv.includes("--against"),
+    false,
+    "the default recorded side is the committed fixture",
+  );
+  assert.ok(
+    plan.argv[plan.argv.indexOf("--modules") + 1].endsWith(
+      "/tools/sdk-smoke-database/node_modules",
+    ),
+  );
+  const resources = Object.keys(sourceResources("sdk-events"));
+  for (const file of [
+    "rtdb-sdk-events.mjs",
+    "rtdb-sdk-events-fixture.mjs",
+    "rtdb-sdk-events-judge.mjs",
+    "rtdb-sdk-admin-judge.mjs",
+    "rtdb-sdk-small-fixture.mjs",
+    "fixtures/production-sdk-events.json",
+    ...EVENTS_OBSERVER.map((name) => `sdk-observer/${name}`),
+  ])
+    assert.ok(resources.includes(`tools/sdk-smoke-database/${file}`), file);
+  const sdk = Object.keys(runtimeResources("sdk-events"));
+  for (const file of [
+    "package-lock.json",
+    "node_modules/firebase/package.json",
+    "node_modules/firebase-admin/package.json",
+    "node_modules/playwright/package.json",
+  ])
+    assert.ok(sdk.includes(file), file);
+  const hash = "c".repeat(64);
+  assert.deepEqual(
+    judgeExport("sdk-events", { campaign: "sdk-events", binarySha256: hash, match: true }, hash),
+    [],
+  );
+  for (const observed of [
+    { campaign: "sdk-small", binarySha256: hash, match: true },
+    { campaign: "sdk-events", binarySha256: hash, match: false },
+    { campaign: "sdk-events", binarySha256: "d".repeat(64), match: true },
+  ])
+    assert.equal(judgeExport("sdk-events", observed, hash).length, 1);
+});
+
+test("SDK events adjudication needs all 160 steps to match the committed fixture and refuses a fixture-shaped journal", async () => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { adjudicate } = await import("./rtdb-release-replay.mjs");
+  const { recordedJournal } =
+    await import("../../tools/sdk-smoke-database/rtdb-sdk-events-fixture.mjs");
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../tools/sdk-smoke-database/fixtures/production-sdk-events.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  const dir = mkdtempSync(join(tmpdir(), "rtdb-sdk-events-"));
+  const run = (journal) => {
+    writeFileSync(join(dir, "journal.json"), JSON.stringify(journal));
+    return adjudicate("sdk-events", dir);
+  };
+  try {
+    const local = recordedJournal(structuredClone(fixture));
+    const good = run(local);
+    assert.equal(good.match, true, JSON.stringify(good.result.problems));
+    assert.equal(good.result.counts.MATCH, 160);
+    assert.equal(run(fixture).match, false, "a local journal never carries a provenance");
+    const reordered = structuredClone(local);
+    const step = reordered.profiles[0].rows[3].steps.find((s) => s.observer.length > 1);
+    step.observer.reverse();
+    const one = run(reordered);
+    assert.equal(one.match, false);
+    assert.deepEqual(one.result.counts, { MATCH: 159, MISMATCH: 1, NEEDS_REVIEW: 0 });
+    const admin = structuredClone(local);
+    admin.profiles.pop();
+    assert.equal(run(admin).match, false);
+    const unsettled = structuredClone(local);
+    unsettled.profiles[4].rows[1].steps[0].quiet = false;
+    const bound = run(unsettled);
+    assert.equal(bound.match, false);
+    assert.equal(bound.result.counts.NEEDS_REVIEW, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

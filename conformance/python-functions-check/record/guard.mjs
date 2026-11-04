@@ -39,7 +39,8 @@ const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArr
 /**
  * The body of the one policy write on a Cloud Run service: the policy the service has, minus the public members. It has
  * only `policy`, whose only keys are `version`, `etag` and `bindings`; every binding is a `roles/` role with a list of
- * string members and no condition; no member is `allUsers` or `allAuthenticatedUsers`, so the write can only remove.
+ * string members and, when it had one, its `condition` object; no member is `allUsers` or `allAuthenticatedUsers`, so the
+ * write can only remove.
  */
 export function policyWithoutPublicMembers(json) {
   if (
@@ -58,7 +59,8 @@ export function policyWithoutPublicMembers(json) {
     bindings.every(
       (b) =>
         isPlainObject(b) &&
-        Object.keys(b).every((k) => k === "role" || k === "members") &&
+        Object.keys(b).every((k) => k === "role" || k === "members" || k === "condition") &&
+        (b.condition === undefined || isPlainObject(b.condition)) &&
         typeof b.role === "string" &&
         b.role.startsWith("roles/") &&
         Array.isArray(b.members) &&
@@ -67,6 +69,46 @@ export function policyWithoutPublicMembers(json) {
         ),
     )
   );
+}
+
+/**
+ * The policy to write back after taking `allUsers` out of a service's policy: every other binding verbatim (conditions
+ * and all), only the one member removed, a binding left with no member dropped. A policy of a shape this does not know
+ * (a field beyond `version`, `etag` and `bindings`, a binding field beyond `role`, `members` and `condition`, members that
+ * are not text, `allAuthenticatedUsers`) is refused, so that nothing the write would silently drop is dropped.
+ */
+export function withoutPublicMember(policy) {
+  if (!isPlainObject(policy)) return { ok: false, why: "policy-not-an-object" };
+  if (Object.keys(policy).some((k) => !["version", "etag", "bindings"].includes(k)))
+    return { ok: false, why: "policy-fields" };
+  if (policy.bindings !== undefined && !Array.isArray(policy.bindings))
+    return { ok: false, why: "bindings-not-a-list" };
+  const kept = [];
+  for (const binding of policy.bindings ?? []) {
+    if (
+      !isPlainObject(binding) ||
+      Object.keys(binding).some((k) => !["role", "members", "condition"].includes(k)) ||
+      typeof binding.role !== "string" ||
+      !Array.isArray(binding.members) ||
+      binding.members.some((m) => typeof m !== "string" || m === "allAuthenticatedUsers") ||
+      (binding.condition !== undefined && !isPlainObject(binding.condition))
+    )
+      return { ok: false, why: "binding-shape" };
+    if (!binding.members.includes("allUsers")) {
+      kept.push(structuredClone(binding));
+      continue;
+    }
+    const members = binding.members.filter((m) => m !== "allUsers");
+    if (members.length > 0) kept.push({ ...structuredClone(binding), members });
+  }
+  return {
+    ok: true,
+    policy: {
+      ...(Number.isInteger(policy.version) ? { version: policy.version } : {}),
+      ...(typeof policy.etag === "string" ? { etag: policy.etag } : {}),
+      bindings: kept,
+    },
+  };
 }
 
 export const ownPackages = () => ALL_FUNCTIONS.flatMap(packageIds);
@@ -398,6 +440,8 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
     ]),
     // Cloud Storage: the default bucket (read), the objects under the check's prefix (list), and the run's one object
     read("storage.googleapis.com", `^/storage/v1/b/${BUCKET}$`),
+    // The default bucket's notification configs (read only): part of the inventory the closure compares.
+    read("storage.googleapis.com", `^/storage/v1/b/${BUCKET}/notificationConfigs$`),
     read(
       "storage.googleapis.com",
       `^/storage/v1/b/${BUCKET}/o$`,

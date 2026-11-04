@@ -127,7 +127,7 @@ test("the channel the run owned and its topic are read again; the carried obliga
     ),
   );
   const rb = await a2(world, result, { carried: ["upload:no-receipt"] });
-  assert.equal(rb.allAbsent, true, JSON.stringify(rb));
+  assert.equal(rb.allAbsent, false, "a carried obligation is never settled by a read-back");
   assert.deepEqual(rb.carried, ["upload:no-receipt"]);
   assert.equal(rb.names.channel.absent, true);
   assert.equal(rb.names["channel-topic"].absent, true);

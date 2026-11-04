@@ -32,7 +32,7 @@ import {
   putClass,
   summarize,
 } from "./deploy.mjs";
-import { createGuard, ownPackages } from "./guard.mjs";
+import { createGuard, ownPackages, withoutPublicMember } from "./guard.mjs";
 import { judge } from "./judge.mjs";
 import { errorFilter, frameFilter, listRequest, parseErrors, parseFrames } from "./logs.mjs";
 import {
@@ -93,18 +93,28 @@ export const absent = (a) =>
 
 /** The IAM members added and removed between two policy reads (recorded, not judged here). */
 export function iamChanges(before, after) {
-  const keys = (a) =>
-    a?.status === 200 && readable(a)
-      ? new Set(
-          (a.json.bindings ?? []).flatMap((b) => (b.members ?? []).map((m) => b.role + "|" + m)),
-        )
-      : null;
-  const b = keys(before);
-  const a = keys(after);
-  if (!b || !a) return null;
+  return iamKeyChanges(iamKeys(before), iamKeys(after));
+}
+
+/** The `role|member` keys of a policy read (sorted), or `null` when the read is not a readable policy. */
+export function iamKeys(answer) {
+  return answer?.status === 200 && readable(answer)
+    ? [
+        ...new Set(
+          (answer.json.bindings ?? []).flatMap((b) =>
+            (b.members ?? []).map((m) => b.role + "|" + m),
+          ),
+        ),
+      ].toSorted()
+    : null;
+}
+
+/** The keys added and removed between two sorted key lists, or `null` when either is missing. */
+export function iamKeyChanges(before, after) {
+  if (!Array.isArray(before) || !Array.isArray(after)) return null;
   return {
-    added: [...a].filter((k) => !b.has(k)).toSorted(),
-    removed: [...b].filter((k) => !a.has(k)).toSorted(),
+    added: after.filter((k) => !before.includes(k)).toSorted(),
+    removed: before.filter((k) => !after.includes(k)).toSorted(),
   };
 }
 
@@ -148,6 +158,8 @@ export async function record({
     busy: 60,
     enable: 10,
     enablePolls: 30,
+    listAttempts: 10,
+    listRetry: 30,
     ...waits,
   };
   const pause = (seconds) => sleep(seconds * 1000);
@@ -287,30 +299,56 @@ export async function record({
     }
     // Every mutating request the CLI sent (from its --debug output) is journaled; one that was retried, unanswered or not
     // answered 2xx is an unknown write that only A2 can close (coordinator ruling R1). firebase-tools' own retries are
-    // accepted as CLI behaviour; the at-most-once rule is the recorder's own requests and one CLI call per action.
+    // accepted as CLI behaviour; the at-most-once rule is the recorder's own requests and one CLI call per action. The
+    // shared parser's own list (`unknownWrites`) is an unknown write for every action too.
+    let ambiguous = null;
+    for (const [n, write] of (Array.isArray(result?.unknownWrites)
+      ? result.unknownWrites
+      : []
+    ).entries())
+      unknownMutations.push({
+        id: `cli-${action}-unknown-write-${n + 1}`,
+        class: "cli-unknown-write",
+        request: `${write?.method} ${write?.host} ${write?.status}`,
+      });
     if (action !== "dry-run" || Array.isArray(result?.cliWrites)) {
-      if (!Array.isArray(result?.cliWrites))
+      if (!Array.isArray(result?.cliWrites)) {
+        ambiguous ??= "cli-log-unreadable";
         unknownMutations.push({ id: "cli-" + action, class: "cli-log-unreadable" });
-      else {
+      } else {
         let n = 0;
         for (const write of result.cliWrites) {
           n += 1;
           try {
             await save({ id: `cli-${action}-write-${n}`, state: "cli-write", action, ...write });
           } catch {
-            // the journal is the thing that failed
+            // A row that could not be journaled is a write nobody can judge afterwards: it stays an open obligation
+            // (never closureReady) until a read-back and the coordinator settle it.
+            unknownMutations.push({
+              id: `cli-${action}-write-${n}`,
+              class: "cli-write-unjournaled",
+              request: `${write.method} ${write.url}`,
+            });
+            ambiguous ??= "cli-write-unjournaled";
           }
-          if (write.class !== "ok")
+          if (write.class !== "ok") {
+            ambiguous ??= `cli-write-${write.class}`;
             unknownMutations.push({
               id: `cli-${action}-write-${n}`,
               class: `cli-write-${write.class}`,
               request: `${write.method} ${write.url}`,
             });
+          }
         }
       }
     }
+    // A deploy write that was retried, unanswered, not answered 2xx, not journaled or not readable may have created any
+    // name of the deploy whatever the reads show afterwards: every one of them stays an unconfirmed create until an own
+    // 2xx read shows it (a 404 never settles it).
+    if (action === "deploy" && ambiguous) deployUnknown ??= ambiguous;
     return result;
   };
+  const uploadUnconfirmed = [];
   const cliDeleteClean = () =>
     Boolean(out.cli.delete) && !cliFailed(out.cli.delete) && !cliUnknownClass(out.cli.delete);
   const hostOfLabel = (label) =>
@@ -323,6 +361,7 @@ export async function record({
           : "pubsub";
   const unconfirmedCreates = () => [
     ...[...pendingCreates.values()].filter((create) => !confirmed.has(create.label)),
+    ...uploadUnconfirmed,
     ...(deployUnknown
       ? [...cliLabels]
           .filter(([label]) => !confirmed.has(label))
@@ -420,7 +459,11 @@ export async function record({
         unknownMutations.length > 0 ||
         stop !== null ||
         unconfirmed.length > 0 ||
-        vanished.length > 0,
+        vanished.length > 0 ||
+        out.cleanup.uploadReasons?.length > 0 ||
+        out.cleanup.uploadObjectsUnexplained?.length > 0 ||
+        out.inventory.differences?.length > 0 ||
+        out.inventory.complete === false,
       ...(stop ? { authStop: stop } : {}),
       closureReady: closureReady && !blocked,
     };
@@ -482,19 +525,22 @@ export async function record({
     )
       return "identity";
     if (String(project.json.projectNumber) !== String(projectNumber)) return "project-number";
-    const services = await normal({ id: "services-before", method: "GET", url: SERVICES_URL });
-    const enabled = new Set((services?.json?.services ?? []).map((s) => s.config?.name));
+    // The enabled services are read page by page: a project can have more than one page of them.
+    const services = await list("services-before", SERVICES_URL, "services");
+    const enabled = new Set((services?.services ?? []).map((s) => s.config?.name));
     out.servicesMissing = REQUIRED_SERVICES.filter((id) => !enabled.has(id));
     servicesToEnable = ENABLE_SERVICES.filter((id) => !enabled.has(id));
     enabledBefore = [...enabled].toSorted();
-    if (!(services?.status === 200 && readable(services)) || out.servicesMissing.length > 0)
-      return "services";
+    if (services === null || out.servicesMissing.length > 0) return "services";
     iamBefore = await read({
       id: "iam-before",
       method: "POST",
       url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,
       json: {},
     });
+    // The project IAM is part of the baseline every closure compares with: a policy that cannot be read stops the run
+    // before anything is enabled or created.
+    if (iamKeys(iamBefore) === null) return "iam";
     const sdk = await read(
       {
         id: "admin-sdk-config",
@@ -527,8 +573,13 @@ export async function record({
     if (bucketRead?.status !== 200) return "bucket";
     const before = await functionLists("preflight");
     if (!complete(before)) return "lists";
-    const jobs = await list("preflight-jobs", SCHEDULER + "?pageSize=500", "jobs");
-    const queues = await list("preflight-queues", TASKS + "?pageSize=500", "queues");
+    // Cloud Scheduler and Cloud Tasks may be disabled here: a request that carries the quota project is refused with 403
+    // SERVICE_DISABLED until the API is on, so their lists are read after the enable (below), not here.
+    const notifications = await list(
+      "preflight-notifications",
+      `https://storage.googleapis.com/storage/v1/b/${bucket}/notificationConfigs`,
+      "items",
+    );
     const topics = await list(
       "preflight-topics",
       `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics?pageSize=1000`,
@@ -561,7 +612,9 @@ export async function record({
       "documents",
     );
     if (
-      ![jobs, queues, topics, subs, triggers, channels, packages, objects, documents].every(Boolean)
+      ![notifications, topics, subs, triggers, channels, packages, objects, documents].every(
+        Boolean,
+      )
     )
       return "lists";
     const names = (items) => items.map((item) => item.name).toSorted();
@@ -572,6 +625,8 @@ export async function record({
       subscriptions: names(subs.subscriptions),
       topics: names(topics.topics),
       services: enabledBefore,
+      iam: iamKeys(iamBefore),
+      notifications: notifications.items.map((item) => item.id).toSorted(),
     };
     // The inventory every closure compares against must be complete: a bucket that cannot be listed to its end stops the run
     // before anything is enabled or created.
@@ -582,8 +637,6 @@ export async function record({
       uploads: sourceObjectsBefore[sourceBuckets(projectNumber)[0]],
       sources: sourceObjectsBefore[sourceBuckets(projectNumber)[1]],
     };
-    const ownJobs = jobs.jobs.some((j) => JOB_IDS.includes(lastSegment(j.name)));
-    const ownQueues = queues.queues.some((qe) => QUEUE_IDS.includes(lastSegment(qe.name)));
     const ownTopic = topics.topics.some((t) => lastSegment(t.name) === TOPIC);
     const ownPackagesPresent = packages.packages.some((p) =>
       ownPackages().includes(lastSegment(p.name)),
@@ -593,8 +646,6 @@ export async function record({
     );
     if (
       !nonePresent(summarize(before)) ||
-      ownJobs ||
-      ownQueues ||
       ownTopic ||
       ownPackagesPresent ||
       ownTriggers ||
@@ -606,7 +657,76 @@ export async function record({
     // makes: the cleanup deletes the channel once and reads it back (coordinator ruling R6).
     out.channel = { ownedByRun: !out.inventory.before.channels.includes(CHANNEL) };
     await pollLogs("preflight");
-    return (await enableServices()) ? null : "enable-services";
+    // Every read-only check must have passed before anything is enabled (coordinator ruling R5): a read that failed (an
+    // unknown answer, a 4xx or 5xx on a baseline, a log poll that gave no entries list) stops the run here.
+    if (incompleteReads.length > 0 || counts().unknown > 0) return "preflight-reads";
+    if (!(await enableServices())) return "enable-services";
+    // The two lists that could not be read before the enable: read now, with bounded retries while the enable propagates,
+    // and checked for the run's own names before the dry run.
+    const jobs = await listAfterEnable("preflight-jobs", SCHEDULER + "?pageSize=500", "jobs");
+    if (!jobs) return "lists-after-enable";
+    const queues = await listAfterEnable("preflight-queues", TASKS + "?pageSize=500", "queues");
+    if (!queues) return "lists-after-enable";
+    if (
+      jobs.jobs.some((j) => JOB_IDS.includes(lastSegment(j.name))) ||
+      queues.queues.some((qe) => QUEUE_IDS.includes(lastSegment(qe.name)))
+    )
+      return "namespace";
+    return null;
+  }
+
+  /**
+   * A list of an API the run has just enabled, read in observe mode: Google answers a request for an API that is not on
+   * (or not yet propagated) with 403 SERVICE_DISABLED, which is data here, not an authorization stop. It is read again
+   * after `listRetry` seconds, up to `listAttempts` times; any other failure, or a 403 that stays, gives null.
+   */
+  async function listAfterEnable(id, url, key) {
+    for (let attempt = 1; attempt <= wait.listAttempts; attempt++) {
+      const items = [];
+      let token = "";
+      let disabled = false;
+      let failed = false;
+      for (let page = 0; page < 5; page++) {
+        const answer = await read(
+          {
+            id:
+              id + (attempt > 1 ? "-attempt-" + attempt : "") + (page ? "-page-" + (page + 1) : ""),
+            method: "GET",
+            url:
+              url +
+              (token
+                ? (url.includes("?") ? "&" : "?") + "pageToken=" + encodeURIComponent(token)
+                : ""),
+          },
+          { observe: true },
+        );
+        if (
+          answer?.status === 403 &&
+          readable(answer) &&
+          Array.isArray(answer.json.error?.details) &&
+          answer.json.error.details.some((d) => d?.reason === "SERVICE_DISABLED")
+        ) {
+          disabled = true;
+          break;
+        }
+        if (!(answer?.status === 200 && readable(answer))) {
+          failed = true;
+          incompleteReads.push({ id, class: answerClass(answer) });
+          break;
+        }
+        items.push(...(answer.json[key] ?? []));
+        token = answer.json.nextPageToken ?? "";
+        if (!token) return { [key]: items };
+        if (page === 4) {
+          failed = true;
+          incompleteReads.push({ id, class: "more-than-five-pages" });
+        }
+      }
+      if (failed) return null;
+      if (disabled && attempt < wait.listAttempts) await pause(wait.listRetry);
+    }
+    incompleteReads.push({ id, class: "service-disabled" });
+    return null;
   }
 
   /**
@@ -643,9 +763,9 @@ export async function record({
       );
       if (op?.json?.done === true) break;
     }
-    const after = await read({ id: "services-after-enable", method: "GET", url: SERVICES_URL });
-    const now = new Set((after?.json?.services ?? []).map((svc) => svc.config?.name));
-    if (!(after?.status === 200 && readable(after))) return false;
+    const after = await list("services-after-enable", SERVICES_URL, "services");
+    if (after === null) return false;
+    const now = new Set(after.services.map((svc) => svc.config?.name));
     out.servicesEnabled = servicesToEnable.filter((id) => now.has(id));
     return out.servicesEnabled.length === servicesToEnable.length;
   }
@@ -1003,20 +1123,17 @@ export async function record({
           };
           out.cleanup.invoker[fn] = finding;
           if (!finding.allUsers) continue;
-          const kept = bindings
-            .map((b) => ({ role: b.role, members: members(b).filter((m) => m !== "allUsers") }))
-            .filter((b) => b.members.length > 0);
+          const plan = withoutPublicMember(policy.json);
+          if (!plan.ok) {
+            finding.refused = plan.why;
+            finding.removed = false;
+            continue;
+          }
           const answer = await mutate({
             id: `cleanup-remove-invoker-${fn}`,
             method: "POST",
             url: url + ":setIamPolicy",
-            json: {
-              policy: {
-                ...(Number.isInteger(policy.json.version) ? { version: policy.json.version } : {}),
-                ...(typeof policy.json.etag === "string" ? { etag: policy.json.etag } : {}),
-                bindings: kept,
-              },
-            },
+            json: { policy: plan.policy },
             cleanup: true,
           });
           finding.removeClass = answerClass(answer);
@@ -1284,6 +1401,27 @@ export async function record({
         if (!before.includes(name) && !explained.has(name))
           out.cleanup.uploadObjectsUnexplained.push({ bucket: bucketName, name });
     });
+    // An upload whose receipt was never confirmed, whose object could not be read, or that left no readable receipt is an
+    // unknown create: a 404 or an unchanged inventory never settles it, and only the read-back with a positive read (or a
+    // recovery) closes it.
+    for (const reason of out.cleanup.uploadReasons) {
+      const [kind, ...rest] = reason.split(":");
+      if (
+        [
+          "receipt-unconfirmed",
+          "object-unreadable",
+          "receipt-log-unreadable",
+          "killed-without-receipt",
+          "no-receipt",
+        ].includes(kind)
+      )
+        uploadUnconfirmed.push({
+          label: "upload-object",
+          id: "cli-deploy",
+          name: rest.length > 0 ? rest.join(":") : null,
+          class: kind,
+        });
+    }
     // The Eventarc channel `firebase`, when the CLI made it (it was not there at the preflight): deleted once after the
     // functions are gone, its operation read until done; the channel and its managed topic are read back below.
     const channelUrl = `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/channels/${CHANNEL}`;
@@ -1411,16 +1549,13 @@ export async function record({
         cleanup: true,
       });
       out.inventory.iam = iamChanges(iamBefore, iamAfter);
-      const after = await read({
-        id: "services-after",
-        method: "GET",
-        url: SERVICES_URL,
-        cleanup: true,
-      });
-      const servicesNow =
-        after?.status === 200 && readable(after)
-          ? (after.json.services ?? []).map((svc) => svc.config?.name).toSorted()
-          : null;
+      const after = await list("services-after", SERVICES_URL, "services");
+      const servicesNow = after ? after.services.map((svc) => svc.config?.name).toSorted() : null;
+      const notificationsAfter = await list(
+        "inventory-notifications",
+        `https://storage.googleapis.com/storage/v1/b/${bucket}/notificationConfigs`,
+        "items",
+      );
       out.inventory.services =
         servicesNow && enabledBefore
           ? {
@@ -1455,6 +1590,9 @@ export async function record({
           topics: finalLists.topics ?? null,
           packages: finalLists.packages ?? null,
           services: servicesNow,
+          notifications: notificationsAfter
+            ? notificationsAfter.items.map((item) => item.id).toSorted()
+            : null,
           sourceObjects: {
             uploads: afterBuckets[sourceBuckets(projectNumber)[0]],
             sources: afterBuckets[sourceBuckets(projectNumber)[1]],

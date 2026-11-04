@@ -331,7 +331,7 @@ const READ_ONLY_POST = /:(?:getIamPolicy|testIamPermissions|generateUploadUrl)$|
 /**
  * Every mutating request in the CLI output with its answers: `{ method, url, requests, statuses, class }`. The class is
  * "ok" (every request answered 2xx), "unanswered" (fewer answers than requests), "non-2xx" (any other answer) or
- * "retried" (more than one request to the same method and URL, which only happens after a failed one). Anything but
+ * "retried" (more than one request to the same method and URL, whatever the answers). Anything but
  * "ok" is an unknown write for the run (coordinator ruling R1).
  */
 export function cliWritesFromOutput(text) {
@@ -359,7 +359,7 @@ export function cliWritesFromOutput(text) {
   }
   for (const entry of writes.values()) {
     entry.class =
-      entry.requests > 1 && !entry.statuses.every((code) => code >= 200 && code < 300)
+      entry.requests > 1
         ? "retried"
         : entry.statuses.length < entry.requests
           ? "unanswered"
@@ -376,6 +376,10 @@ export function redactCliText(text) {
     .replace(
       /https?:\/\/[^\s"'<>]*(?:X-Goog-|Signature=|GoogleAccessId=)[^\s"'<>]*/giu,
       "[REDACTED UPLOAD URL]",
+    )
+    .replace(
+      /(?:X-Goog-[A-Za-z-]+|Signature|GoogleAccessId)=[^&\s"'<>]+/giu,
+      "[REDACTED SIGNATURE]",
     )
     .replace(/"apiKey"\s*:\s*"[^"]*"/gu, '"apiKey":"[REDACTED]"');
 }
@@ -429,11 +433,13 @@ export const INVENTORY_KINDS = Object.freeze([
   "subscriptions",
   "topics",
   "packages",
+  "notifications",
 ]);
 
 /**
  * What differs between the preflight inventory and a later one, by identity and not by count. `before` and `after` carry
- * name lists for `channels`, `triggers`, `subscriptions`, `topics`, `packages` and `services`, and `sourceObjects` with
+ * name lists for `channels`, `triggers`, `subscriptions`, `topics`, `packages`, `services` and `notifications` (the ids of
+ * the default bucket's notification configs), and `sourceObjects` with
  * `uploads` and `sources` (the two Gen2 buckets). A list that is `null` (not read to its end) makes the comparison
  * incomplete, which blocks closure like a difference does. `enabled` is the services this run enabled on purpose.
  * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function

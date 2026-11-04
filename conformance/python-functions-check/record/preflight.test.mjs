@@ -387,6 +387,7 @@ test("inventoryDifferences compares by identity, allows only what the run enable
     subscriptions: ["s1", "s2"],
     topics: ["p1"],
     packages: ["k1"],
+    notifications: ["n1"],
     services: ["a", "b"],
     sourceObjects: { uploads: ["u1"], sources: ["x/function-source.zip"] },
   };
@@ -538,8 +539,8 @@ test("the CLI log gives every mutating request with its answers; reads and the u
         "\n" +
         STAT("POST", "x.example/a", 200),
     )[0].class,
-    "ok",
-    "two good writes to one address are not a retry",
+    "retried",
+    "two requests to one address are a retry whatever the answers (R1: unknown)",
   );
   assert.equal(
     cliWritesFromOutput(
@@ -549,7 +550,13 @@ test("the CLI log gives every mutating request with its answers; reads and the u
         "\n" +
         STAT("POST", "x.example/a", 200),
     )[0].class,
+    "retried",
+    "two requests and one answer: a repeat is reported as retried, which is an unknown write as well",
+  );
+  assert.equal(
+    cliWritesFromOutput(REQ("POST", "x.example/a"))[0].class,
     "unanswered",
+    "one request and no answer",
   );
   assert.equal(cliWritesFromOutput("[t] >>> [apiv2][query] POST not-a-url x")[0], undefined);
 });
@@ -720,7 +727,11 @@ test("the CLI log parser keeps PUT writes to other hosts, tells methods apart, a
   assert.equal(found["PATCH iam.example/s"].class, "non-2xx", "199 is not");
   assert.equal(found["PUT iam.example/t"].class, "ok");
   assert.equal(found["PUT iam.example/u"].class, "retried");
-  assert.equal(found["PUT iam.example/v"].class, "ok", "two good answers to two requests");
+  assert.equal(
+    found["PUT iam.example/v"].class,
+    "retried",
+    "two good answers to two requests are still two requests to one address",
+  );
   assert.equal(found["POST iam.example/r"].requests, 1);
   assert.deepEqual(found["PUT iam.example/u"].statuses, [503, 200]);
 });
@@ -867,7 +878,7 @@ test("an identity answer that is 200 but not JSON stops the run as an identity p
   assert.deepEqual(ids(journal), ["identity"]);
 });
 
-test("a retried CLI write is retried even when the failing answer is a 300", () => {
+test("a retried CLI write is retried even when the failing answer is a 300, and so are two requests that both answered 2xx", () => {
   const found = cliWritesFromOutput(
     [
       REQ("POST", "x.example/a"),
@@ -885,7 +896,11 @@ test("a retried CLI write is retried even when the failing answer is a 300", () 
       STAT("POST", "x.example/a", 200),
     ].join("\n"),
   );
-  assert.equal(two[0].class, "ok");
+  assert.equal(two[0].class, "retried");
+  const single = cliWritesFromOutput(
+    [REQ("POST", "x.example/a"), STAT("POST", "x.example/a", 299)].join("\n"),
+  );
+  assert.equal(single[0].class, "ok");
 });
 
 test("a settle read that answers 403 is data, not a stop", async () => {

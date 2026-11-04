@@ -41,9 +41,10 @@ test("after a clean run everything reads absent and nothing is sent but reads", 
   assert.equal(result.allAbsent, true);
   const calls = world.calls.slice(before);
   assert.ok(
-    calls.every((c) => c.startsWith("GET ")),
-    "only GETs",
+    calls.every((c) => c.startsWith("GET ") || c.endsWith(":getIamPolicy")),
+    "only GETs and the project IAM read",
   );
+  assert.equal(calls.filter((c) => !c.startsWith("GET ")).length, 1, "one POST, the IAM read");
   assert.ok(result.attempted <= READBACK_MAX_REQUESTS);
   assert.equal(Object.keys(result.names).length, readbackNames(RUN, BUCKET).length);
   assert.deepEqual(Object.keys(result.lists).toSorted(), [

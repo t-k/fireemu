@@ -123,6 +123,11 @@ export function createWorld({
   cliWrites = undefined,
   projectNumberReported = NUMBER,
   leaveSubscriptions = false,
+  servicePageSize = 0,
+  projectIam = [],
+  notifications = [],
+  propagationReads = 0,
+  invokerBindings = undefined,
 } = {}) {
   const w = {
     runId,
@@ -160,6 +165,9 @@ export function createWorld({
     generations: new Map(),
     upload: null,
     insert: 0,
+    projectIam: structuredClone(projectIam),
+    notifications: new Set(notifications),
+    refused: new Map(),
     services: new Set([
       ...REQUIRED.filter((id) => !withoutServices.includes(id)),
       "compute.googleapis.com",
@@ -208,6 +216,8 @@ export function createWorld({
         base + "/locations/" + REGION + "/repositories/gcf-artifacts/packages/",
       ),
       services: [...w.services].toSorted(),
+      iam: w.projectIam.flatMap((b) => b.members.map((m) => b.role + "|" + m)).toSorted(),
+      notifications: [...w.notifications].toSorted(),
       sourceObjects: {
         uploads: [...(w.sourceBuckets.get(buckets[0]) ?? [])].toSorted(),
         sources: [...(w.sourceBuckets.get(buckets[1]) ?? [])].toSorted(),
@@ -272,11 +282,13 @@ export function createWorld({
       w.policies.set(fn, {
         version: 1,
         etag: "etag-" + fn + "-1",
-        bindings: publicInvokers.includes(fn)
-          ? [{ role: "roles/run.invoker", members: ["allUsers"] }]
-          : SCHEDULER_FUNCTIONS.includes(fn)
-            ? [{ role: "roles/run.invoker", members: ["serviceAccount:" + SERVICE_ACCOUNT] }]
-            : [],
+        bindings: invokerBindings
+          ? structuredClone(invokerBindings)
+          : publicInvokers.includes(fn)
+            ? [{ role: "roles/run.invoker", members: ["allUsers"] }]
+            : SCHEDULER_FUNCTIONS.includes(fn)
+              ? [{ role: "roles/run.invoker", members: ["serviceAccount:" + SERVICE_ACCOUNT] }]
+              : [],
       });
   };
   const deleteDeployed = () => {
@@ -384,6 +396,32 @@ export function createWorld({
       if (out) return out;
     }
     const host = url.hostname;
+    // A request that carries the quota project for an API that is not on (or not yet propagated after the enable) is refused
+    // with 403 SERVICE_DISABLED in the layout production uses (recorded: FS-RULES 2026-09-27, the EVENTARC A1 fixture).
+    if (withoutServices.includes(host)) {
+      const left = w.refused.get(host) ?? 0;
+      if (!w.services.has(host) || left > 0) {
+        if (left > 0) w.refused.set(host, left - 1);
+        return reply(403, {
+          error: {
+            code: 403,
+            message:
+              `${host} has not been used in project ${PROJECT} before or it is disabled. Enable it by visiting ` +
+              `https://console.developers.google.com/apis/api/${host}/overview?project=${PROJECT} then retry. ` +
+              "If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.",
+            status: "PERMISSION_DENIED",
+            details: [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                reason: "SERVICE_DISABLED",
+                domain: "googleapis.com",
+                metadata: { consumer: "projects/" + PROJECT, service: host },
+              },
+            ],
+          },
+        });
+      }
+    }
     if (
       host === "cloudresourcemanager.googleapis.com" &&
       method === "GET" &&
@@ -400,18 +438,27 @@ export function createWorld({
         if (!Array.isArray(body?.serviceIds) || Object.keys(body).length !== 1)
           return badRequest("serviceIds is required");
         w.enableRequests.push([...body.serviceIds]);
-        for (const id of body.serviceIds) w.services.add(id);
+        for (const id of body.serviceIds) {
+          if (!w.services.has(id)) w.refused.set(id, propagationReads);
+          w.services.add(id);
+        }
         return reply(200, { name: "operations/enable-" + w.enableRequests.length, done: false });
       }
       if (method === "GET" && path.startsWith("/v1/operations/"))
         return reply(200, { name: path.slice(4), done: ++w.enableReads >= 2 });
+      const all = [...w.services].toSorted().map((id) => ({
+        name: "projects/" + NUMBER + "/services/" + id,
+        config: { name: id },
+        state: "ENABLED",
+        parent: "projects/" + NUMBER,
+      }));
+      const start = Number(url.searchParams.get("pageToken") ?? 0);
+      const slice = servicePageSize ? all.slice(start, start + servicePageSize) : all;
       return reply(200, {
-        services: [...w.services].toSorted().map((id) => ({
-          name: "projects/" + NUMBER + "/services/" + id,
-          config: { name: id },
-          state: "ENABLED",
-          parent: "projects/" + NUMBER,
-        })),
+        services: slice,
+        ...(servicePageSize && start + servicePageSize < all.length
+          ? { nextPageToken: String(start + servicePageSize) }
+          : {}),
       });
     }
     const policyCall =
@@ -431,7 +478,8 @@ export function createWorld({
       w.policies.set(fn, { version: 1, etag: given.etag + "+", bindings: given.bindings ?? [] });
       return reply(200, w.policies.get(fn));
     }
-    if (path.endsWith(":getIamPolicy")) return reply(200, { version: 1, etag: "e", bindings: [] });
+    if (path.endsWith(":getIamPolicy"))
+      return reply(200, { version: 1, etag: "e", bindings: w.projectIam });
     if (path.endsWith("/adminSdkConfig"))
       return reply(200, { projectId: PROJECT, storageBucket: BUCKET });
     if (host === "appengine.googleapis.com") {
@@ -669,6 +717,19 @@ export function createWorld({
         return w.documents.delete(id) ? reply(200, {}) : notFound("document");
     }
     if (host === "storage.googleapis.com") {
+      if (path.endsWith("/notificationConfigs") && method === "GET")
+        return reply(200, {
+          kind: "storage#notifications",
+          ...(w.notifications.size
+            ? {
+                items: [...w.notifications].toSorted().map((id) => ({
+                  kind: "storage#notification",
+                  id,
+                  topic: "//pubsub.googleapis.com/projects/p/topics/t",
+                })),
+              }
+            : {}),
+        });
       if (path.startsWith("/upload/")) {
         const name = url.searchParams.get("name");
         if (url.searchParams.get("uploadType") !== "media" || !name)

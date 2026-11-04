@@ -194,7 +194,9 @@ test("the policy body can only remove: no public member, no condition, no unknow
     { policy: { bindings: [{ role: "roles/x" }] } },
     { policy: { bindings: [{ role: "roles/x", members: "u" }] } },
     { policy: { bindings: [{ role: "roles/x", members: [1] }] } },
-    { policy: { bindings: [{ role: "roles/x", members: [], condition: {} }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], condition: "c" }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], condition: [] }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], conditions: {} }] } },
   ])
     assert.equal(policyWithoutPublicMembers(bad), false, JSON.stringify(bad));
 });

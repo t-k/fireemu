@@ -5,7 +5,7 @@
 // proves nothing about whether the create happened); the command that runs it reads the run's own result for the
 // unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { inventoryDifferences, nonePresent, summarize } from "./deploy.mjs";
+import { iamUnexpected, inventoryDifferences, nonePresent, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
 import {
   ALL_FUNCTIONS,
@@ -20,7 +20,7 @@ import {
   functionName,
   packageIds,
 } from "./plan.mjs";
-import { absent } from "./run.mjs";
+import { absent, iamKeyChanges, iamKeys } from "./run.mjs";
 import { documentId, documentUrl, objectName, storageObjectUrl, topicUrl } from "./script.mjs";
 
 export const READBACK_MAX_REQUESTS = 130;
@@ -67,11 +67,19 @@ export const readbackNames = (runId, bucket, uploadObjects = [], channel = {}) =
   ]),
 ];
 
-/** The read-back's allowlist: the recording's, narrowed to GETs that are not mutations. */
+const IAM_READ = `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`;
+
+/**
+ * The read-back's allowlist: the recording's, narrowed to GETs that are not mutations, and the one project IAM policy read
+ * (a POST that changes nothing).
+ */
 export function readbackAllow(runId, projectNumber, uploadObjects = []) {
   const guard = createGuard(runId, projectNumber);
   for (const item of uploadObjectEntries(uploadObjects)) guard.adoptObject(item.bucket, item.name);
-  return (spec) => spec.method === "GET" && guard.allow(spec) && !guard.isMutation(spec);
+  return (spec) =>
+    (spec.method === "GET" || (spec.method === "POST" && spec.url === IAM_READ)) &&
+    guard.allow(spec) &&
+    !guard.isMutation(spec);
 }
 
 export async function readbackRun({
@@ -99,7 +107,7 @@ export async function readbackRun({
     quotaProject: PROJECT,
     timeoutFor: () => 15_000,
   });
-  const out = { runId, names: {}, lists: {}, incompleteReads: [], authStop: null };
+  const out = { runId, names: {}, lists: {}, incompleteReads: [], authStop: null, carried };
   if (!bucket) out.incompleteReads.push({ id: "bucket", status: "unknown" });
   const list = async (id, url, key) => {
     const items = [];
@@ -199,6 +207,14 @@ export async function readbackRun({
       `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services?filter=state:ENABLED&pageSize=200`,
       "services",
     );
+    const iamNow = await capture({ id: "read-iam", method: "POST", url: IAM_READ, json: {} });
+    const notifications = bucket
+      ? await list(
+          "list-notifications",
+          `https://storage.googleapis.com/storage/v1/b/${bucket}/notificationConfigs`,
+          "items",
+        )
+      : null;
     const bucketNames = {};
     for (const [index, name] of sourceBuckets(projectNumber).entries()) {
       const label = index === 0 ? "uploads" : "sources";
@@ -218,12 +234,24 @@ export async function readbackRun({
       topics: names(topics, "topics"),
       packages: names(packages, "packages"),
       services: services ? services.services.map((svc) => svc.config?.name).toSorted() : null,
+      notifications: notifications ? notifications.items.map((item) => item.id).toSorted() : null,
       sourceObjects: bucketNames,
     };
-    out.inventory = baseline
-      ? { baseline: true, ...inventoryDifferences({ before: baseline, after, enabled }) }
-      : { baseline: false, complete: false, missing: ["baseline"], differences: [] };
-    out.carried = carried;
+    if (baseline) {
+      const compared = inventoryDifferences({ before: baseline, after, enabled });
+      // Project IAM may only have gained service-account members since the preflight.
+      const iam = iamUnexpected(iamKeyChanges(baseline.iam, iamKeys(iamNow)));
+      out.inventory = {
+        baseline: true,
+        complete: compared.complete && iam.complete,
+        missing: [...compared.missing, ...(iam.complete ? [] : ["iam"])],
+        differences: [
+          ...compared.differences,
+          ...iam.unexpected.map((what) => ({ kind: "iam", what })),
+        ],
+      };
+    } else
+      out.inventory = { baseline: false, complete: false, missing: ["baseline"], differences: [] };
   } catch (error) {
     if (!(error instanceof AuthStop)) throw error;
   }
@@ -244,7 +272,11 @@ export async function readbackRun({
     out.inventory?.baseline === true &&
     out.inventory.complete === true &&
     out.inventory.differences.length === 0;
+  // Every obligation the run left open (an unconfirmed upload, an unexplained object, a difference or an unreadable part of
+  // its inventory, a configuration it could not restore) is carried: a read-back that finds nothing there cannot settle it.
+  const carriedClear = Array.isArray(carried) && carried.length === 0;
   out.allAbsent =
+    carriedClear &&
     namesGone &&
     listsGone &&
     inventoryClean &&

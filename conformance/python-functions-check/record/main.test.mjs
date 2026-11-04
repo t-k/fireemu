@@ -491,3 +491,37 @@ test("the real packet reads, and every file it lists exists", () => {
   );
   assert.equal(typeof realDeps.send, "function");
 });
+
+test("readback never exits 0 while the run carries an open obligation: a clean A2 cannot settle an unknown upload, an unexplained object or a difference", async () => {
+  const base = { unconfirmedCreates: [], bucket: "b.firebasestorage.app" };
+  const clean = finishedRun(base);
+  assert.equal((await run(rbArgs(clean.d), rbDeps(clean.at))).code, 0);
+  for (const [label, patch] of [
+    [
+      "an upload reason",
+      {
+        cleanup: {
+          uploadReasons: ["receipt-unconfirmed:514cacbe-3258-46fd-9a02-54b7485b0001.zip"],
+        },
+      },
+    ],
+    [
+      "an unexplained object",
+      { cleanup: { uploadObjectsUnexplained: [{ bucket: "b", name: "n.zip" }] } },
+    ],
+    [
+      "an inventory difference",
+      { inventory: { differences: [{ kind: "topics", added: ["t"], removed: [] }] } },
+    ],
+    [
+      "an IAM difference",
+      { inventory: { differences: [{ kind: "iam", what: "added roles/owner|user:a@b.c" }] } },
+    ],
+    ["an incomplete inventory", { inventory: { complete: false, differences: [] } }],
+  ]) {
+    const f = finishedRun({ ...base, ...patch });
+    const r = await run(rbArgs(f.d), rbDeps(f.at));
+    assert.equal(r.code, 3, label);
+    assert.match(r.err.join("\n"), /open obligations that a read-back cannot settle/, label);
+  }
+});

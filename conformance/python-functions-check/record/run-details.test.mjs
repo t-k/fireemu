@@ -371,7 +371,7 @@ for (const [what, hook, because] of [
   [
     "a job list that cannot be read",
     (r) => (r.url.includes("/jobs?") ? error(500, "INTERNAL") : null),
-    "lists",
+    "lists-after-enable",
   ],
 ])
   test(`${what} stops the run before anything is created`, async () => {
@@ -418,7 +418,7 @@ test("a list may span five pages and no more, in the preflight and in the log re
       }
       return send(request);
     });
-    assert.equal(result.stoppedBecause === "lists", !ok, `pages=${pages}`);
+    assert.equal(result.stoppedBecause === "lists-after-enable", !ok, `pages=${pages}`);
   }
 });
 

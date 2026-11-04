@@ -322,6 +322,16 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       );
       return 3;
     }
+    // Every obligation the run left open (an unconfirmed upload, an unexplained object, an inventory or IAM difference) is
+    // carried: a read-back that finds nothing there cannot settle it, so it never exits 0 with any left.
+    if (judged.carried.length > 0) {
+      err(
+        "the run left open obligations that a read-back cannot settle: " +
+          judged.carried.join("; ") +
+          "; take them to the coordinator or to a recovery packet",
+      );
+      return 3;
+    }
     return result.allAbsent ? 0 : 3;
   } catch (error) {
     err("the read-back stopped: " + String(error?.message));

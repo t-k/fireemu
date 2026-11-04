@@ -1748,6 +1748,20 @@ fn timeout_rounds_and_scales_like_java() {
                 "0x00000000000000000000000000000001p0s",
                 (200, MIX_PLAIN.to_owned()),
             ),
+            // 2^53 + 1 ns is a tie at double precision: alone it rounds to even (2^53, a
+            // double length, too long); a non-zero digit far behind it rounds it up past
+            // 2^53, where Scala reads the text as a long and fails.
+            (
+                "0x20000000000001p0ns",
+                (400, error("timeout must not be longer than 15 minutes")),
+            ),
+            ("0x20000000000001.0000001p0ns", (400, format.clone())),
+            ("0x20000000000001.0111111p0ns", (400, format.clone())),
+            (
+                "0x20000000000001.0000000p0ns",
+                (400, error("timeout must not be longer than 15 minutes")),
+            ),
+            ("0x20000000000003p0ns", (400, format.clone())),
             (long_one_second.as_str(), (200, MIX_PLAIN.to_owned())),
             (long_one_second_more.as_str(), (200, MIX_PLAIN.to_owned())),
             (long_tiny.as_str(), (200, MIX_PLAIN.to_owned())),

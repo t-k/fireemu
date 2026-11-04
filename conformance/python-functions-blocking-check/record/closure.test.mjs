@@ -182,7 +182,7 @@ test("only a service-agent addition to the project IAM is expected; a removal or
 test("the A2 read-back compares the inventory with the preflight's by identity and carries the open obligations", async () => {
   const { world, result } = await go();
   const clean = await a2(world, result, { carried: ["upload:no-receipt"] });
-  assert.equal(clean.allAbsent, true);
+  assert.equal(clean.allAbsent, false, "a carried obligation is never settled by a read-back");
   assert.deepEqual(clean.inventory, {
     baseline: true,
     complete: true,

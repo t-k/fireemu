@@ -14,14 +14,22 @@ import { NUMBER, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
 const error = (code, status) => reply(code, { error: { code, status, message: "x" } });
-async function go(worldOptions = {}, wrapSend = (send) => send, wrapCli = (cli) => cli) {
+async function go(
+  worldOptions = {},
+  wrapSend = (send) => send,
+  wrapCli = (cli) => cli,
+  extra = {},
+) {
   const world = createWorld({ runId: RUN, ...worldOptions });
   const journal = [];
   const result = await record({
     runId: RUN,
     projectNumber: NUMBER,
     accessToken: "tok-abcdefgh",
-    save: async (r) => journal.push(r),
+    save: async (r) => {
+      if (extra.refuseSave?.(r)) throw new Error("disk full");
+      journal.push(r);
+    },
     send: wrapSend(world.send, world),
     runCli: wrapCli((args) => world.runCli(args), world),
     clock: () => world.now,
@@ -470,4 +478,76 @@ test("the signed upload query of the real CLI line, which follows a space, is re
   withCliLog({ action: "deploy" }, directory);
   assert.ok(!/Signature=AbC/.test(readFileSync(join(directory, "cli-deploy-stdout.txt"), "utf8")));
   assert.equal(FUNCTION, "pcblock");
+});
+
+// ---- Round 3 (events review, shared): a journal row that could not be saved, and a failed read-only preflight check ------
+
+test("a cli-write row that could not be journaled is a sticky unknown write: never closureReady, the read-back is required", async () => {
+  const ok = {
+    method: "POST",
+    url: `cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/functions`,
+    requests: 1,
+    statuses: [200],
+    class: "ok",
+  };
+  const clean = await go({ cliWrites: [ok] });
+  assert.equal(clean.result.closureReady, true);
+  const { result } = await go(
+    { cliWrites: [ok] },
+    (send) => send,
+    (cli) => cli,
+    { refuseSave: (row) => row.state === "cli-write" },
+  );
+  assert.equal(result.closureReady, false);
+  assert.equal(result.readBackRequired, true);
+  assert.ok(result.unknownMutationList.some((m) => m.class === "cli-write-unjournaled"));
+  assert.notEqual(result.outcome, "pcblock-recorded");
+});
+
+test("an IAM baseline that cannot be read, or a preflight log poll that gives no entries list, stops the run before anything is created", async () => {
+  for (const [label, wrap, because] of [
+    [
+      "an IAM 500",
+      (send) => async (request) =>
+        request.method === "POST" &&
+        request.url.endsWith(":getIamPolicy") &&
+        request.url.includes("cloudresourcemanager")
+          ? error(500, "INTERNAL")
+          : send(request),
+      "iam",
+    ],
+    [
+      "an IAM answer that is not JSON",
+      (send) => async (request) =>
+        request.method === "POST" &&
+        request.url.endsWith(":getIamPolicy") &&
+        request.url.includes("cloudresourcemanager")
+          ? new Response("not json", { status: 200 })
+          : send(request),
+      "iam",
+    ],
+    [
+      "a log poll 500",
+      (send) => async (request) =>
+        request.url.includes("entries:list") ? error(500, "INTERNAL") : send(request),
+      "preflight-reads",
+    ],
+  ]) {
+    const { world, result } = await go({}, wrap);
+    assert.equal(result.stoppedBecause, because, label);
+    assert.deepEqual(world.cliRuns, [], label);
+    assert.equal(result.outcome, "pcblock-stopped-clean", label);
+    assert.ok(!world.calls.some((c) => c.includes("accounts:signUp")), label);
+  }
+});
+
+test("the read-back never reports everything absent while the run carries an obligation", async () => {
+  const { world, result } = await go();
+  assert.equal((await a2(world, result, { carried: [] })).allAbsent, true);
+  for (const carried of [
+    ["upload:receipt-unconfirmed:x.zip"],
+    ["unexplained-upload-object:x.zip"],
+    ["inventory-incomplete"],
+  ])
+    assert.equal((await a2(world, result, { carried })).allAbsent, false, carried[0]);
 });

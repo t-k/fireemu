@@ -340,7 +340,14 @@ export async function record({
           try {
             await save({ id: `cli-${action}-write-${n}`, state: "cli-write", action, ...write });
           } catch {
-            // the journal is the thing that failed
+            // A row that could not be journaled is a write nobody can judge afterwards: it stays an open obligation
+            // (never closureReady) until a read-back and the coordinator settle it.
+            ambiguous ??= "cli-write-unjournaled";
+            unknownMutations.push({
+              id: `cli-${action}-write-${n}`,
+              class: "cli-write-unjournaled",
+              request: `${write.method} ${write.url}`,
+            });
           }
           if (write.class !== "ok") {
             ambiguous ??= `cli-write-${write.class}`;
@@ -566,6 +573,9 @@ export async function record({
       url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,
       json: {},
     });
+    // The project IAM is part of the baseline every closure compares with: a policy that cannot be read stops the run
+    // before anything is created.
+    if (iamKeys(iamBefore) === null) return "iam";
     configBefore = await read({ id: "config-before", method: "GET", url: CONFIG_URL });
     if (!(configBefore?.status === 200 && readable(configBefore))) return "config";
     if (!emptyBlocking(configBefore.json)) return "blocking-config";
@@ -630,6 +640,9 @@ export async function record({
     )
       return "namespace";
     await pollLogs("preflight");
+    // Every read-only check must have passed before anything is created: a read that failed (an unknown answer, a 4xx or
+    // 5xx on a baseline, a log poll that gave no entries list) stops the run here.
+    if (incompleteReads.length > 0 || counts().unknown > 0) return "preflight-reads";
     return null;
   }
 

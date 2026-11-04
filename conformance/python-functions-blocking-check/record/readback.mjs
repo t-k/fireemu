@@ -232,7 +232,11 @@ export async function readbackRun({
     out.inventory?.baseline === true &&
     out.inventory.complete === true &&
     out.inventory.differences.length === 0;
+  // Every obligation the run left open (an unconfirmed upload, an unexplained object, a difference or an unreadable part of
+  // its inventory, a configuration it could not restore) is carried: a read-back that finds nothing there cannot settle it.
+  const carriedClear = Array.isArray(carried) && carried.length === 0;
   out.allAbsent =
+    carriedClear &&
     namesGone &&
     listsGone &&
     inventoryClean &&

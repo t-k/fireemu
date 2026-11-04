@@ -131,6 +131,14 @@ test('runner: a transport failure stops the profile; a non-GET is listed as unkn
   const f = fakeSend(l => (l === 'sv-bogus' ? new CapExceeded('direct cap 9 reached at sv-bogus') : null)), rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
   assert.equal(rows.at(-1).outcome, 'not-sent'); assert.equal('unknown' in rows.at(-1), false); assert.equal(f.sent.at(-1).label, 'sv-bogus');
 });
+test('runner: an overridden POST is not a push: a name in its answer is neither checked nor masked', async () => {
+  const f = fakeSend(label => (label === 'override-put' ? { status: 200, text: '{"name":"-OZzZzZzZzZzZzZzZzZz"}' } : label === 'override-put-get' ? { status: 200, text: '{"name":"-OZzZzZzZzZzZzZzZzZz"}' } : null));
+  const rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
+  for (const id of ['override-put', 'override-put-get']) { assert.equal(rows.find(x => x.id === id).body, '{"name":"-OZzZzZzZzZzZzZzZzZz"}', id); assert.equal('pushIdShapeOk' in rows.find(x => x.id === id), false, id); }
+});
+test('runner: an invalid scope is refused before anything is sent', async () => {
+  for (const scope of ['', '/a', 'a//b', 'a/b c', 'a/../b', 42]) { const f = fakeSend(); await assert.rejects(runRestProfile({ send: f.send, url, scope }), /Invalid rest scope/, String(scope)); assert.equal(f.sent.length, 0); }
+});
 test('runner: a POST answer whose name is not a 20-character push id is not masked and says so', async () => {
   const f = fakeSend(label => (label === 'post-array' ? { status: 200, text: '{"name":"-short"}' } : null)), rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
   const r = rows.find(x => x.id === 'post-array'); assert.equal(r.pushIdShapeOk, false); assert.equal(r.body, '{"name":"-short"}');
@@ -204,6 +212,7 @@ test('run --suite rest: the rest Rules are installed and restored, 2 x 72 cases 
     const cases = db.state.log.filter(r => r.path.startsWith(`${PREFIX}/`));
     assert.equal(cases.length, 144);
     assert.deepEqual([...new Set(cases.map(r => r.path.split('/')[3].replace(/\.json$/, '')))], REST_PROFILES);
+    assert.ok(cases.every(r => r.path.startsWith(`${PREFIX}/${REST_AREA}/`)), 'every case is under <prefix>/sdk-rest/<profile>');
     assert.ok(cases.every(r => r.headers.authorization === 'Bearer owner' && r.headers['accept-encoding'] === 'identity'));
     const rows = readFileSync(path.join(out, 'run', 'journal.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.kind === 'case');
     assert.equal(rows.length, 144); assert.ok(rows.every(r => r.suite === 'rest' && REST_PROFILES.includes(r.profile) && r.ok));
@@ -259,4 +268,16 @@ test('command line: --suite rest takes a cap of 20..250', () => {
   assert.equal(r.status, 2); assert.match(r.stderr, /--direct-cap 20\.\.250/);
   const usage = spawnSync(process.execPath, [observer, '--target', 'emulator', '--suite', 'bogus'], { encoding: 'utf8', env: { PATH: process.env.PATH } });
   assert.match(usage.stderr, /--suite small\|events\|admin\|events\+admin\|rest/);
+});
+test('run --suite rest: after the run is aborted no further case is sent, and the case in flight is awaited before the cleanup', async () => {
+  const db = await fakeDatabase(), out = mkdtempSync(path.join(tmpdir(), 'rest-run-'));
+  const fetchImpl = async (u, init) => { if (String(u).includes('/r1-rest/ints.json')) { await new Promise(r => setTimeout(r, 900)); return fetch(u, { ...init, signal: undefined }); } return fetch(u, init); };   // the second case answers after the run deadline
+  try {
+    const { exit, result } = await run({ target: { kind: 'emulator', host: db.host, namespace: 'ns', projectId: 'demo-x' }, runId: 'TEST-REST-04', prefix: PREFIX, directCap: 190, outDir: path.join(out, 'run'), suite: 'rest', runMs: 400, closeMs: 3000 }, { fetchImpl });
+    const paths = db.state.log.map(r => `${r.method} ${r.path}`), late = paths.indexOf(`PUT ${PREFIX}/${REST_AREA}/r1-rest/ints.json`);
+    assert.ok(late > 0, JSON.stringify(paths));
+    assert.deepEqual(paths.slice(late + 1), [`DELETE ${PREFIX}.json`, `GET ${PREFIX}.json`, 'PUT /.settings/rules.json', 'GET /.settings/rules.json'], 'the in-flight case lands before the cleanup and nothing else is sent');
+    assert.equal(paths.some(p => p.endsWith('/r1-rest/leaf.json')), false);
+    assert.notEqual(exit, 0); assert.match(result.error ?? '', /run deadline/);
+  } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });

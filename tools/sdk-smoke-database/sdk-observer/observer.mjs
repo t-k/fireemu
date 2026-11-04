@@ -165,7 +165,7 @@ const realProfiles = { ws: wsProfile, lp: lpProfile };
 
 // ---- events (G6) and admin (G13) profiles ------------------------------------------------------------------------------------------------
 const eventsCfg = ctx => ({ projectId: ctx.projectId, databaseURL: ctx.databaseURL, scope: ctx.scope, transport: ctx.transport, local: ctx.local, name: ctx.profile, closeMs: ctx.closeMs });
-async function eventsWsProfile(ctx) {
+export async function eventsWsProfile(ctx) {
   await captureWs(ctx.journal, () => { try { ctx.counter.take('ws-attempt'); } catch (error) { ctx.abort(error.message); throw error; } });
   const A = await import('firebase/app'), D = await import('firebase/database'), { runEventsProfile } = await import('./events-sequence.mjs');
   if (ctx.cancelled) throw new Error('cancelled');

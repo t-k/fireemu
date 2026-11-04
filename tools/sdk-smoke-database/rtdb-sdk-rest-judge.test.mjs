@@ -99,6 +99,11 @@ test('a missing, extra or swapped case row is NEEDS_REVIEW at its position and t
     const s = summarize(p, l);
     assert.equal(s.match, false, `${side} ${i}`); assert.ok(s.counts.NEEDS_REVIEW >= 1 || s.problems.length >= 1, `${side} ${i}`);
   }
+  for (const [side, reason] of [['production', 'recorded case is missing or out of place'], ['local', 'local case is missing or out of place']]) {
+    const pp = copy(), ll = copy(), target = side === 'production' ? pp : ll, r = target.profiles[0].rows; [r[20], r[21]] = [r[21], r[20]];
+    const sw = summarize(pp, ll);
+    for (const i of [20, 21]) assert.equal(sw.rows.find(x => x.profile === 'r1-rest' && x.case === REST_CASES[i]).reason, reason, `${side} ${i}`);
+  }
   const p = copy(), l = copy(); l.profiles[0].rows.splice(10, 1);
   const s = summarize(p, l);
   assert.equal(s.rows.find(r => r.profile === 'r1-rest' && r.case === REST_CASES[10]).verdict, 'NEEDS_REVIEW');

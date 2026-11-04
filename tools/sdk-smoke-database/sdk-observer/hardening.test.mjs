@@ -129,3 +129,17 @@ test('B2 the events app closer does not call goOffline on a database the recorde
   } finally { console.error = original; }
   assert.deepEqual(errors.filter(e => e.includes('FIREBASE FATAL ERROR')), []);
 });
+test('B2 a whole events WebSocket profile and its closers write no FIREBASE FATAL ERROR (startup read against a closed port, bounded by the 10 s step)', { timeout: 60000 }, async () => {
+  const { eventsWsProfile } = await import('./observer.mjs'), { createServer } = await import('node:net');
+  const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); const port = probe.address().port; await new Promise(r => probe.close(r));   // a port nobody listens on
+  const errors = [], original = console.error;
+  console.error = (...args) => { errors.push(args.map(String).join(' ')); };
+  const ctx = { profile: 'r1-ws', scope: 'p/sdk-events/r1-ws', transport: 'ws', databaseURL: `http://127.0.0.1:${port}?ns=quiet-profile`, projectId: 'demo-quiet', local: true, journal: { write() {} }, counter: createCounter({ direct: 1000 }), abort() {}, closeMs: 1000, closers: [] };
+  try {
+    const rows = await eventsWsProfile(ctx);
+    assert.equal(rows[0].id, 'startup'); assert.equal(rows[0].ok, false);
+    assert.ok(ctx.closers.length >= 1, 'the profile registered its app closers');
+    for (const close of ctx.closers.splice(0).reverse()) await close();
+  } finally { console.error = original; }
+  assert.deepEqual(errors.filter(e => e.includes('FIREBASE FATAL ERROR')), []);
+});

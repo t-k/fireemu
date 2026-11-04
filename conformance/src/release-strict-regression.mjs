@@ -199,6 +199,7 @@ export const RUNS = [
   rtdbRun("R26", "s5", ["RTDB-s5-comparison.json"]),
   rtdbRun("R27", "functions", ["RTDB-functions-trigger-comparison.json"]),
   rtdbRun("R28", "sdk-small", ["RTDB-sdk-small-comparison.json"]),
+  rtdbRun("R29", "sdk-events", ["RTDB-sdk-events-comparison.json"]),
   laneRun(
     "R1",
     "fs-query-index-comparison-v1",
@@ -1529,6 +1530,7 @@ export function judge(comparison, observations, context) {
       R26: "s5",
       R27: "functions",
       R28: "sdk-small",
+      R29: "sdk-events",
     };
     return judgeRtdbExport(
       comparison.runIds[0] === "R22" &&

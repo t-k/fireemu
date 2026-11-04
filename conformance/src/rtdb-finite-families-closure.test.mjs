@@ -21,7 +21,12 @@ const V041 = {
   binarySha256: "0030b466385dd160c0521ff8e985141d1d0adc67a3a8841c97744b0f27ed9315",
 };
 const SDK_SMALL = "spec/compatibility/closure/evidence/RTDB-sdk-small-comparison.json";
-const V043 = { sourceCommit: "afe1234851c593031c1eea2e2304f3e2a0dc3f01" };
+const V043 = {
+  sourceCommit: "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
+  binarySha256: "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+};
+const SDK_EVENTS = "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json";
+const EVENTS_FIXTURE = "tools/sdk-smoke-database/fixtures/production-sdk-events.json";
 
 const closure = () => json(CLOSURE);
 const condition = (id) => closure().conditions.find((entry) => entry.conditionId === id);
@@ -161,16 +166,13 @@ test("the small SDK observer comparison binds the v0.43.0 release binary in both
   assert.equal(regression.rows, 32);
 });
 
-// Each item of the frozen inventory (docs.local/runs/rtdb-closure-4a/inventory.md, G6-G10, G13,
-// G17) and of the decided exclusions stays named as unobserved or out of scope.
+// Each item of the frozen inventory (docs.local/runs/rtdb-closure-4a/inventory.md, G7-G10, G17)
+// and of the decided exclusions stays named as unobserved or out of scope. G6 and G13 were recorded
+// on 2026-11-04 (RTDB-EVENTS-20261104-01); what lies beyond their recorded cases stays named.
 const STILL_UNOBSERVED = [
-  "orderByKey",
-  "orderByPriority",
-  "orderByValue",
-  "equalTo",
-  "compound cursors",
-  "transaction on an absent node",
-  "Node Admin SDK",
+  "beyond the recorded cases of RTDB/sdk-events-queries-and-transactions",
+  "applyLocally false",
+  "Node Admin SDK with a service-account credential",
   "timeout",
   "writeSizeLimit",
   "print=pretty",
@@ -197,6 +199,12 @@ const STILL_UNOBSERVED = [
 ];
 // Recorded since 2026-10-28/29; none of these may still be called unverified.
 const NOW_RECORDED = [
+  "inventory G6",
+  "inventory G13",
+  "UNVERIFIED Node Admin SDK over WebSocket",
+  "transaction on an absent node",
+  "the Node Admin SDK over WebSocket",
+  "orderByKey, orderByPriority and orderByValue windows",
   "UNVERIFIED REST POST/push ids, DELETE",
   "print=silent, equalTo/endAt/startAfter/endBefore",
   "Security Rules .validate, cascading, data/newData/root, query-based rules",
@@ -218,8 +226,17 @@ test("the contract's database entry no longer calls the recorded families unveri
   );
   for (const item of ["print=silent", "startAfter", "increment", "serverTimestamp"])
     assert.ok(database.decision.includes(item), item);
-  for (const item of ["timeout", "auth.token", "Node Admin SDK", "tampered", "Android"])
+  for (const item of [
+    "timeout",
+    "auth.token",
+    "Node Admin SDK",
+    "service-account",
+    "tampered",
+    "Android",
+  ])
     assert.ok(database.gaps.join("\n").includes(item), item);
+  for (const item of ["startAt(value, key)", "firebase-admin 14.3.0", "user OAuth access token"])
+    assert.ok(database.decision.includes(item), item);
 });
 
 test("the Mac controls stay bound to older binaries and the two jar-only differences are known", () => {
@@ -238,4 +255,93 @@ test("the Mac controls stay bound to older binaries and the two jar-only differe
     assert.match(entry.statement, /no production answer/);
     assert.match(entry.decisionRef, /2218/);
   }
+});
+
+test("the SDK events and Admin SDK comparison binds the v0.43.0 release binary in both profiles", () => {
+  const comparison = json(SDK_EVENTS);
+  assert.equal(comparison.kind, "rtdb-production-comparison-v1");
+  assert.equal(comparison.parent, "RTDB");
+  assert.deepEqual(comparison.conditions, [
+    "RTDB/sdk-events-queries-and-transactions",
+    "RTDB/admin-sdk-websocket",
+  ]);
+  assert.equal(comparison.production.recording, "RTDB-EVENTS-20261104-01");
+  assert.match(comparison.production.credential, /user OAuth access token/);
+  assert.match(comparison.production.credential, /not a service account/);
+  assert.deepEqual(comparison.production.adminStartup, { "r1-admin": true, "r2-admin": true });
+  assert.deepEqual(comparison.production.requests, {
+    requests: 188,
+    direct: 184,
+    reserve: 4,
+    adc: 1,
+    overflow: 0,
+  });
+  assert.equal(comparison.binding.sourceCommit, V043.sourceCommit);
+  assert.equal(comparison.binding.binarySha256, V043.binarySha256);
+  assert.equal(comparison.binding.productionRequests, 0);
+  assert.equal(comparison.fixture.path, EVENTS_FIXTURE);
+  assert.equal(comparison.fixture.sha256, sha(EVENTS_FIXTURE));
+  for (const { path, sha256 } of comparison.tool)
+    if (path.startsWith("tools/sdk-smoke-database/")) assert.equal(sha(path), sha256, path);
+  const cases = { events: 0, admin: 0 };
+  for (const profile of ["strict", "emulator"]) {
+    const run = comparison.profiles[profile];
+    assert.equal(run.binarySha256, V043.binarySha256);
+    assert.deepEqual(run.counts, { MATCH: 160, MISMATCH: 0, NEEDS_REVIEW: 0 });
+    assert.equal(run.rows.length, 160);
+    assert.ok(run.rows.every((row) => row.verdict === "MATCH"));
+    assert.deepEqual(
+      run.profiles.map((p) => p.name),
+      ["r1-ws", "r1-lp", "r2-ws", "r2-lp", "r1-admin", "r2-admin"],
+    );
+    cases.events += run.rows.filter((row) => !row.profile.endsWith("-admin")).length;
+    cases.admin += run.rows.filter((row) => row.profile.endsWith("-admin")).length;
+  }
+  assert.deepEqual(cases, { events: 2 * 128, admin: 2 * 32 });
+  assert.match(comparison.scope, /service-account Admin SDK credential is not claimed/);
+  const regression = closure().integratedRegression.comparisons.find((c) => c.path === SDK_EVENTS);
+  assert.ok(regression);
+  assert.equal(regression.sha256, sha(SDK_EVENTS));
+  assert.equal(regression.rows, 160);
+  assert.match(regression.binding, /R29/);
+});
+
+test("the events and Admin SDK conditions cite the recording and never claim a service account", () => {
+  for (const [id, rows] of [
+    ["RTDB/sdk-events-queries-and-transactions", { MATCH: 128 }],
+    ["RTDB/admin-sdk-websocket", { MATCH: 32 }],
+  ]) {
+    const entry = condition(id);
+    assert.ok(entry, id);
+    assert.equal(entry.status, "VERIFIED");
+    const evidence = entry.evidence;
+    assert.equal(evidence.comparisonPath, SDK_EVENTS);
+    assert.equal(evidence.comparisonSha256, sha(SDK_EVENTS));
+    assert.equal(evidence.fixturePath, EVENTS_FIXTURE);
+    assert.equal(evidence.fixtureSha256, sha(EVENTS_FIXTURE));
+    assert.equal(evidence.release, "v0.43.0");
+    assert.equal(evidence.sourceCommit, V043.sourceCommit);
+    assert.equal(evidence.binarySha256, V043.binarySha256);
+    assert.equal(evidence.productionRequests, 0);
+    assert.deepEqual(evidence.rows, { strict: rows, emulator: rows });
+    assert.equal(evidence.productionRecordings[0].recording, "RTDB-EVENTS-20261104-01");
+    assert.match(evidence.ownerDecisions, /2227/);
+    assert.match(evidence.ownerDecisions, /2228/);
+    for (const file of evidence.tests) assert.ok(exists(file), file);
+  }
+  const admin = condition("RTDB/admin-sdk-websocket");
+  assert.match(admin.evidence.scope, /user OAuth access token/);
+  assert.match(admin.evidence.scope, /service account/);
+  assert.match(admin.cases.join("\n"), /deny/);
+  const events = condition("RTDB/sdk-events-queries-and-transactions");
+  for (const item of ["startAt(1, 'b')", "prevName", "long polling", "multi-path update", "abort"])
+    assert.ok(events.cases.join("\n").includes(item), item);
+  const r10 = closure().scopeDecisions.find((entry) => entry.id === "R10");
+  assert.ok(r10);
+  assert.equal(r10.amends, "R2");
+  assert.match(r10.decisionRef, /\b2217\b/);
+  assert.match(r10.decisionRef, /\b2218\b/);
+  for (const id of ["RTDB/sdk-events-queries-and-transactions", "RTDB/admin-sdk-websocket"])
+    assert.ok(r10.decision.includes(id), id);
+  assert.match(r10.decision, /service account/);
 });

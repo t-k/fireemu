@@ -159,6 +159,16 @@
       "decidedBy": "project coordinator (delegated by the owner)",
       "decidedOn": "2026-11-03",
       "decisionRef": "docs.local/instructions/owner-decisions.md (1915, 1936, 1938, 1948, 1956, 1963, 1988, 2118, 2202, 2203, 2206, 2217, 2218); docs.local/runs/rtdb-closure-4a/inventory.md (the frozen list of shapes that stay unobserved)"
+    },
+    {
+      "id": "R10",
+      "decision": "R2 (as amended by R4 to R7 and R9) is amended for the web SDK listener, query and transaction shapes and the Node Admin SDK shapes recorded in production on 2026-11-04 (run RTDB-EVENTS-20261104-01) and replayed on the v0.43.0 release in both profiles, for the recorded shapes only: key, priority, value-range and equalTo windows with child events and prevName, startAt/endAt with a key on tied values, a parent and child listener fan-out on a multi-path update, transactions on an absent node, an object and an abort, and get of a window and a missing path, over WebSocket and long polling (RTDB/sdk-events-queries-and-transactions); and firebase-admin 14.3.0 over WebSocket under deny-all Rules: set, get, update, push, transactions, remove, a listener window and a denied get (RTDB/admin-sdk-websocket). The Admin SDK authenticated with a user OAuth access token, so an Admin SDK with a service account is not claimed. Inventory items G6 and G13 leave /outOfScope; every other shape stays unverified as /outOfScope enumerates it; the parent remains IMPLEMENTING.",
+      "rationale": "The 52 observations of RTDB-EVENTS-20261104-01 match fireemu v0.43.0 in 160 of 160 steps in the strict and the emulator profile; the frozen inventory still named them unobserved.",
+      "amends": "R2",
+      "status": "FROZEN",
+      "decidedBy": "project coordinator (delegated by the owner)",
+      "decidedOn": "2026-11-04",
+      "decisionRef": "docs.local/instructions/owner-decisions.md (2217, 2218, 2227, 2228); docs.local/runs/rtdb-closure-4a/inventory.md (G6, G13)"
     }
   ],
   "conditions": [
@@ -1143,6 +1153,124 @@
         "scope": "The 32 recorded observations only: one-shot gets, not listeners; child events, windows, compound cursors, transaction variants and Admin SDK paths stay unobserved (/outOfScope).",
         "releaseRun": "R28 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-small)"
       }
+    },
+    {
+      "conditionId": "RTDB/sdk-events-queries-and-transactions",
+      "coverageLedgerRows": [
+        "RTDB-CV-07",
+        "RTDB-CV-08",
+        "RTDB-CV-09"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "E1 key_window: orderByKey limitToFirst(2) and limitToLast(2) listeners while keys are set inside, before and after the window and the first key is removed (the next key is pulled in)",
+        "E2 priority_window: orderByPriority limitToFirst(2) with setPriority, setWithPriority and a remove moving children across the window edge",
+        "E3 value_range: orderByValue startAt(4)/endAt(8) with values moving into and out of the range",
+        "E4 equal_events: orderByChild('t') equalTo(2) with a field moving in and out, a write that changes nothing and a set of the whole child",
+        "E5 cursor_pair: orderByChild('s') startAt(1, 'b')/endAt(1, 'c') on tied values: get, the listener's initial events, a write inside the bounds",
+        "E6 fanout: value and child listeners at a parent and at two children, one multi-path update at the root, then a set of the parent",
+        "E7 transactions: a transaction on an absent node, an abort by returning undefined and a transaction on an object, with value listeners on the three paths and the transaction writer's own events and resolution",
+        "E8 get_exists: get of an orderByKey limitToFirst(2) window and of a missing path (exists false)",
+        "per step the ordered child_added/changed/moved/removed callbacks with prevName and the value callbacks, the acknowledgements and the get and transaction results; web SDK over WebSocket and long polling, 2 rounds: 8 cases x 4 profiles = 32 observations, 128 steps"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-EVENTS-20261104-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-04",
+            "profiles": 4,
+            "observations": 32
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-events.json",
+        "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
+        "comparisonSha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
+        "release": "v0.43.0",
+        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
+        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+        "toolCommit": "bcce71689e65c12d58f424376f983b91b6ac25e4",
+        "rows": {
+          "strict": {
+            "MATCH": 128
+          },
+          "emulator": {
+            "MATCH": 128
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is the v0.43.0 release; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-events-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-events-fixture.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-events.test.mjs",
+          "conformance/src/rtdb-release-replay.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs"
+        ],
+        "scope": "The 128 recorded steps of the four web SDK profiles only. Not claimed: other windows, cursors and query combinations, applyLocally false, raw wire frames and timings; a write that covers several per-path listens of one connection stays /knownDifferences/rootWriteListenOrder (the recorded fanout case is a multi-path update with listeners at a parent and its children).",
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events)"
+      }
+    },
+    {
+      "conditionId": "RTDB/admin-sdk-websocket",
+      "coverageLedgerRows": [
+        "RTDB-CV-05",
+        "RTDB-CV-07",
+        "RTDB-CV-09"
+      ],
+      "source": "spec/compatibility/contract.json#database",
+      "cases": [
+        "firebase-admin 14.3.0 in Node over WebSocket, 2 rounds (r1-admin, r2-admin), under Rules that deny every client, so each answer shows the Admin SDK bypass",
+        "set, get, a multi-key update with a nested path, push (the key's shape only), transactions on an absent node, an object and an abort, remove followed by a get",
+        "a value and child_added listener on an orderByChild('s') limitToFirst(2) window with a write in between",
+        "a get of a path under explicit deny Rules (admin bypass)",
+        "10 cases x 2 profiles = 20 observations, 32 steps"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recording": "RTDB-EVENTS-20261104-01",
+            "project": "fireemu-oracle-query",
+            "recordedOn": "2026-11-04",
+            "profiles": 2,
+            "observations": 20
+          }
+        ],
+        "fixturePath": "tools/sdk-smoke-database/fixtures/production-sdk-events.json",
+        "fixtureSha256": "75a8e586267e6681d9f88085219920bc829a94d7600699557c08d91b85de2fe8",
+        "comparisonTool": "tools/sdk-smoke-database/rtdb-sdk-events-judge.mjs",
+        "comparisonPath": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
+        "comparisonSha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
+        "release": "v0.43.0",
+        "sourceCommit": "afe1234851c593031c1eea2e2304f3e2a0dc3f01",
+        "binarySha256": "a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b",
+        "toolCommit": "bcce71689e65c12d58f424376f983b91b6ac25e4",
+        "rows": {
+          "strict": {
+            "MATCH": 32
+          },
+          "emulator": {
+            "MATCH": 32
+          }
+        },
+        "productionRequests": 0,
+        "ownerDecisions": "docs.local/instructions/owner-decisions.md (2217: the closure path and caps; 2218 D6: the closure binary is the v0.43.0 release; 2227: the approval line of run RTDB-EVENTS-20261104-01; 2228: its V line); sandbox-ledger lines 1252 (booking) and 1253 (close)",
+        "tests": [
+          "tools/sdk-smoke-database/rtdb-sdk-events-judge.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-events-fixture.test.mjs",
+          "tools/sdk-smoke-database/rtdb-sdk-events.test.mjs",
+          "conformance/src/rtdb-release-replay.test.mjs",
+          "conformance/src/release-strict-regression.test.mjs",
+          "conformance/src/rtdb-finite-families-closure.test.mjs"
+        ],
+        "scope": "The 32 recorded steps only. In production the Admin SDK authenticated with the operator's gcloud user OAuth access token passed as a custom credential, not a service account; locally it uses fireemu's owner credential. An Admin SDK with a service-account credential, the Java and Python Admin SDKs and other Admin SDK shapes are not claimed.",
+        "releaseRun": "R29 in conformance/src/release-strict-regression.mjs (rtdb-production-comparison-v1, campaign sdk-events)"
+      }
     }
   ],
   "integratedRegression": {
@@ -1251,6 +1379,24 @@
           }
         },
         "binding": "the published v0.43.0 release binary a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b (fireemu-0.43.0-darwin-arm64.tar.gz, verified against the release's SHA256SUMS) of tag commit afe1234851c593031c1eea2e2304f3e2a0dc3f01; release run R28"
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/RTDB-sdk-events-comparison.json",
+        "sha256": "f73d959ca5dada4e44b3bbc66b26a72cd9fd22cdcf9e10faca7fd7c71efbbfc7",
+        "rows": 160,
+        "summary": {
+          "strict": {
+            "MATCH": 160,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          },
+          "emulator": {
+            "MATCH": 160,
+            "MISMATCH": 0,
+            "NEEDS_REVIEW": 0
+          }
+        },
+        "binding": "the published v0.43.0 release binary a0e1688bf4e915c0be5d973019e3e643cb15a3f869e596cdf63937aeae506e7b (fireemu-0.43.0-darwin-arm64.tar.gz, verified against the release's SHA256SUMS) of tag commit afe1234851c593031c1eea2e2304f3e2a0dc3f01; release run R29"
       }
     ],
     "productionRequests": 0,
@@ -1398,8 +1544,8 @@
     }
   },
   "outOfScope": [
-    "UNVERIFIED SDK events and queries (inventory G6): orderByKey and orderByPriority windows with limitToFirst/limitToLast and their child_added/changed/removed/moved events with prevName, setPriority and setWithPriority moving a child across a window edge, orderByValue startAt/endAt range listeners, orderByChild equalTo listeners, compound cursors startAt(value, key) and endAt(value, key) with tied values, the callback order of a parent and a child listener on one multi-path update, transaction variants beyond the recorded CV09 schedule (a transaction on an absent node, an abort, a transaction on an object, the applyLocally event order), and once/get on a window and on a missing path; the one-shot gets of the small SDK observer and the two orderByChild windows of RTDB/sdk-reconnect-and-query-order are the only recorded SDK queries",
-    "UNVERIFIED Node Admin SDK over WebSocket (inventory G13): admin get, set, update, push, transaction, remove and value and child_added listeners under Rules that deny everything; only official-emulator smokes exist (tools/sdk-smoke-database)",
+    "UNVERIFIED web SDK listener, query and transaction shapes beyond the recorded cases of RTDB/sdk-events-queries-and-transactions, RTDB/sdk-small-queries-and-writes and RTDB/sdk-reconnect-and-query-order: other windows, cursors and query combinations, and transactions with applyLocally false",
+    "UNVERIFIED Node Admin SDK with a service-account credential, and Admin SDK shapes beyond the recorded cases of RTDB/admin-sdk-websocket (which authenticated with a user OAuth access token)",
     "UNVERIFIED REST options (inventory G7): timeout; writeSizeLimit tiny, medium, large, unlimited and numeric or invalid values (only small is recorded); print=pretty and an invalid print value; POST at the root and POST of a scalar, of an object with .priority and of null, and other push-ID forms; .sv through POST and through .priority; orderBy=\"$priority\", \"$key\" and \"$value\" outside the Rules-gated queries of the recorded operators cases, and orderBy=\"$key\" with 32-bit integer keys; limitToFirst/limitToLast alone or with shallow, and orderBy with shallow=true; format=export with a window; if-none-match and the Mixing refusal; X-HTTP-Method-Override; callback= JSONP names; download=; a PATCH of a priority on an emptied node; a malformed % escape; the SSE patch event of an ancestor PATCH; .settings/rules.json GET and PUT",
     "UNVERIFIED Security Rules beyond the recorded cases (inventory G8): auth.token custom claims and auth.token.firebase.sign_in_provider; .indexOn refusal variants (several keys, .value, .key, orderBy on a non-indexed child with and without limitToFirst, nested paths); cascade grammar beyond the recorded cases ($var wildcards with a parent .validate, .validate on deleted nodes, newData.hasChildren after a multi-path update, root.child cross-path reads, now in .write); query members beyond the recorded query-Rules and operators cases; numeric string concatenation (Java Double.toString); syntax-error and multi-diagnostic load texts beyond the 8 recorded regular expressions and the 3 recorded identity refusals; lexing of U+0085, U+FEFF and other Cf characters, a+? and /a|q/; the read a conditional write needs, a .priority write judged at the node, and a rejected WebSocket auth falling back to anonymous",
     "UNVERIFIED RTDB-triggered Cloud Functions delivery beyond the recorded one (inventory G9): an end user's write context (1st gen context.auth, 2nd gen authType/authId), wildcard instances, nested wildcard patterns, an ancestor write fanning out to several children, multi-path updates, web SDK writes, redelivery after a failed invocation and its timing, ordering across handlers and delivery latency: see /knownGaps/triggerUserAuthContext and /knownGaps/triggerBreadth",

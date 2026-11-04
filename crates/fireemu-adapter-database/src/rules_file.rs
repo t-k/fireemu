@@ -254,6 +254,7 @@ impl Reader {
         let mut text = String::new();
         let mut places = Vec::new();
         let mut second_units = Vec::new();
+        let mut lone_surrogates = Vec::new();
         loop {
             let place = flat(self);
             match self.peek() {
@@ -265,6 +266,7 @@ impl Reader {
                         text,
                         places,
                         second_units,
+                        lone_surrogates,
                     });
                 }
                 Some('\\') => {
@@ -310,7 +312,12 @@ impl Reader {
                                     )
                                     .unwrap_or('\u{fffd}')
                                 }
-                                None => char::from_u32(high).unwrap_or('\u{fffd}'),
+                                None => char::from_u32(high).unwrap_or_else(|| {
+                                    // A Rust string cannot hold a surrogate: U+FFFD stands in,
+                                    // and the unit is kept to tell it from the others.
+                                    lone_surrogates.push((places.len(), high));
+                                    '\u{fffd}'
+                                }),
                             }
                         }
                         Some(other) => other,
@@ -404,8 +411,10 @@ impl Reader {
     /// emulator takes it.
     fn index_name(&mut self) -> Result<String, RulesError> {
         let start = self.position();
-        let name = self.string()?.text;
-        if valid_index_name(&name) {
+        let string = self.string()?;
+        let name = string.text;
+        // (A surrogate written alone cannot be encoded in the path, so the name is refused.)
+        if string.lone_surrogates.is_empty() && valid_index_name(&name) {
             Ok(name)
         } else {
             Err(Self::error_at(
@@ -471,6 +480,10 @@ impl Reader {
         let mut spec = RuleSpec::default();
         let mut wildcard: Option<String> = None;
         let mut index_on = false;
+        // The keys read so far, by what tells them apart in Java: the text and the lone
+        // surrogates it could not hold (two of them are two keys, though both read as U+FFFD).
+        let mut seen: std::collections::HashSet<(String, Vec<(usize, u32)>)> =
+            std::collections::HashSet::new();
         loop {
             self.space()?;
             match self.peek() {
@@ -487,7 +500,8 @@ impl Reader {
                 Some(_) => return Err(self.error_here("Parse error.")),
             }
             let key_at = self.position();
-            let key = self.string()?.text;
+            let key_string = self.string()?;
+            let (key, lone_surrogates) = (key_string.text, key_string.lone_surrogates);
             if key.is_empty() {
                 return Err(Self::error_at(key_at, "Unexpected empty string."));
             }
@@ -541,12 +555,20 @@ impl Reader {
                     } else if !valid_key(&key) {
                         return Err(Self::error_at(end, INVALID_KEY));
                     }
-                    if spec.children.contains_key(&key) {
+                    if !seen.insert((key.clone(), lone_surrogates.clone())) {
                         return Err(Self::error_at(
                             end,
                             &format!("'{key}' occurs multiple times."),
                         ));
                     }
+                    // A named child with a lone surrogate in its key matches no path (a path
+                    // holds no surrogate on its own); it is kept under a key no path can
+                    // spell, so its rules are still read and checked, and two of them stay two.
+                    let key = if lone_surrogates.is_empty() || key.starts_with('$') {
+                        key
+                    } else {
+                        format!("{key}\u{0}{}", spec.children.len())
+                    };
                     spec.children.insert(key, child);
                 }
             }
@@ -580,6 +602,9 @@ struct JsonString {
     /// The second escapes of the characters written as surrogate pairs (see
     /// [`SourceExpr::second_units`]).
     second_units: Vec<(usize, (usize, usize))>,
+    /// The index in `text` and the UTF-16 unit of each surrogate written alone (an escape with
+    /// no partner), which `text` holds as U+FFFD.
+    lone_surrogates: Vec<(usize, u32)>,
 }
 
 /// Whether the official emulator takes `name` in `.indexOn`: `.value` and `.key`, or a path

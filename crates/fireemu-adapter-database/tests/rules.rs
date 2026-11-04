@@ -278,6 +278,135 @@ fn rules_put_answers_every_probed_document_as_the_official_emulator() {
     );
 }
 
+/// Where a key or an index name holds a lone surrogate (or any supplementary character), the
+/// official emulator writes it in its error text as `\uD800` (Jackson escapes the surrogates of
+/// a string, in upper case); fireemu's text holds the character, a lone surrogate as U+FFFD
+/// (a Rust string cannot hold one). The status and the place are the jar's, which is what a
+/// client reads. The rows are the jar's answers (4.11.2, 2026-11-04), none recorded in
+/// production.
+#[test]
+fn rules_put_names_a_lone_surrogate_by_the_replacement_character() {
+    const ROWS: &[(&str, &str, u16, &str)] = &[
+    ("r2:k-d800-d800", "{\"rules\":{\"\\ud800\":{},\"\\ud800\":{}}}", 400, "{\n  \"error\" : \"1:33: '\\uD800' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-emoji-pair", "{\"rules\":{\"\u{1f600}\":{},\"\\ud83d\\ude00\":{}}}", 400, "{\n  \"error\" : \"1:35: '\\uD83D\\uDE00' occurs multiple times.\\n\"\n}\n"),
+    ("r2:k-wild-d800-d801", "{\"rules\":{\"$\\ud800\":{},\"$\\ud801\":{}}}", 400, "{\n  \"error\" : \"1:35: Cannot have multiple default rules ('$\\uD800' and '$\\uD801').\\n\"\n}\n"),
+    ("r2:idx-d800", "{\"rules\":{\".indexOn\":\"\\ud800\"}}", 400, "{\n  \"error\" : \"1:22: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ("r2:idx-d800-d801", "{\"rules\":{\".indexOn\":[\"\\ud800\",\"\\ud801\"]}}", 400, "{\n  \"error\" : \"1:23: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ("r2:idx-d800-d800", "{\"rules\":{\".indexOn\":[\"\\ud800\",\"\\ud800\"]}}", 400, "{\n  \"error\" : \"1:23: Invalid key: \\uD800. Index must be either .value or declared on a valid path\\n\"\n}\n"),
+    ];
+    /// The text with every `\uD800`-style escape of a surrogate written as the character
+    /// (a pair as one, a lone one as U+FFFD).
+    fn written_as_characters(jar: &str) -> String {
+        let mut out = String::new();
+        let mut rest = jar;
+        while let Some(at) = rest.find("\\uD") {
+            out.push_str(&rest[..at]);
+            let unit = |text: &str| u32::from_str_radix(text.get(2..6)?, 16).ok();
+            let high = unit(&rest[at..]).filter(|u| (0xD800..0xDC00).contains(u));
+            let low = rest[at + 6..]
+                .starts_with("\\uD")
+                .then(|| unit(&rest[at + 6..]))
+                .flatten()
+                .filter(|u| (0xDC00..0xE000).contains(u));
+            match (high, low) {
+                (Some(high), Some(low)) => {
+                    out.push(
+                        char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+                            .unwrap_or('\u{fffd}'),
+                    );
+                    rest = &rest[at + 12..];
+                }
+                _ => {
+                    out.push('\u{fffd}');
+                    rest = &rest[at + 6..];
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+    let mut wrong = Vec::new();
+    for strict in [false, true] {
+        for &(case, rules, status, jar) in ROWS {
+            let options = RestOptions {
+                production_shapes: strict,
+                ..RestOptions::default()
+            };
+            let mut database = Database::new(options, 7);
+            let answer = call(&mut database, "PUT", "/.settings/rules.json", OWNER, rules);
+            if answer != (status, written_as_characters(jar)) {
+                wrong.push(format!(
+                    "strict={strict} {case}: {answer:?}, the jar {jar:?}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+mod key_identity {
+    //! Two children of a level share a key when Java reads their keys as the same string: the
+    //! same UTF-16 units, however the file spells them (an escape or the character, a pair as
+    //! one character or two escapes). A surrogate written alone is a key of its own: `\ud800` and
+    //! `\ud801` are two, and neither is `\ufffd`. Checked against the jar's rows in
+    //! `rules_put_answers_every_probed_document_as_the_official_emulator` (`r2:k-*`).
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A piece of a key: its UTF-16 units and a way to write it in the rules file.
+    fn atom() -> impl Strategy<Value = (Vec<u16>, String)> {
+        let atoms: Vec<(Vec<u16>, &'static str)> = vec![
+            (vec![0x61], "a"),
+            (vec![0x61], "\\u0061"),
+            (vec![0x62], "b"),
+            (vec![0xFFFD], "\u{fffd}"),
+            (vec![0xFFFD], "\\ufffd"),
+            (vec![0xD83D, 0xDE00], "\u{1f600}"),
+            (vec![0xD83D, 0xDE00], "\\ud83d\\ude00"),
+            (vec![0xD800], "\\ud800"),
+            (vec![0xD801], "\\ud801"),
+            (vec![0xDE00], "\\ude00"),
+            (vec![0xD83D], "\\ud83d"),
+        ];
+        prop::sample::select(atoms).prop_map(|(units, spelling)| (units, spelling.to_owned()))
+    }
+
+    fn key() -> impl Strategy<Value = (Vec<u16>, String)> {
+        prop::collection::vec(atom(), 1..4).prop_map(|atoms| {
+            let units = atoms.iter().flat_map(|(units, _)| units.clone()).collect();
+            let spelling = atoms
+                .iter()
+                .map(|(_, spelling)| spelling.as_str())
+                .collect();
+            (units, spelling)
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn children_collide_only_when_their_keys_are_the_same_java_string(
+            keys in prop::collection::vec(key(), 1..5),
+        ) {
+            let members: Vec<String> = keys.iter().map(|(_, spelling)| format!("\"{spelling}\":{{}}")).collect();
+            let rules = format!("{{\"rules\":{{{}}}}}", members.join(","));
+            let distinct: BTreeSet<&Vec<u16>> = keys.iter().map(|(units, _)| units).collect();
+            for strict in [false, true] {
+                let options = RestOptions { production_shapes: strict, ..RestOptions::default() };
+                let mut database = Database::new(options, 7);
+                let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, &rules);
+                if distinct.len() == keys.len() {
+                    prop_assert_eq!((status, body.as_str()), (200, r#"{"status":"ok"}"#), "{}", rules);
+                } else {
+                    prop_assert_eq!(status, 400, "{}", rules);
+                    prop_assert!(body.contains("occurs multiple times."), "{}: {}", rules, body);
+                }
+            }
+        }
+    }
+}
+
 /// A JSON surrogate-pair escape in the rules file is one character, as the official emulator
 /// (Java) reads it: the rule compares it with the character itself. A high escape followed by
 /// anything but a low escape stays alone (`\ud83dxude00` is seven units). Answers of the jar,

@@ -214,18 +214,37 @@ def test_an_empty_content_type_is_the_default(adapter):
 
 
 # Production (recorded 2026-11-04, sandbox run PYCHECK-EVENTS-20261104-01): the raw CloudEvent of a Pub/Sub, Storage and
-# Eventarc delivery has no `traceparent` attribute. The trace context is an ordinary HTTP header of the request there.
+# Eventarc delivery has no `traceparent` attribute. The trace context is an ordinary HTTP header of the request there. In the
+# strict profile the daemon stamps a `traceparent` member for the Node runner's event; the emulator profile adds none, so a
+# `traceparent` there is a publisher's own CloudEvents tracing extension (the official emulator delivers it) and is kept.
 TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
 
-def test_a_traceparent_member_is_not_a_cloudevent_attribute(adapter):
+def set_profile(monkeypatch, profile):
+    if profile is None:
+        monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+
+
+def test_the_strict_profile_does_not_make_a_traceparent_member_an_attribute(adapter, monkeypatch):
+    set_profile(monkeypatch, "strict")
     attributes = adapter(event(traceparent=TRACEPARENT))._get_attributes()
     assert "traceparent" not in attributes
     assert attributes["id"] == "e-1"
 
 
-def test_a_traceparent_member_does_not_change_the_data_or_the_other_attributes(adapter):
+@pytest.mark.parametrize("profile", [None, "emulator", ""])
+def test_the_emulator_profile_keeps_a_publishers_traceparent_extension(adapter, monkeypatch, profile):
+    set_profile(monkeypatch, profile)
+    assert adapter(event(traceparent=TRACEPARENT))._get_attributes()["traceparent"] == TRACEPARENT
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", "strict"])
+def test_a_traceparent_member_never_changes_the_data_or_the_other_attributes(adapter, monkeypatch, profile):
+    set_profile(monkeypatch, profile)
     with_trace = adapter(event(traceparent=TRACEPARENT))
     without = adapter(event())
-    assert with_trace._get_attributes() == without._get_attributes()
+    rest = {k: v for k, v in with_trace._get_attributes().items() if k != "traceparent"}
+    assert rest == without._get_attributes()
     assert with_trace.get_data() == without.get_data()

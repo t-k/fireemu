@@ -97,7 +97,11 @@ def test_the_refusal_without_a_specversion_has_this_exact_message():
 DATASCHEMA = "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
 
 
-@pytest.mark.parametrize("kind", ["created", "updated", "deleted", "written"])
+# Only `created` was recorded; the other three follow the one schema document of the family and are UNRECORDED.
+@pytest.mark.parametrize(
+    "kind",
+    ["created", pytest.param("updated", id="updated-UNRECORDED"), pytest.param("deleted", id="deleted-UNRECORDED"), pytest.param("written", id="written-UNRECORDED")],
+)
 def test_the_strict_profile_gives_a_firestore_event_the_dataschema_production_sends(monkeypatch, kind):
     monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
     attributes = firestore_cloud_event(structured(type=f"google.cloud.firestore.document.v1.{kind}"))._get_attributes()
@@ -125,3 +129,22 @@ def test_the_dataschema_is_added_to_nothing_but_the_attributes(monkeypatch):
     event = structured()
     firestore_cloud_event(event)
     assert "dataschema" not in event
+
+
+TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+
+
+def test_the_strict_profile_does_not_make_a_traceparent_member_a_firestore_attribute(monkeypatch):
+    monkeypatch.setenv("FIREEMU_HTTP_PROFILE", "strict")
+    attributes = firestore_cloud_event(structured(traceparent=TRACEPARENT))._get_attributes()
+    assert "traceparent" not in attributes
+    assert attributes["id"] == "e-1"
+
+
+@pytest.mark.parametrize("profile", [None, "emulator", ""])
+def test_the_emulator_profile_keeps_a_traceparent_member_as_a_firestore_attribute(monkeypatch, profile):
+    if profile is None:
+        monkeypatch.delenv("FIREEMU_HTTP_PROFILE", raising=False)
+    else:
+        monkeypatch.setenv("FIREEMU_HTTP_PROFILE", profile)
+    assert firestore_cloud_event(structured(traceparent=TRACEPARENT))._get_attributes()["traceparent"] == TRACEPARENT

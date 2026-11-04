@@ -16,11 +16,13 @@ from google.events.cloud import firestore as firestore_events
 
 _NOT_AN_ATTRIBUTE = frozenset({"data", "datacontenttype"})
 # The daemon's strict 2nd gen frame names a `traceparent` for the Node runner's event. Production sends the trace context as an
-# ordinary HTTP header (Cloud Run's), never as a `ce-` attribute, so the Python event has none (sandbox run
-# PYCHECK-EVENTS-20261104-01, the raw twins of the Pub/Sub, Storage and Eventarc events).
+# ordinary HTTP header (Cloud Run's), never as a `ce-` attribute, so the strict Python event has none (sandbox run
+# PYCHECK-EVENTS-20261104-01, the raw twins of the Pub/Sub, Storage, Eventarc and Firestore events). The emulator profile
+# stamps no such member, so a `traceparent` there is the publisher's own tracing extension and stays an attribute.
 _HTTP_HEADER_ONLY = frozenset({"traceparent"})
-# Eventarc sends `ce-dataschema` with every Firestore event (recorded for `created`; the schema is the same document for the
-# family). The strict profile delivers it; the emulator profile keeps the official emulator's attributes, which have none.
+# Eventarc sends `ce-dataschema` with every Firestore event. Recorded for `created` only; for `updated`, `deleted`, `written`
+# and any other type routed here it is UNRECORDED (the schema is one document for the family in google-cloudevents). The strict
+# profile delivers it; the emulator profile keeps the official emulator's attributes, which have none.
 _FIRESTORE_DATASCHEMA = (
     "https://github.com/googleapis/google-cloudevents/blob/main/proto/google/events/cloud/firestore/v1/data.proto"
 )
@@ -34,10 +36,11 @@ def _attribute_headers(event: dict) -> dict:
     if not isinstance(event.get("specversion"), str):
         # Without it `from_http` would read the body as a structured JSON event and fail on the body.
         raise ValueError("the event has no specversion")
+    header_only = _HTTP_HEADER_ONLY if _strict() else frozenset()
     return {
         f"ce-{name}": value
         for name, value in event.items()
-        if name not in _NOT_AN_ATTRIBUTE and name not in _HTTP_HEADER_ONLY and isinstance(value, str)
+        if name not in _NOT_AN_ATTRIBUTE and name not in header_only and isinstance(value, str)
     }
 
 

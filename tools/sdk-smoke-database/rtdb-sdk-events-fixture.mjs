@@ -16,7 +16,7 @@ export const SETUP = { events: ['startup', 'startup-observer', 'seed'], admin: [
 export const CASES = { events: EVENT_CASES, admin: ADMIN_CASES };
 const NAMES = { events: EVENTS_PROFILES, admin: ADMIN_PROFILES };
 const FAULTS = ['abort', 'error', 'profile-error', 'page-error', 'timeout'];
-const IGNORED = ['admin-req', 'admin-res', 'admin-unknown', 'raw-ws', 'raw-lp-request', 'raw-lp-response', 'raw-page-ws', 'raw-admin-connect', 'result', 'cleanup'];
+const IGNORED = ['lp-inflight', 'admin-req', 'admin-res', 'admin-unknown', 'raw-ws', 'raw-lp-request', 'raw-lp-response', 'raw-page-ws', 'raw-admin-connect', 'result', 'cleanup'];
 
 /** The profiles of a suite, in the observer's order. */
 export function profilesOf(suite) {

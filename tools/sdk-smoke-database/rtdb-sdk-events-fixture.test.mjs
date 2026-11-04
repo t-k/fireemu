@@ -82,3 +82,8 @@ test('reduce: the credential outcome of an admin refusal is kept in the reduced 
   assert.deepEqual(r.result, { status: 'incomplete', observed: 42, exit: 1, cleanup: { prefix: 'verified', rules: 'verified' }, credentialOutcome: ['r1-admin'] });
   assert.equal(Object.hasOwn(reduceEventsJournal(journal(), RESULT).result, 'credentialOutcome'), false);
 });
+
+test('reduce: the in-flight measurement row of the long-polling page is ignored like the other capture rows', () => {
+  const rows = journal(); rows.splice(2, 0, { kind: 'lp-inflight', profile: 'r1-lp', maxInFlight: 7, inFlight: 0, stopped: false });
+  assert.deepEqual(reduceEventsJournal(rows, RESULT), reduceEventsJournal(journal(), RESULT));
+});

@@ -1,0 +1,10 @@
+{
+  "functions": [
+    {
+      "source": "fixture",
+      "codebase": "pcblock",
+      "runtime": "python312",
+      "ignore": ["venv", "__pycache__", "*.pyc"]
+    }
+  ]
+}

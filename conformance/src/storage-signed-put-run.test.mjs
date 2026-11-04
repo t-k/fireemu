@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const RUN = fileURLToPath(new URL("./storage-signed-put/run.mjs", import.meta.url));
@@ -25,6 +25,8 @@ const SIGNER = "firebase-adminsdk-fbsvc@fireemu-oracle-query.iam.gserviceaccount
 const MEMBER = "user:owner@example.com";
 
 const tree = mkdtempSync(join(tmpdir(), "sp-run-"));
+// The private tree holds the stub `gcloud` and every output directory; it goes whatever the tests did.
+after(() => rmSync(tree, { recursive: true, force: true }));
 const stubBin = join(tree, "bin");
 mkdirSync(stubBin);
 // A `gcloud` that fails, so a run that gets as far as the ADC token stops there.

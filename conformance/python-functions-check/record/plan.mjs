@@ -31,8 +31,6 @@ export const COLLECTION = "pycheck-src";
 export const EVENT_TYPE = "pycheck.thing.v1.happened";
 export const CHANNEL = "firebase";
 export const OBJECT_PREFIX = "pycheck/";
-/** The App Engine location the check creates the project's app in when there is none (owner ledger 2226; kept afterwards). */
-export const APP_ENGINE_LOCATION = "us-central";
 
 export const RUN_ID = /^[a-f0-9]{16}$/;
 /** The marker every payload of a run carries; the fixture reads it back out of what it was given. */
@@ -55,10 +53,9 @@ export const FRAME_MARK = "PYCHECK_FRAME";
 /** The Google Cloud APIs the run needs. A missing one stops the run before anything is created. */
 export const REQUIRED_SERVICES = Object.freeze([
   "artifactregistry.googleapis.com",
+  "cloudbilling.googleapis.com",
   "cloudbuild.googleapis.com",
   "cloudfunctions.googleapis.com",
-  "cloudscheduler.googleapis.com",
-  "cloudtasks.googleapis.com",
   // The CLI ensures these for every functions deployment and enables a missing one without asking; the run starts only
   // when they are already on, so the deploy changes no service (the delivery and blocking recordings did the same).
   "compute.googleapis.com",
@@ -69,6 +66,16 @@ export const REQUIRED_SERVICES = Object.freeze([
   "pubsub.googleapis.com",
   "run.googleapis.com",
   "storage.googleapis.com",
+]);
+
+/**
+ * The two services this project does not have on (coordinator ruling R5): the recorder enables exactly the missing ones of
+ * these, once, after every read-only preflight check has passed, reads them back, and leaves them enabled. Nothing else is
+ * ever enabled.
+ */
+export const ENABLE_SERVICES = Object.freeze([
+  "cloudscheduler.googleapis.com",
+  "cloudtasks.googleapis.com",
 ]);
 
 // How long the run waits, in seconds: after a deploy before it reads back, and for each family after its source
@@ -96,7 +103,7 @@ export const sourceBuckets = (projectNumber) => [
 /** The one bucket the recorder may delete objects in: the CLI's own source upload slot for the region. */
 export const uploadBucket = (projectNumber) => sourceBuckets(projectNumber)[0];
 
-const UPLOAD_OBJECT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+const UPLOAD_OBJECT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.zip$/;
 
 /**
  * Whether a name may be adopted as one of this deployment's upload objects: the upload bucket of the project and a plain

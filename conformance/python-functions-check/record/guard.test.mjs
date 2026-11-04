@@ -55,6 +55,20 @@ test("every source operation is allowed and is a mutation", () => {
 test("the setup, readbacks, lists and cleanup requests are allowed, and only the deletes and creates are mutations", () => {
   const mutating = [
     { method: "PUT", url: topicUrl, json: {} },
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["cloudscheduler.googleapis.com", "cloudtasks.googleapis.com"] },
+    },
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["cloudtasks.googleapis.com"] },
+    },
+    {
+      method: "DELETE",
+      url: `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/channels/firebase`,
+    },
     { method: "DELETE", url: topicUrl },
     { method: "DELETE", url: `${R}/functions/pcps` },
     {
@@ -75,7 +89,11 @@ test("the setup, readbacks, lists and cleanup requests are allowed, and only the
     assert.equal(guard.isMutation(spec), true, spec.method + " " + spec.url);
   }
   const reads = [
-    `https://firebaserules.googleapis.com/v1/projects/${PROJECT}/releases/cloud.firestore`,
+    `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}`,
+    `https://serviceusage.googleapis.com/v1/operations/operation-1234-abcd`,
+    `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/channels/firebase`,
+    `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/operations/operation-1234-abcd`,
+    `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/eventarc-channel-us-central1-firebase-450`,
     `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services?filter=state:ENABLED&pageSize=200`,
     `https://firebase.googleapis.com/v1beta1/projects/${PROJECT}/adminSdkConfig`,
     `https://appengine.googleapis.com/v1/apps/${PROJECT}`,
@@ -267,10 +285,73 @@ const REFUSED = [
     },
   ],
   [
-    "deleting a channel",
+    "deleting a channel that is not the Firebase channel",
     {
       method: "DELETE",
-      url: `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/channels/firebase`,
+      url: `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/channels/other`,
+    },
+  ],
+  [
+    "deleting the Firebase channel in another region",
+    {
+      method: "DELETE",
+      url: `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/europe-west1/channels/firebase`,
+    },
+  ],
+  [
+    "an App Engine app create (the run never makes one)",
+    {
+      method: "POST",
+      url: "https://appengine.googleapis.com/v1/apps",
+      json: { id: PROJECT, locationId: "us-central" },
+    },
+  ],
+  [
+    "enabling a service the run does not enable",
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["compute.googleapis.com"] },
+    },
+  ],
+  [
+    "enabling the two services together with another one",
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["cloudtasks.googleapis.com", "compute.googleapis.com"] },
+    },
+  ],
+  [
+    "enabling the same service twice",
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["cloudtasks.googleapis.com", "cloudtasks.googleapis.com"] },
+    },
+  ],
+  [
+    "an enable with no service",
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: [] },
+    },
+  ],
+  [
+    "an enable with another key",
+    {
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${NUMBER}/services:batchEnable`,
+      json: { serviceIds: ["cloudtasks.googleapis.com"], extra: 1 },
+    },
+  ],
+  [
+    "an enable in another project",
+    {
+      method: "POST",
+      url: "https://serviceusage.googleapis.com/v1/projects/999999999999/services:batchEnable",
+      json: { serviceIds: ["cloudtasks.googleapis.com"] },
     },
   ],
   [

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ENABLE_SERVICES,
   ALL_FUNCTIONS,
   FAMILIES,
   JOB_IDS,
@@ -66,17 +67,20 @@ test("names: the job, the queue, the image and its cache sibling", () => {
   );
 });
 
-test("the required services cover everything the run touches", () => {
+test("the required services cover everything the run touches, and the two the run may enable are not among them", () => {
   for (const id of [
-    "cloudtasks",
-    "cloudscheduler",
     "eventarcpublishing",
     "artifactregistry",
     "pubsub",
     "firestore",
     "storage",
+    "cloudbilling",
+    "compute",
+    "firebaseextensions",
   ])
     assert.ok(REQUIRED_SERVICES.includes(id + ".googleapis.com"), id);
+  assert.deepEqual(ENABLE_SERVICES, ["cloudscheduler.googleapis.com", "cloudtasks.googleapis.com"]);
+  for (const id of ENABLE_SERVICES) assert.ok(!REQUIRED_SERVICES.includes(id), id);
 });
 
 const targets = Object.fromEntries(

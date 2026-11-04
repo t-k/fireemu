@@ -1,10 +1,8 @@
 // The deploy helpers: the declaration check of the SDK's own discovery, the readiness summary, the CLI plan, and the
 // refusals of the source copy.
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import {
   allActive,
   cliPlan,
@@ -42,6 +40,7 @@ const endpoints = () =>
         timeZone: fn.startsWith("pcsch") ? "UTC" : null,
         taskQueue: fn.startsWith("pctask"),
         maxAttempts: fn.startsWith("pctask") ? 1 : null,
+        taskInvoker: null,
       },
     ]),
   );
@@ -62,6 +61,16 @@ const BREAKS = [
   ["not a task queue", (e) => (e.pctask.taskQueue = false), /pctask: not a task queue/],
   ["retries on", (e) => (e.pctaskraw.maxAttempts = 3), /pctaskraw: max attempts/],
   ["another topic", (e) => (e.pcps.filters = { topic: "other" }), /pcps: topic/],
+  [
+    "a task queue invoker (firebase-tools would grant it)",
+    (e) => (e.pctask.taskInvoker = ["public"]),
+    /pctask: task queue invoker/,
+  ],
+  [
+    "a private task queue invoker is still a declared one",
+    (e) => (e.pctaskraw.taskInvoker = ["private"]),
+    /pctaskraw: task queue invoker/,
+  ],
 ];
 for (const [name, edit, pattern] of BREAKS)
   test(`a declaration problem is reported: ${name}`, () => {
@@ -171,7 +180,7 @@ test("the CLI plan refuses an unknown action, a relative path and a missing PATH
 });
 
 test("the source copy needs a full commit SHA", () => {
-  const target = mkdtempSync(join(tmpdir(), "pc-deploy-"));
+  const target = tempDir("pc-deploy-");
   for (const bad of [
     "main",
     "abc123",

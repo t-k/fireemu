@@ -68,7 +68,7 @@ test("the upload object the deploy made is deleted by name, the build's copies a
   assert.equal(result.closureReady, true);
 });
 
-test("buckets that do not exist read as empty, and a bucket that cannot be read is incomplete but not a stop", async () => {
+test("buckets that do not exist read as empty, and a bucket that cannot be listed to its end stops the run", async () => {
   const none = await go({ withSourceBuckets: false });
   assert.deepEqual(none.result.inventory.sourceObjects, {
     uploads: { added: [], removed: [] },
@@ -83,9 +83,10 @@ test("buckets that do not exist read as empty, and a bucket that cannot be read 
         : send(request),
   );
   assert.notEqual(forbidden.result.outcome, "pycheck-auth-stop");
-  assert.equal(forbidden.result.inventory.sourceObjects.sources, null);
+  assert.equal(forbidden.result.stoppedBecause, "source-buckets", "the run does not start");
+  assert.equal(forbidden.result.outcome, "pycheck-stopped-clean");
   assert.ok(forbidden.result.incompleteReads.some((r) => r.id === "preflight-source-objects"));
-  assert.equal(forbidden.result.closureReady, false);
+  assert.deepEqual(forbidden.world.cliRuns, []);
   const paged = await go(
     {},
     (send) => async (request) =>
@@ -93,8 +94,12 @@ test("buckets that do not exist read as empty, and a bucket that cannot be read 
         ? reply(200, { items: [{ name: "a" }], nextPageToken: "t" })
         : send(request),
   );
-  assert.equal(paged.result.inventory.sourceObjects.uploads, null);
-  assert.equal(paged.result.closureReady, false);
+  assert.equal(
+    paged.result.stoppedBecause,
+    "source-buckets",
+    "a listing that does not end is incomplete",
+  );
+  assert.deepEqual(paged.world.cliRuns, []);
 });
 
 test("the source buckets are read before the deploy and after the cleanup, in that order", async () => {
@@ -110,7 +115,7 @@ test("the source buckets are read before the deploy and after the cleanup, in th
 
 test("subscriptions that existed before the run do not count against the final lists", async () => {
   const { result } = await go({ foreignSubscriptions: 2 });
-  assert.equal(result.inventory.before.subscriptions, 2);
+  assert.equal(result.inventory.before.subscriptions.length, 2);
   assert.equal(result.cleanup.listsEmpty, true);
   assert.equal(result.outcome, "pycheck-recorded");
 });
@@ -178,7 +183,7 @@ test("the allowlist reads the two source buckets' object lists and nothing else 
   );
 });
 
-test("a source bucket that could not be read before the run, and can after it, gives no comparison and no cleanup error", async () => {
+test("a source bucket that cannot be read before the run stops it, even if it can be read afterwards", async () => {
   let first = true;
   const { result } = await go({}, (send) => async (request) => {
     if (request.url.includes("gcf-v2-sources") && first) {
@@ -187,7 +192,7 @@ test("a source bucket that could not be read before the run, and can after it, g
     }
     return send(request);
   });
-  assert.equal(result.inventory.sourceObjects.sources, null);
+  assert.equal(result.stoppedBecause, "source-buckets");
   assert.equal(result.cleanup.errors, undefined);
-  assert.ok(result.inventory.sourceObjects.uploads);
+  assert.equal(result.inventory.sourceObjects, undefined);
 });

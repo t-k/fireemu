@@ -2,16 +2,11 @@
 // generation, read back; any other new object in the upload bucket is reported and keeps the cleanup unverified. The sources
 // bucket (the build's copies) is inventory only.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  putClass,
-  uploadEventFromLine,
-  uploadEventsFromCliOutput,
-  withUploadEvents,
-} from "./deploy.mjs";
+import { tempDir } from "./testtmp.mjs";
+import { putClass, uploadEventFromLine, uploadEventsFromCliOutput, withCliLog } from "./deploy.mjs";
 import { createGuard } from "./guard.mjs";
 import { isOwnUploadObject, sourceBuckets, uploadBucket } from "./plan.mjs";
 import { readbackRun, uploadObjectEntries } from "./readback.mjs";
@@ -19,6 +14,11 @@ import { record } from "./run.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
+/** Distinct names in the recorded shape (`<uuid>.zip`). */
+const uuidName = (n) => `514cacbe-3258-46fd-9a02-54b7485b${String(n).padStart(4, "0")}.zip`;
+const A = uuidName(9001);
+const B = uuidName(9002);
+const OLD = "9a9a9a9a-0000-4000-8000-000000000001.zip";
 const [UPLOADS, SOURCES] = sourceBuckets(NUMBER);
 const error = (code, status) => reply(code, { error: { code, status, message: "x" } });
 async function go(worldOptions = {}, wrapSend = (send) => send, options = {}) {
@@ -45,36 +45,35 @@ const RECORDED = readFileSync(
 );
 const [RECEIPT_LINE, PUT_LINE] = RECORDED.trimEnd().split("\n");
 
-test("which names may be adopted: a plain object name in this project's upload bucket, nothing else", () => {
+test("which names may be adopted: the recorded <uuid>.zip shape in this project's upload bucket, nothing else", () => {
   assert.equal(uploadBucket(NUMBER), UPLOADS);
-  for (const name of [
-    "a",
-    "a1b2.zip",
-    "514cacbe-3258-46fd-9a02-54b7485b11c1.zip",
-    "A_b-c.d",
-    "a".repeat(255),
-  ])
+  for (const name of [A, B, "514cacbe-3258-46fd-9a02-54b7485b11c1.zip"])
     assert.equal(isOwnUploadObject(NUMBER, UPLOADS, name), true, name);
   for (const name of [
     "",
-    ".hidden",
-    "-dash.zip",
-    "x/y.zip",
-    "/abs.zip",
-    "a/../b.zip",
-    "has space.zip",
-    "a\nb",
-    "a".repeat(256),
+    "a",
+    "a1b2.zip",
+    A.toUpperCase(),
+    A.replace(".zip", ".txt"),
+    A.replace(".zip", ""),
+    A + "x",
+    "x" + A,
+    "x/" + A,
+    "/" + A,
+    A.replace("-", "_"),
+    "514cacbe-3258-46fd-9a02-54b7485b00g1.zip",
+    "514cacbe-3258-46fd-9a02-54b7485b000.zip",
+    "514cacbe-3258-46fd-9a02-54b7485b00001.zip",
+    A + "\n",
     undefined,
     null,
     5,
-    "é.zip",
   ])
     assert.equal(isOwnUploadObject(NUMBER, UPLOADS, name), false, String(name));
   assert.equal(isOwnUploadObject(NUMBER, SOURCES, "pcps/function-source.zip"), false);
-  assert.equal(isOwnUploadObject(NUMBER, SOURCES, "a.zip"), false);
-  assert.equal(isOwnUploadObject(NUMBER, "someone-elses-bucket", "a.zip"), false);
-  assert.equal(isOwnUploadObject("999999999999", UPLOADS, "a.zip"), false);
+  assert.equal(isOwnUploadObject(NUMBER, SOURCES, A), false);
+  assert.equal(isOwnUploadObject(NUMBER, "someone-elses-bucket", A), false);
+  assert.equal(isOwnUploadObject("999999999999", UPLOADS, A), false);
 });
 
 test("an object can be read or deleted only after the run adopted it, only in the upload bucket, only by generation", () => {
@@ -83,66 +82,57 @@ test("an object can be read or deleted only after the run adopted it, only in th
     `https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(name)}${query}`;
   const gen = "?ifGenerationMatch=1760000000000001";
   for (const method of ["GET", "DELETE"])
-    assert.equal(
-      g.allow({ method, url: url(UPLOADS, "a.zip", method === "DELETE" ? gen : "") }),
-      false,
-    );
-  assert.equal(g.adoptObject(UPLOADS, "a.zip"), true);
+    assert.equal(g.allow({ method, url: url(UPLOADS, A, method === "DELETE" ? gen : "") }), false);
+  assert.equal(g.adoptObject(UPLOADS, A), true);
   assert.equal(
     g.adoptObject(SOURCES, "pcps/function-source.zip"),
     false,
     "the sources bucket is never adopted",
   );
-  assert.equal(g.adoptObject("another-bucket", "a.zip"), false);
-  assert.equal(g.adoptObject(UPLOADS, "x/y.zip"), false);
-  assert.deepEqual(g.adoptedObjects(), [`${UPLOADS}/a.zip`]);
-  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, "a.zip") }), true);
+  assert.equal(g.adoptObject("another-bucket", A), false);
+  assert.equal(g.adoptObject(UPLOADS, "x/${A}"), false);
+  assert.deepEqual(g.adoptedObjects(), [`${UPLOADS}/${A}`]);
+  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, A) }), true);
   assert.equal(
-    g.allow({ method: "GET", url: url(UPLOADS, "a.zip", "?fields=bucket,name,generation") }),
+    g.allow({ method: "GET", url: url(UPLOADS, A, "?fields=bucket,name,generation") }),
     true,
   );
-  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, "a.zip", "?fields=media") }), false);
-  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, "a.zip", "?alt=media") }), false);
-  assert.equal(g.isMutation({ method: "GET", url: url(UPLOADS, "a.zip") }), false);
-  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip", gen) }), true);
-  assert.equal(g.isMutation({ method: "DELETE", url: url(UPLOADS, "a.zip", gen) }), true);
+  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, A, "?fields=media") }), false);
+  assert.equal(g.allow({ method: "GET", url: url(UPLOADS, A, "?alt=media") }), false);
+  assert.equal(g.isMutation({ method: "GET", url: url(UPLOADS, A) }), false);
+  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, A, gen) }), true);
+  assert.equal(g.isMutation({ method: "DELETE", url: url(UPLOADS, A, gen) }), true);
   assert.equal(
-    g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip") }),
+    g.allow({ method: "DELETE", url: url(UPLOADS, A) }),
     false,
     "a delete without a generation",
   );
+  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, A, "?ifGenerationMatch=x") }), false);
+  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, A, "?ifGenerationMatch=") }), false);
   assert.equal(
-    g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip", "?ifGenerationMatch=x") }),
-    false,
-  );
-  assert.equal(
-    g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip", "?ifGenerationMatch=") }),
-    false,
-  );
-  assert.equal(
-    g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip", gen + "&generation=1") }),
+    g.allow({ method: "DELETE", url: url(UPLOADS, A, gen + "&generation=1") }),
     false,
     "no other query key",
   );
-  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, "b.zip", gen) }), false);
+  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, B, gen) }), false);
   assert.equal(
     g.allow({ method: "DELETE", url: url(SOURCES, "pcps/function-source.zip", gen) }),
     false,
   );
   assert.equal(g.allow({ method: "GET", url: url(SOURCES, "pcps/function-source.zip") }), false);
-  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, "a.zip", gen), json: {} }), false);
-  assert.equal(g.allow({ method: "PATCH", url: url(UPLOADS, "a.zip", gen), json: {} }), false);
+  assert.equal(g.allow({ method: "DELETE", url: url(UPLOADS, A, gen), json: {} }), false);
+  assert.equal(g.allow({ method: "PATCH", url: url(UPLOADS, A, gen), json: {} }), false);
   assert.equal(
     g.allow({
       method: "DELETE",
-      url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/a.zip%${gen}`,
+      url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/${A}%${gen}`,
     }),
     false,
   );
   assert.equal(
     g.allow({
       method: "DELETE",
-      url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/a/b.zip${gen}`,
+      url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/${A.slice(0, 8)}/${A.slice(9)}${gen}`,
     }),
     false,
     "an unencoded slash is another route",
@@ -206,18 +196,52 @@ test("the upload class of a PUT: confirmed by a 2xx, refused only by definite 4x
   assert.equal(putClass([500]), "unknown");
 });
 
-test("the CLI result carries the events of the deploy's stdout file, and nothing for another action or an unreadable file", () => {
-  const directory = mkdtempSync(join(tmpdir(), "pcu-"));
+test("the CLI result carries the upload events and the writes of its stdout file, and the files lose the signed URLs and API keys", () => {
+  const directory = tempDir("pcu-");
   try {
-    writeFileSync(join(directory, "cli-deploy-stdout.txt"), [RECEIPT_LINE, PUT_LINE].join("\n"));
+    const stdout = [
+      RECEIPT_LINE,
+      PUT_LINE,
+      "[t] >>> [apiv2][query] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions functionId=a",
+      "[t] <<< [apiv2][status] POST https://cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions 200",
+      '[t] <<< [apiv2][body] GET https://identitytoolkit.googleapis.com/admin/v2/projects/p/config {"client":{"apiKey":"SECRETKEY"}}',
+      "[t] https://storage.googleapis.com/b/o.zip?X-Goog-Signature=SIGNED&GoogleAccessId=x",
+    ].join("\n");
+    writeFileSync(join(directory, "cli-deploy-stdout.txt"), stdout);
+    writeFileSync(join(directory, "cli-deploy-stderr.txt"), '"apiKey": "OTHERKEY"');
     const result = { action: "deploy", exitCode: 0 };
-    const withEvents = withUploadEvents(result, directory);
-    assert.equal(withEvents.exitCode, 0);
-    assert.equal(withEvents.uploadEvents.length, 2);
-    assert.deepEqual(withUploadEvents({ action: "delete" }, directory), { action: "delete" });
-    assert.deepEqual(withUploadEvents({ action: "dry-run" }, directory), { action: "dry-run" });
-    assert.equal(withUploadEvents(result, join(directory, "missing")).uploadEvents, null);
-    assert.equal(withUploadEvents(undefined, directory), undefined);
+    const withLog = withCliLog(result, directory);
+    assert.equal(withLog.exitCode, 0);
+    assert.equal(withLog.uploadEvents.length, 2);
+    assert.deepEqual(withLog.cliWrites, [
+      {
+        method: "POST",
+        url: "cloudfunctions.googleapis.com/v2/projects/p/locations/us-central1/functions",
+        requests: 1,
+        statuses: [200],
+        class: "ok",
+      },
+    ]);
+    const kept = readFileSync(join(directory, "cli-deploy-stdout.txt"), "utf8");
+    assert.ok(
+      !/SECRETKEY|SIGNED|OTHERKEY/.test(
+        kept + readFileSync(join(directory, "cli-deploy-stderr.txt"), "utf8"),
+      ),
+    );
+    assert.ok(
+      kept.includes("storageSource") && kept.includes("[REDACTED"),
+      "the receipt line stays readable",
+    );
+    assert.equal(withCliLog({ action: "delete" }, directory).uploadEvents, undefined);
+    assert.equal(
+      withCliLog({ action: "delete" }, directory).cliWrites,
+      null,
+      "no delete log: unreadable",
+    );
+    assert.equal(withCliLog(result, join(directory, "missing")).uploadEvents, null);
+    assert.equal(withCliLog(result, join(directory, "missing")).cliWrites, null);
+    assert.equal(withCliLog(undefined, directory), undefined);
+    assert.deepEqual(withCliLog({}, directory), {});
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -308,7 +332,7 @@ test("any other new object in the upload bucket is left, reported, and keeps the
   }
 });
 
-test("a new object in the sources bucket is inventory only: never read by name, never deleted, never blocks", async () => {
+test("a new object in the sources bucket is never read by name or deleted; one that is no function's copy blocks the closure", async () => {
   const { result, world, journal } = await go({}, (send, w) => async (request) => {
     if (
       request.method === "GET" &&
@@ -327,8 +351,15 @@ test("a new object in the sources bucket is inventory only: never read by name, 
       (r) => r.state === "before-send" && r.url?.includes("gcf-v2-sources") && r.method !== "GET",
     ),
   );
-  assert.equal(result.cleanup.verified, true);
-  assert.equal(result.outcome, "pycheck-recorded");
+  assert.deepEqual(
+    result.inventory.differences.filter((d) => d.kind === "sourceObjects"),
+    [{ kind: "sourceObjects", added: ["pcps/older.zip"], removed: [] }],
+  );
+  assert.equal(result.cleanup.verified, false);
+  assert.equal(result.outcome, "pycheck-needs-recovery");
+  const clean = await go();
+  assert.deepEqual(clean.result.inventory.differences, []);
+  assert.equal(clean.result.cleanup.verified, true);
 });
 
 test("a deploy that printed no receipt is reported: its object is unexplained and nothing is deleted by guesswork", async () => {
@@ -497,20 +528,21 @@ test("an object that reads 404 or cannot be read when its metadata is asked for 
   assert.equal(badGeneration.result.cleanup.uploadReasons.length, 1);
 });
 
-test("a bucket that cannot be read before the run gives nothing to delete and an incomplete read; paging is followed to five pages", async () => {
-  const before = await go({}, (send) => {
-    let first = true;
-    return async (request) => {
-      if (request.method === "GET" && request.url.includes("gcf-v2-uploads") && first) {
-        first = false;
-        return error(403, "PERMISSION_DENIED");
-      }
-      return send(request);
-    };
-  });
-  assert.equal(before.result.cleanup.uploadObjectsDeleted.length, 0);
-  assert.ok(before.result.cleanup.uploadReasons.includes("upload-baseline-unreadable"));
-  assert.equal(before.result.closureReady, false);
+test("a bucket that cannot be listed before the run stops the run before anything is enabled or created; paging is followed to five pages", async () => {
+  for (const bucket of ["gcf-v2-uploads", "gcf-v2-sources"]) {
+    const before = await go(
+      { withoutServices: ["cloudtasks.googleapis.com"] },
+      (send) => async (request) =>
+        request.method === "GET" && request.url.includes(bucket)
+          ? error(403, "PERMISSION_DENIED")
+          : send(request),
+    );
+    assert.equal(before.result.stoppedBecause, "source-buckets", bucket);
+    assert.equal(before.result.outcome, "pycheck-stopped-clean");
+    assert.deepEqual(before.world.cliRuns, []);
+    assert.deepEqual(before.world.enableRequests, [], "nothing is enabled");
+    assert.ok(before.result.incompleteReads.some((r) => r.id === "preflight-source-objects"));
+  }
   const paged = await go({ sourcePageSize: 5 });
   assert.equal(paged.result.cleanup.uploadObjectsDeleted.length, 1);
   assert.equal(paged.result.cleanup.verified, true);
@@ -544,6 +576,7 @@ test("the A2 read-back reads each deleted object by name with its own allowlist,
     clock: () => world.now,
     bucket: result.bucket,
     uploadObjects: result.cleanup.uploadObjectsDeleted,
+    baseline: world.baseline,
   };
   const clean = await readbackRun({ ...base, send: world.send });
   assert.equal(clean.allAbsent, true);
@@ -648,14 +681,14 @@ test("three receipts are read, a fourth is too many; the same receipt twice is o
     receipt(w.upload),
     put(w.upload),
     receipt(w.upload),
-    receipt("aaa.zip"),
-    receipt("bbb.zip"),
-    receipt("ccc.zip"),
+    receipt(uuidName(9101)),
+    receipt(uuidName(9102)),
+    receipt(uuidName(9103)),
   ]);
   assert.deepEqual(result.cleanup.uploadReasons, [
     "too-many-receipts",
-    "receipt-unconfirmed:aaa.zip",
-    "receipt-unconfirmed:bbb.zip",
+    `receipt-unconfirmed:${uuidName(9101)}`,
+    `receipt-unconfirmed:${uuidName(9102)}`,
   ]);
   assert.deepEqual(result.cleanup.uploadObjectsDeleted[0].putStatuses, [200]);
   assert.equal(
@@ -669,8 +702,8 @@ test("exactly three receipts are not too many", async () => {
   const { result } = await withEvents((w) => [
     receipt(w.upload),
     put(w.upload),
-    receipt("aaa.zip"),
-    receipt("bbb.zip"),
+    receipt(uuidName(9101)),
+    receipt(uuidName(9102)),
   ]);
   assert.ok(!result.cleanup.uploadReasons.includes("too-many-receipts"));
 });
@@ -679,23 +712,23 @@ test("a held receipt repeated after three are held is not a fourth", async () =>
   const { result } = await withEvents((w) => [
     receipt(w.upload),
     put(w.upload),
-    receipt("aaa.zip"),
-    receipt("bbb.zip"),
+    receipt(uuidName(9101)),
+    receipt(uuidName(9102)),
     receipt(w.upload),
-    receipt("aaa.zip"),
+    receipt(uuidName(9101)),
   ]);
   assert.deepEqual(result.cleanup.uploadReasons, [
-    "receipt-unconfirmed:aaa.zip",
-    "receipt-unconfirmed:bbb.zip",
+    `receipt-unconfirmed:${uuidName(9101)}`,
+    `receipt-unconfirmed:${uuidName(9102)}`,
   ]);
 });
 
 test("the delete's generation is one to twenty digits in the allowlist", () => {
   const g = createGuard(RUN, NUMBER);
-  g.adoptObject(UPLOADS, "a.zip");
+  g.adoptObject(UPLOADS, A);
   const del = (generation) => ({
     method: "DELETE",
-    url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/a.zip?ifGenerationMatch=${generation}`,
+    url: `https://storage.googleapis.com/storage/v1/b/${UPLOADS}/o/${A}?ifGenerationMatch=${generation}`,
   });
   assert.equal(g.allow(del("1")), true);
   assert.equal(g.allow(del("1".repeat(20))), true);
@@ -732,31 +765,27 @@ test("a CLI that ended by itself with no receipt is 'no-receipt' only when it su
 });
 
 test("a receipt that names an object already in the bucket before the run is never deleted", async () => {
-  const { result, world } = await withEvents([receipt("old-upload.zip"), put("old-upload.zip")]);
-  assert.deepEqual(result.cleanup.uploadReasons, ["receipt-names-baseline-object:old-upload.zip"]);
+  const world = createWorld({ runId: RUN });
+  world.sourceBuckets.get(UPLOADS).push(OLD);
+  world.baseline = world.inventory();
+  const result = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    save: async () => {},
+    send: world.send,
+    runCli: async (args) => {
+      const r = await world.runCli(args);
+      return args.action === "deploy" ? { ...r, uploadEvents: [receipt(OLD), put(OLD)] } : r;
+    },
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+  });
+  assert.deepEqual(result.cleanup.uploadReasons, [`receipt-names-baseline-object:${OLD}`]);
   assert.deepEqual(result.cleanup.uploadObjectsDeleted, []);
-  assert.ok(world.sourceBuckets.get(UPLOADS).includes("old-upload.zip"));
+  assert.ok(world.sourceBuckets.get(UPLOADS).includes(OLD));
   assert.ok(world.sourceBuckets.get(UPLOADS).includes(world.upload), "the real one is unexplained");
   assert.equal(result.cleanup.uploadObjectsUnexplained.length, 1);
-});
-
-test("without a readable baseline nothing is deleted and both reasons are reported, with no internal error", async () => {
-  const { result } = await go({}, (send) => {
-    let first = true;
-    return async (request) => {
-      if (request.method === "GET" && request.url.includes("gcf-v2-uploads") && first) {
-        first = false;
-        return error(403, "PERMISSION_DENIED");
-      }
-      return send(request);
-    };
-  });
-  assert.deepEqual(result.cleanup.uploadReasons, [
-    "upload-baseline-unreadable",
-    "upload-list-incomplete",
-  ]);
-  assert.equal(result.cleanup.errors, undefined);
-  assert.deepEqual(result.cleanup.uploadObjectsDeleted, []);
 });
 
 test("a list that cannot be read after the deploy is reported with the baseline known", async () => {

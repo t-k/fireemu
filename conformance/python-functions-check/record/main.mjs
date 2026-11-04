@@ -34,7 +34,7 @@ import {
   runCli as realRunCli,
   sdkVersionProblems,
   sourceProblems,
-  withUploadEvents,
+  withCliLog,
 } from "./deploy.mjs";
 import { FIREBASE_TOOLS_VERSION, NODE_VERSION, PROJECT, RUN_ID } from "./plan.mjs";
 import { READBACK_MAX_REQUESTS, SETTLE_MS, readbackRun, uploadObjectEntries } from "./readback.mjs";
@@ -189,6 +189,18 @@ export function lastActivity(path) {
   return last;
 }
 
+/** Writes the whole text to the descriptor: `writeSync` may write less than it was given (a row can be megabytes). */
+export function writeAll(fd, text, write = writeSync) {
+  const bytes = Buffer.from(text, "utf8");
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = write(fd, bytes, offset, bytes.length - offset);
+    if (!Number.isInteger(written) || written <= 0)
+      throw new Error("the journal write made no progress");
+    offset += written;
+  }
+}
+
 /** The run's own result file: the creates it left unconfirmed and the bucket it used. */
 export function resultOf(path) {
   let result;
@@ -207,6 +219,19 @@ export function resultOf(path) {
     creates: result.unconfirmedCreates,
     bucket: typeof result.bucket === "string" ? result.bucket : null,
     uploadObjects: uploadObjectEntries(result.cleanup?.uploadObjectsDeleted),
+    // What the A2 read-back compares against and the obligations the result leaves open (a read-back that cannot see a
+    // baseline closes nothing).
+    baseline: result.inventory?.before ?? null,
+    enabled: Array.isArray(result.servicesEnabled) ? result.servicesEnabled : [],
+    channel: result.cleanup?.channel ?? { ownedByRun: result.channel?.ownedByRun === true },
+    carried: [
+      ...(result.cleanup?.uploadReasons ?? []).map((reason) => "upload:" + reason),
+      ...(result.cleanup?.uploadObjectsUnexplained ?? []).map(
+        (item) => "unexplained-upload-object:" + item.name,
+      ),
+      ...(result.inventory?.differences ?? []).map((d) => "inventory:" + JSON.stringify(d)),
+      ...(result.inventory?.complete === false ? ["inventory-incomplete"] : []),
+    ],
   };
 }
 
@@ -252,9 +277,13 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
       projectNumber: values["project-number"],
       bucket: judged.ok ? judged.bucket : null,
       uploadObjects: judged.ok ? judged.uploadObjects : [],
+      baseline: judged.ok ? judged.baseline : null,
+      enabled: judged.ok ? judged.enabled : [],
+      channel: judged.ok ? judged.channel : {},
+      carried: judged.ok ? judged.carried : [],
       accessToken: deps.token(),
       save: async (row) => {
-        writeSync(journal, JSON.stringify(row) + "\n");
+        writeAll(journal, JSON.stringify(row) + "\n");
         fsyncSync(journal);
       },
       send: deps.send,
@@ -274,6 +303,8 @@ async function readbackCommand({ values, env, deps, out, err, digest }) {
           attempted: result.attempted,
           unknown: result.unknown,
           unconfirmedCreates: unconfirmed,
+          inventory: result.inventory ?? null,
+          carried: judged.ok ? judged.carried : [],
         },
         null,
         2,
@@ -391,7 +422,7 @@ export async function main(
   const configHome = join(runDir, "cli-config");
   mkdirSync(configHome, { recursive: true, mode: 0o700 });
   const runCli = async ({ action }) =>
-    withUploadEvents(
+    withCliLog(
       await deps.runCli({
         action,
         plan: cliPlan(action, {
@@ -414,7 +445,7 @@ export async function main(
       projectNumber: values["project-number"],
       accessToken,
       save: async (row) => {
-        writeSync(journal, JSON.stringify(row) + "\n");
+        writeAll(journal, JSON.stringify(row) + "\n");
         fsyncSync(journal);
       },
       send,

@@ -5,7 +5,7 @@
 // proves nothing about whether the create happened); the command that runs it reads the run's own result for the
 // unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { nonePresent, summarize } from "./deploy.mjs";
+import { inventoryDifferences, nonePresent, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
 import {
   ALL_FUNCTIONS,
@@ -14,7 +14,9 @@ import {
   PROJECT,
   QUEUE_IDS,
   REGION,
+  CHANNEL,
   TOPIC,
+  sourceBuckets,
   functionName,
   packageIds,
 } from "./plan.mjs";
@@ -27,6 +29,7 @@ export const SETTLE_MS = 10 * 60 * 1000;
 const GCF = "https://cloudfunctions.googleapis.com/v2/";
 const SCHEDULER = `https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/jobs`;
 const TASKS = `https://cloudtasks.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/queues`;
+const CHANNEL_URL = `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/channels/${CHANNEL}`;
 const REGISTRY = `https://artifactregistry.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/repositories/gcf-artifacts/packages`;
 
 /** Every name of the run with the URL that reads it directly. The object needs the bucket the run recorded. */
@@ -36,13 +39,27 @@ export const uploadObjectEntries = (list) =>
     (item) => typeof item?.bucket === "string" && typeof item?.name === "string",
   );
 
-export const readbackNames = (runId, bucket, uploadObjects = []) => [
+export const readbackNames = (runId, bucket, uploadObjects = [], channel = {}) => [
   ...ALL_FUNCTIONS.map((fn) => ["function-" + fn, GCF + functionName(fn)]),
   ...JOB_IDS.map((id) => ["job-" + id, SCHEDULER + "/" + id]),
   ...QUEUE_IDS.map((id) => ["queue-" + id, TASKS + "/" + id]),
   ["topic", topicUrl],
   ["document", documentUrl(documentId(runId))],
   ...(bucket ? [["object", storageObjectUrl(bucket, objectName(runId))]] : []),
+  ...(channel?.ownedByRun
+    ? [
+        ["channel", CHANNEL_URL],
+        ...(typeof channel.topic === "string" &&
+        /^eventarc-channel-us-central1-firebase-[0-9]+$/.test(channel.topic)
+          ? [
+              [
+                "channel-topic",
+                `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/${channel.topic}`,
+              ],
+            ]
+          : []),
+      ]
+    : []),
   ...ALL_FUNCTIONS.flatMap(packageIds).map((id) => ["package-" + id, REGISTRY + "/" + id]),
   ...uploadObjectEntries(uploadObjects).map((item, index) => [
     "upload-object-" + (index + 1),
@@ -62,6 +79,10 @@ export async function readbackRun({
   projectNumber,
   bucket = null,
   uploadObjects = [],
+  baseline = null,
+  enabled = [],
+  channel = {},
+  carried = [],
   accessToken,
   save,
   send,
@@ -104,7 +125,7 @@ export async function readbackRun({
   };
   const last = (item) => String(item.name).split("/").at(-1);
   try {
-    for (const [label, url] of readbackNames(runId, bucket, uploadObjects)) {
+    for (const [label, url] of readbackNames(runId, bucket, uploadObjects, channel)) {
       const answer = await capture({ id: "readback-" + label, method: "GET", url });
       out.names[label] = { status: answer?.status ?? null, absent: absent(answer) };
     }
@@ -162,6 +183,47 @@ export async function readbackRun({
       );
       out.lists.documents = documents ? documents.documents.map(last) : null;
     }
+    // The inventory the run started from, compared by identity with a fresh one (the closure rule of the recording).
+    const subs = await list(
+      "list-subscriptions",
+      `https://pubsub.googleapis.com/v1/projects/${PROJECT}/subscriptions?pageSize=1000`,
+      "subscriptions",
+    );
+    const channels = await list(
+      "list-channels",
+      `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/channels`,
+      "channels",
+    );
+    const services = await list(
+      "list-services",
+      `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services?filter=state:ENABLED&pageSize=200`,
+      "services",
+    );
+    const bucketNames = {};
+    for (const [index, name] of sourceBuckets(projectNumber).entries()) {
+      const label = index === 0 ? "uploads" : "sources";
+      const listed = await list(
+        "list-" + label,
+        `https://storage.googleapis.com/storage/v1/b/${name}/o?maxResults=1000`,
+        "items",
+      );
+      bucketNames[label] = listed ? listed.items.map((item) => item.name).toSorted() : null;
+    }
+    const names = (listed, key) =>
+      listed ? listed[key].map((item) => item.name).toSorted() : null;
+    const after = {
+      channels: channels ? channels.channels.map(last).toSorted() : null,
+      triggers: names(triggers, "triggers"),
+      subscriptions: names(subs, "subscriptions"),
+      topics: names(topics, "topics"),
+      packages: names(packages, "packages"),
+      services: services ? services.services.map((svc) => svc.config?.name).toSorted() : null,
+      sourceObjects: bucketNames,
+    };
+    out.inventory = baseline
+      ? { baseline: true, ...inventoryDifferences({ before: baseline, after, enabled }) }
+      : { baseline: false, complete: false, missing: ["baseline"], differences: [] };
+    out.carried = carried;
   } catch (error) {
     if (!(error instanceof AuthStop)) throw error;
   }
@@ -171,16 +233,21 @@ export async function readbackRun({
   out.unknown = known.unknown;
   if (stop) out.authStop = stop;
   const namesGone =
-    Object.keys(out.names).length === readbackNames(runId, bucket, uploadObjects).length &&
+    Object.keys(out.names).length === readbackNames(runId, bucket, uploadObjects, channel).length &&
     Object.values(out.names).every((n) => n.absent === true);
   const listsGone =
     out.lists.functionsAndServices === true &&
     ["jobs", "queues", "topics", "packages", "triggers", "objects", "documents"].every(
       (key) => Array.isArray(out.lists[key]) && out.lists[key].length === 0,
     );
+  const inventoryClean =
+    out.inventory?.baseline === true &&
+    out.inventory.complete === true &&
+    out.inventory.differences.length === 0;
   out.allAbsent =
     namesGone &&
     listsGone &&
+    inventoryClean &&
     stop === null &&
     known.unknown === 0 &&
     out.incompleteReads.length === 0;

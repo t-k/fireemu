@@ -3,18 +3,10 @@
 // the first version of the suite; each test names what its mutant would have changed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import { discover, prepareSource, sourceProblems, summarize } from "./deploy.mjs";
 import { createGuard } from "./guard.mjs";
 import { judge } from "./judge.mjs";
@@ -336,6 +328,7 @@ async function pagedReadback(pages) {
   const rows = [];
   let jobPages = 0;
   const result = await readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -395,6 +388,7 @@ test("a list without a query takes the page token with a question mark", async (
   const seen = [];
   let first = true;
   await readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -423,6 +417,7 @@ test("the lists are judged on their own: the topic in the topics list alone keep
   world.topics.add("pycheck-orders");
   const direct = `GET pubsub.googleapis.com/v1/projects/${P}/topics/pycheck-orders`;
   const result = await readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -440,7 +435,9 @@ test("the lists are judged on their own: the topic in the topics list alone keep
   assert.equal(result.allAbsent, false);
   const other = createWorld({ runId: RUN });
   other.topics.add("someone-elses");
+  other.baseline = other.inventory();
   const clean = await readbackRun({
+    baseline: other.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -457,6 +454,7 @@ test("the functions and the Cloud Run services must both be listed", async () =>
   for (const host of ["cloudfunctions.googleapis.com", "run.googleapis.com"]) {
     const world = createWorld({ runId: RUN });
     const result = await readbackRun({
+      baseline: world.baseline,
       runId: RUN,
       projectNumber: NUMBER,
       bucket: BUCKET,
@@ -476,6 +474,7 @@ test("the functions and the Cloud Run services must both be listed", async () =>
 test("an unknown answer is counted, and an error that is not a stop is not swallowed", async () => {
   const world = createWorld({ runId: RUN });
   const result = await readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -492,6 +491,7 @@ test("an unknown answer is counted, and an error that is not a stop is not swall
   assert.equal(result.allAbsent, false);
   await assert.rejects(
     readbackRun({
+      baseline: world.baseline,
       runId: RUN,
       projectNumber: NUMBER,
       bucket: BUCKET,
@@ -509,7 +509,7 @@ test("an unknown answer is counted, and an error that is not a stop is not swall
 // ---- deploy: what touches the disk -------------------------------------------------------------------
 
 function repoWithFixture() {
-  const repo = mkdtempSync(join(tmpdir(), "pc-repo-"));
+  const repo = tempDir("pc-repo-");
   const env = {
     PATH: process.env.PATH,
     HOME: repo,
@@ -536,8 +536,8 @@ function repoWithFixture() {
 
 test("the source copy takes the tracked files of the check at the commit, links the venv, and nothing else", () => {
   const { repo, sha } = repoWithFixture();
-  const target = join(mkdtempSync(join(tmpdir(), "pc-target-")), "nested", "source");
-  const venv = mkdtempSync(join(tmpdir(), "pc-venv-"));
+  const target = join(tempDir("pc-target-"), "nested", "source");
+  const venv = tempDir("pc-venv-");
   const { configPath, fixtureDir } = prepareSource({
     repoRoot: repo,
     commit: sha,
@@ -564,7 +564,7 @@ test("the source copy takes the tracked files of the check at the commit, links 
 });
 
 test("a forty-character hexadecimal commit passes the shape check, and forty-one does not", () => {
-  const target = mkdtempSync(join(tmpdir(), "pc-sha-"));
+  const target = tempDir("pc-sha-");
   assert.throws(
     () => prepareSource({ repoRoot: "/nonexistent-repo", commit: "a".repeat(40), target }),
     (e) => !/full SHA/.test(e.message),
@@ -580,7 +580,7 @@ test("a forty-character hexadecimal commit passes the shape check, and forty-one
 });
 
 function fakeVenv(script) {
-  const fixture = mkdtempSync(join(tmpdir(), "pc-fixture-"));
+  const fixture = tempDir("pc-fixture-");
   mkdirSync(join(fixture, "venv/bin"), { recursive: true });
   writeFileSync(join(fixture, "venv/bin/python"), script);
   chmodSync(join(fixture, "venv/bin/python"), 0o755);
@@ -591,7 +591,7 @@ test("the discovery runs the venv's Python isolated, in the fixture, with the pr
   const fixture = fakeVenv(
     `#!/bin/sh\nprintf '{"first":"%s","pp":"%s","cwd":"%s","fc":%s,"gp":"%s","home":"%s"}' "$1" "$PYTHONPATH" "$(pwd -P)" "$FIREBASE_CONFIG" "$GCLOUD_PROJECT" "$HOME"\n`,
   );
-  const directory = join(mkdtempSync(join(tmpdir(), "pc-dir-")), "made", "here");
+  const directory = join(tempDir("pc-dir-"), "made", "here");
   const out = discover({ fixtureDir: fixture, directory });
   assert.equal(out.first, "-I");
   assert.equal(out.pp, fixture);
@@ -609,7 +609,7 @@ test("an offline discovery failure keeps only the first 300 characters of the er
   const fixture = fakeVenv(`#!/bin/sh\nprintf '%s' "${"E".repeat(400)}" >&2\nexit 3\n`);
   const [problem] = sourceProblems({
     fixtureDir: fixture,
-    directory: mkdtempSync(join(tmpdir(), "pc-dir-")),
+    directory: tempDir("pc-dir-"),
   });
   assert.equal(problem.length, "the SDK discovery of the fixture failed: ".length + 300);
 });
@@ -628,7 +628,7 @@ test("another function is not a stray of this one", () => {
 });
 
 test("a commit hash with zeros in it passes the shape check", () => {
-  const target = mkdtempSync(join(tmpdir(), "pc-sha0-"));
+  const target = tempDir("pc-sha0-");
   for (const sha of ["0123456789abcdef0123456789abcdef01234567", "0".repeat(40)])
     assert.throws(
       () => prepareSource({ repoRoot: "/nonexistent-repo", commit: sha, target }),

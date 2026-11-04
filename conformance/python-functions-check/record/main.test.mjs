@@ -2,10 +2,10 @@
 // environment, the read-back waits ten minutes and never closes an unknown create, and the exit codes mean what the
 // header says.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import {
   PACKET_FILES,
   envProblems,
@@ -64,7 +64,7 @@ const run = async (argv, deps = goodDeps(), environment = env) => {
   });
   return { code, out, err };
 };
-const dir = () => mkdtempSync(join(tmpdir(), "pc-main-"));
+const dir = () => tempDir("pc-main-");
 
 test("arguments: a command, flags with values, --send without one", () => {
   assert.deepEqual(parseArgs(["check", "--run-dir", "x", "--send"]), {
@@ -446,7 +446,16 @@ test("resultOf reads the unconfirmed creates and the bucket, and refuses anythin
   mkdirSync(d, { recursive: true });
   const path = join(d, "r.json");
   writeFileSync(path, JSON.stringify({ unconfirmedCreates: [], bucket: 5 }));
-  assert.deepEqual(resultOf(path), { ok: true, creates: [], bucket: null, uploadObjects: [] });
+  assert.deepEqual(resultOf(path), {
+    ok: true,
+    creates: [],
+    bucket: null,
+    uploadObjects: [],
+    baseline: null,
+    enabled: [],
+    channel: { ownedByRun: false },
+    carried: [],
+  });
   writeFileSync(path, "{");
   assert.equal(resultOf(path).ok, false);
   assert.equal(resultOf(join(d, "none")).ok, false);

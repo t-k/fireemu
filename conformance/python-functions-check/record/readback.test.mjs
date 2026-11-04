@@ -24,6 +24,7 @@ async function afterRun(worldOptions = {}) {
 }
 const readback = (world, over = {}) =>
   readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: BUCKET,
@@ -129,6 +130,7 @@ test("a list that cannot be read, or runs past five pages, is incomplete and not
 test("a missing bucket cannot read the object and is incomplete", async () => {
   const { world } = await afterRun();
   const result = await readbackRun({
+    baseline: world.baseline,
     runId: RUN,
     projectNumber: NUMBER,
     bucket: null,

@@ -1,11 +1,11 @@
 // What the second mutation pass still found alive, each pinned by a scenario that tells the mutant from the original.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import { localChecks, main, realDeps, resultOf } from "./main.mjs";
 import { SETTLE_MS } from "./readback.mjs";
 import { ALL_FUNCTIONS, JOB_IDS, QUEUE_IDS, TOPIC, functionName, packageIds } from "./plan.mjs";
@@ -58,7 +58,13 @@ test("a 200 that is not JSON is read as nothing, never as a crash, on every read
     });
     assert.equal(served, true, name);
     assert.equal(result.stoppedBecause, undefined, name);
-    assert.equal(result.outcome, "pycheck-recorded", name);
+    // A 200 whose body is not JSON is an unknown answer: the read is incomplete and the run does not close.
+    assert.equal(result.outcome, "pycheck-needs-review", name);
+    assert.ok(
+      result.incompleteReads.some((r) => r.class === "unreadable"),
+      name,
+    );
+    assert.equal(result.closureReady, false, name);
   }
   const noConfig = await go(
     {},
@@ -261,33 +267,6 @@ test("a 403 on a leftover function's operation read and on an image's operation 
     return send(request);
   });
   assert.notEqual(pkg.result.outcome, "pycheck-auth-stop");
-});
-
-test("an App Engine operation read and settle read that answer 403 are data", async () => {
-  const operation = await go(
-    { appEngine: false },
-    (send) => async (request) =>
-      request.method === "GET" &&
-      path(request).includes("/apps/") &&
-      path(request).includes("/operations/")
-        ? error(403, "PERMISSION_DENIED")
-        : send(request),
-  );
-  assert.notEqual(operation.result.outcome, "pycheck-auth-stop");
-  assert.equal(operation.result.outcome, "pycheck-recorded", "the app read settles it");
-  let seenCreate = false;
-  const settle = await go({ appEngine: false }, (send) => async (request) => {
-    if (request.method === "POST" && request.url.endsWith("/v1/apps")) seenCreate = true;
-    if (
-      seenCreate &&
-      request.method === "GET" &&
-      path(request).endsWith("/apps/fireemu-oracle-events")
-    )
-      return error(403, "PERMISSION_DENIED");
-    return send(request);
-  });
-  assert.notEqual(settle.result.outcome, "pycheck-auth-stop");
-  assert.equal(settle.result.stoppedBecause, "appengine");
 });
 
 // ---- unconfirmed names, labelled and listed ---------------------------------------------------------------
@@ -625,7 +604,7 @@ test("a missing flag, or a bad value, is the only problem reported", () => {
 });
 
 test("the result file's own error names the reason", () => {
-  const d = mkdtempSync(join(tmpdir(), "pc-gap-"));
+  const d = tempDir("pc-gap-");
   assert.equal(resultOf(join(d, "missing")).why, "the run's result file cannot be read (ENOENT)");
   writeFileSync(join(d, "bad"), "{");
   assert.equal(resultOf(join(d, "bad")).why, "the run's result file cannot be read (not JSON)");
@@ -644,7 +623,7 @@ test("the working tree check agrees with git, and the read-back's messages and h
       cwd: here,
     }).trim() !== "";
   assert.equal(realDeps.gitDirty(), git);
-  const d = mkdtempSync(join(tmpdir(), "pc-gap-"));
+  const d = tempDir("pc-gap-");
   const at = Date.parse("2026-11-05T00:00:00Z");
   writeFileSync(
     join(d, `journal-${RUN}.jsonl`),

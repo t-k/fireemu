@@ -6,7 +6,8 @@ import {
   ALL_FUNCTIONS,
   COLLECTION,
   JOB_IDS,
-  APP_ENGINE_LOCATION,
+  ENABLE_SERVICES,
+  CHANNEL,
   OBJECT_PREFIX,
   PROJECT,
   QUEUE_IDS,
@@ -96,7 +97,8 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
   const invokerRemoval = (json) => policyWithoutPublicMembers(json);
   return [
     // identity and the project's own state
-    read("firebaserules.googleapis.com", `^/v1/projects/${P}/releases/cloud\\.firestore$`),
+    // The project's identity: the recorded read of this project (FE v7), whose projectNumber names the buckets below.
+    read("cloudresourcemanager.googleapis.com", `^/v1/projects/${P}$`),
     read(
       "serviceusage.googleapis.com",
       `^/v1/projects/${esc(projectNumber)}/services$`,
@@ -112,19 +114,21 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
     ],
     read("firebase.googleapis.com", `^/v1beta1/projects/${P}/adminSdkConfig$`),
     read("appengine.googleapis.com", `^/v1/apps/${P}$`),
-    read("appengine.googleapis.com", `^/v1/apps/${P}/operations/${OPERATION_ID}$`),
-    // The one irreversible change: the project's App Engine app, only when it has none, with exactly this body.
+    // The one enable the run may make: exactly the missing ones of the two services this project lacks, once.
     [
       "POST",
-      "appengine.googleapis.com",
-      `^/v1/apps$`,
+      "serviceusage.googleapis.com",
+      `^/v1/projects/${esc(projectNumber)}/services:batchEnable$`,
       q({}),
       (json) =>
-        onlyKeys(json, ["id", "locationId"]) &&
-        json.id === PROJECT &&
-        json.locationId === APP_ENGINE_LOCATION,
+        onlyKeys(json, ["serviceIds"]) &&
+        Array.isArray(json.serviceIds) &&
+        json.serviceIds.length >= 1 &&
+        new Set(json.serviceIds).size === json.serviceIds.length &&
+        json.serviceIds.every((id) => ENABLE_SERVICES.includes(id)),
       true,
     ],
+    read("serviceusage.googleapis.com", `^/v1/operations/${OPERATION_ID}$`),
     // Cloud Functions: lists, the run's functions, the leftovers' deletes (one at a time, exact names)
     read(
       "cloudfunctions.googleapis.com",
@@ -179,6 +183,24 @@ export function rules(runId, projectNumber, state = { objects: new Set() }) {
       "eventarc.googleapis.com",
       `^/v1/projects/${P}/locations/${R}/channels$`,
       q({ pageToken: token }),
+    ),
+    // The Eventarc channel `firebase` the CLI creates when it is missing: read, and deleted once when the run owns it.
+    read("eventarc.googleapis.com", `^/v1/projects/${P}/locations/${R}/channels/${esc(CHANNEL)}$`),
+    [
+      "DELETE",
+      "eventarc.googleapis.com",
+      `^/v1/projects/${P}/locations/${R}/channels/${esc(CHANNEL)}$`,
+      q({}),
+      nothing,
+      true,
+    ],
+    read(
+      "eventarc.googleapis.com",
+      `^/v1/projects/${P}/locations/${R}/operations/${OPERATION_ID}$`,
+    ),
+    read(
+      "pubsub.googleapis.com",
+      `^/v1/projects/${P}/topics/eventarc-channel-${R}-${esc(CHANNEL)}-[0-9]+$`,
     ),
     // Artifact Registry: lists, and the deletes of this run's own function images
     read(

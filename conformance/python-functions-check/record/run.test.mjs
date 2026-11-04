@@ -182,7 +182,7 @@ test("a function whose address cannot be read gets no task, and the run says so"
 const noWrites = (world) => assert.deepEqual(mutations(world), []);
 test("a missing required API stops before anything is created", async () => {
   const world = createWorld({ runId: RUN });
-  world.services.delete("cloudtasks.googleapis.com");
+  world.services.delete("cloudbuild.googleapis.com");
   const result = await record({
     runId: RUN,
     projectNumber: NUMBER,
@@ -194,7 +194,7 @@ test("a missing required API stops before anything is created", async () => {
     sleep: async (ms) => world.advance(ms),
   });
   assert.equal(result.stoppedBecause, "services");
-  assert.deepEqual(result.servicesMissing, ["cloudtasks.googleapis.com"]);
+  assert.deepEqual(result.servicesMissing, ["cloudbuild.googleapis.com"]);
   assert.deepEqual(world.cliRuns, []);
   noWrites(world);
 });
@@ -261,8 +261,8 @@ test("other people's images, topics, jobs and the project's channel do not stop 
 test("a wrong project identity stops the run before anything else is read", async () => {
   const { result, world } = await go({
     hooks: {
-      "GET firebaserules.googleapis.com/v1/projects/fireemu-oracle-events/releases/cloud.firestore":
-        () => reply(200, { name: "projects/other/releases/cloud.firestore" }),
+      "GET cloudresourcemanager.googleapis.com/v1/projects/fireemu-oracle-events": () =>
+        reply(200, { projectId: "other", projectNumber: NUMBER, lifecycleState: "ACTIVE" }),
     },
   });
   assert.equal(result.stoppedBecause, "identity");
@@ -424,19 +424,38 @@ test("an unknown topic create that a later own 2xx read shows is settled", async
   assert.equal(result.outcome, "pycheck-needs-review");
 });
 
-test("an unknown source create is never re-sent, stays unconfirmed, is still deleted, and blocks the close", async () => {
+test("an unknown source create is never re-sent, stays unconfirmed when no own read shows it, and blocks the close", async () => {
+  let posts = 0;
   const { result, world } = await go({}, {}, (send) => async (request) => {
-    const answer = await send(request);
-    if (request.method === "POST" && request.url.includes("/documents/pycheck-src?"))
+    if (request.method === "POST" && request.url.includes("/documents/pycheck-src?")) {
+      posts += 1;
       throw new Error("reset");
-    return answer;
+    }
+    return send(request);
   });
-  assert.equal(count(world, "POST firestore"), 1);
+  assert.equal(posts, 1);
   assert.equal(result.closureReady, false);
   assert.equal(result.readBackRequired, true);
   assert.ok(result.unconfirmedCreates.some((c) => c.label === "document"));
-  assert.equal(world.documents.size, 0, "the document is deleted in the cleanup");
+  assert.equal(world.documents.size, 0);
   assert.equal(result.cleanup.verified, true);
+});
+
+test("an unknown source create that an own read then shows is settled; the run still needs the read-back", async () => {
+  let posts = 0;
+  const { result, journal } = await go({}, {}, (send) => async (request) => {
+    const answer = await send(request);
+    if (request.method === "POST" && request.url.includes("/documents/pycheck-src?")) {
+      posts += 1;
+      throw new Error("reset");
+    }
+    return answer;
+  });
+  assert.equal(posts, 1);
+  assert.ok(journal.some((r) => r.state === "before-send" && r.id === "settle-document"));
+  assert.ok(!result.unconfirmedCreates.some((c) => c.label === "document"));
+  assert.equal(result.readBackRequired, true, "the unknown write stays unknown");
+  assert.equal(result.closureReady, false);
 });
 
 test("an unknown answer to a source publish is never re-sent and blocks the close", async () => {

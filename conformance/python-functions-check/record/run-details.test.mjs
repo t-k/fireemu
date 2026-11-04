@@ -237,7 +237,7 @@ test("a clean run reports what it read, sent, saw and cleaned", async () => {
   const { result } = await go();
   assert.equal(result.stage, "done");
   assert.equal(result.bucket, "fireemu-oracle-events.firebasestorage.app");
-  assert.deepEqual(result.appEngine, { status: 200 });
+  assert.deepEqual(result.appEngine, { status: 200, present: true });
   assert.deepEqual(result.cli.dryRun.exitCode, 0);
   assert.deepEqual(Object.keys(result.cli), ["dryRun", "deploy", "delete"]);
   assert.equal(result.readbacks.pcps.state, "ACTIVE");
@@ -477,7 +477,10 @@ test("the observing reads (bucket, App Engine app, topic settle, leftover operat
           request.url.includes(needle) ? error(403, "PERMISSION_DENIED") : send(request),
       )
     ).result;
-  assert.equal((await stopAt("/apps/")).stoppedBecause, "appengine");
+  const noApp = await stopAt("/apps/");
+  assert.deepEqual(noApp.appEngine, { status: 403, present: false });
+  assert.equal(noApp.stoppedBecause, undefined, "the App Engine app is only observed");
+  assert.equal(noApp.outcome, "pycheck-recorded");
   const bucket = await go(
     {},
     {},
@@ -730,9 +733,8 @@ test("a confirmed name that reads absent without any delete of ours is flagged w
 
 test("the unknown answer to the object upload is unconfirmed too, and an unknown update is not a create", async () => {
   const upload = await go({}, {}, (send) => async (request) => {
-    const answer = await send(request);
     if (request.url.includes("/upload/storage")) throw new Error("reset");
-    return answer;
+    return send(request);
   });
   assert.ok(
     upload.result.unconfirmedCreates.some(
@@ -1125,7 +1127,8 @@ test("the function and run service lists, and the subscriptions list, are part o
       return subs.send(request);
     },
   });
-  assert.equal(r2.cleanup.listsEmpty, false, "a subscription that was not there before the run");
+  assert.equal(r2.cleanup.verified, false, "a subscription that was not there before the run");
+  assert.ok(r2.inventory.differences.some((d) => d.kind === "subscriptions"));
 });
 
 test("the inventory notes the services and IAM changes, and nothing when a read failed", async () => {

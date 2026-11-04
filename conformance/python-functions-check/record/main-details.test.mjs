@@ -8,15 +8,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { tempDir } from "./testtmp.mjs";
 import { PACKET_FILES, lastActivity, localChecks, main, packetDigest, realDeps } from "./main.mjs";
 import { SETTLE_MS } from "./readback.mjs";
 
@@ -64,7 +63,7 @@ const run = async (argv, deps = goodDeps(), environment = env) => {
   });
   return { code, out, err: err.join("\n"), outText: out.join("\n") };
 };
-const dir = () => mkdtempSync(join(tmpdir(), "pc-md-"));
+const dir = () => tempDir("pc-md-");
 
 test("the digest is the sha256 of 'name TAB sha256(content) LF' lines in packet order", () => {
   const contents = Object.fromEntries(
@@ -334,7 +333,15 @@ test("the read-back journals privately and prints its result pretty", async () =
   assert.equal(
     out.at(-1),
     JSON.stringify(
-      { runId: RUN, allAbsent: true, attempted: 1, unknown: 0, unconfirmedCreates: [] },
+      {
+        runId: RUN,
+        allAbsent: true,
+        attempted: 1,
+        unknown: 0,
+        unconfirmedCreates: [],
+        inventory: null,
+        carried: [],
+      },
       null,
       2,
     ),
@@ -422,6 +429,7 @@ test("the token is asked again when it is old, and a response that reflects the 
   let issued = 0;
   const sent = [];
   let respond = () => new Response("{}");
+  let reached = false;
   const deps = goodDeps({
     now: () => now,
     token: () => `tok-${++issued}-abcdefgh`,
@@ -439,10 +447,12 @@ test("the token is asked again when it is old, and a response that reflects the 
         o.send({ url: "https://example.com/3", method: "GET", headers: {} }),
         /reflected a credential/,
       );
+      reached = true;
       return { outcome: "x", closureReady: true, attempted: 3 };
     },
   });
   await run(["record", ...args(dir()), "--send", "--expect-digest", DIGEST], deps);
+  assert.equal(reached, true, "every assertion inside the fake recorder ran");
   assert.deepEqual(sent, [
     "Bearer tok-1-abcdefgh",
     "Bearer tok-2-abcdefgh",
@@ -488,4 +498,32 @@ test("every local module a packet module imports is itself part of the packet", 
   }
   assert.deepEqual(missing, []);
   for (const file of listed) assert.ok(existsSync(file), file);
+});
+
+test("a production-sized row and result go through the real save path of the record command and are read back", async () => {
+  const d = dir();
+  const big = Buffer.alloc(9 * 1024 * 1024, "b").toString("base64");
+  const deps = goodDeps({
+    record: async (o) => {
+      await o.save({
+        id: "logs-final-frames",
+        state: "response-persisted",
+        dispatchAt: "2026-11-05T00:00:00.000Z",
+        responseAt: "2026-11-05T00:30:00.000Z",
+        bodyBase64: big,
+      });
+      await o.save({ id: "next", dispatchAt: "2026-11-05T00:45:00.000Z" });
+      return { outcome: "x", closureReady: true, attempted: 2, unconfirmedCreates: [], note: big };
+    },
+  });
+  const { code } = await run(["record", ...args(d), "--send", "--expect-digest", DIGEST], deps);
+  assert.equal(code, 0);
+  const files = readdirSync(d);
+  const journal = files.find((f) => f.startsWith("journal-"));
+  const result = files.find((f) => f.startsWith("result-"));
+  assert.equal(lastActivity(join(d, journal)), Date.parse("2026-11-05T00:45:00.000Z"));
+  const rows = readFileSync(join(d, journal), "utf8").trimEnd().split("\n");
+  assert.equal(rows.length, 2);
+  assert.equal(JSON.parse(rows[0]).bodyBase64.length, big.length);
+  assert.equal(JSON.parse(readFileSync(join(d, result), "utf8")).note.length, big.length);
 });

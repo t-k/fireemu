@@ -77,8 +77,10 @@ function productionShaped(frame) {
 }
 export const PRODUCTION_FRAMES = GOLDEN.map(productionShaped);
 
+const CHANNEL_TOPIC = "eventarc-channel-us-central1-firebase-450";
 const REQUIRED = [
   "artifactregistry.googleapis.com",
+  "cloudbilling.googleapis.com",
   "cloudbuild.googleapis.com",
   "cloudfunctions.googleapis.com",
   "cloudscheduler.googleapis.com",
@@ -117,6 +119,10 @@ export function createWorld({
   sourcePageSize = 0,
   publicInvokers = [],
   uploadLines = "normal",
+  withoutServices = [],
+  cliWrites = undefined,
+  projectNumberReported = NUMBER,
+  leaveSubscriptions = false,
 } = {}) {
   const w = {
     runId,
@@ -148,11 +154,14 @@ export function createWorld({
       : new Map(),
     deliveries: [],
     policies: new Map(),
+    subscriptions: new Set(),
+    enableRequests: [],
+    enableReads: 0,
     generations: new Map(),
     upload: null,
     insert: 0,
     services: new Set([
-      ...REQUIRED,
+      ...REQUIRED.filter((id) => !withoutServices.includes(id)),
       "compute.googleapis.com",
       "firebase.googleapis.com",
       "firebaserules.googleapis.com",
@@ -178,6 +187,33 @@ export function createWorld({
     });
   };
 
+  /** The inventory a recorder would read from this world now, in the shape the closure compares (names, sorted). */
+  w.inventory = () => {
+    const base = "projects/" + PROJECT;
+    const names = (ids, prefix) => [...ids].map((id) => prefix + id).toSorted();
+    const buckets = sourceBuckets(NUMBER);
+    return {
+      channels: [...w.channels].toSorted(),
+      triggers: names(w.triggers, base + "/locations/" + REGION + "/triggers/"),
+      subscriptions: [
+        ...Array.from(
+          { length: foreignSubscriptions },
+          (_, n) => `${base}/subscriptions/foreign-${n}`,
+        ),
+        ...names(w.subscriptions, base + "/subscriptions/"),
+      ].toSorted(),
+      topics: names(w.topics, base + "/topics/"),
+      packages: names(
+        w.packages,
+        base + "/locations/" + REGION + "/repositories/gcf-artifacts/packages/",
+      ),
+      services: [...w.services].toSorted(),
+      sourceObjects: {
+        uploads: [...(w.sourceBuckets.get(buckets[0]) ?? [])].toSorted(),
+        sources: [...(w.sourceBuckets.get(buckets[1]) ?? [])].toSorted(),
+      },
+    };
+  };
   w.advance = (ms) => {
     w.now += ms;
   };
@@ -217,6 +253,11 @@ export function createWorld({
       w.queues.set(id, { name: queueName(id), state: "RUNNING", retryConfig: { maxAttempts: 1 } });
     w.topics.add(TOPIC);
     w.channels.add("firebase");
+    if (!w.topics.has(CHANNEL_TOPIC) && !seedChannels.includes("firebase"))
+      w.topics.add(CHANNEL_TOPIC);
+    for (const fn of ALL_FUNCTIONS)
+      if (!SCHEDULER_FUNCTIONS.includes(fn) && !QUEUE_IDS.includes(fn))
+        w.subscriptions.add(`eventarc-${REGION}-${fn}-123-sub-000`);
     for (const [name, items] of w.sourceBuckets) {
       if (name.startsWith("gcf-v2-uploads")) {
         w.upload =
@@ -245,6 +286,7 @@ export function createWorld({
       w.runServices.delete(fn);
       w.policies.delete(fn);
       w.triggers.delete(fn + "-123");
+      if (!leaveSubscriptions) w.subscriptions.delete(`eventarc-${REGION}-${fn}-123-sub-000`);
     }
     for (const id of JOB_IDS) if (!leaveOnDelete.includes("job:" + id)) w.jobs.delete(id);
     for (const id of QUEUE_IDS) if (!leaveOnDelete.includes("queue:" + id)) w.queues.delete(id);
@@ -262,6 +304,7 @@ export function createWorld({
           error: null,
           errored: 5,
           uploadEvents: [],
+          cliWrites: [],
           durationMs: 1,
         };
       createDeployed();
@@ -297,6 +340,7 @@ export function createWorld({
       errored: 0,
       unknownWrites: [],
       ...(uploadEvents ? { uploadEvents } : {}),
+      cliWrites: cliWrites ?? [],
       durationMs: 1,
     };
   };
@@ -340,12 +384,27 @@ export function createWorld({
       if (out) return out;
     }
     const host = url.hostname;
-    if (host === "firebaserules.googleapis.com")
+    if (
+      host === "cloudresourcemanager.googleapis.com" &&
+      method === "GET" &&
+      path === "/v1/projects/" + PROJECT
+    )
       return reply(200, {
-        name: "projects/" + PROJECT + "/releases/cloud.firestore",
-        rulesetName: "projects/" + PROJECT + "/rulesets/abc",
+        projectNumber: projectNumberReported,
+        projectId: PROJECT,
+        lifecycleState: "ACTIVE",
+        name: PROJECT,
       });
-    if (host === "serviceusage.googleapis.com")
+    if (host === "serviceusage.googleapis.com") {
+      if (method === "POST" && path.endsWith("/services:batchEnable")) {
+        if (!Array.isArray(body?.serviceIds) || Object.keys(body).length !== 1)
+          return badRequest("serviceIds is required");
+        w.enableRequests.push([...body.serviceIds]);
+        for (const id of body.serviceIds) w.services.add(id);
+        return reply(200, { name: "operations/enable-" + w.enableRequests.length, done: false });
+      }
+      if (method === "GET" && path.startsWith("/v1/operations/"))
+        return reply(200, { name: path.slice(4), done: ++w.enableReads >= 2 });
       return reply(200, {
         services: [...w.services].toSorted().map((id) => ({
           name: "projects/" + NUMBER + "/services/" + id,
@@ -354,6 +413,7 @@ export function createWorld({
           parent: "projects/" + NUMBER,
         })),
       });
+    }
     const policyCall =
       /^\/v2\/projects\/[^/]+\/locations\/[^/]+\/services\/([^/:]+):(get|set)IamPolicy$/.exec(path);
     if (host === "run.googleapis.com" && policyCall) {
@@ -375,26 +435,7 @@ export function createWorld({
     if (path.endsWith("/adminSdkConfig"))
       return reply(200, { projectId: PROJECT, storageBucket: BUCKET });
     if (host === "appengine.googleapis.com") {
-      if (method === "POST" && path === "/v1/apps") {
-        if (w.app)
-          return reply(409, { error: { code: 409, status: "ALREADY_EXISTS", message: "exists" } });
-        if (
-          body?.id !== PROJECT ||
-          typeof body?.locationId !== "string" ||
-          Object.keys(body).length !== 2
-        )
-          return badRequest("id and locationId are required");
-        w.app = {
-          name: "apps/" + PROJECT,
-          id: PROJECT,
-          locationId: body.locationId,
-          servingStatus: "SERVING",
-        };
-        w.appOperationReads = 0;
-        return reply(200, { name: `apps/${PROJECT}/operations/op-1`, done: false });
-      }
-      if (path.includes("/operations/"))
-        return reply(200, { name: path.slice(4), done: ++w.appOperationReads >= 2 });
+      if (method !== "GET") throw new Error("world: unexpected " + key);
       return w.app ? reply(200, w.app) : notFound("app");
     }
     if (host === "cloudfunctions.googleapis.com") {
@@ -409,7 +450,9 @@ export function createWorld({
         w.functions.delete(name);
         const fn = name.split("/").at(-1);
         w.runServices.delete(fn);
+        w.policies.delete(fn);
         w.triggers.delete(fn + "-123");
+        w.subscriptions.delete(`eventarc-${REGION}-${fn}-123-sub-000`);
         return reply(200, {
           name: "projects/" + PROJECT + "/locations/" + REGION + "/operations/del-" + ++w.insert,
           done: false,
@@ -434,6 +477,26 @@ export function createWorld({
           "triggers",
           url,
         );
+      const channel = /\/channels\/([^/]+)$/.exec(path);
+      if (channel) {
+        if (method === "GET")
+          return w.channels.has(channel[1])
+            ? reply(200, {
+                name: "projects/" + PROJECT + "/locations/" + REGION + "/channels/" + channel[1],
+                pubsubTopic: "projects/" + PROJECT + "/topics/" + CHANNEL_TOPIC,
+              })
+            : notFound("channel");
+        if (method === "DELETE") {
+          if (!w.channels.has(channel[1])) return notFound("channel");
+          w.channels.delete(channel[1]);
+          w.topics.delete(CHANNEL_TOPIC);
+          return reply(200, {
+            name: "projects/" + PROJECT + "/locations/" + REGION + "/operations/ch-1",
+            done: false,
+          });
+        }
+      }
+      if (path.includes("/operations/")) return reply(200, { name: path.slice(4), done: true });
       if (path.endsWith("/channels"))
         return page(
           [...w.channels].map((id) => ({
@@ -512,9 +575,14 @@ export function createWorld({
         );
       if (path.endsWith("/subscriptions"))
         return page(
-          Array.from({ length: foreignSubscriptions }, (_, n) => ({
-            name: `projects/${PROJECT}/subscriptions/foreign-${n}`,
-          })),
+          [
+            ...Array.from({ length: foreignSubscriptions }, (_, n) => ({
+              name: `projects/${PROJECT}/subscriptions/foreign-${n}`,
+            })),
+            ...[...w.subscriptions].toSorted().map((id) => ({
+              name: `projects/${PROJECT}/subscriptions/${id}`,
+            })),
+          ],
           "subscriptions",
           url,
         );
@@ -676,5 +744,6 @@ export function createWorld({
     }
     throw new Error("world: unexpected " + key);
   };
+  w.baseline = w.inventory();
   return w;
 }

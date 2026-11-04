@@ -26,6 +26,8 @@ import {
   READY_POLL_SECONDS,
   allActive,
   cliFailed,
+  inventoryDifferences,
+  iamUnexpected,
   nonePresent,
   putClass,
   summarize,
@@ -35,7 +37,7 @@ import { judge } from "./judge.mjs";
 import { errorFilter, frameFilter, listRequest, parseErrors, parseFrames } from "./logs.mjs";
 import {
   ALL_FUNCTIONS,
-  APP_ENGINE_LOCATION,
+  CHANNEL,
   COLLECTION,
   DELIVERY_WINDOW_SECONDS,
   JOB_IDS,
@@ -44,6 +46,7 @@ import {
   PROPAGATION_WAIT_SECONDS,
   QUEUE_IDS,
   REGION,
+  ENABLE_SERVICES,
   REQUIRED_SERVICES,
   isOwnUploadObject,
   sourceBuckets,
@@ -143,8 +146,8 @@ export async function record({
     gap: STEP_GAP_SECONDS,
     settle: 30,
     busy: 60,
-    appEngine: 10,
-    appEnginePolls: 30,
+    enable: 10,
+    enablePolls: 30,
     ...waits,
   };
   const pause = (seconds) => sleep(seconds * 1000);
@@ -205,6 +208,7 @@ export async function record({
   let polledUntil = startedAt;
   let iamBefore = null;
   let enabledBefore = null;
+  let servicesToEnable = [];
   let sourceObjectsBefore = null;
   let cliDeleteStarted = false;
 
@@ -214,7 +218,17 @@ export async function record({
     if (counts().attempted >= normalCeiling && !spec.cleanup)
       throw new BudgetError("the normal request ceiling is reached");
     await prepareRequest?.(spec);
-    return capture(spec);
+    const answer = await capture(spec);
+    // A 200, 201 or 202 whose JSON body does not parse says nothing about the effect: it is an unknown answer. An empty
+    // 204 is a complete answer.
+    if (
+      answer &&
+      !answer.bodyUnknown &&
+      [200, 201, 202].includes(answer.status) &&
+      (answer.json === null || answer.json === undefined)
+    )
+      answer.bodyUnknown = true;
+    return answer;
   };
   const noteSeen = (answer) => {
     if (!(answer?.status === 200 && readable(answer))) return;
@@ -270,6 +284,30 @@ export async function record({
     if (why) {
       unknownMutations.push({ id: "cli-" + action, class: why });
       if (action === "deploy") deployUnknown = why;
+    }
+    // Every mutating request the CLI sent (from its --debug output) is journaled; one that was retried, unanswered or not
+    // answered 2xx is an unknown write that only A2 can close (coordinator ruling R1). firebase-tools' own retries are
+    // accepted as CLI behaviour; the at-most-once rule is the recorder's own requests and one CLI call per action.
+    if (action !== "dry-run" || Array.isArray(result?.cliWrites)) {
+      if (!Array.isArray(result?.cliWrites))
+        unknownMutations.push({ id: "cli-" + action, class: "cli-log-unreadable" });
+      else {
+        let n = 0;
+        for (const write of result.cliWrites) {
+          n += 1;
+          try {
+            await save({ id: `cli-${action}-write-${n}`, state: "cli-write", action, ...write });
+          } catch {
+            // the journal is the thing that failed
+          }
+          if (write.class !== "ok")
+            unknownMutations.push({
+              id: `cli-${action}-write-${n}`,
+              class: `cli-write-${write.class}`,
+              request: `${write.method} ${write.url}`,
+            });
+        }
+      }
     }
     return result;
   };
@@ -430,19 +468,24 @@ export async function record({
 
   // ---- the phases ------------------------------------------------------------------------------
   async function preflight() {
-    const identity = await normal({
+    // The project's identity is the recorded read of this project (a 200 with its id, number and an ACTIVE state). The
+    // number it returns must be the one the caller named: that number names the buckets whose objects get deleted.
+    const project = await normal({
       id: "identity",
       method: "GET",
-      url: `https://firebaserules.googleapis.com/v1/projects/${PROJECT}/releases/cloud.firestore`,
+      url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}`,
     });
     if (
-      identity?.status !== 200 ||
-      identity.json?.name !== `projects/${PROJECT}/releases/cloud.firestore`
+      !(project?.status === 200 && readable(project)) ||
+      project.json.projectId !== PROJECT ||
+      project.json.lifecycleState !== "ACTIVE"
     )
       return "identity";
+    if (String(project.json.projectNumber) !== String(projectNumber)) return "project-number";
     const services = await normal({ id: "services-before", method: "GET", url: SERVICES_URL });
     const enabled = new Set((services?.json?.services ?? []).map((s) => s.config?.name));
     out.servicesMissing = REQUIRED_SERVICES.filter((id) => !enabled.has(id));
+    servicesToEnable = ENABLE_SERVICES.filter((id) => !enabled.has(id));
     enabledBefore = [...enabled].toSorted();
     if (!(services?.status === 200 && readable(services)) || out.servicesMissing.length > 0)
       return "services";
@@ -466,6 +509,8 @@ export async function record({
     if (![`${PROJECT}.firebasestorage.app`, `${PROJECT}.appspot.com`].includes(bucket))
       return "bucket-name";
     out.bucket = bucket;
+    // Cloud Scheduler needs no App Engine app here (sbx delivered with none): the run never creates one and only records
+    // what it finds.
     const app = await read(
       {
         id: "appengine-app",
@@ -474,11 +519,7 @@ export async function record({
       },
       { observe: true },
     );
-    out.appEngine = { status: app?.status ?? null };
-    // Cloud Scheduler needs the project's App Engine app. When there is none (an own 404 NOT_FOUND), the run creates it
-    // after every other check has passed (owner ledger 2226): an irreversible change that stays afterwards.
-    if (absent(app)) out.appEngine.missing = true;
-    else if (app?.status !== 200) return "appengine";
+    out.appEngine = { status: app?.status ?? null, present: app?.status === 200 };
     const bucketRead = await read(
       { id: "bucket", method: "GET", url: `https://storage.googleapis.com/storage/v1/b/${bucket}` },
       { observe: true },
@@ -523,13 +564,24 @@ export async function record({
       ![jobs, queues, topics, subs, triggers, channels, packages, objects, documents].every(Boolean)
     )
       return "lists";
+    const names = (items) => items.map((item) => item.name).toSorted();
     out.inventory.before = {
-      channels: channels.channels.map((c) => lastSegment(c.name)),
-      triggers: triggers.triggers.length,
-      packages: packages.packages.length,
-      subscriptions: subs.subscriptions.length,
+      channels: channels.channels.map((c) => lastSegment(c.name)).toSorted(),
+      triggers: names(triggers.triggers),
+      packages: names(packages.packages),
+      subscriptions: names(subs.subscriptions),
+      topics: names(topics.topics),
+      services: enabledBefore,
     };
+    // The inventory every closure compares against must be complete: a bucket that cannot be listed to its end stops the run
+    // before anything is enabled or created.
     sourceObjectsBefore = await sourceObjects("preflight");
+    if (Object.values(sourceObjectsBefore).some((listed) => !Array.isArray(listed)))
+      return "source-buckets";
+    out.inventory.before.sourceObjects = {
+      uploads: sourceObjectsBefore[sourceBuckets(projectNumber)[0]],
+      sources: sourceObjectsBefore[sourceBuckets(projectNumber)[1]],
+    };
     const ownJobs = jobs.jobs.some((j) => JOB_IDS.includes(lastSegment(j.name)));
     const ownQueues = queues.queues.some((qe) => QUEUE_IDS.includes(lastSegment(qe.name)));
     const ownTopic = topics.topics.some((t) => lastSegment(t.name) === TOPIC);
@@ -550,8 +602,52 @@ export async function record({
       documents.documents.length
     )
       return "namespace";
+    // The CLI creates the Eventarc channel `firebase` when it is missing. If it is missing now, the run owns what the CLI
+    // makes: the cleanup deletes the channel once and reads it back (coordinator ruling R6).
+    out.channel = { ownedByRun: !out.inventory.before.channels.includes(CHANNEL) };
     await pollLogs("preflight");
-    return null;
+    return (await enableServices()) ? null : "enable-services";
+  }
+
+  /**
+   * Enables exactly the missing ones of the two services this project lacks (coordinator ruling R5), once, after every
+   * read-only check passed; reads the operation until it is done and the services list until they show. They stay enabled.
+   * An unknown answer is sticky and stops the run.
+   */
+  async function enableServices() {
+    out.servicesEnabled = [];
+    if (servicesToEnable.length === 0) return true;
+    const answer = await mutate({
+      id: "enable-services",
+      method: "POST",
+      url: `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services:batchEnable`,
+      json: { serviceIds: servicesToEnable },
+    });
+    out.enable = { serviceIds: servicesToEnable, class: answerClass(answer) };
+    if (answerClass(answer) !== "2xx") return false;
+    for (
+      let poll = 1;
+      typeof answer.json?.name === "string" &&
+      answer.json.done !== true &&
+      poll <= wait.enablePolls;
+      poll++
+    ) {
+      await pause(wait.enable);
+      const op = await read(
+        {
+          id: `enable-operation-${poll}`,
+          method: "GET",
+          url: `https://serviceusage.googleapis.com/v1/${answer.json.name}`,
+        },
+        { observe: true },
+      );
+      if (op?.json?.done === true) break;
+    }
+    const after = await read({ id: "services-after-enable", method: "GET", url: SERVICES_URL });
+    const now = new Set((after?.json?.services ?? []).map((svc) => svc.config?.name));
+    if (!(after?.status === 200 && readable(after))) return false;
+    out.servicesEnabled = servicesToEnable.filter((id) => now.has(id));
+    return out.servicesEnabled.length === servicesToEnable.length;
   }
 
   /**
@@ -596,56 +692,6 @@ export async function record({
       }
     }
     return found;
-  }
-
-  /**
-   * Creates the project's App Engine app when the preflight found none: one request, never re-sent, then the
-   * operation is read until it is done and the app is read back. The app is not part of the cleanup (it cannot be
-   * deleted and the owner asked to keep it). An unknown answer, or an app that cannot be read afterwards, stays
-   * unconfirmed and keeps the run from closing.
-   */
-  async function ensureAppEngine() {
-    if (!out.appEngine.missing) return true;
-    const url = "https://appengine.googleapis.com/v1/apps";
-    const create = await mutate({
-      id: "create-appengine",
-      method: "POST",
-      url,
-      json: { id: PROJECT, locationId: APP_ENGINE_LOCATION },
-    });
-    out.appEngine.createClass = answerClass(create);
-    if (answerClass(create) === "4xx") return false;
-    pendingCreates.set("appengine", {
-      label: "appengine",
-      id: "create-appengine",
-      name: "apps/" + PROJECT,
-      class: answerClass(create),
-    });
-    const operation = typeof create?.json?.name === "string" ? create.json : null;
-    for (
-      let poll = 1;
-      operation && create.json.done !== true && poll <= wait.appEnginePolls;
-      poll++
-    ) {
-      await pause(wait.appEngine);
-      const op = await read(
-        {
-          id: `appengine-operation-${poll}`,
-          method: "GET",
-          url: `https://appengine.googleapis.com/v1/${operation.name}`,
-        },
-        { observe: true },
-      );
-      if (op?.json?.done === true) break;
-    }
-    const app = await read(
-      { id: "settle-appengine", method: "GET", url: `${url}/${PROJECT}` },
-      { observe: true },
-    );
-    if (app?.status !== 200 || app.json?.locationId !== APP_ENGINE_LOCATION) return false;
-    confirmed.add("appengine");
-    out.appEngine.created = true;
-    return true;
   }
 
   async function setup() {
@@ -821,13 +867,28 @@ export async function record({
       out.operations[op.key] = { sent: true, ...sent[op.key] };
       if (op.key === "fs-create" && answerClass(answer) === "2xx") confirmed.add("document");
       if (op.key === "st-upload" && answerClass(answer) === "2xx") confirmed.add("object");
-      if (isUnknownClass(answer) && (op.key === "fs-create" || op.key === "st-upload"))
+      if (isUnknownClass(answer) && (op.key === "fs-create" || op.key === "st-upload")) {
+        const kind = op.key === "fs-create" ? "document" : "object";
         pendingCreates.set(op.key, {
-          label: op.key === "fs-create" ? "document" : "object",
+          label: kind,
           id: label,
           name: op.key,
           class: answerClass(answer),
         });
+        // An unknown create is settled only by an own read that shows the name (a 404 never settles it).
+        const settle = await read(
+          {
+            id: "settle-" + kind,
+            method: "GET",
+            url:
+              kind === "document"
+                ? documentUrl(documentId(runId))
+                : storageObjectUrl(bucket, objectName(runId)),
+          },
+          { observe: true },
+        );
+        if (settle?.status === 200 && readable(settle)) confirmed.add(kind);
+      }
       await pause(wait.gap);
     }
   }
@@ -1223,6 +1284,50 @@ export async function record({
         if (!before.includes(name) && !explained.has(name))
           out.cleanup.uploadObjectsUnexplained.push({ bucket: bucketName, name });
     });
+    // The Eventarc channel `firebase`, when the CLI made it (it was not there at the preflight): deleted once after the
+    // functions are gone, its operation read until done; the channel and its managed topic are read back below.
+    const channelUrl = `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/channels/${CHANNEL}`;
+    out.cleanup.channel = { ownedByRun: out.channel?.ownedByRun === true };
+    let channelTopicUrl = null;
+    if (out.channel?.ownedByRun && out.cleanup.functionsGone)
+      await step("channel", async () => {
+        const present = await read(
+          { id: "channel-present", method: "GET", url: channelUrl, cleanup: true },
+          { observe: true },
+        );
+        if (absent(present)) return void (out.cleanup.channel.absentAlready = true);
+        if (!(present?.status === 200 && readable(present))) return;
+        const topic = lastSegment(present.json.pubsubTopic);
+        if (/^eventarc-channel-us-central1-firebase-[0-9]+$/.test(topic)) {
+          out.cleanup.channel.topic = topic;
+          channelTopicUrl = `https://pubsub.googleapis.com/v1/projects/${PROJECT}/topics/${topic}`;
+        }
+        const answer = await mutate({
+          id: "delete-channel",
+          method: "DELETE",
+          url: channelUrl,
+          cleanup: true,
+        });
+        out.cleanup.channel.deleteClass = answerClass(answer);
+        if (
+          answerClass(answer) === "2xx" &&
+          typeof answer.json?.name === "string" &&
+          answer.json.done !== true
+        )
+          for (let poll = 1; poll <= 12; poll++) {
+            await pause(10);
+            const op = await read(
+              {
+                id: `channel-operation-${poll}`,
+                method: "GET",
+                url: `https://eventarc.googleapis.com/v1/${answer.json.name}`,
+                cleanup: true,
+              },
+              { observe: true },
+            );
+            if (op?.json?.done === true) break;
+          }
+      });
     // Read every name back directly. Only a direct read of an absence counts; a name that was not read is not absent.
     const names = [
       ...ALL_FUNCTIONS.map((fn) => ["function-" + fn, GCF + functionName(fn)]),
@@ -1231,6 +1336,8 @@ export async function record({
       ["topic", topicUrl],
       ["document", documentUrl(documentId(runId))],
       ["object", bucket ? storageObjectUrl(bucket, objectName(runId)) : null],
+      ...(out.channel?.ownedByRun ? [["channel", channelUrl]] : []),
+      ...(channelTopicUrl ? [["channel-topic", channelTopicUrl]] : []),
       ...ALL_FUNCTIONS.flatMap(packageIds).map((id) => ["package-" + id, REGISTRY + "/" + id]),
       ...out.cleanup.uploadObjectsDeleted.map((item, index) => [
         "upload-object-" + (index + 1),
@@ -1249,6 +1356,7 @@ export async function record({
       });
     }
     out.cleanup.listsEmpty = false;
+    const finalLists = {};
     await step("final-lists", async () => {
       const jobs = await list("final-jobs", SCHEDULER + "?pageSize=500", "jobs");
       const queues = await list("final-queues", TASKS + "?pageSize=500", "queues");
@@ -1269,51 +1377,32 @@ export async function record({
       );
       const packages = await list("final-packages", REGISTRY + "?pageSize=100", "packages");
       const fns = await functionLists("final");
+      const sorted = (listed, key) => (listed ? listed[key].map((x) => x.name).toSorted() : null);
+      finalLists.topics = sorted(topics, "topics");
+      finalLists.subscriptions = sorted(subs, "subscriptions");
+      finalLists.triggers = sorted(triggers, "triggers");
+      finalLists.packages = sorted(packages, "packages");
       out.cleanup.listsEmpty =
         Boolean(jobs && queues && topics && subs && triggers && packages && complete(fns)) &&
         !jobs.jobs.some((x) => JOB_IDS.includes(lastSegment(x.name))) &&
         !queues.queues.some((x) => QUEUE_IDS.includes(lastSegment(x.name))) &&
         !topics.topics.some((x) => lastSegment(x.name) === TOPIC) &&
-        subs.subscriptions.length === (out.inventory.before?.subscriptions ?? 0) &&
         !triggers.triggers.some((t) =>
           ALL_FUNCTIONS.some((fn) => String(t.name).includes("/" + fn + "-")),
         ) &&
         !packages.packages.some((x) => ownPackages().includes(lastSegment(x.name))) &&
         nonePresent(summarize(fns));
     });
-    out.cleanup.verified =
-      out.cleanup.listsEmpty &&
-      out.cleanup.uploadObjectsUnexplained.length === 0 &&
-      out.cleanup.uploadReasons.length === 0 &&
-      Object.values(readBack).every((v) => v === true);
-    // Read-only inventory: what the two Gen2 buckets gained (the upload object is deleted above), and what else changed.
-    await step("source-objects", async () => {
-      const after = await sourceObjects("inventory");
-      out.inventory.sourceObjects = Object.fromEntries(
-        sourceBuckets(projectNumber).map((name, index) => {
-          const before = sourceObjectsBefore?.[name];
-          const now = after[name];
-          return [
-            index === 0 ? "uploads" : "sources",
-            Array.isArray(before) && Array.isArray(now)
-              ? {
-                  added: now.filter((n) => !before.includes(n)),
-                  removed: before.filter((n) => !now.includes(n)),
-                }
-              : null,
-          ];
-        }),
-      );
-    });
+    // The inventory the run started from, compared by identity with a fresh one: the two Gen2 buckets, the channels, the
+    // enabled services (only what this run enabled may have been added) and the project IAM (only service-agent additions).
+    // Every difference, and every list that could not be read to its end, keeps the cleanup from being verified.
     await step("inventory", async () => {
       const channels = await list(
         "inventory-channels",
         `https://eventarc.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/channels`,
         "channels",
       );
-      out.inventory.channelsAfter = channels
-        ? channels.channels.map((c) => lastSegment(c.name))
-        : null;
+      const afterBuckets = await sourceObjects("inventory");
       const iamAfter = await read({
         id: "iam-after",
         method: "POST",
@@ -1328,15 +1417,66 @@ export async function record({
         url: SERVICES_URL,
         cleanup: true,
       });
-      const names_ = new Set((after?.json?.services ?? []).map((svc) => svc.config?.name));
+      const servicesNow =
+        after?.status === 200 && readable(after)
+          ? (after.json.services ?? []).map((svc) => svc.config?.name).toSorted()
+          : null;
       out.inventory.services =
-        after?.status === 200 && readable(after) && enabledBefore
+        servicesNow && enabledBefore
           ? {
-              added: [...names_].filter((n) => !enabledBefore.includes(n)).toSorted(),
-              removed: enabledBefore.filter((n) => !names_.has(n)),
+              added: servicesNow.filter((n) => !enabledBefore.includes(n)).toSorted(),
+              removed: enabledBefore.filter((n) => !servicesNow.includes(n)),
             }
           : null;
+      out.inventory.sourceObjects = Object.fromEntries(
+        sourceBuckets(projectNumber).map((name, index) => {
+          const before = sourceObjectsBefore?.[name];
+          const now = afterBuckets[name];
+          return [
+            index === 0 ? "uploads" : "sources",
+            Array.isArray(before) && Array.isArray(now)
+              ? {
+                  added: now.filter((n) => !before.includes(n)),
+                  removed: before.filter((n) => !now.includes(n)),
+                }
+              : null,
+          ];
+        }),
+      );
+      out.inventory.channelsAfter = channels
+        ? channels.channels.map((c) => lastSegment(c.name)).toSorted()
+        : null;
+      const compared = inventoryDifferences({
+        before: out.inventory.before,
+        after: {
+          channels: out.inventory.channelsAfter,
+          triggers: finalLists.triggers ?? null,
+          subscriptions: finalLists.subscriptions ?? null,
+          topics: finalLists.topics ?? null,
+          packages: finalLists.packages ?? null,
+          services: servicesNow,
+          sourceObjects: {
+            uploads: afterBuckets[sourceBuckets(projectNumber)[0]],
+            sources: afterBuckets[sourceBuckets(projectNumber)[1]],
+          },
+        },
+        enabled: out.servicesEnabled ?? [],
+      });
+      const iam = iamUnexpected(out.inventory.iam);
+      out.inventory.complete = compared.complete && iam.complete;
+      out.inventory.missing = compared.missing;
+      out.inventory.differences = [
+        ...compared.differences,
+        ...iam.unexpected.map((what) => ({ kind: "iam", what })),
+      ];
     });
+    out.cleanup.verified =
+      out.cleanup.listsEmpty &&
+      out.cleanup.uploadObjectsUnexplained.length === 0 &&
+      out.cleanup.uploadReasons.length === 0 &&
+      out.inventory.complete === true &&
+      out.inventory.differences.length === 0 &&
+      Object.values(readBack).every((v) => v === true);
     await step("final-logs", async () => {
       await pause(wait.logDelay);
       await pollLogs("final", { final: true });
@@ -1357,7 +1497,7 @@ export async function record({
   try {
     const problem = await preflight();
     if (problem) {
-      out.outcome = "pycheck-stopped-clean";
+      out.outcome = unknownMutations.length > 0 ? "pycheck-needs-review" : "pycheck-stopped-clean";
       out.stoppedBecause = problem;
       return summary("preflight", false);
     }
@@ -1373,12 +1513,6 @@ export async function record({
       out.outcome = "pycheck-stopped-clean";
       out.stoppedBecause = "the CLI dry run failed";
       return summary("dry-run", false);
-    }
-    out.stage = "app-engine";
-    if (!(await ensureAppEngine())) {
-      out.stoppedBecause = "appengine";
-      out.outcome = open().blocked ? "pycheck-needs-review" : "pycheck-stopped-clean";
-      return summary("app-engine", false);
     }
     out.stage = "setup";
     // The topic is created before the topic is used; a failed create is a clean stop only if nothing was created.

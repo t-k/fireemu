@@ -247,7 +247,7 @@ export async function runRulesProfile({ send, url, scope, installBody, emit = ()
     const isLoad = spec.group === 'load', rel = isLoad ? '.settings/rules.json' : `${scope}${spec.path}`;
     const request = { method: spec.method, path: isLoad ? spec.path : `{scope}${spec.path}`, query: spec.query, requestHeaders: recorded, requestBody: spec.body ?? null };
     let answer;
-    try { answer = await send(id, spec.method, isLoad ? rulesUrl : url(rel, spec.query), { ...(spec.body === undefined ? {} : { body: spec.body }), headers: { ...FIXED_REQUEST_HEADERS, ...headers }, record: true, ...(spec.identity === 'anonymous' ? { anonymous: true } : {}) }); }
+    try { answer = await send(id, spec.method, url(rel, spec.query), { ...(spec.body === undefined ? {} : { body: spec.body }), headers: { ...FIXED_REQUEST_HEADERS, ...headers }, record: true, ...(spec.identity === 'anonymous' ? { anonymous: true } : {}) }); }
     catch (error) {
       const notSent = error instanceof CapExceeded;
       done({ ...head, ok: false, outcome: notSent ? 'not-sent' : 'unknown', ...request, error: `${error?.name}: ${String(error?.message).slice(0, 200)}`, ...(!notSent && spec.method !== 'GET' ? { unknown: [id] } : {}) });

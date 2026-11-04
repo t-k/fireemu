@@ -228,9 +228,18 @@ test('runner: cancellation is checked before every request, the probes and reins
     await runner(f, { cancelled: () => cancelled });
     assert.equal(f.sent.length, stopAt, `stop after request ${stopAt}`);
   }
+  const lazy = RULES_CASES.indexOf('lex-lazy') + 2;   // the start probe, then one request per case: lex-lazy is request `lazy`
+  for (const stopAt of [lazy, lazy + 1]) {
+    let n = 0, cancelled = false;
+    const f = fakeSend(label => { n += 1; if (n === stopAt) cancelled = true; return label === 'lex-lazy' ? { status: 200, text: '{"status":"ok"}' } : null; });
+    const rows = await runner(f, { cancelled: () => cancelled });
+    assert.equal(f.sent.length, stopAt, `a cancel after request ${stopAt} (the accepted document, then its reinstall) sends nothing more`);
+    assert.equal(rows.at(-1).id, 'lex-lazy', 'and writes no stop row');
+  }
   let cancelled = false; const f = fakeSend(label => (label.startsWith('ready-') ? { status: 401, text: 'x' } : null));
-  await runner(f, { cancelled: () => cancelled, sleep: async () => { cancelled = true; } });
+  const rows = await runner(f, { cancelled: () => cancelled, sleep: async () => { cancelled = true; } });
   assert.equal(f.sent.length, 1, 'a cancel during the probe delay sends no further probe');
+  assert.deepEqual(rows, [], 'a cancelled probe is not a not-ready stop row');
 });
 test('runner: an invalid scope or install body is refused before anything is sent', async () => {
   for (const scope of ['', '/a', 'a//b', 'a/b c', 'a', 42]) { const f = fakeSend(); await assert.rejects(runRulesProfile({ send: f.send, url, scope, installBody: INSTALL }), /Invalid rules scope/, String(scope)); assert.equal(f.sent.length, 0); }

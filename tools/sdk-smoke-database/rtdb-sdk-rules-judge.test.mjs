@@ -128,6 +128,8 @@ test('the run level fails closed: an unverified (unknown) mutation, an incomplet
     d => { d.kind = 'rtdb-sdk-rest-journal-v1'; },
     d => { d.suite = 'rest'; },
     d => { delete d.profiles[1].probes; },
+    d => { d.profiles[0].probes[0].ready = false; },
+    d => { d.profiles[1].installs[0].ok = false; },
     d => { d.profiles.reverse(); },
   ];
   for (const [i, change] of changes.entries()) {

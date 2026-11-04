@@ -59,7 +59,7 @@ test('runRestProfile: a cancelled profile sends nothing more and records nothing
 test('writeAll: writes every byte through short writes, and refuses a write that makes no progress', () => {
   const chunks = [], fake = (fd, buf, off, len) => { const n = Math.min(3, len); chunks.push(Buffer.from(buf.subarray(off, off + n))); return n; };
   writeAll(7, 'héllo wörld\n', fake); assert.equal(Buffer.concat(chunks).toString(), 'héllo wörld\n'); assert.ok(chunks.length > 4);
-  assert.throws(() => writeAll(7, 'abc', () => 0), /no progress|short write/);
+  let calls = 0; assert.throws(() => writeAll(7, 'abc', () => { calls += 1; if (calls > 3) throw new Error('fake called too often'); return 0; }), /no progress|short write/); assert.equal(calls, 1);   // counted: accepting no progress fails here, it does not loop
   assert.throws(() => writeAll(7, 'abc', () => { throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }); }), /ENOSPC/);
   writeAll(7, '', () => { throw new Error('nothing to write'); });
 });

@@ -66,11 +66,13 @@ test('run --suite rules: the global Rules are installed and restored, 2 x 70 cas
     assert.equal(/authorization/i.test(readFileSync(path.join(out, 'run', 'journal.jsonl'), 'utf8')), false);
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
-test('run --suite rules: a ready probe that is not yet in effect is repeated, and every extra probe is a counted request', async () => {
+test('run --suite rules: a ready probe that is not yet in effect is repeated with the run\'s probe delay, and every extra probe is a counted request', async () => {
   const db = await fakeDatabase({ readyAfter: 2 }), out = mkdtempSync(path.join(tmpdir(), 'rules-run-'));
   try {
+    const started = Date.now();
     const { exit, result } = await run({ target: local(db.host), runId: 'TEST-RULES-02', prefix: PREFIX, directCap: 210, outDir: path.join(out, 'run'), suite: 'rules', probeDelayMs: 1 });
     assert.equal(exit, 0, JSON.stringify(result)); assert.equal(result.counts.direct, 164);
+    assert.ok(Date.now() - started < 1400, `the 1 ms probe delay of the run is used, not the 1.5 s default (${Date.now() - started} ms)`);
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
 });
 test('run --suite rules: a profile abandoned at its deadline aborts the run: unverified, exit 3, nothing of r2 sent', async () => {
@@ -90,6 +92,15 @@ test('run --suite rules: an unknown answer to a reinstall keeps the claims (exit
     const { exit, result } = await run({ target: local(db.host), runId: 'TEST-RULES-04', prefix: PREFIX, directCap: 210, outDir: path.join(out, 'run'), suite: 'rules', probeDelayMs: 1, continueOnFailure: true }, { fetchImpl });
     assert.equal(exit, 3); assert.ok(result.unverified.some(u => /install-lex-nel/.test(u)), JSON.stringify(result.unverified));
   } finally { db.close(); rmSync(out, { recursive: true, force: true }); }
+});
+test('rulesProfile is wired to the profile cancellation: a cancelled context sends nothing, a live one stops once cancelled', async () => {
+  const { rulesProfile } = await import('./observer.mjs'), sent = [];
+  const answer = { status: 200, text: 'null', headers: {}, bodyBytes: 4, utf8: true, clipped: false };
+  const ctx = { cancelled: true, scope: `${PREFIX.slice(1)}/${RULES_AREA}/r1-rules`, installBody: JSON.stringify(globalRules(PREFIX)), probeDelayMs: 1, restUrl: (rel, q) => `http://h/${rel}${q ? `?${q}` : ''}`, rest: async (...a) => { sent.push(a); return answer; }, journal: { write() {} }, profile: 'r1-rules' };
+  assert.deepEqual(await rulesProfile(ctx), []); assert.equal(sent.length, 0);
+  const live = { ...ctx, cancelled: false }; let n = 0; live.rest = async () => { n += 1; if (n === 3) live.cancelled = true; return answer; };
+  assert.equal((await rulesProfile(live)).length, 2, 'the start probe and two cases, then nothing');
+  assert.equal(n, 3);
 });
 test('the rules suite deadlines: 180 s per profile, 7 minutes per run, the backstop 9 minutes; observations 140; probe delay 1.5 s in production', () => {
   assert.deepEqual([SUITES.rules.profileMs, SUITES.rules.runMs, backstopMs('rules')], [180000, 420000, 540000]);

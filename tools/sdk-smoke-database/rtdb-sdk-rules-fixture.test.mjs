@@ -101,6 +101,7 @@ test('the fixture builder refuses a local run, missing provenance, a request cou
     [PRODUCTION, { ...META, approvals: [] }, /missing approvals/],
     [PRODUCTION, { ...META, requests: 171 }, /not the ledger's 171/],
     [{ ...PRODUCTION, counts: { ...PRODUCTION.counts, adc: 2 } }, META, /exactly one ADC/],
+    [{ ...PRODUCTION, counts: { ...PRODUCTION.counts, adc: 0 } }, META, /exactly one ADC/],
     [{ ...PRODUCTION, counts: { ...PRODUCTION.counts, overflow: 1 } }, META, /overflow/],
     [{ ...PRODUCTION, unverified: ['in-flight admin request'] }, META, /unverified/],
     [{ ...PRODUCTION, runId: 'RTDB-RULES-123456789012' }, META, /12-digit/],

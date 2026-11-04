@@ -308,18 +308,15 @@ fn rules_put_names_a_lone_surrogate_by_the_replacement_character() {
                 .then(|| unit(&rest[at + 6..]))
                 .flatten()
                 .filter(|u| (0xDC00..0xE000).contains(u));
-            match (high, low) {
-                (Some(high), Some(low)) => {
-                    out.push(
-                        char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
-                            .unwrap_or('\u{fffd}'),
-                    );
-                    rest = &rest[at + 12..];
-                }
-                _ => {
-                    out.push('\u{fffd}');
-                    rest = &rest[at + 6..];
-                }
+            if let (Some(high), Some(low)) = (high, low) {
+                out.push(
+                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
+                        .unwrap_or('\u{fffd}'),
+                );
+                rest = &rest[at + 12..];
+            } else {
+                out.push('\u{fffd}');
+                rest = &rest[at + 6..];
             }
         }
         out.push_str(rest);

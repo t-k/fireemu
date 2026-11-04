@@ -199,7 +199,7 @@ test('browser margin: the page is stopped once direct reaches cap - margin; with
   const w = await marginWorld({ cap: 30, margin: 8 });
   try {
     // a pool of 6 parallel requests (fewer than the margin) until the page is closed under it
-    await w.page.evaluate(async () => { let n = 0; const until = Date.now() + 3000, worker = async () => { while (Date.now() < until) { try { await fetch(`/hit?i=${n++}`); } catch { return; } } };   // bounded: a page that is never stopped must fail the test, not hang it await Promise.allSettled(Array.from({ length: 6 }, worker)); }).catch(() => {});
+    await w.page.evaluate(async () => { let n = 0; const until = Date.now() + 3000, worker = async () => { while (Date.now() < until) { try { await fetch(`/hit?i=${n++}`); } catch { return; } } }; await Promise.allSettled(Array.from({ length: 6 }, worker)); }).catch(() => {});   // the pool is bounded to 3 s: a page that is never stopped must fail the test, not hang it
     await new Promise(r => setTimeout(r, 300));
     assert.equal(w.page.isClosed(), true, 'the page is closed at the margin');
     const used = w.counter.used();

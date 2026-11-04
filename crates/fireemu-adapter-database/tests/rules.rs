@@ -278,6 +278,71 @@ fn rules_put_answers_every_probed_document_as_the_official_emulator() {
     );
 }
 
+/// A JSON surrogate-pair escape in the rules file is one character, as the official emulator
+/// (Java) reads it: the rule compares it with the character itself. A high escape followed by
+/// anything but a low escape stays alone (`\ud83dxude00` is seven units). Answers of the jar,
+/// probed 2026-11-04: each rule loads, and the read is allowed (200) or denied (401).
+#[test]
+fn rules_read_json_surrogate_pair_escapes_as_one_character() {
+    for (rule, read) in [
+        (r"'\ud83d\ude00' == '😀'", 200),
+        (r"'\ud83d\ude00' != '😀'", 401),
+        (r"'\ud83d\ude00'.length == 2", 200),
+        (r"'\ud83d\ude00a' == '😀a'", 200),
+        (r"'\ud800\udc00' == '\u{10000}'", 200),
+        (r"'\udbff\udfff' == '\u{10ffff}'", 200),
+        (r"'\ud83dxude00'.length == 7", 200),
+        (r"'\ud83dxude00'.length == 2", 401),
+        (r"'\ud83dxude00' != '😀'", 200),
+        (r"'\ud83d\tde00'.length == 6", 200),
+    ] {
+        let rule = rule
+            .replace(r"\u{10000}", "\u{10000}")
+            .replace(r"\u{10ffff}", "\u{10ffff}");
+        let mut database = db();
+        let rules = format!(r#"{{"rules":{{".read":"{rule}"}}}}"#);
+        assert_eq!(
+            call(&mut database, "PUT", "/.settings/rules.json", OWNER, &rules),
+            (200, r#"{"status":"ok"}"#.to_owned()),
+            "{rules}"
+        );
+        assert_eq!(
+            call(&mut database, "GET", "/.json", &[], "").0,
+            read,
+            "{rules}"
+        );
+    }
+}
+
+/// The diagnostics check at most 4,096 expressions (fireemu's own bound): past it they stop,
+/// say so, and the answer falls back to the first error the file has.
+#[test]
+fn rules_put_bounds_the_expressions_checked_for_diagnostics() {
+    use std::fmt::Write as _;
+    // 1,365 levels of three rules, then `z`: 4,096 expressions, all checked. One level more
+    // (`n9999`, before `z`) and the check stops before `z`.
+    let mut levels = String::new();
+    for i in 0..1365 {
+        write!(
+            levels,
+            r#""n{i:04}":{{".read":true,".write":true,".validate":true}},"#
+        )
+        .unwrap();
+    }
+    for (extra, truncated) in [("", false), (r#""n9999":{".read":true},"#, true)] {
+        let input = format!(r#"{{"rules":{{{levels}{extra}"z":{{".read":"foo"}}}}}}"#);
+        let mut database = db();
+        let (status, body) = call(&mut database, "PUT", "/.settings/rules.json", OWNER, &input);
+        assert_eq!(status, 400);
+        assert_eq!(body.matches("Unknown variable 'foo'.").count(), 1, "{body}");
+        assert_eq!(
+            body.contains("Additional diagnostics were truncated."),
+            truncated,
+            "{body}"
+        );
+    }
+}
+
 fn db() -> Database {
     Database::new(RestOptions::default(), 7)
 }

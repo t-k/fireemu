@@ -92,12 +92,14 @@ async function wsProfile(ctx) {
 }
 /**
  * Browser traffic (long-polling requests and the page's WebSocket) is counted when Chromium reports it, which is after it left.
- * Nothing is routed. Instead the page is stopped at a fixed margin below the cap: once `direct >= cap - margin` the run is
- * aborted and the page closed, so only the requests already in flight can still arrive. The margin must cover the most
- * requests the code can have in flight (BROWSER_MARGIN, bound and measurement in the packet); every request is still
- * charged with the hard cap, and one over it is recorded in `overflow` (it must stay absent).
+ * Nothing is routed (owner 2196), so the cap of browser traffic is stop-on-detection, not a hard pre-dispatch cap: once
+ * `direct >= cap - margin` the run is aborted and the page closed, and the requests already in flight, plus any the SDK
+ * issues before the page is gone (its 25 s keepalive re-polls without cancelling the old request, a writer reconnect
+ * after the transport switch can open a third long-polling connection, completions during a slow close trigger
+ * replacements), can still arrive. Every request is still charged with the hard cap, and one over it is recorded in
+ * `overflow`. The margin (16 since packet 2, was 8) is headroom for that, not a proof.
  */
-export const BROWSER_MARGIN = 8;
+export const BROWSER_MARGIN = 16;
 export function watchBrowserTraffic(page, ctx, isDb, margin = BROWSER_MARGIN) {
   let inFlight = 0, maxInFlight = 0, stopped = false;
   const open = () => { inFlight += 1; maxInFlight = Math.max(maxInFlight, inFlight); }, shut = () => { inFlight = Math.max(0, inFlight - 1); };
@@ -162,8 +164,10 @@ async function eventsWsProfile(ctx) {
   await captureWs(ctx.journal, () => { try { ctx.counter.take('ws-attempt'); } catch (error) { ctx.abort(error.message); throw error; } });
   const A = await import('firebase/app'), D = await import('firebase/database'), { runEventsProfile } = await import('./events-sequence.mjs');
   if (ctx.cancelled) throw new Error('cancelled');
-  return runEventsProfile({ D, A, cfg: eventsCfg(ctx), emit: row => ctx.journal.write({ ...row, profile: ctx.profile }), onApp: (app, db) => ctx.closers.push(async () => { try { D.goOffline(db); } catch { /* already deleted by the recorder */ } await A.deleteApp(app).catch(() => {}); }) });
+  return runEventsProfile({ D, A, cfg: eventsCfg(ctx), emit: row => ctx.journal.write({ ...row, profile: ctx.profile }), onApp: (app, db) => ctx.closers.push(eventsAppCloser(D, A, app, db)) });
 }
+/** The closer of one events app: offline, then deleted (the recorder's own `finally` normally deleted it already). */
+export const eventsAppCloser = (D, A, app, db) => async () => { if (!app.isDeleted) { try { D.goOffline(db); } catch { /* deleted meanwhile */ } } await A.deleteApp(app).catch(() => {}); };   // goOffline on a deleted database logs FIREBASE FATAL ERROR (packet 2 B2)
 export const eventsLpProfile = ctx => lpProfile(ctx, EVENTS_PAGE, (page, cfg) => page.evaluate(c => window.__runEvents(c), cfg));
 /** The endpoint a tls.connect / net.connect call dials: (options[, cb]) or (port[, host][, options][, cb]). */
 export function endpointOf(args) {

@@ -539,16 +539,27 @@ impl Database {
         params: &BTreeMap<String, String>,
         namespace: &str,
         streaming: bool,
+        data_read: bool,
         now_millis: i64,
     ) -> Result<Access, Refusal> {
-        Access::from_rest(
-            request.header("Authorization"),
-            params,
-            &self.options.credentials,
-            namespace,
-            now_millis,
-        )
-        .map_err(|_| read_refused(streaming))
+        let authorization = request.header("Authorization");
+        let credentials = &self.options.credentials;
+        Access::from_rest(authorization, params, credentials, namespace, now_millis).or_else(|_| {
+            // What production answered in the G10 recording, for a data read that is not an
+            // event stream and only under the strict profile. An opaque `auth=` token names no
+            // one: the request is unauthenticated, so the Rules decide (a public path is read,
+            // a protected one is refused) and no identity is granted. An access token other than
+            // the owner's is an unauthorized request.
+            if credentials.strict && data_read && !streaming {
+                if Access::is_unauthorized_token(authorization, params, credentials) {
+                    return Err(Refusal::new(401, "Unauthorized request."));
+                }
+                if Access::is_opaque_auth(authorization, params) {
+                    return Ok(Access::Anonymous);
+                }
+            }
+            Err(read_refused(streaming))
+        })
     }
 
     fn settings(
@@ -764,7 +775,14 @@ impl Database {
         let streaming = request
             .header("Accept")
             .is_some_and(|v| v.contains("text/event-stream"));
-        let access = self.access(request, &params, &namespace, streaming, now_millis)?;
+        let data_read = !writing
+            && matches!(
+                request::location(raw_path, false, &self.options.limits),
+                Ok(Location::Data(_))
+            );
+        let access = self.access(
+            request, &params, &namespace, streaming, data_read, now_millis,
+        )?;
         let path = match request::location(raw_path, writing, &self.options.limits)? {
             Location::Data(path) => path,
             Location::Settings => {

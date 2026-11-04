@@ -1389,7 +1389,9 @@ fn each_profile_reads_each_credential_shape_as_the_ruling_says() {
             200,
             401,
         ),
-        ("auth=garbage", "/anon?auth=x".to_owned(), vec![], 200, 401),
+        // G10 row auth-random-pub: production reads a public path for an opaque `auth=` token
+        // that names no one (the request is unauthenticated), so strict answers 200 too.
+        ("auth=garbage", "/anon?auth=x".to_owned(), vec![], 200, 200),
         ("no credential", "/anon".to_owned(), vec![], 200, 200),
     ];
     for strict in [false, true] {

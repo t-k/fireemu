@@ -129,6 +129,44 @@ impl Access {
         }
     }
 
+    /// Whether the strict profile refuses a REST request because of an access token other than
+    /// the emulator's `owner`: a non-empty `Authorization: Bearer` token, or any `access_token`
+    /// (the empty value included). Production answers these 401 `Unauthorized request.` where it
+    /// answers any other refused credential 401 `Permission denied` (G10 rows bearer-random,
+    /// bearer-none-own, bearer-rs256, bearer-null, at-empty, at-random, at-rs256; an empty
+    /// Bearer, row bearer-empty, is not one).
+    pub(crate) fn is_unauthorized_token(
+        authorization: Option<&str>,
+        params: &BTreeMap<String, String>,
+        credentials: &Credentials,
+    ) -> bool {
+        if !credentials.strict {
+            return false;
+        }
+        let bearer = authorization
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|token| !token.is_empty());
+        let token = bearer.or_else(|| params.get("access_token").map(String::as_str));
+        token.is_some_and(|token| token != OWNER)
+    }
+
+    /// Whether `auth=` carries an opaque token: the shape of the recorded `random` credential (G10
+    /// row auth-random-pub), 1 to 128 ASCII letters and digits. A JWT-shaped value (it has dots),
+    /// an empty, percent-encoded or huge one, `null` and `owner` are not.
+    pub(crate) fn is_opaque_auth(
+        authorization: Option<&str>,
+        params: &BTreeMap<String, String>,
+    ) -> bool {
+        authorization.is_none()
+            && !params.contains_key("access_token")
+            && params.get("auth").is_some_and(|token| {
+                (1..=128).contains(&token.len())
+                    && token.bytes().all(|b| b.is_ascii_alphanumeric())
+                    && token != "null"
+                    && token != OWNER
+            })
+    }
+
     /// The access an OAuth access token (or a realtime `gauth` credential) gives.
     pub(crate) fn administrator(token: &str, credentials: &Credentials) -> Result<Self, Refused> {
         if token == OWNER {

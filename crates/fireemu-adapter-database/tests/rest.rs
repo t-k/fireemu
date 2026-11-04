@@ -2297,3 +2297,492 @@ fn ordinary_patch_echo_keeps_shared_roots_and_resolves_values() {
         format!(r#"{{"a":3,"z":{{"a":{NOW},"b":2}}}}"#)
     );
 }
+
+// ---- Credential answers recorded by the G10 production run (RTDB-TOKENS-20261104-01) ----
+//
+// The oracle below states, for every combination of profile, carrier, token, path and mode, what
+// the answer was before the G10 findings (everything outside the recorded shape) and what the
+// recording says (the recorded shape: a GET that is not an event stream, on a data path). Row ids
+// name the cases of the recording (tools/sdk-smoke-database/fixtures/production-sdk-tokens.json).
+
+#[allow(
+    clippy::format_push_string,
+    clippy::match_same_arms,
+    clippy::semicolon_if_nothing_returned
+)] // an oracle written as a table
+mod g10 {
+    use super::*;
+    use fireemu_adapter_database::rest::Credentials;
+    use std::sync::Arc;
+
+    const VALID_USER: &str = "valid.user.token";
+    const OPAQUE: &str = "5f3c9a1b2d4e6f708192a3b4c5d6e7f801234567";
+    const NONE: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1IiwiaWF0IjoxfQ.";
+    const RS256: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoxfQ.c2ln";
+    const HS256: &str = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1IiwiaWF0IjoxfQ.c2ln";
+    const PERMISSION_DENIED: &str = "{\n  \"error\" : \"Permission denied\"\n}\n";
+    const UNAUTHORIZED: &str = "{\n  \"error\" : \"Unauthorized request.\"\n}\n";
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Carrier {
+        Auth,
+        Bearer,
+        AccessToken,
+        Nothing,
+    }
+
+    fn tokens() -> Vec<(&'static str, String)> {
+        vec![
+            ("absent", String::new()),
+            ("empty", String::new()),
+            ("opaque", OPAQUE.to_owned()),
+            ("owner", "owner".to_owned()),
+            ("null", "null".to_owned()),
+            ("jwt_none", NONE.to_owned()),
+            ("jwt_rs256", RS256.to_owned()),
+            ("jwt_hs256", HS256.to_owned()),
+            ("two_seg", "aaa.bbb".to_owned()),
+            ("huge", "a".repeat(5000)),
+            ("pct", "a b+c/d=e%f&g#h?i\"j".to_owned()),
+            ("adc", "ya29.A0Test-token_abc".to_owned()),
+            ("user", VALID_USER.to_owned()),
+        ]
+    }
+
+    fn encode(text: &str) -> String {
+        text.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                    char::from(b).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect()
+    }
+
+    fn database(strict: bool) -> Database {
+        let verifier: fireemu_adapter_database::rest::IdTokenVerifier = Arc::new(|token, _, _| {
+            (token == VALID_USER).then(|| r#"{"sub":"u1","iat":1}"#.to_owned())
+        });
+        let mut db = Database::new(
+            RestOptions {
+                credentials: Credentials {
+                    strict,
+                    id_tokens: Some(verifier),
+                },
+                ..RestOptions::default()
+            },
+            1,
+        );
+        db.load_rules(
+            "g10",
+            r#"{"rules":{".read":false,".write":false,"pub":{".read":true,".write":true},"authreq":{".read":"auth != null"}}}"#,
+            NOW,
+        )
+        .unwrap();
+        // The seed is written by the administrator, as the suite does.
+        for (path, value) in [("pub", r#"{"v":1}"#), ("authreq", r#"{"v":3}"#)] {
+            let response = send(
+                &mut db,
+                "PUT",
+                &format!("/{path}.json?ns=g10"),
+                &[("Authorization", "Bearer owner")],
+                value,
+            );
+            assert_eq!(response.status, 200, "seed {path}");
+        }
+        db
+    }
+
+    /// The answer of a request: (status, body).
+    fn run(
+        db: &mut Database,
+        carrier: Carrier,
+        token: &str,
+        path: &str,
+        mode: &str,
+    ) -> Option<(u16, String)> {
+        let (method, accept): (&str, &[(&str, &str)]) = match mode {
+            "get" => ("GET", &[]),
+            "stream" => ("GET", &[("Accept", "text/event-stream")]),
+            _ => ("PUT", &[]),
+        };
+        let mut query = "ns=g10".to_owned();
+        let mut headers: Vec<(&str, String)> =
+            accept.iter().map(|(k, v)| (*k, (*v).to_owned())).collect();
+        match carrier {
+            Carrier::Auth => query.push_str(&format!("&auth={}", encode(token))),
+            Carrier::AccessToken => query.push_str(&format!("&access_token={}", encode(token))),
+            Carrier::Bearer => headers.push(("Authorization", format!("Bearer {token}"))),
+            Carrier::Nothing => {}
+        }
+        let target = format!(
+            "/{}.json?{query}",
+            if path == "settings" {
+                ".settings/rules"
+            } else {
+                path
+            }
+        );
+        let borrowed: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let body = match (method, path) {
+            ("PUT", "pub") => r#"{"v":1}"#,
+            ("PUT", _) => r#"{"v":3}"#,
+            _ => "",
+        };
+        let response = match db.handle(&request(method, &target, &borrowed, body), NOW) {
+            Handled::Response { response, .. } => response,
+            Handled::Stream { .. } => return None,
+        };
+        Some((response.status, String::from_utf8(response.body).unwrap()))
+    }
+
+    /// Who the credential makes the request, before and after the findings: `None` is a refusal.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Who {
+        Owner,
+        Admin,
+        User,
+        Anonymous,
+        Refused,
+    }
+
+    fn who(strict: bool, carrier: Carrier, name: &str, token: &str) -> Who {
+        match carrier {
+            Carrier::Nothing => Who::Anonymous,
+            Carrier::Bearer | Carrier::AccessToken if token == "owner" => Who::Owner,
+            Carrier::Bearer | Carrier::AccessToken => {
+                if strict {
+                    Who::Refused
+                } else {
+                    Who::Admin
+                }
+            }
+            Carrier::Auth if name == "user" => Who::User,
+            Carrier::Auth if strict => Who::Refused,
+            Carrier::Auth => Who::Anonymous,
+        }
+    }
+
+    fn answer_for(who: Who, path: &str, mode: &str) -> (u16, String) {
+        let administrator = matches!(who, Who::Owner | Who::Admin);
+        match (who, path, mode) {
+            (Who::Refused, _, _) => (401, PERMISSION_DENIED.to_owned()),
+            (_, "settings", _) if administrator => (200, String::new()),
+            (_, "settings", _) => (403, error("Permission denied.")),
+            (_, "pub", _) => (200, r#"{"v":1}"#.to_owned()),
+            (Who::Anonymous, "authreq", "get") => (401, PERMISSION_DENIED.to_owned()),
+            (_, "authreq", "get") => (200, r#"{"v":3}"#.to_owned()),
+            (_, "authreq", _) if administrator => (200, r#"{"v":3}"#.to_owned()),
+            _ => (401, PERMISSION_DENIED.to_owned()),
+        }
+    }
+
+    fn comparable(path: &str, answer: (u16, String)) -> (u16, String) {
+        if path == "settings" && answer.0 == 200 {
+            (200, String::new())
+        } else {
+            answer
+        }
+    }
+
+    /// What the recording says, where it says anything.
+    fn recorded(
+        strict: bool,
+        carrier: Carrier,
+        name: &str,
+        token: &str,
+        path: &str,
+        mode: &str,
+    ) -> Option<(u16, String)> {
+        let data_read = mode == "get" && path != "settings";
+        if !strict || !data_read {
+            return None;
+        }
+        match carrier {
+            // auth-random-pub (200 {"v":1}) and auth-random on authreq (401 Permission denied).
+            Carrier::Auth if name == "opaque" => Some(answer_for(Who::Anonymous, path, mode)),
+            // bearer-random(-pub), bearer-none-own, bearer-rs256, bearer-null: not bearer-empty.
+            Carrier::Bearer if !token.is_empty() && token != "owner" => {
+                Some((401, UNAUTHORIZED.to_owned()))
+            }
+            // at-empty, at-random(-pub), at-rs256: every access_token but the owner's.
+            Carrier::AccessToken if token != "owner" => Some((401, UNAUTHORIZED.to_owned())),
+            _ => None,
+        }
+    }
+
+    /// The rows of the recording this change reproduces, by the case id of the tokens suite
+    /// (strict profile; every row is a GET of `/pub.json` or `/authreq.json`).
+    #[test]
+    fn strict_reproduces_the_recorded_g10_rows() {
+        let mut db = database(true);
+        let long = "a".repeat(5000);
+        let rows: Vec<(&str, Carrier, &str, &str, u16, &str)> = vec![
+            (
+                "auth-random-pub",
+                Carrier::Auth,
+                OPAQUE,
+                "pub",
+                200,
+                r#"{"v":1}"#,
+            ),
+            (
+                "auth-random",
+                Carrier::Auth,
+                OPAQUE,
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-empty",
+                Carrier::Auth,
+                "",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-none-own",
+                Carrier::Auth,
+                NONE,
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-rs256",
+                Carrier::Auth,
+                RS256,
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-hs256",
+                Carrier::Auth,
+                HS256,
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-two-seg",
+                Carrier::Auth,
+                "aaa.bbb",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-huge",
+                Carrier::Auth,
+                &long,
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-pct",
+                Carrier::Auth,
+                "a b+c/d=e%f&g#h?i\"j",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-null",
+                Carrier::Auth,
+                "null",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "auth-adc",
+                Carrier::Auth,
+                "ya29.A0Test-token_abc",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "bearer-empty",
+                Carrier::Bearer,
+                "",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "bearer-random",
+                Carrier::Bearer,
+                OPAQUE,
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "bearer-none-own",
+                Carrier::Bearer,
+                NONE,
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "bearer-rs256",
+                Carrier::Bearer,
+                RS256,
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "bearer-null",
+                Carrier::Bearer,
+                "null",
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "bearer-random-pub",
+                Carrier::Bearer,
+                OPAQUE,
+                "pub",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "at-empty",
+                Carrier::AccessToken,
+                "",
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "at-random",
+                Carrier::AccessToken,
+                OPAQUE,
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "at-rs256",
+                Carrier::AccessToken,
+                RS256,
+                "authreq",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "at-random-pub",
+                Carrier::AccessToken,
+                OPAQUE,
+                "pub",
+                401,
+                UNAUTHORIZED,
+            ),
+            (
+                "ctl-anon-authreq",
+                Carrier::Nothing,
+                "",
+                "authreq",
+                401,
+                PERMISSION_DENIED,
+            ),
+            (
+                "ctl-anon-pub",
+                Carrier::Nothing,
+                "",
+                "pub",
+                200,
+                r#"{"v":1}"#,
+            ),
+            (
+                "ctl-admin-authreq",
+                Carrier::Bearer,
+                "owner",
+                "authreq",
+                200,
+                r#"{"v":3}"#,
+            ),
+        ];
+        for (id, carrier, token, path, status, body) in rows {
+            let answer = run(&mut db, carrier, token, path, "get").expect("a response");
+            assert_eq!(answer, (status, body.to_owned()), "{id}");
+        }
+    }
+
+    #[test]
+    fn credential_answers_follow_the_recording_where_it_speaks_and_the_old_answers_elsewhere() {
+        let mut moved = Vec::new();
+        for strict in [true, false] {
+            let mut db = database(strict);
+            for carrier in [
+                Carrier::Auth,
+                Carrier::Bearer,
+                Carrier::AccessToken,
+                Carrier::Nothing,
+            ] {
+                for (name, token) in tokens() {
+                    if (carrier == Carrier::Nothing) != (name == "absent")
+                        || (name == "user" && carrier != Carrier::Auth)
+                    {
+                        continue;
+                    }
+                    if name == "adc" && carrier == Carrier::Bearer {
+                        continue;
+                    }
+                    for path in ["pub", "authreq", "settings"] {
+                        for mode in ["get", "stream", "put"] {
+                            if path == "settings" && mode != "get" {
+                                continue;
+                            }
+                            let Some(actual) = run(&mut db, carrier, &token, path, mode) else {
+                                continue;
+                            };
+                            let old = comparable(
+                                path,
+                                answer_for(who(strict, carrier, name, &token), path, mode),
+                            );
+                            let old = if mode == "stream" && old.0 == 401 {
+                                (401, "Permission denied".to_owned())
+                            } else {
+                                old
+                            };
+                            let expected = recorded(strict, carrier, name, &token, path, mode)
+                                .unwrap_or_else(|| old.clone());
+                            let actual = comparable(path, actual);
+                            assert_eq!(
+                                actual, expected,
+                                "strict={strict} {carrier:?} {name} {path} {mode}"
+                            );
+                            if expected != old {
+                                moved.push((carrier, name, path, mode, old.0, expected.0));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Everything that moved: only strict, only GET, and none to an identity: the answers that
+        // changed are 401 -> 401 with another body (S2) or 401 -> the anonymous answer (S1).
+        assert!(!moved.is_empty());
+        for (carrier, name, _, mode, before, after) in &moved {
+            assert_eq!(*mode, "get");
+            match carrier {
+                Carrier::Auth => {
+                    assert!(*name == "opaque" && *before == 401 && (*after == 200 || *after == 401))
+                }
+                Carrier::Bearer | Carrier::AccessToken => assert!(*before == 401 && *after == 401),
+                Carrier::Nothing => panic!("an absent credential moved"),
+            }
+        }
+    }
+}

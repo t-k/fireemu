@@ -93,3 +93,9 @@ test('the committed fixture: 4 profiles x 8 cases recorded in production, accept
   assert.doesNotThrow(() => buildFixture([], { ...RESULT }, META)); // the reducer accepts an empty journal; the judge then refuses it
   assert.equal(summarize(fixture, buildFixture([], RESULT, META)).match, false);
 });
+
+test('reduce: the long-polling in-flight measurement row of a later observer version is ignored', () => {
+  const doc = journal(prng(2)), rows = rawRows(doc);
+  rows.splice(3, 0, { kind: 'lp-inflight', profile: 'r1-lp', maxInFlight: 7, inFlight: 0, stopped: false });
+  assert.deepEqual(reduceJournal(rows, { ...RESULT, target: 'emulator' }), doc);
+});

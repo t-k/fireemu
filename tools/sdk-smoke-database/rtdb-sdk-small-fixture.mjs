@@ -19,7 +19,7 @@ export const CASE_SOURCES = ['actor.mjs', 'sequence.mjs', 'rules.mjs', 'page.mjs
 const ROLES = ['writer', 'observer'];
 const IDS = [...SETUP, ...CASES].map(([, id]) => id);
 const FAULTS = ['abort', 'error', 'profile-error', 'page-error', 'timeout'];
-const IGNORED = ['admin-req', 'admin-res', 'admin-unknown', 'raw-ws', 'raw-lp-request', 'raw-lp-response', 'result', 'cleanup'];
+const IGNORED = ['lp-inflight', 'admin-req', 'admin-res', 'admin-unknown', 'raw-ws', 'raw-lp-request', 'raw-lp-response', 'result', 'cleanup'];
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const own = (list, v) => typeof v === 'string' && list.includes(v);
 

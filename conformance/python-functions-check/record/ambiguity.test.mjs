@@ -1030,3 +1030,27 @@ test("the signed upload query of the real CLI line, which follows a space, is re
   withCliLog({ action: "deploy" }, directory);
   assert.ok(!/Signature=AbC/.test(readFileSync(join(directory, "cli-deploy-stdout.txt"), "utf8")));
 });
+
+test("one service whose public member could not be removed is enough to require the read-back and keep the cleanup unverified", async () => {
+  const { journal, result } = await go(
+    {},
+    (send, w) => async (request) =>
+      request.method === "GET" &&
+      request.url.includes(`/services/${ALL_FUNCTIONS[0]}:getIamPolicy`) &&
+      w.policies.has(ALL_FUNCTIONS[0])
+        ? reply(200, {
+            ...w.policies.get(ALL_FUNCTIONS[0]),
+            bindings: [{ role: "roles/run.viewer", members: ["allUsers"] }],
+          })
+        : send(request),
+  );
+  assert.deepEqual(
+    Object.entries(result.cleanup.invoker)
+      .filter(([, finding]) => finding.refused)
+      .map(([fn]) => fn),
+    [ALL_FUNCTIONS[0]],
+  );
+  assert.equal(result.readBackRequired, true);
+  assert.equal(result.cleanup.verified, false);
+  assert.ok(!journal.some((r) => r.id === `cleanup-remove-invoker-${ALL_FUNCTIONS[0]}`));
+});

@@ -427,11 +427,11 @@ export async function record({
         vanished.length > 0,
     };
   };
-  /** The services whose public member the cleanup refused to remove (it stood in a binding the write must not touch). */
-  const refusedInvokers = () =>
-    Object.entries(out.cleanup.invoker ?? {})
-      .filter(([, finding]) => typeof finding?.refused === "string")
-      .map(([fn, finding]) => `${fn}:${finding.refused}`);
+  /** True when the cleanup refused to remove the public member of a service (it stood in a binding the write must not touch). */
+  const invokerRefused = () =>
+    Object.values(out.cleanup.invoker ?? {}).some(
+      (finding) => typeof finding?.refused === "string",
+    );
   const summary = (stage, closureReady) => {
     const known = counts();
     const stop = authStop();
@@ -455,7 +455,7 @@ export async function record({
         out.cleanup.uploadObjectsUnexplained?.length > 0 ||
         out.inventory.differences?.length > 0 ||
         out.inventory.complete === false ||
-        refusedInvokers().length > 0,
+        invokerRefused(),
       ...(stop ? { authStop: stop } : {}),
       closureReady: closureReady && !blocked,
     };
@@ -1604,7 +1604,7 @@ export async function record({
       out.cleanup.uploadReasons.length === 0 &&
       out.inventory.complete === true &&
       out.inventory.differences.length === 0 &&
-      refusedInvokers().length === 0 &&
+      !invokerRefused() &&
       Object.values(readBack).every((v) => v === true);
     await step("final-logs", async () => {
       await pause(wait.logDelay);

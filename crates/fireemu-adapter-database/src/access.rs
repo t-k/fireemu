@@ -748,3 +748,48 @@ mod admin_override_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod credential_answer_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn auth(value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("auth".to_owned(), value.to_owned())])
+    }
+
+    proptest! {
+        // `auth=` is opaque exactly when it is 1 to 128 ASCII letters and digits, and is neither
+        // `null` nor `owner`: the shape of the recorded random credential (G10 auth-random-pub).
+        #[test]
+        fn opaque_auth_is_the_recorded_shape_and_nothing_wider(value in "\\PC{0,200}|[A-Za-z0-9]{0,140}|[a-z0-9.]{0,40}") {
+            let expected = (1..=128).contains(&value.len())
+                && value.chars().all(|c| c.is_ascii_alphanumeric())
+                && value != "null"
+                && value != "owner";
+            prop_assert_eq!(Access::is_opaque_auth(None, &auth(&value)), expected);
+            // Any other carrier makes it not an `auth=` credential at all.
+            prop_assert!(!Access::is_opaque_auth(Some("Bearer x"), &auth(&value)));
+            let mut with_token = auth(&value);
+            with_token.insert("access_token".to_owned(), "x".to_owned());
+            prop_assert!(!Access::is_opaque_auth(None, &with_token));
+        }
+
+        // Only the strict profile has unauthorized tokens; the owner's and an empty Bearer never do.
+        #[test]
+        fn unauthorized_tokens_are_strict_non_owner_access_tokens(token in "[ -~]{0,40}", query in any::<bool>()) {
+            let strict = Credentials { strict: true, ..Credentials::default() };
+            let lax = Credentials::default();
+            let (header, params) = if query {
+                (None, BTreeMap::from([("access_token".to_owned(), token.clone())]))
+            } else {
+                (Some(format!("Bearer {token}")), BTreeMap::new())
+            };
+            let expected = token != OWNER && (query || !token.is_empty());
+            prop_assert_eq!(Access::is_unauthorized_token(header.as_deref(), &params, &strict), expected);
+            prop_assert!(!Access::is_unauthorized_token(header.as_deref(), &params, &lax));
+            // A bare `auth=` credential is never one.
+            prop_assert!(!Access::is_unauthorized_token(None, &auth(&token), &strict));
+        }
+    }
+}

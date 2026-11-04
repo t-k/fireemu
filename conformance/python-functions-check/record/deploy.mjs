@@ -423,14 +423,6 @@ const OWN_SOURCE_COPY = new RegExp(
   "u",
 );
 
-/**
- * What differs between the preflight inventory and a later one, by identity and not by count. `before` and `after` carry
- * name lists for `channels`, `triggers`, `subscriptions`, `topics`, `packages` and `services`, and `sourceObjects` with
- * `uploads` and `sources` (the two Gen2 buckets). A list that is `null` (not read to its end) makes the comparison
- * incomplete, which blocks closure like a difference does. `enabled` is the services this run enabled on purpose.
- * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
- * (`<function>/function-source.zip`), which stays and is reported.
- */
 export const INVENTORY_KINDS = Object.freeze([
   "channels",
   "triggers",
@@ -439,6 +431,14 @@ export const INVENTORY_KINDS = Object.freeze([
   "packages",
 ]);
 
+/**
+ * What differs between the preflight inventory and a later one, by identity and not by count. `before` and `after` carry
+ * name lists for `channels`, `triggers`, `subscriptions`, `topics`, `packages` and `services`, and `sourceObjects` with
+ * `uploads` and `sources` (the two Gen2 buckets). A list that is `null` (not read to its end) makes the comparison
+ * incomplete, which blocks closure like a difference does. `enabled` is the services this run enabled on purpose.
+ * The upload bucket must be as it was; the sources bucket may only have gained the build's copy of each function
+ * (`<function>/function-source.zip`), which stays and is reported.
+ */
 export function inventoryDifferences({ before, after, enabled = [], kinds = INVENTORY_KINDS }) {
   const differences = [];
   const missing = [];

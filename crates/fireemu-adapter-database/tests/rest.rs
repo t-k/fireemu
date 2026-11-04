@@ -2467,6 +2467,8 @@ mod g10 {
 
     fn answer_for(who: Who, path: &str, mode: &str) -> (u16, String) {
         let administrator = matches!(who, Who::Owner | Who::Admin);
+        // An event stream is read like a GET: it opens where a GET would answer 2xx.
+        let mode = if mode == "stream" { "get" } else { mode };
         match (who, path, mode) {
             (Who::Refused, _, _) => (401, PERMISSION_DENIED.to_owned()),
             (_, "settings", _) if administrator => (200, String::new()),
@@ -2719,6 +2721,61 @@ mod g10 {
         }
     }
 
+    /// `auth` is judged by its decoded value, as production reads the query, and an event stream
+    /// in any spelling of the media type keeps its old answers.
+    #[test]
+    fn the_decoded_auth_value_and_any_spelling_of_an_event_stream() {
+        let mut db = database(true);
+        let read = |db: &mut Database, query: &str, headers: &[(&str, &str)]| {
+            let response = send(db, "GET", &format!("/pub.json?ns=g10{query}"), headers, "");
+            (response.status, String::from_utf8(response.body).unwrap())
+        };
+        let nobody = (200, r#"{"v":1}"#.to_owned());
+        let refused = (401, PERMISSION_DENIED.to_owned());
+        // `%61` is `a`; `%61uth=a` names the `auth` parameter.
+        assert_eq!(read(&mut db, "&auth=%61", &[]), nobody);
+        assert_eq!(read(&mut db, "&%61uth=a", &[]), nobody);
+        assert_eq!(read(&mut db, "&auth=a%62%63", &[]), nobody);
+        // A decoded value outside the opaque shape stays refused.
+        assert_eq!(read(&mut db, "&auth=a%2Eb", &[]), refused);
+        assert_eq!(read(&mut db, "&auth=%20", &[]), refused);
+        // Mixed-case media types are event streams too: the old answers, not the G10 ones.
+        for accept in [
+            "Text/Event-Stream",
+            "TEXT/EVENT-STREAM",
+            "application/json, Text/Event-Stream",
+        ] {
+            assert_eq!(
+                read(&mut db, &format!("&auth={OPAQUE}"), &[("Accept", accept)]),
+                refused,
+                "{accept}"
+            );
+            assert_eq!(
+                read(
+                    &mut db,
+                    "",
+                    &[("Accept", accept), ("Authorization", "Bearer random")]
+                ),
+                refused,
+                "{accept}"
+            );
+            assert_eq!(
+                read(&mut db, "&access_token=x", &[("Accept", accept)]),
+                refused,
+                "{accept}"
+            );
+        }
+        // Without the event-stream type the G10 answers apply.
+        assert_eq!(
+            read(
+                &mut db,
+                &format!("&auth={OPAQUE}"),
+                &[("Accept", "application/json")]
+            ),
+            nobody
+        );
+    }
+
     #[test]
     fn credential_answers_follow_the_recording_where_it_speaks_and_the_old_answers_elsewhere() {
         let mut moved = Vec::new();
@@ -2744,18 +2801,28 @@ mod g10 {
                             if path == "settings" && mode != "get" {
                                 continue;
                             }
-                            let Some(actual) = run(&mut db, carrier, &token, path, mode) else {
-                                continue;
-                            };
+                            let outcome = run(&mut db, carrier, &token, path, mode);
                             let old = comparable(
                                 path,
                                 answer_for(who(strict, carrier, name, &token), path, mode),
                             );
-                            let old = if mode == "stream" && old.0 == 401 {
-                                (401, "Permission denied".to_owned())
-                            } else {
-                                old
-                            };
+                            if mode == "stream" {
+                                // A stream opens exactly where a read would answer 200 and is
+                                // refused in plain text otherwise; no recorded row covers it.
+                                match outcome {
+                                    None => assert_eq!(
+                                        old.0, 200,
+                                        "strict={strict} {carrier:?} {name} {path}: opened a stream"
+                                    ),
+                                    Some(refused) => assert_eq!(
+                                        (old.0, refused),
+                                        (401, (401, "Permission denied".to_owned())),
+                                        "strict={strict} {carrier:?} {name} {path}: stream"
+                                    ),
+                                }
+                                continue;
+                            }
+                            let actual = outcome.expect("a response, not a stream");
                             let expected = recorded(strict, carrier, name, &token, path, mode)
                                 .unwrap_or_else(|| old.clone());
                             let actual = comparable(path, actual);

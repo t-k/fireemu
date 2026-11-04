@@ -775,7 +775,13 @@ impl Database {
         let streaming = request
             .header("Accept")
             .is_some_and(|v| v.contains("text/event-stream"));
+        // The G10 answers cover a data read that is no event stream in any spelling of the media
+        // type (`streaming` itself keeps its case-sensitive reading).
+        let event_stream_any_case = request
+            .header("Accept")
+            .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream"));
         let data_read = !writing
+            && !event_stream_any_case
             && matches!(
                 request::location(raw_path, false, &self.options.limits),
                 Ok(Location::Data(_))

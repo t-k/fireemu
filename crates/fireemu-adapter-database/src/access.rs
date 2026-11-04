@@ -151,8 +151,10 @@ impl Access {
     }
 
     /// Whether `auth=` carries an opaque token: the shape of the recorded `random` credential (G10
-    /// row auth-random-pub), 1 to 128 ASCII letters and digits. A JWT-shaped value (it has dots),
-    /// an empty, percent-encoded or huge one, `null` and `owner` are not.
+    /// row auth-random-pub), 1 to 128 ASCII letters and digits. It judges the decoded value, as
+    /// production reads the query: `auth=%61` is `auth=a`, and `%61uth=a` names `auth`. A
+    /// JWT-shaped value (it has dots), an empty, symbol-bearing or huge one, `null` and `owner`
+    /// are not opaque.
     pub(crate) fn is_opaque_auth(
         authorization: Option<&str>,
         params: &BTreeMap<String, String>,

@@ -12,6 +12,7 @@ use fireemu_core_auth::jwt::{
     RulesTokenPolicy, TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthRegistry;
+use fireemu_core_types::json::{parse as json_parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
 use crate::config::RuntimeConfig;
@@ -135,8 +136,11 @@ fn unverified_signed_claims(
         return None;
     }
     let text = String::from_utf8(base64url_decode(payload).ok()?).ok()?;
-    let claims: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let claims = claims.as_object()?;
+    // The claims go through the parser (and the depth budget) the unsigned path reads them with.
+    let claims = json_parse(&text).ok()?;
+    if !matches!(claims, JsonValue::Object(_)) {
+        return None;
+    }
     let live = claims.get("exp")?.as_i64()?.checked_mul(1000)? > now;
     if !live || claims.get("aud")?.as_str()? != project {
         return None;
@@ -144,7 +148,7 @@ fn unverified_signed_claims(
     let tenant = claims
         .get("firebase")
         .and_then(|firebase| firebase.get("tenant"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(JsonValue::as_str)
         .map(str::to_owned);
     Some((text, tenant))
 }

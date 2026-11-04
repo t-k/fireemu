@@ -837,3 +837,317 @@ test("the read-back's exit codes and messages for a bad project number, a gate a
   assert.match(refused.join(), /GOOGLE_APPLICATION_CREDENTIALS is set/);
   assert.deepEqual(localChecks({ values: {}, env: {}, deps: {} }).slice(-1), ["HOME is not set"]);
 });
+
+// ---- second pass ----------------------------------------------------------------------------------------
+
+test("the function is confirmed by a list that shows it, and stays unconfirmed when nothing does", async () => {
+  const timedOut = (cli) => async (o) =>
+    o.action === "deploy" ? { ...(await cli(o)), timedOut: true } : cli(o);
+  const hideRead = (send) => async (request) =>
+    request.method === "GET" && path(request).endsWith("/functions/pcblock")
+      ? error(404, "NOT_FOUND")
+      : send(request);
+  const byList = await go({}, hideRead, {}, timedOut);
+  assert.deepEqual(byList.result.unconfirmedCreates, [], "the list showed it");
+  const hideList = (send) => async (request) =>
+    request.method === "GET" && path(request).endsWith("/locations/-/functions")
+      ? reply(200, {})
+      : send(request);
+  const neither = await go(
+    { deployState: "DEPLOYING" },
+    (send) => hideRead(hideList(send)),
+    { waits: { readyPolls: 1 } },
+    timedOut,
+  );
+  assert.deepEqual(
+    neither.result.unconfirmedCreates.map((c) => c.label),
+    ["function"],
+  );
+  const listNot200 = await go(
+    { deployState: "DEPLOYING" },
+    (send) => async (request) =>
+      request.method === "GET" && path(request).endsWith("/locations/-/functions")
+        ? reply(202, { functions: [{ name: functionName() }] })
+        : hideRead(send)(request),
+    { waits: { readyPolls: 1 } },
+    timedOut,
+  );
+  assert.deepEqual(
+    listNot200.result.unconfirmedCreates.map((c) => c.label),
+    ["function"],
+  );
+});
+
+test("the request ids of every list and phase are the packet's", async () => {
+  const { journal } = await go({ leaveOnDelete: true });
+  const all = ids(journal);
+  for (const id of [
+    "preflight-run-services",
+    "ready-1-run-services",
+    "cleanup-1-run-services",
+    "after-leftover-1-run-services",
+    "final-run-services",
+    "preflight-functions-v2",
+    "final-functions-v2",
+    "preflight-packages",
+    "cleanup-packages",
+    "final-packages",
+    "readback-gone-function",
+    "readback-gone-account",
+    "leftover-delete-function",
+  ])
+    assert.ok(all.includes(id), id);
+});
+
+test("a leftover function's operation reads are numbered one to twelve", async () => {
+  const { journal } = await go(
+    { leaveOnDelete: true },
+    (send) => async (request) =>
+      request.method === "GET" && path(request).includes("/operations/del-")
+        ? reply(200, { name: path(request), done: false })
+        : send(request),
+  );
+  assert.deepEqual(
+    ids(journal).filter((id) => id.startsWith("leftover-operation-")),
+    Array.from({ length: 12 }, (_, n) => `leftover-operation-${n + 1}`),
+  );
+});
+
+test("a package operation that is done at the second read is read twice", async () => {
+  let polls = 0;
+  const id = packageIds()[0];
+  const { journal } = await go({}, (send) => async (request) => {
+    if (request.method === "DELETE" && path(request).endsWith(id)) {
+      await send(request);
+      return reply(200, {
+        name: "projects/fireemu-oracle-idp/locations/us-central1/operations/pk-1",
+        done: false,
+      });
+    }
+    if (request.method === "GET" && path(request).endsWith("/operations/pk-1"))
+      return reply(200, { name: "x", done: ++polls >= 2 });
+    return send(request);
+  });
+  assert.equal(polls, 2);
+  assert.deepEqual(
+    ids(journal).filter((x) => x.startsWith("package-operation")),
+    [`package-operation-${id}-1`, `package-operation-${id}-2`],
+  );
+});
+
+test("a read-back step that fails leaves its name unread, not gone, and a 403 on a direct read of an absence is data", async () => {
+  const world = createWorld({ runId: RUN });
+  const result = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    runCli: world.runCli,
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+    send: world.send,
+    save: async (row) => {
+      if (row.id === "readback-gone-function" && row.state === "before-send")
+        throw new Error("disk full");
+    },
+  });
+  assert.equal(result.cleanup.readBack.function, false);
+  assert.equal(result.cleanup.verified, false);
+  const forbidden = await go(
+    {},
+    (send, w) => async (request) =>
+      request.method === "GET" &&
+      path(request).endsWith("/functions/pcblock") &&
+      w.cliRuns.includes("delete")
+        ? error(403, "PERMISSION_DENIED")
+        : send(request),
+  );
+  assert.notEqual(forbidden.result.outcome, "pcblock-auth-stop");
+  assert.equal(forbidden.result.cleanup.readBack.function, false);
+  assert.equal(forbidden.result.cleanup.verified, false);
+});
+
+test("a single incomplete read, with the cleanup verified, still keeps the run from closing", async () => {
+  let served = false;
+  const { result } = await go({}, (send) => async (request) => {
+    if (!served && request.method === "GET" && path(request).endsWith("/functions/pcblock")) {
+      served = true;
+      return error(400, "INVALID_ARGUMENT");
+    }
+    return send(request);
+  });
+  assert.equal(result.incompleteReads.length, 1);
+  assert.equal(result.cleanup.verified, true);
+  assert.equal(result.closureReady, false);
+  assert.equal(result.readBackRequired, false);
+  assert.equal(result.outcome, "pcblock-needs-review");
+});
+
+test("a source bucket that could not be read before the run, and can after it, gives no comparison and no cleanup error", async () => {
+  let first = true;
+  const { result } = await go({}, (send) => async (request) => {
+    if (request.url.includes("gcf-v2-sources") && first) {
+      first = false;
+      return error(403, "PERMISSION_DENIED");
+    }
+    return send(request);
+  });
+  assert.equal(result.inventory.sourceObjects.sources, null);
+  assert.equal(result.cleanup.errors, undefined);
+  assert.ok(result.inventory.sourceObjects.uploads);
+});
+
+test("an image list that cannot be read in the preflight stops the run, and a list past five pages is recorded", async () => {
+  const stop = await go(
+    {},
+    (send) => async (request) =>
+      request.method === "GET" && path(request).endsWith("/packages")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(stop.result.stoppedBecause, "lists");
+  assert.equal(stop.result.outcome, "pcblock-stopped-clean");
+  let n = 0;
+  const pages = await go(
+    {},
+    (send) => async (request) =>
+      request.method === "GET" && path(request).endsWith("/packages") && n < 9
+        ? (n++, reply(200, { nextPageToken: "t" + n }))
+        : send(request),
+  );
+  assert.equal(pages.result.stoppedBecause, "lists");
+  assert.ok(
+    pages.result.incompleteReads.some(
+      (r) => r.id === "preflight-packages" && r.class === "more-than-five-pages",
+    ),
+  );
+});
+
+test("a stopped run reports no errors seen, and a CLI delete row is journaled", async () => {
+  const stopped = await go({ baselineBlocking: { triggers: { beforeCreate: {} } } });
+  assert.equal(stopped.result.errorsSeen, 0);
+  const { journal } = await go();
+  assert.ok(journal.some((r) => r.id === "cli-delete" && r.state === "cli-result"));
+});
+
+test("a configuration read that fails after the cleanup is neither equal nor empty", async () => {
+  const { result } = await go(
+    {},
+    (send, world) => async (request) =>
+      request.method === "GET" &&
+      path(request).endsWith("/config") &&
+      world.cliRuns.includes("delete")
+        ? error(500, "INTERNAL")
+        : send(request),
+  );
+  assert.equal(result.cleanup.configAfterEmptyBlocking, null);
+});
+
+test("the read-back's pages and ids, its two lists, the package names and the account count", async () => {
+  const { readbackRun } = await import("./readback.mjs");
+  const world = createWorld({ runId: RUN });
+  const run = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    save: async () => {},
+    send: world.send,
+    runCli: world.runCli,
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+  });
+  const baseline = {
+    localId: run.signUp.localId,
+    accountsBefore: run.inventory.before.accounts,
+    configBeforeDigest: run.configBefore.sha256,
+  };
+  const read = async (send) => {
+    const rows = [];
+    const out = await readbackRun({
+      runId: RUN,
+      projectNumber: NUMBER,
+      accessToken: "tok-abcdefgh",
+      save: async (r) => rows.push(r),
+      send,
+      clock: () => world.now,
+      ...baseline,
+    });
+    return { out, ids: rows.filter((r) => r.state === "before-send").map((r) => r.id) };
+  };
+  const clean = await read(world.send);
+  for (const id of [
+    "readback-function",
+    "readback-account",
+    `readback-package-${packageIds()[0]}`,
+    "list-functions-v2",
+    "list-run-services",
+    "list-packages",
+    "read-config",
+    "read-accounts",
+  ])
+    assert.ok(clean.ids.includes(id), id);
+  let pageCalls = 0;
+  const paged = await read(async (request) => {
+    if (request.method === "GET" && path(request).endsWith("/packages") && pageCalls++ === 0)
+      return reply(200, { nextPageToken: "t" });
+    return world.send(request);
+  });
+  assert.ok(paged.ids.includes("list-packages-page-2"));
+  assert.ok(!paged.ids.includes("list-packages-page-3"));
+  const noRun = await read(async (request) =>
+    request.method === "GET" && path(request).endsWith("/locations/-/services")
+      ? reply(500, { error: { status: "INTERNAL" } })
+      : world.send(request),
+  );
+  assert.equal(noRun.out.lists.functionAndService, false);
+  assert.equal(noRun.out.allAbsent, false);
+  const listed = await read(async (request) => {
+    if (request.method === "GET" && path(request).endsWith("/packages"))
+      return reply(200, {
+        packages: [
+          { name: `projects/p/locations/l/repositories/gcf-artifacts/packages/${packageIds()[1]}` },
+          { name: "projects/p/locations/l/repositories/gcf-artifacts/packages/other" },
+        ],
+      });
+    return world.send(request);
+  });
+  assert.deepEqual(listed.out.lists.packages, [packageIds()[1]]);
+  assert.equal(listed.out.allAbsent, false);
+  for (const [answer, after] of [
+    [() => reply(500, { error: { status: "INTERNAL" } }), null],
+    [() => reply(200, {}), 0],
+  ]) {
+    const counted = await read(async (request) =>
+      request.method === "POST" && path(request).endsWith("accounts:query")
+        ? answer()
+        : world.send(request),
+    );
+    assert.equal(counted.out.accounts.after, after);
+    assert.equal(counted.out.allAbsent, false);
+  }
+});
+
+test("the read-back refuses to run for a missing journal with exit code 2", async () => {
+  const d = mkdtempSync(join(tmpdir(), "pcb-gap2-"));
+  const code = await main(
+    [
+      "readback",
+      "--run-dir",
+      d,
+      "--project-number",
+      "123456789012",
+      "--run-id",
+      RUN,
+      "--send",
+      "--expect-digest",
+      "d".repeat(64),
+    ],
+    {
+      env: { HOME: "/h" },
+      deps: { token: () => "tok-abcdefgh", now: () => Date.now() },
+      out: () => {},
+      err: () => {},
+      digest: "d".repeat(64),
+    },
+  );
+  assert.equal(code, 2);
+});

@@ -1819,3 +1819,191 @@ proptest! {
         }
     }
 }
+
+/// `X-Firebase-ETag: true` adds the `ETag` to the answers of conditional requests, as the jar
+/// does; a write's answer carries the `ETag` of what was written (POST: the new child).
+#[test]
+fn conditional_answers_carry_the_etag_when_asked() {
+    let both = [("etag", ETAG_X1), ("access-control-expose-headers", "ETag")];
+    for strict in PROFILES {
+        let mut db = db(strict);
+        send(&mut db, "PUT", "/s/etag.json?ns=p", &[], r#"{"x":1}"#);
+        for asked in ["true", "TRUE"] {
+            let not_modified = send(
+                &mut db,
+                "GET",
+                "/s/etag.json?ns=p",
+                &[("if-none-match", ETAG_X1), ("x-firebase-etag", asked)],
+                "",
+            );
+            assert_eq!(not_modified.status, 304);
+            assert_eq!(
+                recorded(&not_modified),
+                with(json_headers(), &both),
+                "strict={strict} {asked}"
+            );
+            assert_eq!(header(&not_modified, "Content-Length"), Some("0"));
+        }
+        let callback = send(
+            &mut db,
+            "GET",
+            "/s/etag.json?ns=p&callback=cb",
+            &[("if-none-match", ETAG_X1), ("x-firebase-etag", "true")],
+            "",
+        );
+        assert_eq!(
+            (callback.status, header(&callback, "ETag")),
+            (304, Some(ETAG_X1))
+        );
+        let not_asked = send(
+            &mut db,
+            "GET",
+            "/s/etag.json?ns=p",
+            &[("if-none-match", ETAG_X1), ("x-firebase-etag", "false")],
+            "",
+        );
+        assert_eq!((not_asked.status, header(&not_asked, "ETag")), (304, None));
+        for query in ["", "&print=silent"] {
+            let failed = send(
+                &mut db,
+                "PUT",
+                &format!("/s/etag.json?ns=p{query}"),
+                &[("if-none-match", ETAG_X1), ("x-firebase-etag", "true")],
+                r#"{"x":2}"#,
+            );
+            assert_eq!(failed.status, 412, "{query}");
+            assert_eq!(
+                recorded(&failed),
+                with(json_headers(), &both),
+                "strict={strict} {query}"
+            );
+            assert_eq!(String::from_utf8(failed.body).unwrap(), r#"{"x":1}"#);
+        }
+        // The neighbours that already carried it.
+        let read = send(
+            &mut db,
+            "GET",
+            "/s/etag.json?ns=p",
+            &[("if-none-match", "\"q\""), ("x-firebase-etag", "true")],
+            "",
+        );
+        assert_eq!((read.status, header(&read, "ETag")), (200, Some(ETAG_X1)));
+        let mismatch = send(
+            &mut db,
+            "PUT",
+            "/s/etag.json?ns=p",
+            &[("if-match", "\"q\""), ("x-firebase-etag", "true")],
+            r#"{"x":3}"#,
+        );
+        assert_eq!(
+            (mismatch.status, header(&mismatch, "ETag")),
+            (412, Some(ETAG_X1))
+        );
+        let matched = send(
+            &mut db,
+            "PUT",
+            "/s/etag.json?ns=p",
+            &[("if-match", ETAG_X1), ("x-firebase-etag", "true")],
+            r#"{"x":1}"#,
+        );
+        assert_eq!(
+            (matched.status, header(&matched, "ETag")),
+            (200, Some(ETAG_X1))
+        );
+        let deleted = send(
+            &mut db,
+            "DELETE",
+            "/s/etag.json?ns=p",
+            &[("if-match", ETAG_X1), ("x-firebase-etag", "true")],
+            "",
+        );
+        assert_eq!(
+            (deleted.status, header(&deleted, "ETag")),
+            (200, Some("null_etag"))
+        );
+        // POST: the ETag of the new child's value.
+        let posted = send(
+            &mut db,
+            "POST",
+            "/s/p.json?ns=p",
+            &[("x-firebase-etag", "true")],
+            "1",
+        );
+        assert_eq!(posted.status, 200);
+        assert_eq!(
+            header(&posted, "ETag"),
+            Some("YPVfR2bXt/lcDjiQZ8pOkAd3qkQ=")
+        );
+        assert_eq!(
+            header(&posted, "Access-Control-Expose-Headers"),
+            Some("ETag")
+        );
+        let plain_post = send(&mut db, "POST", "/s/p.json?ns=p", &[], "1");
+        assert_eq!(header(&plain_post, "ETag"), None);
+    }
+}
+
+#[tokio::test]
+async fn over_http_a_not_modified_answer_with_its_etag() {
+    for strict in PROFILES {
+        let address = start(strict).await;
+        exchange(&address, "PUT", "/s/etag.json?ns=p", "", r#"{"x":1}"#).await;
+        let response = exchange(
+            &address,
+            "GET",
+            "/s/etag.json?ns=p",
+            &format!("if-none-match: {ETAG_X1}\r\nx-firebase-etag: true\r\n"),
+            "",
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 304"), "{response}");
+        assert_eq!(
+            head_lines(&response),
+            vec![
+                "access-control-allow-origin: *".to_owned(),
+                "access-control-expose-headers: etag".to_owned(),
+                "cache-control: no-cache".to_owned(),
+                "content-length: 0".to_owned(),
+                "content-type: application/json; charset=utf-8".to_owned(),
+                format!("etag: {}", ETAG_X1.to_ascii_lowercase()),
+            ],
+            "strict={strict}"
+        );
+    }
+}
+
+/// A ranged query over array-like children answers an object; a limit or a query that only
+/// orders keeps the array (jar).
+#[test]
+fn ranged_queries_over_an_array_answer_an_object() {
+    for strict in PROFILES {
+        let mut db = db(strict);
+        send(&mut db, "PUT", "/arr.json?ns=p", &[], "[10,20,30,40]");
+        send(&mut db, "PUT", "/arr6.json?ns=p", &[], "[1,2,3,4,5,6]");
+        for (target, body) in [
+            (
+                "/arr.json?orderBy=%22%24key%22&startAt=%220%22",
+                r#"{"0":10,"1":20,"2":30,"3":40}"#,
+            ),
+            (
+                "/arr.json?orderBy=%22%24key%22&limitToFirst=4",
+                "[10,20,30,40]",
+            ),
+            ("/arr.json?orderBy=%22%24key%22", "[10,20,30,40]"),
+            (
+                "/arr6.json?orderBy=%22%24key%22&startAt=%220%22",
+                r#"{"4":5,"5":6,"1":2,"0":1,"2":3,"3":4}"#,
+            ),
+            (
+                "/arr.json?shallow=true",
+                r#"{"0":true,"1":true,"2":true,"3":true}"#,
+            ),
+        ] {
+            assert_eq!(
+                get(&mut db, &format!("{target}&ns=p")),
+                (200, body.to_owned()),
+                "strict={strict} {target}"
+            );
+        }
+    }
+}

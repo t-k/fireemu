@@ -838,7 +838,8 @@ impl Database {
                 let tree = &self.namespace(&call.namespace).tree;
                 if let Some(Condition::NoneMatch(tag)) = call.condition {
                     if tag_at(tree, &call.path) == tag {
-                        return Ok(respond(not_modified(&call.output)));
+                        let tag = call.want_etag.then(|| tag.to_owned());
+                        return Ok(respond(not_modified(&call.output, tag)));
                     }
                     return Ok(respond(read(
                         tree,
@@ -905,7 +906,12 @@ impl Database {
                 return Ok(respond(precondition_failed(current, &call.output, true)));
             }
             Some(Condition::NoneMatch(tag)) if current_tag == tag => {
-                return Ok(respond(precondition_failed(current, &call.output, false)));
+                // The ETag only when asked (X-Firebase-ETag), as the official emulator.
+                return Ok(respond(precondition_failed(
+                    current,
+                    &call.output,
+                    call.want_etag,
+                )));
             }
             _ => {}
         }
@@ -975,7 +981,11 @@ impl Database {
         }
         .map_err(|err| change_refusal(&err, || data_refusal(body.text)))?;
         let name = Json::object([("name", Json::String(id))]);
-        let response = json_response(&name, &call.output, None);
+        // Asked for, the ETag is the new child's (the official emulator).
+        let tag = call
+            .want_etag
+            .then(|| tag_at(&self.namespace(&call.namespace).tree, &child));
+        let response = json_response(&name, &call.output, tag);
         // A new child: the write always changes something.
         let change = Change::Put {
             path: child,
@@ -2193,9 +2203,14 @@ fn precondition_failed(current: Option<&Node>, output: &Output, with_etag: bool)
 }
 
 /// The 304 answer: the output's content type, an explicit zero length (production and the
-/// official emulator, RTDB-REST-20261104-01 etag-inm-match) and no body.
-fn not_modified(output: &Output) -> HttpResponse {
+/// official emulator, RTDB-REST-20261104-01 etag-inm-match), `etag` when the request asked
+/// for it (the official emulator), and no body.
+fn not_modified(output: &Output, etag: Option<String>) -> HttpResponse {
     let mut headers = output_headers(output);
+    if let Some(etag) = etag {
+        headers.push(header("Access-Control-Expose-Headers", "ETag"));
+        headers.push(header("ETag", &etag));
+    }
     headers.push(header("Content-Length", "0"));
     HttpResponse {
         status: 304,
@@ -2299,10 +2314,8 @@ fn patch_entries(
         .collect()
 }
 
-/// The answer to a `PATCH`: its entries as one nested object, as the official emulator
-/// echoes them (the requested values with placeholders resolved, nulls kept).
-/// The answer to a `PATCH`: each entry's value with its placeholders resolved, and the tree
-/// the entries make.
+/// The answer to a `PATCH`: each entry's value with its placeholders resolved (nulls kept),
+/// and the tree the entries make.
 struct PatchEcho {
     values: Vec<Json>,
     tree: crate::scala_map::WriteTree,

@@ -2,8 +2,9 @@
 // RTDB SDK small observer (owner decision 2026-11-02, replaces the gen2 harness): 4 profiles (r1/r2 x ws/lp) x 8 cases against one RTDB, talking to it directly.
 // Suites (--suite, default small): small (the recorded RTDB-SMALL cases), events (G6: listener events and queries, 4 profiles x 8 cases),
 // admin (G13: firebase-admin over WebSocket, 2 rounds x 10 cases), events+admin (both in one run, one ADC token),
-// rest (G7, packet 2: plain REST requests through the admin REST path, 2 rounds x 72 cases, no SDK, no browser).
-//   node --max-old-space-size=1024 observer.mjs --target production|emulator [--suite small|events|admin|events+admin|rest] --run-id ID --prefix /p --direct-cap N --out <new dir> [--production-config <file>] [--continue-on-failure] | --print-manifest
+// rest (G7, packet 2: plain REST requests through the admin REST path, 2 rounds x 72 cases, no SDK, no browser),
+// rules (G8, packet 3: Rules leftovers and REST neighbours, 2 rounds x 70 cases as admin, anonymous and auth_variable_override requests).
+//   node --max-old-space-size=1024 observer.mjs --target production|emulator [--suite small|events|admin|events+admin|rest|rules] --run-id ID --prefix /p --direct-cap N --out <new dir> [--production-config <file>] [--continue-on-failure] | --print-manifest
 // The SDK comes from the parent package (tools/sdk-smoke-database/node_modules). --production-config names a file outside the
 // repository with the private inputs: principalSha256, legacyPacket, runtimeProposal and paths {owner, lease, recording}.
 // Restoration (prefix delete, Rules back byte-equal) runs in `finally`; the ledgers are never written by this script.
@@ -23,6 +24,7 @@ import { ADMIN_PROFILES, EVENTS_PROFILES, SUITE_AREAS, suiteRules } from './even
 import { EVENT_CASES } from './events-actor.mjs';
 import { ADMIN_CASES } from './admin-suite.mjs';
 import { REST_AREA, REST_CASES, REST_PROFILES, restRules, runRestProfile } from './rest-suite.mjs';
+import { RULES_AREA, RULES_CASES, RULES_PROFILES, globalRules, runRulesProfile } from './rules-suite.mjs';
 import tls from 'node:tls';
 import net from 'node:net';
 
@@ -32,15 +34,20 @@ export const PROFILES = [[1, 'ws'], [1, 'lp'], [2, 'ws'], [2, 'lp']];
 const eventsPlan = EVENTS_PROFILES.map(name => ({ name, suite: 'events', transport: name.slice(3) }));
 const adminPlan = ADMIN_PROFILES.map(name => ({ name, suite: 'admin', transport: 'admin' }));
 const restPlan = REST_PROFILES.map(name => ({ name, suite: 'rest', transport: 'rest' }));
+const rulesPlan = RULES_PROFILES.map(name => ({ name, suite: 'rules', transport: 'rules' }));
 export const SUITES = {
   small: { parts: ['small'], basis: '2196', capMax: 180, plan: PROFILES.map(([round, transport]) => ({ name: `r${round}-${transport}`, suite: 'small', transport })), profileMs: 90000, runMs: 600000 },
   events: { parts: ['events'], basis: '2217', capMax: 250, plan: eventsPlan, profileMs: 150000, runMs: 900000 },
   admin: { parts: ['admin'], basis: '2217', capMax: 250, plan: adminPlan, profileMs: 200000, runMs: 900000 },
   'events+admin': { parts: ['events', 'admin'], basis: '2217', capMax: 250, plan: [...eventsPlan, ...adminPlan], profileMs: 200000, runMs: 900000 },
   rest: { parts: ['rest'], basis: '2217', capMax: 250, plan: restPlan, profileMs: 120000, runMs: 360000 },   // 72 requests per profile, 10 s timeout each, a transport failure stops the profile
+  rules: { parts: ['rules'], basis: '2217', capMax: 250, plan: rulesPlan, profileMs: 180000, runMs: 420000 },   // about 80 requests per profile plus the ready probes (at most 8 per install, 1.5 s apart)
 };
-const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES, rest: REST_CASES };
-const AREAS = { small: 'sdk-next', ...SUITE_AREAS, rest: REST_AREA };
+const SUITE_CASES = { small: null, events: EVENT_CASES, admin: ADMIN_CASES, rest: REST_CASES, rules: RULES_CASES };
+const AREAS = { small: 'sdk-next', ...SUITE_AREAS, rest: REST_AREA, rules: RULES_AREA };
+/** The pause between two ready probes of the rules suite: production Rules take effect after a delay, a local emulator at once. */
+export const PROBE_DELAY_MS = { production: 1500, emulator: 100 };
+const REST_PARTS = ['rest', 'rules'];   // the plain-HTTP suites: their profiles abort the run at their deadline
 /** The process backstop: above the suite's run deadline plus the bounded cleanup (small: 12 min as before). */
 export const backstopMs = suite => (Object.hasOwn(SUITES, suite) ? SUITES[suite].runMs : SUITES.small.runMs) + 2 * 60 * 1000;
 /** How many case rows a finished run of the suite holds. */
@@ -205,7 +212,9 @@ async function adminProfile(ctx) {
 }
 /** One rest profile: the case table through the run's guarded admin REST (ctx.rest), under the profile scope. */
 export const restProfile = ctx => runRestProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
-const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile } };
+/** One rules profile: the case table through the same guarded admin REST, the probes and reinstalls with the run's install text. */
+export const rulesProfile = ctx => runRulesProfile({ send: ctx.rest, url: ctx.restUrl, scope: ctx.scope, installBody: ctx.installBody, probeDelayMs: ctx.probeDelayMs, cancelled: () => ctx.cancelled === true, emit: row => ctx.journal.write({ ...row, profile: ctx.profile }) });
+const suiteProfiles = { events: { ws: eventsWsProfile, lp: eventsLpProfile }, admin: { admin: adminProfile }, rest: { rest: restProfile }, rules: { rules: rulesProfile } };
 
 // ---- the run -----------------------------------------------------------------------------------------------------------------------------------
 export async function run(opts, deps = {}) {
@@ -243,7 +252,7 @@ export async function run(opts, deps = {}) {
       return guard(o.adminMs + 2000, label, p);
     };
     const rulesUrl = urls.data('.settings/rules'), prefixUrl = urls.data(o.prefix.slice(1));
-    const want = suite === 'small' ? packetRules(o.prefix) : suite === 'rest' ? restRules(o.prefix) : suiteRules(S.parts, o.prefix);
+    const want = suite === 'small' ? packetRules(o.prefix) : suite === 'rest' ? restRules(o.prefix) : suite === 'rules' ? globalRules(o.prefix) : suiteRules(S.parts, o.prefix), installBody = JSON.stringify(want);
     if (production) {
       const r = await rest('instance', 'GET', urls.instance), v = JSON.parse(r.text);
       if (r.status !== 200 || v.type !== 'USER_DATABASE' || v.state !== 'ACTIVE' || !v.name.endsWith(`/instances/${T.namespace}`)) throw new Error('instance is not ACTIVE');
@@ -254,20 +263,20 @@ export async function run(opts, deps = {}) {
     const pre = await rest('prefix-before', 'GET', prefixUrl);
     if (pre.status !== 200 || pre.text.trim() !== 'null') throw new Error('prefix is not null');
     state.touched = true;   // from the PUT on, the cleanup runs even if the answer never arrives
-    const put = await rest('rules-install', 'PUT', rulesUrl, { body: JSON.stringify(want) });
+    const put = await rest('rules-install', 'PUT', rulesUrl, { body: installBody });
     const back = await rest('rules-installed', 'GET', rulesUrl);
     if (put.status !== 200 || back.status !== 200 || !isDeepStrictEqual(JSON.parse(back.text), want)) throw new Error('Rules install not read back');
     for (const { name: profile, suite: part, transport } of S.plan) {
       if (abortReason) break;
       const area = AREAS[part];
-      const ctx = { profile, scope: `${o.prefix}/${area}/${profile}`.slice(1), transport, databaseURL: urls.databaseURL, projectId: T.projectId, local: !production, target: T, journal, counter, abort: abortFn, caseMs: o.caseMs, closeMs: o.closeMs, closers: [], ...(part === 'admin' ? { adminToken } : {}), ...(part === 'rest' ? { rest, restUrl: urls.raw } : {}) };
+      const ctx = { profile, scope: `${o.prefix}/${area}/${profile}`.slice(1), transport, databaseURL: urls.databaseURL, projectId: T.projectId, local: !production, target: T, journal, counter, abort: abortFn, caseMs: o.caseMs, closeMs: o.closeMs, closers: [], ...(part === 'admin' ? { adminToken } : {}), ...(REST_PARTS.includes(part) ? { rest, restUrl: urls.raw } : {}), ...(part === 'rules' ? { installBody, probeDelayMs: o.probeDelayMs ?? PROBE_DELAY_MS[production ? 'production' : 'emulator'] } : {}) };
       let rows;
       const profilePromise = (async () => (part === 'small' ? d.profiles[transport](ctx) : d.suiteProfiles[part][transport](ctx)))(), drain = async () => { for (const close of ctx.closers.splice(0).reverse()) await withTimeout(o.closeMs, `close ${profile}`, close()).catch(() => result.unverified.push(`close ${profile}`)); };
       try { rows = await guard(o.profileMs, `profile ${profile}`, profilePromise); }
-      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); if (part !== 'small') result.unverified.push(`${part === 'rest' ? 'REST' : 'SDK'} mutations possibly in flight: profile ${profile} aborted`); if (part === 'rest') abortFn(`rest profile ${profile} hit its deadline`); }   // an abandoned SDK profile may have sent writes whose outcome is unknown
+      catch (error) { ctx.cancelled = true; rows = [{ role: '-', id: 'profile', ok: false, error: `${error?.name}: ${error?.message}` }]; jw({ kind: 'profile-error', profile, error: String(error?.message) }); if (part !== 'small') result.unverified.push(`${REST_PARTS.includes(part) ? 'REST' : 'SDK'} mutations possibly in flight: profile ${profile} aborted`); if (REST_PARTS.includes(part)) abortFn(`${part} profile ${profile} hit its deadline`); }   // an abandoned SDK profile may have sent writes whose outcome is unknown
       await drain();   // actors, page, browser stopped and awaited before anything else
       if (ctx.cancelled) { await withTimeout(o.closeMs, `settle ${profile}`, profilePromise.catch(() => {})).catch(() => result.unverified.push(`profile ${profile} did not settle`)); await drain(); }   // a profile still starting up registers more closers when it finishes
-      for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${part === 'rest' ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
+      for (const label of rows.flatMap(row => row.unknown ?? [])) result.unverified.push(`unknown ${REST_PARTS.includes(part) ? 'REST' : 'SDK'} mutation outcome: ${profile}/${label}`);   // a write, push or transaction that hit its deadline: like an unknown REST mutation it keeps the claims for the A2 read-back
       result.cases.push(...rows.map(({ value, steps, ...row }) => ({ profile, ...row })));
       if (rows.some(row => !row.ok) && !o.continueOnFailure) break;
     }
@@ -340,7 +349,7 @@ async function main(argv) {
   if (argv[0] === 'readback') return readbackCommand(argv);
   if (arg('--target') === 'production') productionEnvironment();
   const kind = arg('--target'), runId = arg('--run-id'), prefix = arg('--prefix'), directCap = Number(arg('--direct-cap')), suite = arg('--suite') ?? 'small';
-  if (!Object.hasOwn(SUITES, suite)) throw new Error('usage: --suite small|events|admin|events+admin|rest');
+  if (!Object.hasOwn(SUITES, suite)) throw new Error('usage: --suite small|events|admin|events+admin|rest|rules');
   const capMax = SUITES[suite].capMax;
   if (!['production', 'emulator'].includes(kind) || !/^[A-Za-z0-9-]{4,64}$/.test(runId ?? '') || !Number.isSafeInteger(directCap) || directCap < 20 || directCap > capMax) throw new Error(`usage: --target production|emulator --run-id ID --prefix /p --direct-cap 20..${capMax}`);
   packetRules(prefix);

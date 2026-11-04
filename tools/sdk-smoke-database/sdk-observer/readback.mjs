@@ -1,4 +1,4 @@
-// The read-only A2 read-back of the events/admin/rest suites (Opus presend review of packet 1 v1, Must 1).
+// The read-only A2 read-back of the events/admin/rest/rules suites (Opus presend review of packet 1 v1, Must 1).
 //   node readback via observer.mjs: observer.mjs readback --run-dir <finished run dir> --production-config <file> --out <new dir>
 // After a run that left an unknown outcome (exit 3, `unverified`), the coordinator reads the prefix, the Rules and the instance back
 // at least ten minutes after the run ended. This sends the tokeninfo POST and three GETs, nothing else; it takes no lease and
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { adcVerdict, checkApproval, createAdmin, writeAll, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls } from './lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest'];
+export const READBACK_SUITES = ['events', 'admin', 'events+admin', 'rest', 'rules'];
 export const WAIT_MS = 10 * 60 * 1000;
 
 /** The admin REST of the run, narrowed to GET: any other method is refused before it reaches the network. */
@@ -22,7 +22,7 @@ function finishedRun(runDir) {
   try { result = JSON.parse(readFileSync(path.join(runDir, 'result.json'), 'utf8')); } catch (error) { throw new Error(`run directory: result.json unreadable (${error.code ?? error.name})`); }
   const bad = reason => new Error(`run directory: ${reason}`);
   if (result?.target !== 'production') throw bad('not a production run');
-  if (!READBACK_SUITES.includes(result.suite)) throw bad('not an events, admin or rest suite run');
+  if (!READBACK_SUITES.includes(result.suite)) throw bad('not an events, admin, rest or rules suite run');
   if (typeof result.runId !== 'string' || !/^[A-Za-z0-9-]{4,64}$/.test(result.runId)) throw bad('run id');
   if (typeof result.prefix !== 'string' || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(result.prefix)) throw bad('prefix is not recorded');
   if (typeof result.endedAt !== 'string' || !Number.isFinite(Date.parse(result.endedAt))) throw bad('endedAt is not recorded');

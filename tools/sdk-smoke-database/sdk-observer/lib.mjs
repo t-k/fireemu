@@ -59,26 +59,29 @@ export function targetUrls(t) {
 
 // The request headers a caller may add (the rest suite) and the response headers it records. Nothing else is journalled:
 // the Authorization header and the token never are.
-export const EXTRA_REQUEST_HEADERS = ['if-none-match', 'x-http-method-override', 'x-firebase-etag', 'accept-encoding'];
+export const EXTRA_REQUEST_HEADERS = ['if-none-match', 'x-http-method-override', 'x-firebase-etag', 'accept-encoding', 'if-match'];
 export const RECORDED_RESPONSE_HEADERS = ['etag', 'content-type', 'content-length', 'content-disposition', 'cache-control', 'location', 'allow', 'www-authenticate', 'access-control-allow-origin', 'access-control-expose-headers', 'vary'];
 const BODY_MAX = 65536;
 
 // Admin REST with a fixed timeout on every request. An unknown outcome (timeout, network error) is journalled and thrown, never retried here.
 // `record` (the rest suite only): the extra request headers are sent and journalled, the answer keeps its byte length,
 // UTF-8 validity and the allowlisted response headers, on the admin-res row and in the return value.
+// `anonymous` (the rules suite's case requests only, with `record`): the request carries none of the credential headers
+// (no Authorization, no x-goog-user-project), as an unauthenticated client sends it; the admin-req row says so.
 export function createAdmin({ headers, journal, counter, fetchImpl = fetch, timeoutMs = 10000 }) {
   const unknownMutations = [];   // survives promise settlement: the server may still apply such a request later
   return {
     unknownMutations,
-    async rest(label, method, url, { body, cleanup = false, headers: extra, record = false } = {}) {
+    async rest(label, method, url, { body, cleanup = false, headers: extra, record = false, anonymous = false } = {}) {
       if (extra !== undefined && !record) throw new Error('extra request headers need record');
+      if (anonymous && (!record || cleanup)) throw new Error('anonymous needs record');
       for (const name of Object.keys(extra ?? {})) if (!EXTRA_REQUEST_HEADERS.includes(name) || typeof extra[name] !== 'string') throw new Error(`request header ${name} is not recorded`);   // before the counter: nothing is sent
       counter.take(label, cleanup ? 'reserve' : 'direct');
       const note = row => { try { journal.write(row); } catch (error) { if (!cleanup && row.kind === 'admin-req') throw error; } };   // a cleanup request never depends on the journal; nothing else is sent when the journal is down
-      note({ kind: 'admin-req', label, method, url, body: body === undefined ? null : clip(body), ...(record ? { headers: { ...(extra ?? {}) } } : {}) });
+      note({ kind: 'admin-req', label, method, url, body: body === undefined ? null : clip(body), ...(record ? { headers: { ...(extra ?? {}) } } : {}), ...(anonymous ? { anonymous: true } : {}) });
       let res, text, bytes;
       try {
-        res = await fetchImpl(url, { method, redirect: 'manual', headers: { ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extra ?? {}) }, body, signal: AbortSignal.timeout(timeoutMs) });
+        res = await fetchImpl(url, { method, redirect: 'manual', headers: { ...(anonymous ? {} : headers), ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extra ?? {}) }, body, signal: AbortSignal.timeout(timeoutMs) });
         if (record) bytes = Buffer.from(await res.arrayBuffer()); else text = clip(await res.text());
       } catch (error) { note({ kind: 'admin-unknown', label, error: String(error?.name) }); if (method !== 'GET') unknownMutations.push(label); throw new Unknown(`${label}: unknown outcome`); }
       if (!record) { note({ kind: 'admin-res', label, status: res.status, body: text }); return { status: res.status, text }; }
@@ -97,7 +100,7 @@ export function createAdmin({ headers, journal, counter, fetchImpl = fetch, time
 }
 
 // `- <date> | RTDB-SMALL-OBSERVER <runId> | decision=APPROVE; scriptSha256=..; directCap=..; adc=1; prefix=..; basis=2196 | coordinator | <source>`: exactly one such line, every field equal.
-// The events, admin and rest suites (packets 1 and 2 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin|rest>` and carry basis=2217.
+// The events, admin, rest and rules suites (packets 1 to 3 of the RTDB closure, owner row 2217) add `suite=<events|admin|events+admin|rest|rules>` and carry basis=2217.
 export function checkApproval(ledgerText, want) {
   if (ledgerText.split('\n').some(l => /^REVOKED\b/.test(l.split(' | ')[1] ?? '') && l.includes(want.runId))) throw new Error(`approval revoked: a REVOKED line names ${want.runId}`);   // a consumed or withdrawn line never approves again
   const lines = ledgerText.split('\n').filter(l => l.includes(`| RTDB-SMALL-OBSERVER ${want.runId} |`));
@@ -108,7 +111,7 @@ export function checkApproval(ledgerText, want) {
   if (new Set(pairs.map(([k]) => k)).size !== pairs.length) throw new Error('approval fields repeated');   // a repeated field would be silently collapsed: "decision=REVOKED; decision=APPROVE" must not pass
   const fields = Object.fromEntries(pairs);
   const suite = want.suite ?? 'small';
-  if (!['small', 'events', 'admin', 'events+admin', 'rest'].includes(suite)) throw new Error('approval suite');
+  if (!['small', 'events', 'admin', 'events+admin', 'rest', 'rules'].includes(suite)) throw new Error('approval suite');
   const expected = { decision: 'APPROVE', scriptSha256: want.scriptSha256, directCap: String(want.directCap), adc: '1', prefix: want.prefix, ...(suite === 'small' ? { basis: '2196' } : { suite, basis: '2217' }) };
   if (Object.keys(fields).sort().join() !== Object.keys(expected).sort().join() || Object.entries(expected).some(([k, v]) => fields[k] !== v)) throw new Error('approval fields differ');
 }

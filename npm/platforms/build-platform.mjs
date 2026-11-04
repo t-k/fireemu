@@ -43,6 +43,7 @@ export const PYTHON_RUNNER_FILES = [
   "fireemu_runner/framing.py",
   "fireemu_runner/main.py",
   "fireemu_runner/manifest.py",
+  "fireemu_runner/request_view.py",
   "fireemu_runner/scheduler.py",
   "fireemu_runner/serve.py",
 ];

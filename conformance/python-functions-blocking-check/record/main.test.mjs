@@ -838,3 +838,48 @@ test("the real adapters answer for this machine", () => {
   assert.match(realDeps.repoRoot(), /^\//);
   assert.equal(typeof realDeps.signals, "function");
 });
+
+test("readback never exits 0 while the run carries an open obligation: a clean A2 cannot settle an unknown upload, an unexplained object or a difference", async () => {
+  const base = {
+    unconfirmedCreates: [],
+    signUp: { localId: "L".repeat(28) },
+    inventory: { before: { accounts: 3 }, differences: [], complete: true },
+    configBefore: { sha256: "c".repeat(64) },
+  };
+  const clean = finishedRun(base);
+  const ok = await run(rbArgs(clean.d), rbDeps(clean.at));
+  assert.equal(ok.code, 0, ok.err);
+  for (const [label, patch] of [
+    [
+      "an upload reason",
+      {
+        cleanup: {
+          uploadReasons: ["receipt-unconfirmed:514cacbe-3258-46fd-9a02-54b7485b0001.zip"],
+        },
+      },
+    ],
+    [
+      "an unexplained object",
+      { cleanup: { uploadObjectsUnexplained: [{ bucket: "b", name: "n.zip" }] } },
+    ],
+    [
+      "an inventory difference",
+      {
+        inventory: {
+          before: { accounts: 3 },
+          differences: [{ kind: "topics", added: ["t"], removed: [] }],
+        },
+      },
+    ],
+    [
+      "an incomplete inventory",
+      { inventory: { before: { accounts: 3 }, complete: false, differences: [] } },
+    ],
+    ["a configuration difference", { cleanup: { configDifference: ["blockingFunctions"] } }],
+  ]) {
+    const f = finishedRun({ ...base, ...patch });
+    const r = await run(rbArgs(f.d), rbDeps(f.at));
+    assert.equal(r.code, 3, label);
+    assert.match(r.err, /open obligations that a read-back cannot settle/, label);
+  }
+});

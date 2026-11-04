@@ -267,7 +267,7 @@ const READ_ONLY_POST = /:(?:getIamPolicy|testIamPermissions|generateUploadUrl)$|
 /**
  * Every mutating request in the CLI output with its answers: `{ method, url, requests, statuses, class }`. The class is
  * "ok" (every request answered 2xx), "unanswered" (fewer answers than requests), "non-2xx" (any other answer) or
- * "retried" (more than one request to the same method and URL, which only happens after a failed one). Anything but
+ * "retried" (more than one request to the same method and URL, whatever the answers). Anything but
  * "ok" is an unknown write for the run (coordinator ruling R1).
  */
 export function cliWritesFromOutput(text) {
@@ -294,8 +294,10 @@ export function cliWritesFromOutput(text) {
     else entry.statuses.push(Number(status[3]));
   }
   for (const entry of writes.values()) {
+    // More than one request to the same method and address is a retry (or a repeat) whatever the answers were: R1 treats
+    // it as an unknown write.
     entry.class =
-      entry.requests > 1 && !entry.statuses.every((code) => code >= 200 && code < 300)
+      entry.requests > 1
         ? "retried"
         : entry.statuses.length < entry.requests
           ? "unanswered"
@@ -312,6 +314,10 @@ export function redactCliText(text) {
     .replace(
       /https?:\/\/[^\s"'<>]*(?:X-Goog-|Signature=|GoogleAccessId=)[^\s"'<>]*/giu,
       "[REDACTED UPLOAD URL]",
+    )
+    .replace(
+      /(?:X-Goog-[A-Za-z-]+|Signature|GoogleAccessId)=[^&\s"'<>]+/giu,
+      "[REDACTED SIGNATURE]",
     )
     .replace(/"apiKey"\s*:\s*"[^"]*"/gu, '"apiKey":"[REDACTED]"');
 }

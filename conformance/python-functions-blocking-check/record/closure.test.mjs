@@ -548,7 +548,11 @@ test("the CLI log parser gives every mutating request with its answers, keeps PU
   assert.equal(found["PATCH iam.example/s"].class, "non-2xx");
   assert.equal(found["PUT iam.example/t"].class, "ok");
   assert.equal(found["PUT iam.example/u"].class, "retried");
-  assert.equal(found["PUT iam.example/v"].class, "ok");
+  assert.equal(
+    found["PUT iam.example/v"].class,
+    "retried",
+    "two requests are a retry or a repeat whatever the answers",
+  );
   assert.deepEqual(found["PUT iam.example/u"].statuses, [503, 200]);
   assert.deepEqual(cliWritesFromOutput(""), []);
   assert.equal(
@@ -559,7 +563,7 @@ test("the CLI log parser gives every mutating request with its answers, keeps PU
         "\n" +
         STAT("POST", "x.example/a", 200),
     )[0].class,
-    "unanswered",
+    "retried",
   );
 });
 
@@ -769,23 +773,25 @@ test("writeAll passes the rest of the text and no more to each write", () => {
   ]);
 });
 
-test("a retried CLI write is retried even when the failing answer is a 300, and 299 is still a good answer", () => {
-  const found = cliWritesFromOutput(
-    [
-      REQ("POST", "x.example/a"),
-      REQ("POST", "x.example/a"),
-      STAT("POST", "x.example/a", 300),
-      STAT("POST", "x.example/a", 200),
-    ].join("\n"),
+test("more than one request to the same method and address is retried whatever the answers", () => {
+  for (const code of [300, 299, 200]) {
+    const found = cliWritesFromOutput(
+      [
+        REQ("POST", "x.example/a"),
+        REQ("POST", "x.example/a"),
+        STAT("POST", "x.example/a", code),
+        STAT("POST", "x.example/a", 200),
+      ].join("\n"),
+    );
+    assert.equal(found[0].class, "retried", String(code));
+    assert.equal(found[0].requests, 2);
+  }
+  const one = cliWritesFromOutput(
+    [REQ("POST", "x.example/a"), STAT("POST", "x.example/a", 299)].join("\n"),
   );
-  assert.equal(found[0].class, "retried");
-  const two = cliWritesFromOutput(
-    [
-      REQ("POST", "x.example/a"),
-      REQ("POST", "x.example/a"),
-      STAT("POST", "x.example/a", 299),
-      STAT("POST", "x.example/a", 200),
-    ].join("\n"),
+  assert.equal(one[0].class, "ok");
+  const three = cliWritesFromOutput(
+    [REQ("POST", "x.example/a"), STAT("POST", "x.example/a", 300)].join("\n"),
   );
-  assert.equal(two[0].class, "ok");
+  assert.equal(three[0].class, "non-2xx");
 });

@@ -31,7 +31,7 @@ import {
   putClass,
   summarize,
 } from "./deploy.mjs";
-import { createGuard, ownPackages } from "./guard.mjs";
+import { createGuard, ownPackages, withoutPublicMember } from "./guard.mjs";
 import { judge } from "./judge.mjs";
 import { errorFilter, frameFilter, listRequest, parseErrors, parseFrames } from "./logs.mjs";
 import {
@@ -76,18 +76,28 @@ export const absent = (a) =>
 
 /** The IAM members added and removed between two policy reads (recorded, not judged here). */
 export function iamChanges(before, after) {
-  const keys = (a) =>
-    a?.status === 200 && readable(a)
-      ? new Set(
-          (a.json.bindings ?? []).flatMap((b) => (b.members ?? []).map((m) => b.role + "|" + m)),
-        )
-      : null;
-  const b = keys(before);
-  const a = keys(after);
-  if (!b || !a) return null;
+  return iamKeyChanges(iamKeys(before), iamKeys(after));
+}
+
+/** The `role|member` keys of a policy read (sorted), or `null` when the read is not a readable policy. */
+export function iamKeys(answer) {
+  return answer?.status === 200 && readable(answer)
+    ? [
+        ...new Set(
+          (answer.json.bindings ?? []).flatMap((b) =>
+            (b.members ?? []).map((m) => b.role + "|" + m),
+          ),
+        ),
+      ].toSorted()
+    : null;
+}
+
+/** The keys added and removed between two sorted key lists, or `null` when either is missing. */
+export function iamKeyChanges(before, after) {
+  if (!Array.isArray(before) || !Array.isArray(after)) return null;
   return {
-    added: [...a].filter((k) => !b.has(k)).toSorted(),
-    removed: [...b].filter((k) => !a.has(k)).toSorted(),
+    added: after.filter((k) => !before.includes(k)).toSorted(),
+    removed: before.filter((k) => !after.includes(k)).toSorted(),
   };
 }
 
@@ -305,10 +315,25 @@ export async function record({
     // Every mutating request the CLI sent (from its --debug output) is journaled; one that was retried, unanswered or not
     // answered 2xx is an unknown write that only A2 can close (coordinator ruling R1). firebase-tools' own retries are
     // accepted as CLI behaviour; the at-most-once rule is the recorder's own requests and one CLI call per action.
+    // The shared parser's own list (writes to Cloud Functions, Scheduler or Pub/Sub answered 3xx, 5xx or below 200) is honoured
+    // too.
+    let ambiguous = null;
+    for (const [n, write] of (Array.isArray(result?.unknownWrites)
+      ? result.unknownWrites
+      : []
+    ).entries()) {
+      ambiguous ??= "cli-unknown-write";
+      unknownMutations.push({
+        id: `cli-${action}-unknown-write-${n + 1}`,
+        class: "cli-unknown-write",
+        request: `${write?.method} ${write?.host} ${write?.status}`,
+      });
+    }
     if (action !== "dry-run" || Array.isArray(result?.cliWrites)) {
-      if (!Array.isArray(result?.cliWrites))
+      if (!Array.isArray(result?.cliWrites)) {
+        ambiguous ??= "cli-log-unreadable";
         unknownMutations.push({ id: "cli-" + action, class: "cli-log-unreadable" });
-      else {
+      } else {
         let n = 0;
         for (const write of result.cliWrites) {
           n += 1;
@@ -317,21 +342,28 @@ export async function record({
           } catch {
             // the journal is the thing that failed
           }
-          if (write.class !== "ok")
+          if (write.class !== "ok") {
+            ambiguous ??= `cli-write-${write.class}`;
             unknownMutations.push({
               id: `cli-${action}-write-${n}`,
               class: `cli-write-${write.class}`,
               request: `${write.method} ${write.url}`,
             });
+          }
         }
       }
     }
+    // A deploy write that was retried, unanswered or not answered 2xx may have created the function whatever the reads show
+    // afterwards: the function stays an unconfirmed create until an own read shows it (a 404 never settles it).
+    if (action === "deploy" && ambiguous) deployUnknown ??= ambiguous;
     return result;
   };
   const cliDeleteClean = () =>
     Boolean(out.cli.delete) && !cliFailed(out.cli.delete) && !cliUnknownClass(out.cli.delete);
+  const uploadUnconfirmed = [];
   const unconfirmedCreates = () => [
     ...[...pendingCreates.values()].filter((create) => !confirmed.has(create.label)),
+    ...uploadUnconfirmed,
     ...(deployUnknown && !confirmed.has("function")
       ? [{ label: "function", id: "cli-deploy", name: functionName(), class: deployUnknown }]
       : []),
@@ -417,7 +449,11 @@ export async function record({
         stop !== null ||
         unconfirmed.length > 0 ||
         vanished.length > 0 ||
-        out.cleanup.configDifference?.length > 0,
+        out.cleanup.configDifference?.length > 0 ||
+        out.cleanup.uploadReasons?.length > 0 ||
+        out.cleanup.uploadObjectsUnexplained?.length > 0 ||
+        out.inventory.differences?.length > 0 ||
+        out.inventory.complete === false,
       ...(stop ? { authStop: stop } : {}),
       closureReady: closureReady && !blocked,
     };
@@ -517,12 +553,13 @@ export async function record({
       String(identity.json.projectNumber) !== String(projectNumber)
     )
       return "identity";
-    const services = await normal({ id: "services-before", method: "GET", url: SERVICES_URL });
-    const enabled = new Set((services?.json?.services ?? []).map((s) => s.config?.name));
+    // The enabled services are read page by page (a project can have more than one page of them).
+    const services = await list("services-before", SERVICES_URL, "services");
+    if (services === null) return "services";
+    const enabled = new Set(services.services.map((s) => s.config?.name));
     out.servicesMissing = REQUIRED_SERVICES.filter((id) => !enabled.has(id));
     enabledBefore = [...enabled].toSorted();
-    if (!(services?.status === 200 && readable(services)) || out.servicesMissing.length > 0)
-      return "services";
+    if (out.servicesMissing.length > 0) return "services";
     iamBefore = await read({
       id: "iam-before",
       method: "POST",
@@ -570,6 +607,7 @@ export async function record({
     const sortedNames = (listed, key) => listed[key].map((x) => x.name).toSorted();
     out.inventory.before = {
       accounts: accountsBefore,
+      iam: iamKeys(iamBefore),
       packages: sortedNames(packages, "packages"),
       triggers: sortedNames(triggers, "triggers"),
       subscriptions: sortedNames(subs, "subscriptions"),
@@ -790,20 +828,17 @@ export async function record({
         };
         out.cleanup.invoker = found;
         if (!found.allUsers) return;
-        const kept = bindings
-          .map((b) => ({ role: b.role, members: members(b).filter((m) => m !== "allUsers") }))
-          .filter((b) => b.members.length > 0);
+        const plan = withoutPublicMember(policy.json);
+        if (!plan.ok) {
+          found.refused = plan.why;
+          found.removed = false;
+          return;
+        }
         const answer = await mutate({
           id: "cleanup-remove-invoker",
           method: "POST",
           url: RUN + ":setIamPolicy",
-          json: {
-            policy: {
-              ...(Number.isInteger(policy.json.version) ? { version: policy.json.version } : {}),
-              ...(typeof policy.json.etag === "string" ? { etag: policy.json.etag } : {}),
-              bindings: kept,
-            },
-          },
+          json: { policy: plan.policy },
           cleanup: true,
         });
         found.removeClass = answerClass(answer);
@@ -1013,6 +1048,27 @@ export async function record({
         if (!before.includes(name) && !explained.has(name))
           out.cleanup.uploadObjectsUnexplained.push({ bucket: bucketName, name });
     });
+    // An upload whose receipt was never confirmed, whose object could not be read, or that left no readable receipt is an unknown
+    // create: a 404 or an unchanged inventory never settles it, and only the read-back with a positive read (or a recovery)
+    // closes it.
+    for (const reason of out.cleanup.uploadReasons) {
+      const [kind, ...rest] = reason.split(":");
+      if (
+        [
+          "receipt-unconfirmed",
+          "object-unreadable",
+          "receipt-log-unreadable",
+          "killed-without-receipt",
+          "no-receipt",
+        ].includes(kind)
+      )
+        uploadUnconfirmed.push({
+          label: "upload-object",
+          id: "cli-deploy",
+          name: rest.length > 0 ? rest.join(":") : null,
+          class: kind,
+        });
+    }
     // Read every name back directly. Only a direct read of an absence counts; a name that was not read is not absent.
     const names = [
       ["function", GCF + functionName(), "get"],
@@ -1121,16 +1177,8 @@ export async function record({
         cleanup: true,
       });
       out.inventory.iam = iamChanges(iamBefore, iamAfter);
-      const after = await read({
-        id: "services-after",
-        method: "GET",
-        url: SERVICES_URL,
-        cleanup: true,
-      });
-      const servicesNow =
-        after?.status === 200 && readable(after)
-          ? (after.json.services ?? []).map((svc) => svc.config?.name).toSorted()
-          : null;
+      const after = await list("services-after", SERVICES_URL, "services");
+      const servicesNow = after ? after.services.map((svc) => svc.config?.name).toSorted() : null;
       out.inventory.services =
         servicesNow && enabledBefore
           ? {

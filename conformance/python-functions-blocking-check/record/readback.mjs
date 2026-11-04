@@ -6,10 +6,10 @@
 // same, the account count the same). It never settles an unknown CREATE: the command that runs it reads the run's own result
 // for the unconfirmed creates and refuses to close while any exist.
 import { AuthStop, createCapture, readable } from "../../scheduled-delivery/capture.mjs";
-import { inventoryDifferences, isGone, summarize } from "./deploy.mjs";
+import { iamUnexpected, inventoryDifferences, isGone, summarize } from "./deploy.mjs";
 import { createGuard, ownPackages } from "./guard.mjs";
 import { CONFIG_URL, PROJECT, REGION, functionName, packageIds, sourceBuckets } from "./plan.mjs";
-import { configDigest, absent, emptyBlocking } from "./run.mjs";
+import { absent, configDigest, emptyBlocking, iamKeyChanges, iamKeys } from "./run.mjs";
 import { countAccounts, lookupAccount } from "./script.mjs";
 
 export const READBACK_MAX_REQUESTS = 60;
@@ -149,6 +149,12 @@ export async function readbackRun({
       `https://serviceusage.googleapis.com/v1/projects/${projectNumber}/services?filter=state:ENABLED&pageSize=200`,
       "services",
     );
+    const iamNow = await capture({
+      id: "read-iam",
+      method: "POST",
+      url: `https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT}:getIamPolicy`,
+      json: {},
+    });
     const bucketNames = {};
     for (const [index, name] of sourceBuckets(projectNumber).entries()) {
       const label = index === 0 ? "uploads" : "sources";
@@ -161,25 +167,32 @@ export async function readbackRun({
     }
     const sorted = (listed, key) =>
       listed ? listed[key].map((item) => item.name).toSorted() : null;
-    out.inventory = baseline
-      ? {
-          baseline: true,
-          ...inventoryDifferences({
-            before: baseline,
-            after: {
-              triggers: sorted(triggers, "triggers"),
-              subscriptions: sorted(subs, "subscriptions"),
-              topics: sorted(topics, "topics"),
-              packages: sorted(packages, "packages"),
-              services: services
-                ? services.services.map((svc) => svc.config?.name).toSorted()
-                : null,
-              sourceObjects: bucketNames,
-            },
-            kinds: ["triggers", "subscriptions", "topics", "packages"],
-          }),
-        }
-      : { baseline: false, complete: false, missing: ["baseline"], differences: [] };
+    if (baseline) {
+      const compared = inventoryDifferences({
+        before: baseline,
+        after: {
+          triggers: sorted(triggers, "triggers"),
+          subscriptions: sorted(subs, "subscriptions"),
+          topics: sorted(topics, "topics"),
+          packages: sorted(packages, "packages"),
+          services: services ? services.services.map((svc) => svc.config?.name).toSorted() : null,
+          sourceObjects: bucketNames,
+        },
+        kinds: ["triggers", "subscriptions", "topics", "packages"],
+      });
+      // Project IAM may only have gained service-account members since the preflight.
+      const iam = iamUnexpected(iamKeyChanges(baseline.iam, iamKeys(iamNow)));
+      out.inventory = {
+        baseline: true,
+        complete: compared.complete && iam.complete,
+        missing: [...compared.missing, ...(iam.complete ? [] : ["iam"])],
+        differences: [
+          ...compared.differences,
+          ...iam.unexpected.map((what) => ({ kind: "iam", what })),
+        ],
+      };
+    } else
+      out.inventory = { baseline: false, complete: false, missing: ["baseline"], differences: [] };
     out.carried = carried;
     const config = await capture({ id: "read-config", method: "GET", url: CONFIG_URL });
     if (config?.status === 200 && readable(config)) {

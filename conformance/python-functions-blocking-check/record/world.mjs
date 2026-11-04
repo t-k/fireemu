@@ -109,6 +109,9 @@ export function createWorld({
   registerWith = "url",
   cliWrites = undefined,
   foreignSubscriptions = 0,
+  servicePageSize = 0,
+  invokerBindings = undefined,
+  projectIam = [],
 } = {}) {
   const w = {
     runId,
@@ -131,6 +134,7 @@ export function createWorld({
     },
     entries: [],
     cliRuns: [],
+    projectIam: structuredClone(projectIam),
     signUps: 0,
     insert: 0,
     generations: new Map(),
@@ -168,6 +172,7 @@ export function createWorld({
         base + "/locations/" + REGION + "/repositories/gcf-artifacts/packages/",
       ),
       services: [...w.services].toSorted(),
+      iam: w.projectIam.flatMap((b) => b.members.map((m) => b.role + "|" + m)).toSorted(),
       sourceObjects: {
         uploads: [...(w.sourceBuckets.get(buckets[0]) ?? [])].toSorted(),
         sources: [...(w.sourceBuckets.get(buckets[1]) ?? [])].toSorted(),
@@ -215,7 +220,9 @@ export function createWorld({
     w.policy = {
       version: 1,
       etag: "etag-1",
-      bindings: publicInvoker ? [{ role: "roles/run.invoker", members: ["allUsers"] }] : [],
+      bindings:
+        invokerBindings ??
+        (publicInvoker ? [{ role: "roles/run.invoker", members: ["allUsers"] }] : []),
     };
   };
   const deleteDeployed = () => {
@@ -318,16 +325,23 @@ export function createWorld({
     const host = url.hostname;
     if (host === "firebase.googleapis.com")
       return reply(200, { projectId: PROJECT, projectNumber: NUMBER, state: "ACTIVE" });
-    if (host === "serviceusage.googleapis.com")
+    if (host === "serviceusage.googleapis.com") {
+      const all = [...w.services].toSorted().map((id) => ({
+        name: "projects/" + NUMBER + "/services/" + id,
+        config: { name: id },
+        state: "ENABLED",
+      }));
+      const start = Number(url.searchParams.get("pageToken") ?? 0);
+      const slice = servicePageSize ? all.slice(start, start + servicePageSize) : all;
       return reply(200, {
-        services: [...w.services].toSorted().map((id) => ({
-          name: "projects/" + NUMBER + "/services/" + id,
-          config: { name: id },
-          state: "ENABLED",
-        })),
+        services: slice,
+        ...(servicePageSize && start + servicePageSize < all.length
+          ? { nextPageToken: String(start + servicePageSize) }
+          : {}),
       });
+    }
     if (path.endsWith(":getIamPolicy") && host === "cloudresourcemanager.googleapis.com")
-      return reply(200, { version: 1, etag: "e", bindings: [] });
+      return reply(200, { version: 1, etag: "e", bindings: w.projectIam });
     if (host === "identitytoolkit.googleapis.com") {
       if (method === "GET" && path === `/admin/v2/projects/${PROJECT}/config`)
         return reply(200, w.config);

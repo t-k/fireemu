@@ -161,6 +161,21 @@ test("the policy body can only remove: no public member, no condition, no unknow
   assert.equal(policyWithoutPublicMembers(ok), true);
   assert.equal(policyWithoutPublicMembers({ policy: { bindings: [] } }), true);
   assert.equal(policyWithoutPublicMembers({ policy: {} }), true);
+  assert.equal(
+    policyWithoutPublicMembers({
+      policy: {
+        bindings: [
+          {
+            role: "roles/x",
+            members: ["user:a@b.c"],
+            condition: { expression: "true", title: "t" },
+          },
+        ],
+      },
+    }),
+    true,
+    "a binding keeps its condition",
+  );
   const withMember = (m) => ({
     policy: { bindings: [{ role: "roles/run.invoker", members: [m] }] },
   });
@@ -187,7 +202,9 @@ test("the policy body can only remove: no public member, no condition, no unknow
     { policy: { bindings: [{ role: "roles/x" }] } },
     { policy: { bindings: [{ role: "roles/x", members: "u" }] } },
     { policy: { bindings: [{ role: "roles/x", members: [1] }] } },
-    { policy: { bindings: [{ role: "roles/x", members: [], condition: {} }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], condition: "c" }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], condition: null }] } },
+    { policy: { bindings: [{ role: "roles/x", members: [], other: 1 }] } },
   ])
     assert.equal(policyWithoutPublicMembers(bad), false, JSON.stringify(bad));
 });

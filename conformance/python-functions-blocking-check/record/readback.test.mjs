@@ -51,7 +51,11 @@ test("after a clean run everything reads absent and nothing is sent but reads", 
   const calls = world.calls.slice(before);
   assert.ok(
     calls.every(
-      (c) => c.startsWith("GET ") || c.endsWith("accounts:lookup") || c.endsWith("accounts:query"),
+      (c) =>
+        c.startsWith("GET ") ||
+        c.endsWith("accounts:lookup") ||
+        c.endsWith("accounts:query") ||
+        c.endsWith(":getIamPolicy"),
     ),
     calls.join("\n"),
   );

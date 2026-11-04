@@ -64,7 +64,7 @@ test('an override case carries its auth object as compact JSON in auth_variable_
     assert.doesNotThrow(() => JSON.parse(new URLSearchParams(c.query).get('auth_variable_override')), c.id);
   }
 });
-test('one round is 79 requests with one probe per install (77 cases + the start probe + 4 reinstalls and their probes, minus nothing); one run 164; the recommended cap 210', () => {
+test('one round is 79 requests with one probe per install (77 cases + the start probe + 4 reinstalls and their probes, minus nothing); one run 164; the normal-path recommendation 210 (the packet\'s cap is the suite maximum 250)', () => {
   const validLoads = TABLE.filter(c => c.expectValid).length;
   assert.equal(validLoads, 4);
   const perRound = RULES_CASES.length + 1 + 2 * validLoads;
@@ -263,4 +263,13 @@ test('createAdmin: if-match is an allowed request header', async () => {
   const seen = [], admin = createAdmin({ headers: {}, journal: { write() {} }, counter: createCounter({ direct: 2 }), fetchImpl: async (u, init) => { seen.push(init.headers); return new Response('null'); } });
   await admin.rest('a', 'PUT', 'http://h/x.json', { record: true, body: '1', headers: { 'if-match': '"e"' } });
   assert.equal(seen[0]['if-match'], '"e"');
+});
+
+test('runner: a clipped answer is not ok: outcome clipped, no unknown label for a 2xx mutation, the profile goes on; a clipped GET is not ok either', async () => {
+  const ids = RULES_CASES.filter(id => !id.startsWith('load-') && !id.startsWith('lex-'));
+  const put = TABLE.find(c => c.method === 'PUT' && ids.includes(c.id)).id, get = TABLE.find(c => c.method === 'GET' && ids.includes(c.id)).id;
+  const f = fakeSend(label => (label === put || label === get ? { status: 200, text: 'x'.repeat(100), clipped: true } : null));
+  const rows = await runner(f);
+  for (const id of [put, get]) { const r = rows.find(x => x.id === id); assert.equal(r.ok, false, id); assert.equal(r.outcome, 'clipped', id); assert.equal('unknown' in r, false, id); }
+  assert.equal(rows.length, RULES_CASES.length, 'the profile goes on after a clipped answer');
 });

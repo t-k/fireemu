@@ -16,7 +16,7 @@ import { getHeapStatistics } from 'node:v8';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { adcVerdict, checkApproval, claim, clip, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls, writeAll } from './lib.mjs';
+import { adcVerdict, checkApproval, claim, clip, createAdmin, createCounter, createJournal, mintToken, scriptManifest, sha256, targetUrls, unknownStatus, writeAll } from './lib.mjs';
 import { CASE_ORDER, runCases, withTimeout } from './sequence.mjs';
 import { readback } from './readback.mjs';
 import { packetRules } from './rules.mjs';
@@ -264,6 +264,7 @@ export async function run(opts, deps = {}) {
     if (pre.status !== 200 || pre.text.trim() !== 'null') throw new Error('prefix is not null');
     state.touched = true;   // from the PUT on, the cleanup runs even if the answer never arrives
     const put = await rest('rules-install', 'PUT', rulesUrl, { body: installBody });
+    if (unknownStatus(put.status)) result.unverified.push('unknown mutation outcome: rules-install');   // below 200, 3xx or 5xx: the Rules may or may not have changed: exit 3, claims kept, A2
     const back = await rest('rules-installed', 'GET', rulesUrl);
     if (put.status !== 200 || back.status !== 200 || !isDeepStrictEqual(JSON.parse(back.text), want)) throw new Error('Rules install not read back');
     for (const { name: profile, suite: part, transport } of S.plan) {

@@ -8,10 +8,10 @@
 // One row per case: id, method, the path with the scope masked as {scope}, the query string, the selected request
 // headers, the request body, the outcome, status, the allowlisted response headers, the body (scope and generated push
 // ids masked; a push id is masked only after its 20-character shape is checked, `pushIdShapeOk`) and its byte length.
-// Outcomes: answered; unknown-status (a complete answer below 200, 3xx or 5xx to a non-GET: the mutation is unknown); unknown-body (a non-GET answered with a body that is not UTF-8: unknown too);
+// Outcomes: answered; clipped (the answer body passed 64 KiB: not complete evidence, the case is not ok, nothing is unknown); unknown-status (a complete answer below 200, 3xx or 5xx to a non-GET: the mutation is unknown); unknown-body (a non-GET answered with a body that is not UTF-8: unknown too);
 // unknown (the request may have left and no answer was read: the profile stops); not-sent (the cap refused it: the
 // profile stops); blocked (a header value it needs was not in an earlier answer: nothing sent).
-import { CapExceeded, RECORDED_RESPONSE_HEADERS } from './lib.mjs';
+import { CapExceeded, RECORDED_RESPONSE_HEADERS, unknownStatus } from './lib.mjs';
 
 export const REST_PROFILES = ['r1-rest', 'r2-rest'];
 export const REST_AREA = 'sdk-rest';
@@ -132,7 +132,6 @@ export function maskText(text, { scope, pushIds }) {
   return out;
 }
 const generatedName = text => { try { const v = JSON.parse(text); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 1 && typeof v.name === 'string' ? v.name : null; } catch { return null; } };
-const unknownStatus = status => status < 200 || (status >= 300 && status < 400) || status >= 500;
 
 /**
  * One profile: every kept case once, in order. `send(label, method, url, {body, headers, record})` is the observer's
@@ -167,9 +166,9 @@ export async function runRestProfile({ send, url, scope, emit = () => {}, cases 
     const shapeOk = name !== null && PUSH_ID.test(name);
     if (shapeOk) pushIds.push(name);
     const isPost = spec.method === 'POST' && !spec.headers?.['x-http-method-override'];
-    const unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);   // a body that is not UTF-8 cannot be judged: the mutation's outcome is unknown
+    const clipped = answer.clipped === true, unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);   // a body that is not UTF-8 cannot be judged: the mutation's outcome is unknown
     done({
-      id, ok: !unknown, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
+      id, ok: !unknown && !clipped, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : clipped ? 'clipped' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
       ...(isPost ? { pushIdShapeOk: shapeOk } : {}), ...(unknown ? { unknown: [id] } : {}),
     });
   }

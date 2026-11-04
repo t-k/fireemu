@@ -12,6 +12,8 @@ export function writeAll(fd, data, write = writeSync) {
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export const clip = (text, max = 65536) => (text.length > max ? `${text.slice(0, max)}...[clipped ${text.length - max}]` : text);
 export class CapExceeded extends Error {}
+/** A complete answer that does not settle a mutation: below 200, 3xx or 5xx. */
+export const unknownStatus = status => status < 200 || (status >= 300 && status < 400) || status >= 500;
 export class Unknown extends Error {}
 
 // The approval line binds this exact code: sha256 over "<sha256>  <name>" lines of the top-level *.mjs, *.html and package.json.

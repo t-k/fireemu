@@ -290,3 +290,11 @@ test('runner: an overridden DELETE answered with a name body is neither masked n
   const f = fakeSend(label => (label === 'override-delete' ? { status: 200, text: '{"name":"-OZzZzZzZzZzZzZzZzZz"}' } : null)), rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
   const r = rows.find(x => x.id === 'override-delete'); assert.equal(r.body, '{"name":"-OZzZzZzZzZzZzZzZzZz"}'); assert.equal('pushIdShapeOk' in r, false); assert.equal(r.ok, true);
 });
+
+test('runner: a clipped answer (over 64 KiB) is not ok: outcome clipped, no unknown label for a mutation whose status is a 2xx, the profile goes on', async () => {
+  const f = fakeSend(label => (label === 'wsl-tiny' ? { status: 200, text: 'x'.repeat(100), clipped: true } : label === 'timeout-5s' ? { status: 200, text: 'y', clipped: true } : null));
+  const rows = await runRestProfile({ send: f.send, url, scope: SCOPE });
+  for (const id of ['wsl-tiny', 'timeout-5s']) { const r = rows.find(x => x.id === id); assert.equal(r.ok, false, id); assert.equal(r.outcome, 'clipped', id); assert.equal('unknown' in r, false, id); assert.equal(r.clipped, true, id); }
+  assert.equal(rows.length, 72, 'the profile goes on after a clipped answer');
+  assert.equal(rows.find(x => x.id === 'wsl-medium').ok, true);
+});

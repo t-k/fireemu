@@ -20,7 +20,7 @@
 // it needs was not in an earlier answer). A load case with an unknown outcome stops the profile (the Rules in effect
 // are unknown). Probe and install rows are journalled separately (kind `probe`, `install`); a profile whose probe
 // never reads 200, or whose reinstall is not answered 200, stops there.
-import { CapExceeded } from './lib.mjs';
+import { CapExceeded, unknownStatus } from './lib.mjs';
 import { FIXED_REQUEST_HEADERS, OWN_ETAG, maskText } from './rest-suite.mjs';
 
 export const RULES_PROFILES = ['r1-rules', 'r2-rules'];
@@ -197,7 +197,6 @@ export function globalRules(prefix) {
 /** The ready path (with its .json) of a profile scope `<prefix>/sdk-rules/<profile>`. */
 export const readyPath = scope => `${scope.split('/').slice(0, -1).join('/')}/ready.json`;
 
-const unknownStatus = status => status < 200 || (status >= 300 && status < 400) || status >= 500;
 const SCOPE_RE = /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/[A-Za-z0-9_-]+$/;
 
 /**
@@ -254,9 +253,9 @@ export async function runRulesProfile({ send, url, scope, installBody, emit = ()
       return rows;   // transport uncertainty or the cap: nothing more is sent from this profile
     }
     if (id === 'cw-etag' && typeof answer.headers?.etag === 'string') seen.etag = answer.headers.etag;
-    const unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);
+    const clipped = answer.clipped === true, unreadable = spec.method !== 'GET' && answer.utf8 === false, unknown = spec.method !== 'GET' && (unknownStatus(answer.status) || unreadable);
     done({
-      ...head, ok: !unknown, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
+      ...head, ok: !unknown && !clipped, outcome: unreadable ? 'unknown-body' : unknown ? 'unknown-status' : clipped ? 'clipped' : 'answered', ...request, status: answer.status, responseHeaders: answer.headers ?? {}, body: mask(answer.text), bodyBytes: answer.bodyBytes, utf8: answer.utf8, clipped: answer.clipped,
       ...(unknown ? { unknown: [id] } : {}),
     });
     if (isLoad && unknown) return rows;   // the Rules in effect are unknown: nothing more is sent

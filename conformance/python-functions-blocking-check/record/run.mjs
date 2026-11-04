@@ -82,8 +82,9 @@ export const absent = (a) =>
 export function iamPolicyOf(answer) {
   if (!(answer?.status === 200 && readable(answer)) || !supportedIamPolicy(answer.json))
     return null;
-  const { etag, version, ...policy } = answer.json;
-  return policy;
+  return Object.fromEntries(
+    Object.entries(answer.json).filter(([key]) => key !== "etag" && key !== "version"),
+  );
 }
 
 /**

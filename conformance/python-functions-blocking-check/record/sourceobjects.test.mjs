@@ -315,3 +315,50 @@ test("the A2 read-back reads each deleted object by name with its own allowlist,
   );
   assert.deepEqual(sourceObjectEntries(undefined), []);
 });
+
+test("boundaries: a one-character name and a 1024-character name are names, a 1025-character one is not; labels count from one", async () => {
+  assert.equal(isOwnSourceObject(NUMBER, UPLOADS, "a"), true);
+  assert.equal(isOwnSourceObject(NUMBER, UPLOADS, "a".repeat(1024)), true);
+  assert.equal(isOwnSourceObject(NUMBER, UPLOADS, "a".repeat(1025)), false);
+  const { world, result } = await go();
+  const names = result.cleanup.sourceObjectsDeleted;
+  const rb = await readbackRun({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    save: async () => {},
+    clock: () => world.now,
+    send: world.send,
+    localId: result.signUp?.localId ?? null,
+    accountsBefore: result.inventory.before.accounts ?? null,
+    configBeforeDigest: result.configBefore?.sha256 ?? null,
+    sourceObjects: names,
+  });
+  assert.deepEqual(
+    Object.keys(rb.names).filter((n) => n.startsWith("source-object-")),
+    names.map((_, i) => "source-object-" + (i + 1)),
+  );
+});
+
+test("a bucket listing of exactly five pages is read to its end and is not flagged", async () => {
+  const world = createWorld({ runId: RUN, sourcePageSize: 1 });
+  for (let i = 0; i < 3; i++) world.sourceBuckets.get(UPLOADS).push(`older-${i}.zip`);
+  const journal = [];
+  const result = await record({
+    runId: RUN,
+    projectNumber: NUMBER,
+    accessToken: "tok-abcdefgh",
+    save: async (r) => journal.push(r),
+    send: world.send,
+    runCli: world.runCli,
+    clock: () => world.now,
+    sleep: async (ms) => world.advance(ms),
+  });
+  assert.ok(ids(journal).includes("cleanup-source-objects-uploads-page-5"));
+  assert.ok(!ids(journal).includes("cleanup-source-objects-uploads-page-6"));
+  assert.ok(
+    !result.incompleteReads.some((r) => r.class === "more-than-five-pages"),
+    JSON.stringify(result.incompleteReads),
+  );
+  assert.equal(result.cleanup.sourceObjectsDeleted.filter((d) => d.bucket === UPLOADS).length, 1);
+});

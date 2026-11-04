@@ -608,19 +608,20 @@ test("a missing flag, or a bad value, is the only problem reported", () => {
     adcExists: () => true,
     sdkProblems: () => [],
   };
-  assert.deepEqual(
-    localChecks({ values: { ...full, "venv-dir": undefined }, env: { HOME: "/h" }, deps }),
-    ["--venv-dir is required"],
+  const forbidden = Object.fromEntries(
+    Object.keys(deps).map((name) => [
+      name,
+      () => assert.fail(name + " must not be called before the arguments are valid"),
+    ]),
   );
-  assert.deepEqual(
-    localChecks({ values: { ...full, "project-number": "1" }, env: { HOME: "/h" }, deps }),
-    ["--project-number is 12 or 13 digits"],
-  );
-  assert.deepEqual(localChecks({ values: full, env: {}, deps }), ["HOME is not set"]);
-  assert.deepEqual(
-    localChecks({ values: { ...full, "source-commit": "x" }, env: { HOME: "/h" }, deps }),
-    ["--source-commit is a full SHA"],
-  );
+  const only = (over, env = { HOME: "/h" }) =>
+    localChecks({ values: { ...full, ...over }, env, deps: forbidden });
+  assert.deepEqual(only({ "venv-dir": undefined }), ["--venv-dir is required"]);
+  assert.deepEqual(only({ "project-number": undefined }), ["--project-number is required"]);
+  assert.deepEqual(only({ "source-commit": undefined }), ["--source-commit is required"]);
+  assert.deepEqual(only({ "project-number": "1" }), ["--project-number is 12 or 13 digits"]);
+  assert.deepEqual(only({}, {}), ["HOME is not set"]);
+  assert.deepEqual(only({ "source-commit": "x" }), ["--source-commit is a full SHA"]);
 });
 
 test("the result file's own error names the reason", () => {

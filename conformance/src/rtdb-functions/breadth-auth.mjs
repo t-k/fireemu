@@ -39,6 +39,9 @@ export function createAuth({
   });
   const base = `https://identitytoolkit.googleapis.com/v1/projects/${encodeURIComponent(projectId)}`;
   return {
+    get uid() {
+      return uid;
+    },
     get idToken() {
       return idToken;
     },

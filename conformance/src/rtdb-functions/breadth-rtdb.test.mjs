@@ -18,10 +18,11 @@ test("rules limit user writes to the two groups", () => {
 test("user writes redact URLs on success and error and are never retried", async () => {
   const rows = [],
     urls = [];
+  let token;
   const client = createRtdb({
     packet: {},
     nonce: "nonce",
-    userToken: "sentinel-token",
+    userToken: () => token,
     log: (row) => rows.push(row),
     fetchImpl: async (url) => {
       urls.push(url);
@@ -29,6 +30,7 @@ test("user writes redact URLs on success and error and are never retried", async
       return { status: 200, text: async () => "{}" };
     },
   });
+  token = "sentinel-token";
   assert.equal(
     (
       await client.write({
@@ -54,6 +56,7 @@ test("user writes redact URLs on success and error and are never retried", async
     "unknown",
   );
   assert.equal(urls.length, 2);
+  assert.ok(urls.every((url) => url.includes("auth=sentinel-token")));
   assert.ok(rows.every((r) => r.url.includes("auth=***")));
   assert.ok(!JSON.stringify(rows).includes("sentinel-token"));
 });
@@ -63,7 +66,7 @@ test("a write identifier cannot be sent twice after an unknown answer", async ()
   const client = createRtdb({
     packet: {},
     nonce: "n",
-    userToken: "u",
+    userToken: () => "u",
     log: () => {},
     fetchImpl: async () => {
       calls++;

@@ -18,6 +18,7 @@ test("creates, signs in, deletes and proves absence without exposing secrets", a
     },
   });
   const created = await auth.create();
+  assert.equal(auth.uid, "uid");
   const signed = await auth.signIn();
   assert.equal(created.outcome, "ok");
   assert.equal(signed.outcome, "ok");

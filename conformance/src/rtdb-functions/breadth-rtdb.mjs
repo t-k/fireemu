@@ -40,6 +40,7 @@ export function createRtdb({
 }) {
   const written = new Set();
   const admin = adminClient({ fetchImpl: adminFetch, headers, log, stop, secrets, caps: CAPS });
+  const userSecrets = [...secrets];
   const user = adminClient({
     fetchImpl,
     headers: {},
@@ -50,7 +51,7 @@ export function createRtdb({
         body: row.body === undefined ? undefined : "***",
       }),
     stop,
-    secrets: [...secrets, userToken],
+    secrets: userSecrets,
     caps: USER_CAPS,
   });
   const fns = createRtdbAdmin({
@@ -86,8 +87,10 @@ export function createRtdb({
       if (written.has(step.id)) throw new Stop("write already sent");
       let url = run.u.data(step.path);
       if (step.context === "user-rest") {
-        if (!userToken) throw new Stop("missing user token");
-        url += `${url.includes("?") ? "&" : "?"}auth=${encodeURIComponent(userToken)}`;
+        const token = userToken();
+        if (!token) throw new Stop("missing user token");
+        userSecrets.push(token);
+        url += `${url.includes("?") ? "&" : "?"}auth=${encodeURIComponent(token)}`;
       }
       written.add(step.id);
       const reply = await (step.context === "user-rest" ? user : admin).call(

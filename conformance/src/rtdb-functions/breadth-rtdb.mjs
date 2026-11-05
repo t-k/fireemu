@@ -42,6 +42,7 @@ export function createRtdb({
   userToken,
   runDir,
 }) {
+  let baselineVerified = false;
   const written = new Set();
   const admin = adminClient({ fetchImpl: adminFetch, headers, log, stop, secrets, caps: CAPS });
   const userSecrets = [...secrets];
@@ -82,7 +83,24 @@ export function createRtdb({
   return {
     run,
     async setup() {
-      await fns.setupProduction(run, sleep);
+      await fns.read(
+        run,
+        "api-before",
+        "GET",
+        run.u.service,
+        (value) => value?.name === run.u.serviceName && value.state === "ENABLED",
+      );
+      await fns.read(run, "instance-before", "GET", run.u.instance, fns.isInstance(run, "ACTIVE"));
+      await fns.read(
+        run,
+        "active-before",
+        "GET",
+        run.u.list,
+        (value) =>
+          value?.instances?.length === 1 &&
+          fns.isInstance(run, "ACTIVE")(value.instances[0]) &&
+          !value.nextPageToken,
+      );
       run.baseline = await fns.read(
         run,
         "rules-before",
@@ -93,6 +111,7 @@ export function createRtdb({
       if (runDir)
         await writeFile(join(runDir, "baseline.rules.json"), run.baseline, { mode: 0o600 });
       await fns.read(run, "prefix-before", "GET", run.u.data(PREFIX), (value) => value === null);
+      baselineVerified = true;
       run.state.data = "ours";
       await fns.putRules(run, "rules-install", rulesFor(PREFIX, nonce));
       run.propagation = false;
@@ -119,7 +138,49 @@ export function createRtdb({
     async cleanup() {
       run.propagation = true;
       run.propagationWaited = 0;
-      await fns.cleanup(run, options, sleep);
+      admin.cleanup();
+      try {
+        if (run.state.data !== "baseline") {
+          await fns.mutate(
+            run,
+            "prefix-delete",
+            "data",
+            "DELETE",
+            run.u.data(PREFIX),
+            undefined,
+            (value) => value === null,
+          );
+          await fns.read(run, "prefix-null", "GET", run.u.data(PREFIX), (value) => value === null);
+          run.state.data = "baseline";
+        }
+      } catch (error) {
+        run.errors.push(error instanceof Stop ? error.message : `unexpected: ${error?.message}`);
+      }
+      try {
+        if (run.state.rules !== "baseline") {
+          await fns.mutate(
+            run,
+            "rules-restore",
+            null,
+            "PUT",
+            run.u.data(".settings/rules"),
+            run.baseline,
+            (value) => value?.status === "ok",
+            false,
+          );
+          await fns.read(
+            run,
+            "rules-restored",
+            "GET",
+            run.u.data(".settings/rules"),
+            (_, text) =>
+              createHash("sha256").update(text).digest("hex") === packet.baselineRulesSha256,
+          );
+          run.state.rules = "baseline";
+        }
+      } catch (error) {
+        run.errors.push(error instanceof Stop ? error.message : `unexpected: ${error?.message}`);
+      }
       run.propagation = false;
       const restored = Object.values(run.state).every((state) => state === "baseline");
       const accounted =
@@ -127,7 +188,7 @@ export function createRtdb({
         user.counts.logFailures === 0 &&
         !run.errors.some((error) => error.startsWith("unexpected"));
       return {
-        closed: run.unresolved.length === 0 && restored && accounted,
+        closed: baselineVerified && run.unresolved.length === 0 && restored && accounted,
         errors: [...run.errors],
         unresolved: [...run.unresolved],
         state: { ...run.state },

@@ -6,6 +6,12 @@
 //! that raised contributes `{"undefined": {"sourcePosition": ..., "causeMessage": ...}}`, and
 //! one that was never evaluated has `children` and no `values`.
 //!
+//! Each expression keeps at most
+//! [`COVERAGE_VALUES_PER_EXPRESSION`](fireemu_core_rules::coverage::COVERAGE_VALUES_PER_EXPRESSION)
+//! distinct values. When it took more, the node adds `valuesOmitted` (a fireemu extension):
+//! how many evaluations produced a value that was counted but not kept, so `values` counts
+//! plus `valuesOmitted` is every evaluation.
+//!
 //! `.html` is the same document embedded in a page that underlines every evaluated
 //! expression, exactly as the official report does, so the same link works.
 //!
@@ -54,6 +60,9 @@ fn node_json(node: &CoverageNode) -> Value {
                     .collect(),
             ),
         );
+    }
+    if node.omitted > 0 {
+        out.insert("valuesOmitted".to_owned(), json!(node.omitted));
     }
     if !node.children.is_empty() {
         out.insert(
@@ -191,6 +200,11 @@ fn collect_spans(data: &Value, out: &mut Vec<(usize, usize, String)>) {
                     v["count"].as_u64().unwrap_or(0)
                 )
             })
+            .chain(
+                node["valuesOmitted"]
+                    .as_u64()
+                    .map(|omitted| format!("{omitted} more with other values (not kept)")),
+            )
             .collect::<Vec<_>>()
             .join(", ");
         let (Ok(start), Ok(end)) = (usize::try_from(start), usize::try_from(end)) else {

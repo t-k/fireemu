@@ -18,6 +18,17 @@ use std::hash::{Hash, Hasher};
 use crate::ast::{Allow, Expr, Item, Ruleset, Span};
 use crate::value::RulesValue;
 
+/// Distinct values one expression keeps. A later new value is only counted (see
+/// [`CoverageNode::omitted`]), so a rule such as `id != 'secret'` cannot make a long-running
+/// daemon retain every document id a client ever asked about. Coverage is a diagnostic: no
+/// Rules decision reads it, so the bound changes what a report lists, never what is allowed.
+pub const COVERAGE_VALUES_PER_EXPRESSION: usize = 64;
+
+/// Bytes of a string value (or of an undefined cause's message) coverage keeps. A longer one
+/// is cut at the last character boundary at or before this length, so a kept value never
+/// pins more than this many string bytes.
+pub const COVERAGE_STRING_BYTES_PER_VALUE: usize = 1024;
+
 /// A value an expression took, in the shape a report can print.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprValue {
@@ -58,7 +69,7 @@ impl ExprValue {
             RulesValue::Bool(b) => Self::Bool(*b),
             RulesValue::Int(i) => Self::Int(*i),
             RulesValue::Float(f) => Self::Float(*f),
-            RulesValue::String(s) => Self::String(s.clone()),
+            RulesValue::String(s) => Self::String(s[..kept_len(s)].to_owned()),
             other => Self::Composite(other.type_name()),
         }
     }
@@ -80,11 +91,14 @@ pub struct CoverageEntry {
 pub struct Coverage {
     entries: BTreeMap<(usize, usize), CoverageEntry>,
     indexes: BTreeMap<(usize, usize), ValueIndex>,
+    /// Observations, per extent, of values that were not kept because the expression already
+    /// held [`COVERAGE_VALUES_PER_EXPRESSION`] distinct values.
+    omitted: BTreeMap<(usize, usize), u64>,
 }
 
 impl PartialEq for Coverage {
     fn eq(&self, other: &Self) -> bool {
-        self.entries == other.entries
+        self.entries == other.entries && self.omitted == other.omitted
     }
 }
 
@@ -137,14 +151,56 @@ fn fingerprint(value: &ExprValue) -> Option<u64> {
     Some(hash.finish())
 }
 
+/// The byte length of the longest prefix of `text` coverage keeps: all of it up to
+/// [`COVERAGE_STRING_BYTES_PER_VALUE`], otherwise the last character boundary at or before it.
+fn kept_len(text: &str) -> usize {
+    if text.len() <= COVERAGE_STRING_BYTES_PER_VALUE {
+        return text.len();
+    }
+    let mut end = COVERAGE_STRING_BYTES_PER_VALUE;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// `value` as coverage keeps it: a string, or an undefined cause's message, cut to
+/// [`kept_len`]. Lookups use the cut form too, so a long value matches what was kept of it.
+fn bounded(value: Cow<'_, ExprValue>) -> Cow<'_, ExprValue> {
+    let long = match &*value {
+        ExprValue::String(text) => kept_len(text) < text.len(),
+        ExprValue::Undefined(cause) => kept_len(&cause.message) < cause.message.len(),
+        _ => false,
+    };
+    if !long {
+        return value;
+    }
+    let cut = |text: &str| text[..kept_len(text)].to_owned();
+    Cow::Owned(match &*value {
+        ExprValue::String(text) => ExprValue::String(cut(text)),
+        ExprValue::Undefined(cause) => ExprValue::Undefined(UndefinedCause {
+            span: cause.span,
+            end: cause.end,
+            message: cut(&cause.message),
+        }),
+        other => other.clone(),
+    })
+}
+
+/// Adds `count` observations of `value` to `entry`. A value the entry does not hold yet is
+/// kept only while it holds fewer than [`COVERAGE_VALUES_PER_EXPRESSION`] values; otherwise
+/// the observations are added to `omitted`. A kept value is never evicted, so every kept
+/// count is the exact number of times that value was observed.
 fn observe(
     entry: &mut CoverageEntry,
     index: &mut ValueIndex,
+    omitted: &mut u64,
     value: Cow<'_, ExprValue>,
     count: u64,
     merge: bool,
 ) {
     const INDEX_THRESHOLD: usize = 32;
+    let value = bounded(value);
     if index.buckets.is_empty() && entry.values.len() >= INDEX_THRESHOLD {
         for (position, (seen, _)) in entry.values.iter().enumerate() {
             if let Some(hash) = fingerprint(seen) {
@@ -169,6 +225,8 @@ fn observe(
         } else {
             *seen += count;
         }
+    } else if entry.values.len() >= COVERAGE_VALUES_PER_EXPRESSION {
+        *omitted = omitted.saturating_add(count);
     } else {
         if !index.buckets.is_empty() {
             if let Some(hash) = hash {
@@ -201,7 +259,8 @@ impl Coverage {
         } else {
             &mut scratch
         };
-        observe(entry, index, Cow::Owned(value), 1, false);
+        let omitted = self.omitted.entry((span.offset, end)).or_default();
+        observe(entry, index, omitted, Cow::Owned(value), 1, false);
     }
 
     /// Folds another recording into this one.
@@ -224,8 +283,16 @@ impl Coverage {
                 } else {
                     &mut scratch
                 };
-                observe(target, index, Cow::Borrowed(value), *count, true);
+                let omitted = self
+                    .omitted
+                    .entry((entry.span.offset, entry.end))
+                    .or_default();
+                observe(target, index, omitted, Cow::Borrowed(value), *count, true);
             }
+        }
+        for (key, count) in &other.omitted {
+            let omitted = self.omitted.entry(*key).or_default();
+            *omitted = omitted.saturating_add(*count);
         }
     }
 
@@ -239,6 +306,13 @@ impl Coverage {
     #[must_use]
     pub fn entries(&self) -> Vec<&CoverageEntry> {
         self.entries.values().collect()
+    }
+
+    /// How many observations of the expression at `span ..= end` were counted but not kept,
+    /// because it already held [`COVERAGE_VALUES_PER_EXPRESSION`] distinct values.
+    #[must_use]
+    pub fn omitted_at(&self, span: Span, end: usize) -> u64 {
+        self.omitted.get(&(span.offset, end)).copied().unwrap_or(0)
     }
 
     /// The values recorded for one extent, if any.
@@ -275,6 +349,13 @@ impl Coverage {
                 });
             }
         }
+        for omitted in self.omitted.values() {
+            observations = observations.saturating_add(*omitted);
+        }
+        bytes = bytes.saturating_add(
+            count(self.omitted.len())
+                .saturating_mul(count(std::mem::size_of::<((usize, usize), u64)>())),
+        );
         bytes = bytes.saturating_add(
             count(self.indexes.len())
                 .saturating_mul(count(std::mem::size_of::<((usize, usize), ValueIndex)>())),
@@ -303,8 +384,21 @@ pub struct CoverageNode {
     pub end: usize,
     /// Values the expression took; empty when it was never evaluated.
     pub values: Vec<(ExprValue, u64)>,
+    /// Observations of further distinct values that were counted but not kept (see
+    /// [`COVERAGE_VALUES_PER_EXPRESSION`]).
+    pub omitted: u64,
     /// Sub-expressions, in source order.
     pub children: Vec<CoverageNode>,
+}
+
+impl CoverageNode {
+    /// Every evaluation of the expression: the kept values' counts plus the omitted ones.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.values
+            .iter()
+            .fold(self.omitted, |total, (_, seen)| total.saturating_add(*seen))
+    }
 }
 
 /// Builds the report of `ruleset` from `coverage`: one tree per `allow` condition and per
@@ -362,6 +456,7 @@ fn node(expr: &Expr, coverage: &Coverage) -> CoverageNode {
             .values_at(expr.span, expr.end)
             .map(<[(ExprValue, u64)]>::to_vec)
             .unwrap_or_default(),
+        omitted: coverage.omitted_at(expr.span, expr.end),
         children: expr
             .children()
             .into_iter()
@@ -501,10 +596,11 @@ impl RulesDiagnostics {
 mod index_tests {
     use super::*;
 
+    /// The reference the indexed path must agree with: a linear scan, bounded the same way.
     fn linear_record(values: &mut Vec<(ExprValue, u64)>, value: ExprValue, count: u64) {
         if let Some((_, seen)) = values.iter_mut().find(|(seen, _)| *seen == value) {
             *seen = seen.saturating_add(count);
-        } else {
+        } else if values.len() < COVERAGE_VALUES_PER_EXPRESSION {
             values.push((value, count));
         }
     }
@@ -632,7 +728,7 @@ mod index_tests {
     #[test]
     #[ignore = "bounded release coverage measurement"]
     fn bounded_high_cardinality_coverage_measurement() {
-        for size in [1usize, 1000, 100_000] {
+        for size in [1usize, 1000, 10_000, 100_000] {
             for repetition in 0..3 {
                 let mut coverage = Coverage::default();
                 let start = std::time::Instant::now();
@@ -644,7 +740,10 @@ mod index_tests {
                 let snapshot = coverage.clone();
                 coverage.merge(&snapshot);
                 let merge_elapsed = start.elapsed();
-                assert_eq!(coverage.entries()[0].values.len(), size);
+                assert_eq!(
+                    coverage.entries()[0].values.len(),
+                    size.min(COVERAGE_VALUES_PER_EXPRESSION)
+                );
                 assert!(coverage.entries()[0]
                     .values
                     .iter()
@@ -669,7 +768,8 @@ mod index_tests {
                     .flat_map(|index| index.buckets.values())
                     .map(Vec::capacity)
                     .sum();
-                println!("coverage size={size} repetition={repetition} record={record_elapsed:?} clone_merge={merge_elapsed:?} report_retained_bytes={vec_bytes} index_bucket_capacity={index_capacity} index_position_capacity={index_positions}");
+                let estimated = coverage.statistics().3;
+                println!("coverage size={size} repetition={repetition} estimated_coverage_bytes={estimated} record={record_elapsed:?} clone_merge={merge_elapsed:?} report_retained_bytes={vec_bytes} index_bucket_capacity={index_capacity} index_position_capacity={index_positions}");
             }
         }
     }
@@ -689,7 +789,7 @@ mod index_tests {
                 stats.distinct_value_count,
                 stats.observation_count
             ),
-            (1, 1000, 2000)
+            (1, count(COVERAGE_VALUES_PER_EXPRESSION), 2000)
         );
         assert!(stats.estimated_coverage_bytes > 1000);
         assert!(!diagnostics.coverage.indexes.is_empty());
@@ -753,7 +853,7 @@ mod index_tests {
             let before = slot.diagnostics_snapshot().unwrap();
             assert_eq!(
                 (before.distinct_value_count, before.observation_count),
-                (count(size), count(size))
+                (count(size.min(COVERAGE_VALUES_PER_EXPRESSION)), count(size))
             );
             let start = std::time::Instant::now();
             let after = slot.clear_diagnostics(0, 0).unwrap();
@@ -822,5 +922,249 @@ mod index_tests {
                     count(positions).saturating_mul(count(std::mem::size_of::<usize>()))
                 )
         );
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+    use crate::eval::{evaluate_request_traced, Decision, Method, RequestContext, RulesService};
+    use crate::parse::parse_ruleset;
+
+    const LIMIT: usize = COVERAGE_VALUES_PER_EXPRESSION;
+    const BYTES: usize = COVERAGE_STRING_BYTES_PER_VALUE;
+
+    const RULES: &str = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /notes/{id} {\n      allow get: if id != 'secret';\n    }\n  }\n}\n";
+
+    fn get(id: &str) -> RequestContext {
+        RequestContext {
+            service: RulesService::Firestore,
+            method: Method::Get,
+            path: format!("/databases/(default)/documents/notes/{id}"),
+            auth: None,
+            resource: None,
+            request_resource: None,
+            time_unix_nanos: 1_788_004_860_i128 * 1_000_000_000,
+            abstract_path: false,
+            request_query: None,
+        }
+    }
+
+    fn find(nodes: &[CoverageNode], offset: usize, end: usize) -> Option<&CoverageNode> {
+        nodes.iter().find_map(|node| {
+            if node.span.offset == offset && node.end == end {
+                Some(node)
+            } else {
+                find(&node.children, offset, end)
+            }
+        })
+    }
+
+    fn string(index: usize) -> ExprValue {
+        ExprValue::String(format!("uid-{index}"))
+    }
+
+    #[test]
+    fn ten_thousand_distinct_ids_keep_the_limit_and_count_the_rest() {
+        let ruleset = parse_ruleset(RULES).unwrap();
+        let mut diagnostics = RulesDiagnostics::default();
+        for index in 0..10_000 {
+            let (decided, one) =
+                evaluate_request_traced(&ruleset, &get(&format!("doc-{index}")), None);
+            assert!(matches!(decided.decision, Decision::Allow), "{index}");
+            diagnostics.merge_coverage(&one);
+        }
+        // Coverage is a diagnostic: the decision past the bound is the decision before it.
+        let (decided, one) = evaluate_request_traced(&ruleset, &get("secret"), None);
+        assert!(!matches!(decided.decision, Decision::Allow));
+        diagnostics.merge_coverage(&one);
+
+        let nodes = report(&ruleset, diagnostics.coverage());
+        let id_at = RULES.find("id != 'secret'").unwrap();
+        let id = find(&nodes, id_at, id_at + 2).expect("the `id` operand is in the report");
+        assert_eq!(id.values.len(), LIMIT);
+        assert_eq!(id.values[0], (ExprValue::String("doc-0".into()), 1));
+        assert_eq!(id.omitted, 10_001 - 64);
+        assert_eq!(id.total(), 10_001);
+        // The condition took two values only, so nothing of it is omitted.
+        let condition = find(&nodes, id_at, id_at + "id != 'secret'".len()).unwrap();
+        assert_eq!(
+            condition.values,
+            vec![(ExprValue::Bool(true), 10_000), (ExprValue::Bool(false), 1)]
+        );
+        assert_eq!((condition.omitted, condition.total()), (0, 10_001));
+
+        let stats = diagnostics.statistics();
+        assert!(stats.distinct_value_count <= 3 * 64, "{stats:?}");
+        // Every evaluation is still counted: `id`, the literal and the condition each 10,001.
+        assert_eq!(stats.observation_count, 3 * 10_001, "{stats:?}");
+    }
+
+    #[test]
+    fn exactly_the_limit_is_kept_and_one_beyond_is_only_counted() {
+        let mut coverage = Coverage::default();
+        for index in 0..LIMIT {
+            coverage.record(Span::default(), 1, string(index));
+        }
+        assert_eq!(coverage.entries()[0].values.len(), LIMIT);
+        assert_eq!(coverage.omitted_at(Span::default(), 1), 0);
+
+        coverage.record(Span::default(), 1, string(LIMIT));
+        assert_eq!(coverage.entries()[0].values.len(), LIMIT);
+        assert_eq!(coverage.omitted_at(Span::default(), 1), 1);
+        assert!(!coverage.entries()[0]
+            .values
+            .iter()
+            .any(|(value, _)| *value == string(LIMIT)));
+
+        // A kept value still accumulates exactly; the omitted one stays omitted.
+        coverage.record(Span::default(), 1, string(0));
+        coverage.record(Span::default(), 1, string(LIMIT));
+        assert_eq!(coverage.entries()[0].values[0], (string(0), 2));
+        assert_eq!(coverage.omitted_at(Span::default(), 1), 2);
+        // An unrelated extent has its own bound.
+        assert_eq!(coverage.omitted_at(Span::default(), 2), 0);
+    }
+
+    #[test]
+    fn merge_carries_omitted_counts_and_bounds_the_union() {
+        let mut first = Coverage::default();
+        let mut second = Coverage::default();
+        for index in 0..LIMIT + 10 {
+            first.record(Span::default(), 1, string(index));
+            second.record(Span::default(), 1, string(index + 1000));
+        }
+        let mut merged = first.clone();
+        merged.merge(&second);
+        assert_eq!(merged.entries()[0].values, first.entries()[0].values);
+        // first omitted 10, second kept 64 that no longer fit and omitted 10.
+        assert_eq!(merged.omitted_at(Span::default(), 1), 10 + 64 + 10);
+        assert_eq!(merged.statistics().2, 2 * count(LIMIT + 10));
+    }
+
+    #[test]
+    fn a_long_string_is_cut_on_a_character_boundary() {
+        // `a` then two-byte characters: byte `BYTES` falls inside a character.
+        let long = format!("a{}", "é".repeat(BYTES));
+        assert!(!long.is_char_boundary(BYTES));
+        let mut coverage = Coverage::default();
+        coverage.record(Span::default(), 1, ExprValue::String(long.clone()));
+        let ExprValue::String(kept) = &coverage.entries()[0].values[0].0 else {
+            panic!("a string value");
+        };
+        assert_eq!(kept.len(), BYTES - 1);
+        assert!(long.starts_with(kept.as_str()));
+
+        // Exactly the limit is kept whole; one byte more is cut to it.
+        let exact = "x".repeat(BYTES);
+        let beyond = "y".repeat(BYTES + 1);
+        coverage.record(Span::default(), 2, ExprValue::String(exact.clone()));
+        coverage.record(Span::default(), 2, ExprValue::String(beyond));
+        assert_eq!(
+            coverage.entries()[1].values,
+            vec![
+                (ExprValue::String(exact), 1),
+                (ExprValue::String("y".repeat(BYTES)), 1)
+            ]
+        );
+
+        // Values that agree on the kept prefix are one value, counted together.
+        coverage.record(Span::default(), 2, ExprValue::String("y".repeat(BYTES + 9)));
+        assert_eq!(coverage.entries()[1].values[1].1, 2);
+
+        // An undefined cause's message is cut the same way.
+        let message = format!("no field {}", "ü".repeat(BYTES));
+        coverage.record(
+            Span::default(),
+            3,
+            ExprValue::Undefined(UndefinedCause {
+                span: Span::default(),
+                end: 3,
+                message: message.clone(),
+            }),
+        );
+        let ExprValue::Undefined(cause) = &coverage.entries()[2].values[0].0 else {
+            panic!("an undefined value");
+        };
+        assert!(cause.message.len() <= BYTES && cause.message.len() > BYTES - 4);
+        assert!(message.starts_with(cause.message.as_str()));
+        // `ExprValue::of` does not copy more than it keeps either.
+        let ExprValue::String(of) = ExprValue::of(&RulesValue::String(long.clone())) else {
+            panic!("a string value");
+        };
+        assert_eq!(of.len(), BYTES - 1);
+    }
+
+    fn observation(kind: u8, number: u8) -> ExprValue {
+        match kind {
+            0 => ExprValue::Int(i64::from(number)),
+            1 => ExprValue::Bool(number % 2 == 0),
+            _ => ExprValue::String(format!("v{number}")),
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(256))]
+        /// Recording in parts and merging the parts in any order gives every expression the
+        /// same total and keeps `min(distinct, limit)` values. A kept count never exceeds the
+        /// value's true count; it can be lower only when another part had to omit that value,
+        /// and those observations are in the omitted count, so kept plus omitted is exact.
+        #[test]
+        fn merging_parts_in_any_order_gives_the_same_counts(
+            steps in proptest::collection::vec((0usize..3, 0u8..3, 0u8..120), 0..600),
+            parts in 1usize..8,
+            order in proptest::collection::vec(proptest::num::usize::ANY, 0..8),
+        ) {
+            let mut reference: BTreeMap<usize, Vec<(ExprValue, u64)>> = BTreeMap::new();
+            let mut pieces = vec![Coverage::default(); parts];
+            for (position, &(expr, kind, number)) in steps.iter().enumerate() {
+                let value = observation(kind, number);
+                let values = reference.entry(expr).or_default();
+                match values.iter_mut().find(|(seen, _)| *seen == value) {
+                    Some((_, seen)) => *seen += 1,
+                    None => values.push((value.clone(), 1)),
+                }
+                pieces[position % parts].record(Span { offset: expr, ..Span::default() }, expr + 1, value);
+            }
+            let mut permutation: Vec<usize> = (0..parts).collect();
+            for (index, pick) in order.iter().enumerate().take(parts) {
+                permutation.swap(index, index + pick % (parts - index));
+            }
+            let mut forward = Coverage::default();
+            for piece in &pieces {
+                forward.merge(piece);
+            }
+            let mut permuted = Coverage::default();
+            for &index in &permutation {
+                permuted.merge(&pieces[index]);
+            }
+            for merged in [&forward, &permuted] {
+                for (&expr, values) in &reference {
+                    let span = Span { offset: expr, ..Span::default() };
+                    let kept = merged.values_at(span, expr + 1).unwrap();
+                    let total: u64 = values.iter().map(|(_, seen)| seen).sum();
+                    let kept_sum: u64 = kept.iter().map(|(_, seen)| seen).sum();
+                    proptest::prop_assert_eq!(kept_sum + merged.omitted_at(span, expr + 1), total);
+                    proptest::prop_assert_eq!(kept.len(), values.len().min(LIMIT));
+                    for (value, seen) in kept {
+                        let exact = values.iter().find(|(v, _)| v == value).map(|(_, c)| *c);
+                        proptest::prop_assert!(exact.is_some_and(|exact| *seen <= exact));
+                    }
+                }
+                proptest::prop_assert_eq!(merged.statistics().2, count(steps.len()));
+            }
+            // Below the bound nothing depends on the order but the listing order.
+            for (&expr, values) in &reference {
+                if values.len() <= LIMIT {
+                    let span = Span { offset: expr, ..Span::default() };
+                    let mut a = forward.values_at(span, expr + 1).unwrap().to_vec();
+                    let mut b = permuted.values_at(span, expr + 1).unwrap().to_vec();
+                    let key = |entry: &(ExprValue, u64)| format!("{entry:?}");
+                    a.sort_by_key(key);
+                    b.sort_by_key(key);
+                    proptest::prop_assert_eq!(a, b);
+                }
+            }
+        }
     }
 }
